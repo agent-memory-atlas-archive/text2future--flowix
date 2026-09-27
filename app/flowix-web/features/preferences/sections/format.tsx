@@ -31,6 +31,8 @@ import type { FontDownloadProgress } from '@platform/tauri/client/general';
 import {
   beginTypographyFontSelection,
   commitTypographyFontSelection,
+} from '@features/preferences/public/font-api';
+import {
   ensureDownloadedFontRegistered,
   getDownloadedFontStatus,
   getFontOptionById,

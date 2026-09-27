@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { ListTodo } from 'lucide-react';
-import { EjectIcon } from '@phosphor-icons/react';
+import type { CSSProperties } from 'react';
+import mcpPluginIcon from '@/assets/mcp-plugin.svg';
 import { Tooltip } from '@shared/ui/tooltip';
 import type { Notebook } from '@features/memo/store/memo-store';
 import { NotebookSelectorPopup } from '@features/shell/components/status-bar/notebook-selector-popup';
@@ -291,7 +292,14 @@ export function StatusBar({
             className="h-full flex items-center justify-center px-1.5 py-0 hover:bg-[var(--muted)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
             aria-label={t('preferences.tabs.mcp')}
           >
-            <EjectIcon className="w-3.5 h-3.5" weight="regular" />
+            <span
+              aria-hidden="true"
+              className="h-3.5 w-3.5 shrink-0 bg-current"
+              style={{
+                mask: `url("${mcpPluginIcon}") center / contain no-repeat`,
+                WebkitMask: `url("${mcpPluginIcon}") center / contain no-repeat`,
+              } as CSSProperties}
+            />
           </button>
         </Tooltip>
       </div>
