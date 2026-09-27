@@ -13,7 +13,8 @@ import {
 import { useContext } from 'react';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import { memos as memosClient, product } from '@platform/tauri/client';
+import { product } from '@platform/tauri/client';
+import { memoDocumentOperations } from '@features/document/public/file-operations-api';
 import { useI18n, translate, type AppLanguage, type I18nKey } from '@/lib/i18n';
 import {
   ContextMenuContext,
@@ -231,7 +232,7 @@ export function MemoCardActions({
     const path = resolvePath();
     if (!path) return;
     try {
-      const content = await memosClient.readDocument(path);
+      const content = await memoDocumentOperations.read({ path, scopePath: null, memoId: memo.id });
       await writeClipboardText(content ?? '');
       toast.success(t('document.command.copySuccess'));
     } catch (error) {

@@ -38,6 +38,7 @@ dunce = "1.0"
 tempfile = "3"
 fs2 = "0.4"
 sha2 = "0.10"
+zip = { version = "4.6", default-features = false }
 flate2 = "1"
 tar = "0.4"
 semver = "1"

@@ -3,6 +3,7 @@ import { useCallback } from 'react';
 import { displayTitleFromFilename } from '@/lib/utils';
 import { sanitizeFileName, stripFrontmatter } from '@/lib/export-utils';
 import { memos as memosClient, dialogs, type SaveFileFilter } from '@platform/tauri/client';
+import { memoDocumentOperations } from '@features/document/use-cases/memo-document-operations';
 import { translate } from '@/lib/i18n';
 import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
 import { toast } from '@/lib/toast';
@@ -111,7 +112,7 @@ export function useDocumentCommands({
     let raw = getCurrentDocumentContent();
     if (!raw) {
       try {
-        raw = (await memosClient.readDocument(currentDocumentPath)) ?? '';
+        raw = (await memoDocumentOperations.read({ path: currentDocumentPath })) ?? '';
       } catch (error) {
         console.warn('[useDocumentCommands] Failed to read document for export:', error);
         toast.error(tCmd('document.command.readFailed'));
@@ -119,7 +120,8 @@ export function useDocumentCommands({
       }
     }
 
-    const title = displayTitleFromFilename(currentMemo?.filename)
+    const pathFilename = currentDocumentPath.split(/[\\/]/).filter(Boolean).pop();
+    const title = displayTitleFromFilename(currentMemo?.filename ?? pathFilename)
       || extractTitleFromMarkdown(stripFrontmatter(raw))
       || 'Untitled';
     return { title, markdown: raw };
@@ -142,7 +144,7 @@ export function useDocumentCommands({
     if (!currentDocumentPath) return;
 
     try {
-      const content = getCurrentDocumentContent() || await memosClient.readDocument(currentDocumentPath) || '';
+      const content = getCurrentDocumentContent() || await memoDocumentOperations.read({ path: currentDocumentPath }) || '';
       await writeClipboardText(content);
       toast.success(tCmd('document.command.copySuccess'));
     } catch (error) {

@@ -38,9 +38,8 @@ const memoA: WorkColumnTarget = {
 const memoB: WorkColumnTarget = { ...memoA, memoId: 'b', path: '/notes/b.md', transitionId: null };
 
 const sessionA = {
-  id: 'memo:a',
+  fileIdentity: { displayId: 'display-a', path: '/notes/a.md' },
   memoId: 'a',
-  path: '/notes/a.md',
   notebookId: null,
   notebookPath: null,
   openedAt: 1,

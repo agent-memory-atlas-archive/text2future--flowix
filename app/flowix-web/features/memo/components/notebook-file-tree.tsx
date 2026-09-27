@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -30,7 +31,7 @@ import { useComposingValue } from '@shared/hooks/use-composing-value';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
 import { FileTypeIcon } from '@features/memo/components/file-type-icon';
 import { useMemoStore } from '@features/memo/store/memo-store';
-import { useDocumentStore } from '@features/document/store';
+import { replaceActiveMemoPath } from '@features/workspace/use-cases/workspace-navigation';
 import {
   elementFromExternalDropPosition,
   EXTERNAL_FILE_DROP_EVENT,
@@ -38,6 +39,7 @@ import {
   type ExternalFileDropDetail,
 } from '@features/document/components/use-markdown-file-drop';
 import { resolveMemoByPath } from '@features/memo/use-cases/open-by-target';
+import { localDocumentOperations, memoDocumentOperations } from '@features/document/public/file-operations-api';
 import folderIcon from '@/assets/folder-outline.svg?raw';
 import {
   flattenLoadedTree,
@@ -45,7 +47,7 @@ import {
   type FolderTreeController,
 } from '@features/memo/components/use-folder-tree';
 import { NotebookTreeRow } from '@features/memo/components/notebook-tree-row';
-import { files, memos, type DocTreeItem, type DocTreeResourceKind } from '@platform/tauri/client';
+import { files, type DocTreeItem, type DocTreeResourceKind } from '@platform/tauri/client';
 import { resourceKindFromPath } from '@features/editor/code-file';
 import { useDynamicVirtualList } from '@features/memo/components/memo-list/use-dynamic-virtual-list';
 import {
@@ -306,6 +308,9 @@ export function NotebookFileTree({
   const [focusedTreePath, setFocusedTreePath] = useState<string | null>(null);
   const selectedFilePathsRef = useRef<string[]>([]);
   const selectionAnchorPathRef = useRef<string | null>(null);
+  const previousActiveFilePathRef = useRef(
+    activeFilePath ? canonicalPath(activeFilePath) : null,
+  );
   const pointerDragRef = useRef<PointerNoteDrag | null>(null);
   const dropPendingRef = useRef(false);
   const externalDropTargetPathRef = useRef<string | null>(null);
@@ -446,6 +451,13 @@ export function NotebookFileTree({
     selectionAnchorPathRef.current = anchorPath;
     setSelectedFilePaths(nextPaths);
   }, []);
+  useLayoutEffect(() => {
+    const nextActivePath = activeFilePath ? canonicalPath(activeFilePath) : null;
+    if (previousActiveFilePathRef.current === nextActivePath) return;
+    previousActiveFilePathRef.current = nextActivePath;
+    if (selectedFilePathsRef.current.length === 0 && selectionAnchorPathRef.current === null) return;
+    updateSelection([], null);
+  }, [activeFilePath, updateSelection]);
   const handleRowKeepAliveChange = useCallback((path: string, active: boolean) => {
     const key = canonicalPath(path);
     setKeptAlivePaths((previous) => {
@@ -692,16 +704,20 @@ export function NotebookFileTree({
           // Indexed notes use the memo path so the index and active editor
           // keep the same identity after the rename. Unindexed Markdown files
           // still use the generic file rename API.
-          const result = await memos.renameMemoTitle({
-            id: memoId,
+          const result = await memoDocumentOperations.renameTitle({
+            memoId,
             title: trimmed,
             expectedFilename: item.name,
           });
           useMemoStore.getState().handleMemoUpdated(result.memo);
-          useDocumentStore.getState().replaceActiveMemoPath(result.memo.id, result.path);
+          replaceActiveMemoPath(result.memo.id, result.path);
         } else {
           const extension = isNote ? item.name.match(/\.(md|markdown)$/i)?.[0] ?? '' : '';
-          await files.rename(item.fullPath, `${trimmed}${extension}`, notebookPath);
+          await localDocumentOperations.rename({
+            path: item.fullPath,
+            name: `${trimmed}${extension}`,
+            scopePath: notebookPath,
+          });
         }
       }
 

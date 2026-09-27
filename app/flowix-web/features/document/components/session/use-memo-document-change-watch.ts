@@ -37,8 +37,8 @@ export function shouldReloadDocumentForTagsRenamed(
   identity: DocumentIdentity,
   isDirty: boolean,
 ): boolean {
-  if (identity.kind !== 'memo') return false;
-  if (!event.affectedMemoIds.includes(identity.id)) return false;
+  if (!identity.memoId) return false;
+  if (!event.affectedMemoIds.includes(identity.memoId)) return false;
   if (isDirty) return false;
   return true;
 }
@@ -52,8 +52,8 @@ export function shouldReloadDocumentForTagsDeleted(
   identity: DocumentIdentity,
   isDirty: boolean,
 ): boolean {
-  if (identity.kind !== 'memo') return false;
-  if (!event.affectedMemoIds.includes(identity.id)) return false;
+  if (!identity.memoId) return false;
+  if (!event.affectedMemoIds.includes(identity.memoId)) return false;
   if (isDirty) return false;
   return true;
 }
@@ -66,11 +66,11 @@ export function classifyUpdatedMemoDocumentAction(
   isDirty: boolean,
   currentWindowLabel?: string,
 ): UpdatedMemoDocumentAction {
-  if (identity.kind !== 'memo') return 'ignore';
+  if (!identity.memoId) return 'ignore';
   if (event.kind !== 'updated' || !event.path) return 'ignore';
   if (event.source === 'user_edit' && !event.originWindowLabel) return 'ignore';
   if (event.originWindowLabel && event.originWindowLabel === currentWindowLabel) return 'ignore';
-  if (event.id !== identity.id) return 'ignore';
+  if (event.id !== identity.memoId) return 'ignore';
   if (!shouldApplyMemoCommit(event.id, event)) return 'ignore';
   return isDirty ? 'defer' : 'reload';
 }
@@ -86,7 +86,7 @@ export function useMemoDocumentChangeWatch({
   const pendingExternalReloadRef = useRef<PendingMemoReload | null>(null);
 
   useEffect(() => {
-    if (!filePath || identity.kind !== 'memo') return;
+    if (!filePath || !identity.memoId) return;
     let disposed = false;
     const currentWindowLabel = getCurrentWindow().label;
 

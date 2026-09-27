@@ -6,39 +6,43 @@ import {
 } from './registry';
 import type { WorkColumnSurface, WorkColumnSurfaceKind } from './types';
 
+function fileIdentity(path: string) {
+  return { path, displayId: `display:${path}` };
+}
+
 function surface(kind: WorkColumnSurfaceKind): WorkColumnSurface {
   switch (kind) {
     case 'note':
-      return { kind, memoId: 'memo-1', instanceKey: 'note:1', props: { filePath: '/note.md' } };
+      return { kind, memoId: 'memo-1', instanceKey: 'note:1', fileIdentity: fileIdentity('/note.md'), props: {} };
     case 'md':
-      return { kind, instanceKey: 'md:1', props: { filePath: '/workspace/readme.md', isExternalDocument: true } };
+      return { kind, instanceKey: 'md:1', fileIdentity: fileIdentity('/workspace/readme.md'), props: { isExternalDocument: true } };
     case 'code':
-      return { kind, instanceKey: 'code:1', props: { filePath: '/workspace/main.ts', isExternalDocument: true } };
+      return { kind, instanceKey: 'code:1', fileIdentity: fileIdentity('/workspace/main.ts'), props: { isExternalDocument: true } };
     case 'image-file':
       return {
-        kind, instanceKey: 'image:1', filePath: '/workspace/logo.png', scopePath: '/workspace',
-        props: { filePath: '/workspace/logo.png', isExternalDocument: true },
+        kind, instanceKey: 'image:1', fileIdentity: fileIdentity('/workspace/logo.png'), scopePath: '/workspace',
+        props: { isExternalDocument: true },
       };
     case 'video-file':
       return {
-        kind, instanceKey: 'video:1', filePath: '/workspace/demo.mp4', scopePath: '/workspace',
-        props: { filePath: '/workspace/demo.mp4', isExternalDocument: true },
+        kind, instanceKey: 'video:1', fileIdentity: fileIdentity('/workspace/demo.mp4'), scopePath: '/workspace',
+        props: { isExternalDocument: true },
       };
     case 'html-file':
       return {
-        kind, instanceKey: 'html-file:1', filePath: '/workspace/index.html', scopePath: '/workspace',
-        props: { filePath: '/workspace/index.html', isExternalDocument: true },
+        kind, instanceKey: 'html-file:1', fileIdentity: fileIdentity('/workspace/index.html'), scopePath: '/workspace',
+        props: { isExternalDocument: true },
       };
     case 'unavailable-file':
       return {
-        kind, instanceKey: 'unavailable:1', filePath: '/workspace/archive.bin',
-        props: { filePath: '/workspace/archive.bin', isExternalDocument: true },
+        kind, instanceKey: 'unavailable:1', fileIdentity: fileIdentity('/workspace/archive.bin'),
+        props: { isExternalDocument: true },
       };
     case 'media':
       return {
         kind,
         instanceKey: 'media:1',
-        filePath: '/notebook/image.png',
+        fileIdentity: fileIdentity('/notebook/image.png'),
         notebookId: 'notebook-1',
         notebookPath: '/notebook',
         resourceKind: 'image',

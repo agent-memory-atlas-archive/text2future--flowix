@@ -24,7 +24,44 @@ import { useMemoStore, type Notebook } from '@features/memo/store/memo-store';
 import type { MemoItem } from '@/types/memo-item';
 import { resolveAbsolutePath } from '@platform/open-target/path-helper';
 import type { ResolvedOpenTarget } from '@platform/open-target/types';
-import { openMemoTarget } from '@features/workspace/use-cases/workspace-navigation';
+import { canonicalDirectoryPath, canonicalPath } from '@/lib/path';
+import { openExternalTarget, openMemoTarget } from '@features/workspace/use-cases/workspace-navigation';
+
+function hasHiddenNotebookDirectory(path: string, notebookPath: string): boolean {
+  const absolutePath = canonicalPath(path);
+  const root = canonicalDirectoryPath(notebookPath);
+  const prefix = root === '/' ? '/' : `${root}/`;
+  if (!absolutePath.startsWith(prefix)) return false;
+  const relativeParts = absolutePath.slice(prefix.length).split('/').filter(Boolean);
+  if (relativeParts.includes('.flowix')) return false;
+  return relativeParts.slice(0, -1).some((part) => part.startsWith('.') && part !== '.' && part !== '..');
+}
+
+function physicalPathFromTarget(rawPath: string): string {
+  const trimmed = rawPath.trim();
+  if (trimmed.toLowerCase().startsWith('flowix://open?')) {
+    try {
+      const path = new URL(trimmed).searchParams.get('path');
+      if (path) return physicalPathFromTarget(path);
+    } catch {
+      return trimmed;
+    }
+  }
+  if (!trimmed.toLowerCase().startsWith('file://')) return trimmed;
+  try {
+    return decodeURIComponent(new URL(trimmed).pathname);
+  } catch {
+    return trimmed;
+  }
+}
+
+function hiddenNotebookForPhysicalTarget(rawPath: string): { path: string; notebookPath: string } | null {
+  const path = physicalPathFromTarget(rawPath);
+  const notebook = useMemoStore.getState().notebooks.find((item) => (
+    hasHiddenNotebookDirectory(path, item.path)
+  ));
+  return notebook ? { path, notebookPath: notebook.path } : null;
+}
 
 /**
  * 把 ResolvedOpenTarget 喂给 document-store。 跨 notebook 时先切 notebook,
@@ -33,7 +70,20 @@ import { openMemoTarget } from '@features/workspace/use-cases/workspace-navigati
  * 跟 `note-link/view-note.ts::openNoteReference` 同源, 但这里 ResolvedOpenTarget 来自
  * 后端权威解析 (memoId / notebookId / absolutePath 全部校验过)。
  */
-export async function openNoteByTarget(resolved: ResolvedOpenTarget): Promise<void> {
+export async function openNoteByTarget(
+  resolved: ResolvedOpenTarget,
+  options?: { history?: 'push' | 'skip'; destination?: 'main-third' },
+): Promise<void> {
+  const path = resolveAbsolutePath(resolved);
+  if (hasHiddenNotebookDirectory(path, resolved.notebookPath)) {
+    await openExternalTarget(path, {
+      destination: 'main-third',
+      scopePath: resolved.notebookPath,
+      history: options?.history,
+    });
+    return;
+  }
+
   const store = useMemoStore.getState();
   const memoItem: MemoItem = { ...resolved.memo, isOpen: true };
 
@@ -45,11 +95,13 @@ export async function openNoteByTarget(resolved: ResolvedOpenTarget): Promise<vo
 
   await openMemoTarget({
     memoId: resolved.memoId,
-    path: resolveAbsolutePath(resolved),
+    path,
     notebookId: resolved.notebookId,
     notebookPath: resolved.notebookPath,
     memo: memoItem,
     notebook: targetNotebook,
+    history: options?.history,
+    destination: options?.destination,
   });
 }
 
@@ -58,6 +110,15 @@ export async function openNoteByTarget(resolved: ResolvedOpenTarget): Promise<vo
  * 主窗口 listener 收到 `flowix:open-target` 事件时也是同样的逻辑。
  */
 export async function openNoteByDeepLink(url: string): Promise<void> {
+  const hiddenTarget = hiddenNotebookForPhysicalTarget(url);
+  if (hiddenTarget) {
+    await openExternalTarget(hiddenTarget.path, {
+      destination: 'main-third',
+      scopePath: hiddenTarget.notebookPath,
+    });
+    return;
+  }
+
   const resolved = await memosClient.openMemoByTarget(url, { emitEvent: false });
   if (!resolved) {
     // eslint-disable-next-line no-console

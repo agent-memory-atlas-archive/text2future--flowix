@@ -8,6 +8,7 @@ import {
   getOrCreateBuffer,
   hasUnsavedLocalChanges,
   notifyDocumentBufferChanged,
+  releaseDocumentBuffer,
   rebaseCurrentDocumentPath,
   setCurrentDocument,
   type FlushCallbacks,
@@ -20,6 +21,8 @@ import {
 } from '@features/document/store/document-identity';
 import { canonicalPath } from '@/lib/path';
 import { persistRecoveryDraft } from '@features/document/store/recovery-draft-store';
+import { subscribeFileDisplayRelease } from '@features/workspace/store/file-display-store';
+import { waitForSaveQueue } from '@features/document/store/save-queue';
 
 const RECOVERY_DRAFT_WRITE_TIMEOUT_MS = 3_000;
 
@@ -29,6 +32,34 @@ interface RegisteredDocumentCapture {
   capture: DocumentCapture;
 }
 const documentCaptures = new Map<string, Set<RegisteredDocumentCapture>>();
+const pendingReleasedDisplays = new Set<string>();
+const releaseChecksInFlight = new Set<string>();
+
+function cleanupReleasedDisplayBuffer(displayId: string): void {
+  const key = `md:${displayId}`;
+  pendingReleasedDisplays.add(displayId);
+  if (releaseChecksInFlight.has(displayId)) return;
+  releaseChecksInFlight.add(displayId);
+
+  void waitForSaveQueue(key).then((settled) => {
+    if (!settled) {
+      pendingReleasedDisplays.delete(displayId);
+      return;
+    }
+    // A store update can release the identity just before React unmounts its
+    // editor. The final capture unregister retries this cleanup afterwards.
+    if (documentCaptures.has(key)) return;
+    releaseDocumentBuffer(displayId);
+    stagedDocumentSnapshots.delete(key);
+    pendingReleasedDisplays.delete(displayId);
+  }).catch(() => {
+    pendingReleasedDisplays.delete(displayId);
+  }).finally(() => {
+    releaseChecksInFlight.delete(displayId);
+  });
+}
+
+subscribeFileDisplayRelease(cleanupReleasedDisplayBuffer);
 
 /** Register a mounted editor capable of publishing its latest content. */
 export function registerDocumentCapture(
@@ -43,7 +74,12 @@ export function registerDocumentCapture(
   documentCaptures.set(key, captures);
   return () => {
     captures.delete(registration);
-    if (captures.size === 0) documentCaptures.delete(key);
+    if (captures.size === 0) {
+      documentCaptures.delete(key);
+      if (pendingReleasedDisplays.has(identity.displayId)) {
+        cleanupReleasedDisplayBuffer(identity.displayId);
+      }
+    }
   };
 }
 
@@ -209,20 +245,7 @@ export function getDocumentDraft(
   return { identity, path, content: buffer.content };
 }
 
-/**
- * 记录用户敲字产生的编辑。
- *
- * 行为不变量 ── 在双 Map 索引 (memoId / canonicalPath) 下, 物理 rename
- * 期间 memo 路径对应的 buffer 不会被换出, recordDocumentEdit 内部
- * 永远命中同一个 buffer object。race 自然消失, 不再需要 P1 修复 (O)
- * 那 3 层防御兜底。
- *
- * dirty 判定改用语义比较 ── 详见 [buffer-equality.ts]。原 byte equality
- * 在 Windows 上会被 Tiptap mount 阶段把磁盘 CRLF 重写为 LF 的"伪编辑"误
- * 判为真实编辑, 1s 后触发 write_document → 后端 emit `user_edit` →
- * 出现"打开即写盘"的现象。语义比较抹掉行尾 / frontmatter / trailing
- * 空白等归一化差异, 只把"实质不同的内容" 标 dirty。
- */
+/** Record user edits against the buffer owned by the runtime display identity. */
 export function recordDocumentEdit(identity: DocumentIdentity, content: string): DocumentEditResult {
   const buffer = getOrCreateBuffer(identity);
   if (content === buffer.content) {
@@ -248,12 +271,7 @@ export function recordDocumentEdit(identity: DocumentIdentity, content: string):
   return { changed: true, buffer };
 }
 
-/**
- * 把 content 写盘。
- *
- * 跟 recordDocumentEdit 同形 ── buffer key 在双索引下永不漂移, 直接
- * getOrCreateBuffer 拿到当前 memo 对应的 buffer 即可。
- */
+/** Write a buffer snapshot to its current backing path. */
 export async function saveDocumentContent({
   path,
   identity,

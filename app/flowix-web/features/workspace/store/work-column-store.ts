@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { canonicalPath } from '@/lib/path';
 
 import {
   EMPTY_WORK_COLUMN_TARGET,
@@ -28,6 +29,8 @@ export interface WorkColumnStore {
   isCurrentNavigation: (requestId: number) => boolean;
   beginNotebookSwitch: () => void;
   endNotebookSwitch: () => void;
+  replaceMemoPath: (memoId: string, path: string) => void;
+  replaceExternalPath: (previousPath: string, path: string) => void;
 }
 
 export const useWorkColumnStore = create<WorkColumnStore>()((set, get) => ({
@@ -136,5 +139,37 @@ export const useWorkColumnStore = create<WorkColumnStore>()((set, get) => ({
   endNotebookSwitch: () => set((state) => ({
     notebookSwitchesInFlight: Math.max(0, state.notebookSwitchesInFlight - 1),
   })),
+  replaceMemoPath: (memoId, path) => set((state) => {
+    const replace = (target: WorkColumnTarget | null): WorkColumnTarget | null => (
+      target?.kind === 'memo' && target.memoId === memoId
+        ? { ...target, path }
+        : target
+    );
+    const navigation = state.navigation;
+    return {
+      navigation: {
+        ...navigation,
+        target: replace(navigation.target) ?? navigation.target,
+        pendingTarget: replace(navigation.pendingTarget),
+        previousTarget: replace(navigation.previousTarget),
+      },
+    };
+  }),
+  replaceExternalPath: (previousPath, path) => set((state) => {
+    const replace = (target: WorkColumnTarget): WorkColumnTarget => (
+      target.kind === 'external' && canonicalPath(target.path) === canonicalPath(previousPath)
+        ? { ...target, path }
+        : target
+    );
+    const navigation = state.navigation;
+    return {
+      navigation: {
+        ...navigation,
+        target: replace(navigation.target),
+        pendingTarget: navigation.pendingTarget ? replace(navigation.pendingTarget) : null,
+        previousTarget: navigation.previousTarget ? replace(navigation.previousTarget) : null,
+      },
+    };
+  }),
   isCurrentNavigation: (requestId) => get().navigation.requestId === requestId,
 }));

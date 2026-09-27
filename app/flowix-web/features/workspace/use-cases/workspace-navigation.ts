@@ -6,9 +6,23 @@ import { canonicalUrl } from '@features/workspace/store/workspace-content-identi
 import {
   flushWorkspaceDocumentPath,
   getWorkspaceDocumentState,
-  pushWorkspaceDocumentHistory,
+  recordWorkspaceDocumentNavigation,
+  replaceWorkspaceMemoHistoryPath,
+  replaceWorkspaceDocumentPath,
   type DocumentHistoryEntry,
 } from '@features/document/public/workspace-api';
+import {
+  useBrowserColumnStore,
+  type BrowserColumnTab,
+} from '@features/workspace/store/browser-column-store';
+import { documentIdentityFromFile } from '@features/document/store/document-identity';
+import {
+  findFileDisplayId,
+  ensureFileDisplayIdentity,
+  suspendFileDisplayReconciliation,
+} from '@features/workspace/store/file-display-store';
+import { documentIdentityKey } from '@features/document/store/document-identity';
+import { waitForSaveQueue } from '@features/document/store/save-queue';
 import {
   getWorkspaceMemoState,
   setCurrentWorkspaceNotebook,
@@ -33,6 +47,10 @@ import {
   type WorkspaceContentLocation,
 } from './workspace-content-activation';
 import type { ContentIdentity } from '@features/workspace/store/workspace-content-identity';
+import {
+  useWorkspaceRestoreStore,
+  type PersistedWorkspaceTarget,
+} from '@features/workspace/store/workspace-restore-store';
 
 export interface OpenMemoTargetParams {
   memoId: string;
@@ -42,6 +60,7 @@ export interface OpenMemoTargetParams {
   history?: 'push' | 'skip';
   initialContent?: string;
   initialFocus?: 'title' | 'body';
+  destination?: 'main-third';
   /** When supplied, selection is part of this navigation transaction. */
   memo?: MemoItem | null;
   /** Optional authoritative Notebook entity used during a cross-notebook open. */
@@ -62,6 +81,7 @@ export interface OpenMediaTargetParams {
   notebookPath: string | null;
   resourceKind?: 'image' | 'video';
   history?: 'push' | 'skip';
+  destination?: 'main-third';
 }
 
 export interface OpenArtifactTargetParams {
@@ -199,12 +219,67 @@ function beginNavigation(
   return requestId;
 }
 
-function commitNavigation(requestId: number, target: WorkColumnTarget): boolean {
+function commitNavigation(
+  requestId: number,
+  target: WorkColumnTarget,
+  history: 'push' | 'skip' = 'skip',
+): boolean {
   const state = useWorkColumnStore.getState();
   const retryToken = state.navigation.requestId === requestId ? state.navigation.retryToken : null;
+  const previousTarget = state.navigation.target;
   const committed = state.commitNavigation(requestId, target);
-  if (committed && retryToken) retryActions.delete(retryToken);
+  if (committed) {
+    if (retryToken) retryActions.delete(retryToken);
+    if (history === 'push') {
+      recordWorkspaceDocumentNavigation(
+        historyEntryFromWorkColumnTarget(previousTarget),
+        historyEntryFromWorkColumnTarget(target),
+      );
+    }
+    const desiredTarget: PersistedWorkspaceTarget | null = target.kind === 'memo'
+      ? { kind: 'memo', memoId: target.memoId }
+      : target.kind === 'external' && target.path
+        ? { kind: 'external', path: canonicalPath(target.path), scopePath: target.scopePath }
+        : target.kind === 'media'
+          ? {
+              kind: 'media',
+              filePath: canonicalPath(target.filePath),
+              notebookId: target.notebookId,
+              notebookPath: target.notebookPath ? canonicalPath(target.notebookPath) : null,
+              resourceKind: target.resourceKind,
+            }
+        : target.kind === 'agent-conversation'
+          ? { kind: 'agent-conversation', instanceId: target.instanceId }
+          : null;
+    useWorkspaceRestoreStore.getState().setDesiredTarget(desiredTarget);
+  }
   return committed;
+}
+
+export function captureWorkspaceRestoreTarget(): PersistedWorkspaceTarget | null {
+  return useWorkspaceRestoreStore.getState().desiredTarget;
+}
+
+export async function restoreExternalDocumentWorkspace(
+  restored: Extract<PersistedWorkspaceTarget, { kind: 'external' }>,
+): Promise<void> {
+  await openExternalTarget(restored.path, {
+    scopePath: restored.scopePath,
+    history: 'skip',
+    destination: 'main-third',
+  });
+}
+
+export async function restoreMediaWorkspace(
+  restored: Extract<PersistedWorkspaceTarget, { kind: 'media' }>,
+): Promise<void> {
+  await openMediaTarget({
+    filePath: restored.filePath,
+    notebookId: restored.notebookId,
+    notebookPath: restored.notebookPath,
+    resourceKind: restored.resourceKind,
+    history: 'skip',
+  });
 }
 
 function isCurrentNavigation(requestId: number): boolean {
@@ -221,7 +296,7 @@ function targetToPreserveOnNotebookSwitch(
     return {
       kind: 'memo',
       memoId: document.activeMemoSession.memoId,
-      path: document.activeMemoSession.path,
+      path: document.activeMemoSession.fileIdentity.path,
       notebookId: document.activeMemoSession.notebookId,
       notebookPath: document.activeMemoSession.notebookPath,
       transitionId: document.activeMemoSession.transitionId,
@@ -230,7 +305,7 @@ function targetToPreserveOnNotebookSwitch(
   if (document.activeExternalSession) {
     return {
       kind: 'external',
-      path: document.activeExternalSession.path,
+      path: document.activeExternalSession.fileIdentity.path,
       scopePath: document.activeExternalSession.scopePath,
       transitionId: null,
     };
@@ -283,7 +358,7 @@ function captureDocumentSnapshot(): DocumentSnapshot {
     activeMemoSession: document.activeMemoSession
       ? {
           memoId: document.activeMemoSession.memoId,
-          path: document.activeMemoSession.path,
+          path: document.activeMemoSession.fileIdentity.path,
           notebookId: document.activeMemoSession.notebookId,
           notebookPath: document.activeMemoSession.notebookPath,
           transitionId: document.activeMemoSession.transitionId,
@@ -291,7 +366,7 @@ function captureDocumentSnapshot(): DocumentSnapshot {
       : null,
     activeExternalSession: document.activeExternalSession
       ? {
-          path: document.activeExternalSession.path,
+          path: document.activeExternalSession.fileIdentity.path,
           scopePath: document.activeExternalSession.scopePath,
         }
       : null,
@@ -299,11 +374,12 @@ function captureDocumentSnapshot(): DocumentSnapshot {
   };
 }
 
-function historyEntryFromWorkColumnTarget(
+export function historyEntryFromWorkColumnTarget(
   target: WorkColumnTarget,
 ): DocumentHistoryEntry | null {
   switch (target.kind) {
-    case 'memo':
+    case 'memo': {
+      if (!target.path) return null;
       return {
         kind: 'memo',
         memoId: target.memoId,
@@ -312,14 +388,18 @@ function historyEntryFromWorkColumnTarget(
         path: target.path,
         openedAt: Date.now(),
       };
-    case 'external':
+    }
+    case 'external': {
+      if (!target.path) return null;
       return {
         kind: 'external',
         path: target.path,
         scopePath: target.scopePath,
         openedAt: Date.now(),
       };
-    case 'media':
+    }
+    case 'media': {
+      if (!target.filePath) return null;
       return {
         kind: 'media',
         filePath: target.filePath,
@@ -328,6 +408,7 @@ function historyEntryFromWorkColumnTarget(
         resourceKind: target.resourceKind,
         openedAt: Date.now(),
       };
+    }
     case 'agent-conversation':
       return {
         kind: 'agent-conversation',
@@ -335,6 +416,7 @@ function historyEntryFromWorkColumnTarget(
         openedAt: Date.now(),
       };
     case 'artifact':
+      if (!target.pointerMemoId) return null;
       return {
         kind: 'artifact',
         pointerMemoId: target.pointerMemoId,
@@ -342,6 +424,13 @@ function historyEntryFromWorkColumnTarget(
         notebookPath: target.notebookPath,
         pluginId: target.pluginId,
         renderer: target.renderer,
+        openedAt: Date.now(),
+      };
+    case 'web':
+      if (!canonicalUrl(target.url)) return null;
+      return {
+        kind: 'web',
+        url: target.url,
         openedAt: Date.now(),
       };
     default:
@@ -366,22 +455,18 @@ async function restoreDocumentSnapshot(snapshot: DocumentSnapshot): Promise<void
       path: snapshot.activeMemoSession.path,
       notebookId: snapshot.activeMemoSession.notebookId,
       notebookPath: snapshot.activeMemoSession.notebookPath,
-      history: 'skip',
     });
     return;
   }
   if (snapshot.activeExternalSession) {
     await getWorkspaceDocumentState().openExternalDocument(
       snapshot.activeExternalSession.path,
-      { history: 'skip', scopePath: snapshot.activeExternalSession.scopePath },
+      { scopePath: snapshot.activeExternalSession.scopePath },
     );
     return;
   }
   if (snapshot.activeAgentConversationId) {
-    await getWorkspaceDocumentState().openAgentConversation(
-      snapshot.activeAgentConversationId,
-      { history: 'skip' },
-    );
+    await getWorkspaceDocumentState().openAgentConversation(snapshot.activeAgentConversationId);
     return;
   }
   await getWorkspaceDocumentState().clearDocument();
@@ -467,23 +552,24 @@ function publishMemoTargetIfCurrent(
   requestId: number,
   memoId: string,
   path: string | null,
+  history: 'push' | 'skip',
 ): boolean {
   const document = getWorkspaceDocumentState();
   const session = document.activeMemoSession;
   if (
     !session
     || session.memoId !== memoId
-    || (path !== null && canonicalPath(session.path) !== canonicalPath(path))
+    || (path !== null && canonicalPath(session.fileIdentity.path) !== canonicalPath(path))
   ) return false;
 
   return commitNavigation(requestId, {
     kind: 'memo',
     memoId: session.memoId,
-    path: session.path,
+    path: session.fileIdentity.path,
     notebookId: session.notebookId,
     notebookPath: session.notebookPath,
     transitionId: session.transitionId,
-  });
+  }, history);
 }
 
 function publishExternalTargetIfCurrent(
@@ -491,35 +577,98 @@ function publishExternalTargetIfCurrent(
   path: string | null,
   scopePath: string | null,
   fileBrowser?: import('../store/file-browser-target').FileBrowserContext,
+  history: 'push' | 'skip' = 'push',
 ): boolean {
   const document = getWorkspaceDocumentState();
   const session = document.activeExternalSession;
   if (
     !session
     || path === null
-    || canonicalPath(session.path) !== canonicalPath(path)
+    || canonicalPath(session.fileIdentity.path) !== canonicalPath(path)
     || (scopePath !== null && session.scopePath !== canonicalPath(scopePath))
   ) return false;
 
   return commitNavigation(requestId, {
     kind: 'external',
-    path: session.path,
+    path: session.fileIdentity.path,
     ...(fileBrowser ? { fileBrowser } : {}),
     scopePath: session.scopePath,
     transitionId: session.transitionId,
-  });
+  }, history);
 }
 
 export async function openMemoTarget(
   params: OpenMemoTargetParams,
 ): Promise<WorkspaceContentLocation | null> {
+  let promotedExternalTab: BrowserColumnTab | null = null;
+  const previousFocusHostId = useWorkspaceFocusStore.getState().focusedHostId;
+  const memoPath = params.path ? canonicalPath(params.path) : null;
+  if (memoPath) {
+    const activeExternal = getWorkspaceDocumentState().activeExternalSession;
+    if (activeExternal && canonicalPath(activeExternal.fileIdentity.path) === memoPath) {
+      const externalIdentity = documentIdentityFromFile(ensureFileDisplayIdentity(memoPath));
+      const flushed = await flushWorkspaceDocumentPath(
+        externalIdentity,
+        memoPath,
+        activeExternal.scopePath,
+      );
+      if (!flushed || !await waitForSaveQueue(documentIdentityKey(externalIdentity))) {
+        throw new Error('Memo open cancelled because the external document save did not complete');
+      }
+    }
+
+    const identity: ContentIdentity = {
+      kind: 'memo',
+      memoId: params.memoId,
+      path: memoPath,
+    };
+    const existing = params.destination === 'main-third'
+      ? null
+      : findExistingWorkspaceContent(identity);
+    const openExternalTab = existing?.host === 'browser-column'
+      ? useBrowserColumnStore.getState().tabs.find((tab) => tab.id === existing.tabId)
+      : null;
+    const isSameBrowserExternalSurface = openExternalTab?.target.kind === 'file-browser'
+      && !!openExternalTab.target.activeFilePath
+      && canonicalPath(openExternalTab.target.activeFilePath) === memoPath;
+    if (existing && isSameBrowserExternalSurface) {
+      // Flush the external editor before changing its persistence semantics.
+      // Keep its tab id and path identity, but make it a Memo surface so later
+      // edits use the Memo save channel and expose Memo-specific operations.
+      const activated = await activateExistingWorkspaceContentAsync(identity);
+      if (activated?.host === 'browser-column') {
+        const runtimeIdentity = documentIdentityFromFile(
+          ensureFileDisplayIdentity(memoPath),
+          params.memoId,
+        );
+        if (!await waitForSaveQueue(documentIdentityKey(runtimeIdentity))) {
+          throw new Error('Memo open cancelled because the external document save did not complete');
+        }
+        const tab = useBrowserColumnStore.getState().tabs.find(
+          (candidate) => candidate.id === activated.tabId,
+        );
+        if (tab?.target.kind === 'file-browser'
+          && tab.target.activeFilePath
+          && canonicalPath(tab.target.activeFilePath) === memoPath) {
+          promotedExternalTab = tab;
+          useBrowserColumnStore.getState().openTab({
+            ...tab,
+            target: {
+              kind: 'memo',
+              memoId: params.memoId,
+              notebookId: params.notebookId ?? params.notebook?.id ?? '',
+              notebookPath: params.notebookPath ?? params.notebook?.path ?? '',
+              filePath: memoPath,
+            },
+          }, 'focus-existing');
+        }
+      }
+    }
+  }
+
   const previousMemo = getWorkspaceMemoState().selectedMemo;
   const previousNotebook = getWorkspaceMemoState().selectedNotebook;
   const previousDocument = captureDocumentSnapshot();
-  const previousTarget = useWorkColumnStore.getState().navigation.target;
-  const previousSurfaceHistory = previousTarget.kind === 'artifact' || previousTarget.kind === 'media'
-    ? historyEntryFromWorkColumnTarget(previousTarget)
-    : null;
   const notebookId = params.notebookId ?? params.notebook?.id ?? null;
   const memo = params.memo ?? null;
   let switchedNotebook = false;
@@ -582,20 +731,21 @@ export async function openMemoTarget(
       if (!isCurrentNavigation(requestId)) return;
       await getWorkspaceDocumentState().openMemoDocument({
         ...documentParams,
-        history: previousSurfaceHistory ? 'skip' : params.history,
         notebookPath: params.notebookPath ?? targetNotebook?.path ?? null,
       });
 
       // A newer intent may have started while the document transition was
       // queued. Its session and target must remain authoritative.
       if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
-      if (!publishMemoTargetIfCurrent(requestId, params.memoId, params.path)) {
+      if (!publishMemoTargetIfCurrent(
+        requestId,
+        params.memoId,
+        params.path,
+        params.history ?? 'push',
+      )) {
         throw new Error(`Memo session was not committed: ${params.memoId}`);
       }
       useWorkspaceFocusStore.getState().focusHost('main-third');
-      if (previousSurfaceHistory && params.history !== 'skip') {
-        pushWorkspaceDocumentHistory(previousSurfaceHistory);
-      }
     },
     async () => {
       await openMemoTarget(params);
@@ -611,6 +761,17 @@ export async function openMemoTarget(
         const previousNotebookId = previousNotebook?.id ?? null;
         if (previousNotebookId) await setCurrentWorkspaceNotebook(previousNotebookId);
         getWorkspaceMemoState().setSelectedNotebook(previousNotebook);
+      }
+      if (promotedExternalTab) {
+        const currentTab = useBrowserColumnStore.getState().tabs.find(
+          (candidate) => candidate.id === promotedExternalTab?.id,
+        );
+        if (currentTab?.target.kind === 'memo'
+          && currentTab.target.memoId === params.memoId
+          && canonicalPath(currentTab.target.filePath) === memoPath) {
+          useBrowserColumnStore.getState().openTab(promotedExternalTab, 'focus-existing');
+        }
+        useWorkspaceFocusStore.getState().focusHost(previousFocusHostId);
       }
     },
   );
@@ -635,10 +796,6 @@ export async function openExternalTarget(
 
   const previousMemo = getWorkspaceMemoState().selectedMemo;
   const previousDocument = captureDocumentSnapshot();
-  const previousTarget = useWorkColumnStore.getState().navigation.target;
-  const previousSurfaceHistory = previousTarget.kind === 'artifact' || previousTarget.kind === 'media'
-    ? historyEntryFromWorkColumnTarget(previousTarget)
-    : null;
   await runNavigation(
     pendingExternalTarget(path, options),
     async (requestId) => {
@@ -646,17 +803,20 @@ export async function openExternalTarget(
       if (!isCurrentNavigation(requestId)) return;
       await getWorkspaceDocumentState().openExternalDocument(
         path,
-        previousSurfaceHistory ? { ...options, history: 'skip' } : options,
+        { scopePath: options?.scopePath },
       );
       if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
       const scopePath = options?.scopePath ? canonicalPath(options.scopePath) : null;
       if (path === null && !getWorkspaceDocumentState().activeExternalSession) {
         commitNavigation(requestId, EMPTY_WORK_COLUMN_TARGET);
-      } else if (!publishExternalTargetIfCurrent(requestId, path, scopePath, fileBrowser)) {
+      } else if (!publishExternalTargetIfCurrent(
+        requestId,
+        path,
+        scopePath,
+        fileBrowser,
+        options?.history ?? 'push',
+      )) {
         throw new Error(`External document session was not committed: ${path}`);
-      }
-      if (previousSurfaceHistory && options?.history !== 'skip') {
-        pushWorkspaceDocumentHistory(previousSurfaceHistory);
       }
     },
     async () => {
@@ -681,7 +841,9 @@ export async function openMediaTarget(
   const filePath = params.filePath.trim();
   if (!filePath || !params.notebookPath?.trim()) return null;
   const target = pendingMediaTarget({ ...params, filePath });
-  const existing = activateExistingContentForNavigation({ kind: 'media', path: filePath });
+  const existing = params.destination === 'main-third'
+    ? null
+    : activateExistingContentForNavigation({ kind: 'media', path: filePath });
   if (existing instanceof Promise) {
     const activated = await existing;
     if (activated) return activated;
@@ -691,9 +853,6 @@ export async function openMediaTarget(
 
   const previousMemo = getWorkspaceMemoState().selectedMemo;
   const previousDocument = captureDocumentSnapshot();
-  const previousHistoryEntry = historyEntryFromWorkColumnTarget(
-    useWorkColumnStore.getState().navigation.target,
-  );
   await runNavigation(
     target,
     async (requestId) => {
@@ -702,11 +861,8 @@ export async function openMediaTarget(
       await getWorkspaceDocumentState().clearDocument();
       if (!isCurrentNavigation(requestId)) return;
       getWorkspaceMemoState().setSelectedMemo(null);
-      if (!commitNavigation(requestId, target)) return;
+      if (!commitNavigation(requestId, target, params.history ?? 'push')) return;
       useWorkspaceFocusStore.getState().focusHost('main-third');
-      if (params.history !== 'skip' && previousHistoryEntry) {
-        pushWorkspaceDocumentHistory(previousHistoryEntry);
-      }
     },
     async () => { await openMediaTarget(params); },
     async (requestId) => {
@@ -720,11 +876,16 @@ export async function openMediaTarget(
 }
 
 /** Open a web target in the left work column. */
-export async function openWebTarget(url: string): Promise<WorkspaceContentLocation | null> {
+export async function openWebTarget(
+  url: string,
+  options?: { history?: 'push' | 'skip'; destination?: 'main-third' },
+): Promise<WorkspaceContentLocation | null> {
   const normalized = canonicalUrl(url);
   if (!normalized) throw new Error(`Unsupported webpage URL: ${url}`);
 
-  const existing = activateExistingContentForNavigation({ kind: 'web', url: normalized });
+  const existing = options?.destination === 'main-third'
+    ? null
+    : activateExistingContentForNavigation({ kind: 'web', url: normalized });
   if (existing instanceof Promise) {
     const activated = await existing;
     if (activated) return activated;
@@ -738,10 +899,10 @@ export async function openWebTarget(url: string): Promise<WorkspaceContentLocati
     async (requestId) => {
       await flushWorkspaceDocument();
       if (!isCurrentNavigation(requestId)) return;
-      commitNavigation(requestId, target);
+      commitNavigation(requestId, target, options?.history ?? 'push');
       useWorkspaceFocusStore.getState().focusHost('main-third');
     },
-    async () => { await openWebTarget(normalized); },
+    async () => { await openWebTarget(normalized, options); },
   );
   return null;
 }
@@ -757,10 +918,6 @@ export async function openArtifactTarget(
   const pointerMemoId = params.pointerMemoId.trim();
   if (!pointerMemoId) return null;
 
-  const previousHistoryEntry = historyEntryFromWorkColumnTarget(
-    useWorkColumnStore.getState().navigation.target,
-  );
-
   const target = pendingArtifactTarget({ ...params, pointerMemoId });
   await runNavigation(
     target,
@@ -770,12 +927,9 @@ export async function openArtifactTarget(
       // document surface underneath the artifact.
       await flushWorkspaceDocument();
       if (!isCurrentNavigation(requestId)) return;
-      if (!commitNavigation(requestId, target)) return;
+      if (!commitNavigation(requestId, target, params.history ?? 'push')) return;
       selectArtifactMemo(params);
       useWorkspaceFocusStore.getState().focusHost('main-third');
-      if (params.history !== 'skip' && previousHistoryEntry) {
-        pushWorkspaceDocumentHistory(previousHistoryEntry);
-      }
     },
     async () => { await openArtifactTarget(params); },
   );
@@ -789,13 +943,16 @@ export async function flushWorkspaceDocument(): Promise<void> {
 
   if (document.activeMemoSession) {
     flushed = await flushWorkspaceDocumentPath(
-      { kind: 'memo', id: document.activeMemoSession.memoId },
-      document.activeMemoSession.path,
+      documentIdentityFromFile(
+        document.activeMemoSession.fileIdentity,
+        document.activeMemoSession.memoId,
+      ),
+      document.activeMemoSession.fileIdentity.path,
     );
   } else if (document.activeExternalSession) {
     flushed = await flushWorkspaceDocumentPath(
-      { kind: 'external', path: document.activeExternalSession.path },
-      document.activeExternalSession.path,
+      documentIdentityFromFile(document.activeExternalSession.fileIdentity),
+      document.activeExternalSession.fileIdentity.path,
       document.activeExternalSession.scopePath,
     );
   }
@@ -807,30 +964,27 @@ export async function flushWorkspaceDocument(): Promise<void> {
 
 export async function openAgentTarget(
   instanceId: string,
-  options?: { history?: 'push' | 'skip' },
+  options?: { history?: 'push' | 'skip'; destination?: 'main-third' },
 ): Promise<WorkspaceHostId | WorkspaceContentLocation> {
   const normalized = instanceId.trim();
   if (!normalized) return 'main-third';
-  const existing = activateExistingContentForNavigation({
-    kind: 'agent-conversation',
-    instanceId: normalized,
-  });
+  const existing = options?.destination === 'main-third'
+    ? null
+    : activateExistingContentForNavigation({
+        kind: 'agent-conversation',
+        instanceId: normalized,
+      });
   if (existing instanceof Promise) {
     const activated = await existing;
     if (activated) return activated;
   } else if (existing) {
     return existing;
   }
-  const previousTarget = useWorkColumnStore.getState().navigation.target;
-  const previousSurfaceHistory = previousTarget.kind === 'artifact' || previousTarget.kind === 'media'
-    ? historyEntryFromWorkColumnTarget(previousTarget)
-    : null;
   await runNavigation(
     { kind: 'agent-conversation', instanceId: normalized },
     async (requestId) => {
       await getWorkspaceDocumentState().openAgentConversation(
         normalized,
-        previousSurfaceHistory ? { ...options, history: 'skip' } : options,
       );
       if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
       if (getWorkspaceDocumentState().activeAgentConversationId !== normalized) {
@@ -839,10 +993,11 @@ export async function openAgentTarget(
       getWorkspaceMemoState().setActivePluginId(null);
       getWorkspaceMemoState().setSelectedMemo(null);
       if (!isCurrentNavigation(requestId)) return;
-      commitNavigation(requestId, { kind: 'agent-conversation', instanceId: normalized });
-      if (previousSurfaceHistory && options?.history !== 'skip') {
-        pushWorkspaceDocumentHistory(previousSurfaceHistory);
-      }
+      commitNavigation(
+        requestId,
+        { kind: 'agent-conversation', instanceId: normalized },
+        options?.history ?? 'push',
+      );
     },
     async () => {
       await openAgentTarget(normalized, options);
@@ -868,18 +1023,102 @@ export async function clearWorkspaceDocument(): Promise<void> {
 }
 
 export function replaceActiveMemoPath(memoId: string, path: string): void {
+  const nextPath = canonicalPath(path);
+  if (!memoId || !nextPath) return;
   const current = getWorkspaceDocumentState().activeMemoSession;
-  if (!current || current.memoId !== memoId) return;
-  const requestId = beginNavigation({
-    kind: 'memo',
-    memoId,
-    path,
-    notebookId: current.notebookId,
-    notebookPath: current.notebookPath,
-    transitionId: null,
-  }, null);
-  getWorkspaceDocumentState().replaceActiveMemoPath(memoId, path);
-  publishMemoTargetIfCurrent(requestId, memoId, path);
+  const activeMemo = current?.memoId === memoId ? current : null;
+  const navigation = useWorkColumnStore.getState().navigation;
+  const tabs = useBrowserColumnStore.getState().tabs;
+  const previousPaths = new Set<string>();
+  if (activeMemo?.fileIdentity.path) previousPaths.add(canonicalPath(activeMemo.fileIdentity.path));
+  for (const target of [navigation.target, navigation.pendingTarget, navigation.previousTarget]) {
+    if (target?.kind === 'memo' && target.memoId === memoId && target.path) {
+      previousPaths.add(canonicalPath(target.path));
+    }
+  }
+  for (const tab of tabs) {
+    if (tab.target.kind === 'memo' && tab.target.memoId === memoId && tab.target.filePath) {
+      previousPaths.add(canonicalPath(tab.target.filePath));
+    }
+  }
+
+  const hasStalePath = [...previousPaths].some((previousPath) => previousPath !== nextPath);
+  const activePathChanged = !!activeMemo && canonicalPath(activeMemo.fileIdentity.path) !== nextPath;
+  if (!hasStalePath && !activePathChanged) {
+    replaceWorkspaceMemoHistoryPath(memoId, nextPath);
+    return;
+  }
+
+  const resumeDisplayIdReconciliation = suspendFileDisplayReconciliation();
+  try {
+    for (const previousPath of previousPaths) {
+      if (previousPath === nextPath) continue;
+      const displayId = activeMemo?.fileIdentity.path && canonicalPath(activeMemo.fileIdentity.path) === previousPath
+        ? activeMemo.fileIdentity.displayId
+        : findFileDisplayId(previousPath) ?? findFileDisplayId(nextPath);
+      if (!displayId) continue;
+      // A Memo rename can also have legacy file-browser/external references to
+      // the same path. Rebase their shared file identity before updating tabs.
+      replaceWorkspaceDocumentPath({
+        kind: 'md',
+        memoId,
+        path: previousPath,
+        displayId,
+      }, nextPath);
+    }
+
+    if (activeMemo && canonicalPath(activeMemo.fileIdentity.path) !== nextPath) {
+      const requestId = beginNavigation({
+        kind: 'memo',
+        memoId,
+        path: nextPath,
+        notebookId: activeMemo.notebookId,
+        notebookPath: activeMemo.notebookPath,
+        transitionId: null,
+      }, null);
+      getWorkspaceDocumentState().replaceActiveMemoPath(memoId, nextPath);
+      useWorkColumnStore.getState().replaceMemoPath(memoId, nextPath);
+      publishMemoTargetIfCurrent(requestId, memoId, nextPath, 'skip');
+    } else if (!activeMemo) {
+      getWorkspaceDocumentState().replaceActiveMemoPath(memoId, nextPath);
+      useWorkColumnStore.getState().replaceMemoPath(memoId, nextPath);
+    }
+    useBrowserColumnStore.getState().replaceMemoPath(memoId, nextPath);
+    replaceWorkspaceMemoHistoryPath(memoId, nextPath);
+  } finally {
+    resumeDisplayIdReconciliation();
+  }
+}
+
+/** Update every live reference to an external file after an in-place rename. */
+export function replaceExternalDocumentPath(
+  displayId: string,
+  previousPath: string,
+  path: string,
+): void {
+  const previous = canonicalPath(previousPath);
+  const next = canonicalPath(path);
+
+  const resumeDisplayIdReconciliation = suspendFileDisplayReconciliation();
+  try {
+    replaceWorkspaceDocumentPath({
+      kind: 'md',
+      memoId: null,
+      path: previous,
+      displayId,
+    }, next);
+    useWorkColumnStore.getState().replaceExternalPath(previous, next);
+    useBrowserColumnStore.getState().replaceExternalPath(previous, next);
+    const restored = useWorkspaceRestoreStore.getState().desiredTarget;
+    if (restored?.kind === 'external' && canonicalPath(restored.path) === previous) {
+      useWorkspaceRestoreStore.getState().setDesiredTarget({
+        ...restored,
+        path: next,
+      });
+    }
+  } finally {
+    resumeDisplayIdReconciliation();
+  }
 }
 
 export async function discardMemoDocument(memoId: string): Promise<void> {

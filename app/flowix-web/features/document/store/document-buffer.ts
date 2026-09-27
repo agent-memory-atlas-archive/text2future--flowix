@@ -1,7 +1,7 @@
 /**
- * Per-path mutable buffer for a document. The 3 fields here used to be
+ * Mutable buffer for a runtime document identity. The 3 fields here used to be
  * module-singleton refs in useDocumentContent; now they live in a
- * module-level Map<filePath, DocumentBuffer> owned by buffer-registry so
+ * module-level Map<documentIdentityKey, DocumentBuffer> owned by buffer-registry so
  * switching memos doesn't trample the previously-open memo's pending
  * state, and so the document store can coordinate save flushes without
  * going through module-singleton closer hooks.

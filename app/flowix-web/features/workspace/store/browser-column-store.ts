@@ -8,7 +8,11 @@ import {
   normalizePluginArtifactRenderer,
   type PluginArtifactRendererId,
 } from '@features/plugin/public/workspace-api';
-import { canonicalUrl, contentIdentityKey } from './workspace-content-identity';
+import {
+  canonicalUrl,
+  contentIdentityKey,
+  type ContentIdentity,
+} from './workspace-content-identity';
 import { useWorkspaceFocusStore } from './workspace-focus-store';
 
 export type BrowserColumnTarget =
@@ -88,6 +92,8 @@ interface BrowserColumnState {
   closeTabsToRight: (tabId: string) => string | null;
   closeAllTabs: () => void;
   replaceMemoPath: (memoId: string, path: string) => void;
+  replaceExternalPath: (previousPath: string, path: string) => void;
+  clearExternalPath: (path: string) => void;
   removeTabsByMemoId: (memoId: string) => string[];
   reorderTab: (tabId: string, beforeTabId: string | null) => void;
   updateTabMetadata: (tabId: string, metadata: Partial<Pick<BrowserColumnTab, 'title' | 'icon'>>) => void;
@@ -111,20 +117,24 @@ export const BROWSER_COLUMN_FILE_TREE_DEFAULT_WIDTH = 220;
 export const BROWSER_COLUMN_FILE_TREE_MIN_WIDTH = 200;
 export const BROWSER_COLUMN_FILE_TREE_MAX_WIDTH = 420;
 
-export function browserColumnTargetKey(target: BrowserColumnTarget): string | null {
+export function browserColumnTargetIdentity(target: BrowserColumnTarget): ContentIdentity {
   switch (target.kind) {
-    case 'memo': return contentIdentityKey({ kind: 'memo', memoId: target.memoId });
-    case 'media': return contentIdentityKey({ kind: 'media', path: target.filePath });
+    case 'memo': return { kind: 'memo', memoId: target.memoId, path: target.filePath };
+    case 'media': return { kind: 'media', path: target.filePath };
     case 'file-browser': return target.activeFilePath
-      ? contentIdentityKey({ kind: 'external', path: target.activeFilePath })
-      : target.folderPath ? `file-browser:${canonicalPath(target.folderPath)}` : null;
-    case 'web': return contentIdentityKey({ kind: 'web', url: target.url });
-    case 'artifact': return contentIdentityKey({ kind: 'artifact', pointerMemoId: target.pointerMemoId });
-    case 'agent_conversation': return contentIdentityKey({
+      ? { kind: 'external', path: target.activeFilePath }
+      : { kind: 'file-browser', folderPath: target.folderPath ?? '' };
+    case 'web': return { kind: 'web', url: target.url };
+    case 'artifact': return { kind: 'artifact', pointerMemoId: target.pointerMemoId };
+    case 'agent_conversation': return {
       kind: 'agent-conversation',
       instanceId: target.instanceId,
-    });
+    };
   }
+}
+
+export function browserColumnTargetKey(target: BrowserColumnTarget): string | null {
+  return contentIdentityKey(browserColumnTargetIdentity(target));
 }
 
 function adjacentTabId(tabs: BrowserColumnTab[], closingTabId: string): string | null {
@@ -602,6 +612,38 @@ export const useBrowserColumnStore = create<BrowserColumnState>()(
                 ...tab,
                 title: displayTitleFromFilename(filename),
                 target: { ...tab.target, filePath: path },
+              }
+            : tab),
+        }));
+      },
+      replaceExternalPath: (previousPath, path) => {
+        const previous = canonicalPath(previousPath);
+        const next = canonicalPath(path);
+        const filename = next.split(/[\\/]/).pop() ?? next;
+        set((state) => ({
+          tabs: state.tabs.map((tab) => tab.target.kind === 'file-browser'
+            && tab.target.activeFilePath
+            && canonicalPath(tab.target.activeFilePath) === previous
+            ? {
+                ...tab,
+                title: displayTitleFromFilename(filename),
+                target: { ...tab.target, activeFilePath: next },
+              }
+            : tab),
+        }));
+      },
+      clearExternalPath: (path) => {
+        const targetPath = canonicalPath(path);
+        set((state) => ({
+          tabs: state.tabs.map((tab) => tab.target.kind === 'file-browser'
+            && tab.target.activeFilePath
+            && canonicalPath(tab.target.activeFilePath) === targetPath
+            ? {
+                ...tab,
+                title: displayTitleFromFilename(
+                  tab.target.folderPath.split(/[\\/]/).filter(Boolean).pop() ?? tab.target.folderPath,
+                ),
+                target: { ...tab.target, activeFilePath: null },
               }
             : tab),
         }));

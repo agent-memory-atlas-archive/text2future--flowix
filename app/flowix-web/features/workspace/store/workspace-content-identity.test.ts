@@ -12,7 +12,7 @@ describe('workspace content identity', () => {
   it('keeps different content models in separate identity namespaces', () => {
     expect(contentIdentityKey({ kind: 'memo', memoId: 'same-id' })).toBe('memo:same-id');
     expect(contentIdentityKey({ kind: 'external', path: '/notes/same-id' })).toBe(
-      'external:/notes/same-id',
+      'file:/notes/same-id',
     );
     expect(contentIdentityKey({ kind: 'artifact', pointerMemoId: 'same-id' })).toBe(
       'artifact:same-id',

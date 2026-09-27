@@ -5,7 +5,7 @@ import { parentRelativePathForTreeCreate } from './memo-create-location';
 
 function session(path: string, notebookId = 'work'): MemoDocumentSession {
   return {
-    id: 'session', memoId: 'memo', path, notebookId,
+    fileIdentity: { displayId: 'display-session', path }, memoId: 'memo', notebookId,
     notebookPath: '/notes/work', openedAt: 0, transitionId: 0,
   };
 }

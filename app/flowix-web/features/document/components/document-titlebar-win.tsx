@@ -7,6 +7,7 @@ import {
   type DocumentTitlebarProps,
   type DocumentState,
   ExternalTitlebarBadge,
+  ExternalDocumentActions,
   MediaActions,
   MemoActions,
   DOCUMENT_TITLEBAR_ICON_BUTTON_WIN,
@@ -53,10 +54,11 @@ export function DocumentTitlebarWin({
     onExportWord,
     onExportPdf,
     onRequestDeleteMemo,
+    onDeleteExternalFile,
     onColorsChange,
     editorMode,
     onToggleEditorMode,
-  },
+      },
   mediaActions,
 }: DocumentTitlebarProps) {
   const { t } = useI18n();
@@ -131,8 +133,26 @@ export function DocumentTitlebarWin({
         {documentState === 'external' && (
           <ExternalTitlebarBadge />
         )}
+        {documentState === 'external' && externalFilePath && !isMediaSurface && (
+          <ExternalDocumentActions
+            key={externalFilePath}
+            filePath={externalFilePath}
+            iconButtonClass={ICON_BTN}
+            onCopyPath={onCopyLink}
+            onCopyFullText={onCopyFullText}
+            onExportMarkdown={onExportMarkdown}
+            onExportWord={onExportWord}
+            onExportPdf={onExportPdf}
+            onSaveAsTemplate={onSaveAsTemplate}
+            onDeleteExternalFile={onDeleteExternalFile}
+            canCopyFullText={canCopyFullText}
+            canExportContent={canExportContent}
+            canSaveAsTemplate={canSaveAsTemplate}
+          />
+        )}
         {documentState === 'memo' && currentMemo && (
           <MemoActions
+            key={currentMemo.id}
             memo={currentMemo}
             iconButtonClass={ICON_BTN}
             onCopyLink={onCopyLink}

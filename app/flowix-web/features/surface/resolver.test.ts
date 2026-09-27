@@ -40,8 +40,11 @@ function markdownSurface(options: {
     kind: 'note',
     memoId: options.memoId ?? 'memo-1',
     instanceKey: options.memoId ? `memo:${options.memoId}` : `path:${options.filePath ?? '/notebook/note.md'}`,
+    fileIdentity: {
+      path: options.filePath ?? '/notebook/note.md',
+      displayId: `display:${options.filePath ?? '/notebook/note.md'}`,
+    },
     props: {
-      filePath: options.filePath ?? '/notebook/note.md',
       transitionId: options.transitionId ?? null,
       notebookId: options.notebookId ?? 'notebook-1',
       notebookPath: options.notebookPath ?? '/notebook',
@@ -119,10 +122,11 @@ type ExternalDocumentIdentity = Extract<DocumentSurfaceContext, { identity: { ki
 function memoDocumentIdentity(
   options: { path?: string; transitionId?: number | null } = {},
 ): MemoDocumentIdentity {
+  const path = options.path ?? '/notebook/note.md';
   return {
     kind: 'memo',
     memoId: 'memo-1',
-    path: options.path ?? '/notebook/note.md',
+    fileIdentity: { path, displayId: `display:${path}` },
     notebookId: 'notebook-1',
     notebookPath: '/notebook',
     transitionId: options.transitionId ?? null,
@@ -132,9 +136,10 @@ function memoDocumentIdentity(
 function externalDocumentIdentity(
   options: { path?: string; scopePath?: string | null; transitionId?: number | null } = {},
 ): ExternalDocumentIdentity {
+  const path = options.path ?? '/notebook/note.md';
   return {
     kind: 'external',
-    path: options.path ?? '/notebook/note.md',
+    fileIdentity: { path, displayId: `display:${path}` },
     scopePath: options.scopePath ?? '/files',
     transitionId: options.transitionId ?? null,
   };
@@ -161,7 +166,6 @@ describe('surface resolvers', () => {
         instanceKey: 'external:readme:2',
         memo: null,
         documentProps: externalDocumentProps({
-          filePath: '/files/readme.md',
           memoId: null,
           transitionId: 2,
           externalScopePath: '/files',

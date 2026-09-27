@@ -1299,6 +1299,7 @@ dependencies = [
  "walkdir",
  "webview2-com",
  "windows",
+ "zip",
 ]
 
 [[package]]

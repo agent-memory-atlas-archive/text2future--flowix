@@ -9,11 +9,6 @@ import { cn } from '@/lib/utils';
 
 export type MemoListViewTab = 'conversations' | 'notes';
 
-// MemoList and AgentConversationList are mutually exclusive views, so the
-// tab component is remounted during a view switch. Keep the previous position
-// between those mounts so the selected background can still animate across it.
-let lastRenderedTab: MemoListViewTab | null = null;
-
 interface MemoListViewTabsProps {
   activeTab: MemoListViewTab;
   onChange: (tab: MemoListViewTab) => void;
@@ -67,24 +62,17 @@ export function MemoListViewTabs({
   onToggleNavigationDrawer,
 }: MemoListViewTabsProps) {
   const { t } = useI18n();
-  const [indicatorTab, setIndicatorTab] = useState<MemoListViewTab>(
-    () => lastRenderedTab ?? activeTab,
-  );
+  const [indicatorTab, setIndicatorTab] = useState<MemoListViewTab>(activeTab);
 
   useEffect(() => {
-    if (indicatorTab === activeTab) {
-      lastRenderedTab = activeTab;
-      return;
-    }
+    if (indicatorTab === activeTab) return;
     const frame = window.requestAnimationFrame(() => {
       setIndicatorTab(activeTab);
-      lastRenderedTab = activeTab;
     });
     return () => window.cancelAnimationFrame(frame);
   }, [activeTab, indicatorTab]);
 
   const handleChange = (tab: MemoListViewTab) => {
-    lastRenderedTab = activeTab;
     onChange(tab);
   };
 

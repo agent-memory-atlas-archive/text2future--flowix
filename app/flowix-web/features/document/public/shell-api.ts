@@ -18,6 +18,7 @@ export {
   type DocumentEditorMode,
 } from '@features/document/store';
 export { navigateDocumentHistory } from '@features/document/use-cases/document-navigation';
+export { localDocumentOperations } from '@features/document/use-cases/local-document-operations';
 export {
   type DocumentHistoryEntry,
   type MemoDocumentSession,

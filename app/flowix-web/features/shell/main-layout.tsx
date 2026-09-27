@@ -13,7 +13,7 @@ import {
   setDocumentEditorMode,
   useDocumentEditorMode,
   type DocumentHistoryEntry,
-  type MemoDocumentSession,
+  localDocumentOperations,
 } from '@features/document/public/shell-api';
 import {
   MemoList,
@@ -35,12 +35,13 @@ import {
   type DshDownloadProgress,
 } from '@platform/tauri/client';
 import { WindowsTitlebarControls } from '@shared/window-titlebar-controls';
-import { canonicalPath, getDocumentInstanceKey } from '@/lib/path';
 import { NotebookDeleteDialog } from '@features/shell/components/notebook-delete-dialog';
 import { MarkdownFileDropOverlay } from '@features/shell/components/drag-overlay/markdown-file-drop-overlay';
+import { ensureFileDisplayTrackingStarted } from '@features/workspace/use-cases/file-display-tracking';
 import { useMainMiddleColumnController } from '@features/shell/hooks/use-main-middle-column-controller';
 import { useMainPanelController } from '@features/shell/hooks/use-main-panel-controller';
 import { ListColumn } from '@features/shell/components/list-column';
+import { ListColumnContent } from '@features/shell/components/list-column-content';
 import { useI18n } from '@/lib/i18n';
 import { toast } from '@/lib/toast';
 import { openPath } from '@platform/tauri/opener';
@@ -64,8 +65,26 @@ import { CenteredLoadingSpinner } from '@shared/ui/centered-loading-spinner';
 import { MainPromptHost } from '@features/shell/components/main-prompt-host';
 import type { Editor } from '@tiptap/core';
 import { OnboardingScreen } from '@features/onboarding';
+import {
+  discardDocumentDraft,
+  flushDocumentPath,
+  hasDocumentUnsavedChanges,
+} from '@features/document/store/document-session-service';
+import { documentIdentityKey } from '@features/document/store/document-identity';
+import { waitForSaveQueue } from '@features/document/store/save-queue';
+import { expectExternalDocumentDelete } from '@features/document/store/external-document-operation';
+import {
+  clearWorkspaceDocument,
+  historyEntryFromWorkColumnTarget,
+} from '@features/workspace/use-cases/workspace-navigation';
+import { documentHistoryEntryKey } from '@features/document/store/document-history-store';
+import { useBrowserColumnStore } from '@features/workspace/store/browser-column-store';
+import { useDocumentStore } from '@features/document/store/document-store';
 
 const DOCUMENT_PANEL_MIN_WIDTH = BROWSER_COLUMN_MIN_WIDTH;
+
+// File identities must exist before resolving the first persisted/open surface.
+if (typeof window !== 'undefined') ensureFileDisplayTrackingStarted();
 
 const BrowserColumn = lazy(() =>
   import('@features/shell/components/browser-column').then((module) => ({
@@ -85,35 +104,9 @@ function isTauriRuntime(): boolean {
 function isDifferentHistoryTarget(
   entry: DocumentHistoryEntry,
   currentWorkColumnTarget: WorkColumnTarget,
-  activeMemoSession: MemoDocumentSession | null,
-  currentDocumentSource: 'memo' | 'external' | null,
-  currentDocumentPath: string | null,
-  activeAgentConversationId: string | null,
 ): boolean {
-  if (currentWorkColumnTarget.kind === 'artifact') {
-    return entry.kind !== 'artifact'
-      || entry.pointerMemoId !== currentWorkColumnTarget.pointerMemoId;
-  }
-  if (currentWorkColumnTarget.kind === 'media') {
-    return entry.kind !== 'media'
-      || canonicalPath(entry.filePath) !== canonicalPath(currentWorkColumnTarget.filePath);
-  }
-  if (entry.kind === 'artifact') return true;
-  if (currentWorkColumnTarget.kind === 'agent-conversation') {
-    return entry.kind !== 'agent-conversation'
-      || entry.instanceId !== currentWorkColumnTarget.instanceId;
-  }
-  if (entry.kind === 'agent-conversation') {
-    return entry.instanceId !== activeAgentConversationId;
-  }
-  if (entry.kind === 'memo') {
-    return !activeMemoSession || (
-      entry.memoId !== activeMemoSession.memoId ||
-      canonicalPath(entry.path) !== canonicalPath(activeMemoSession.path)
-    );
-  }
-  if (entry.kind !== 'external') return true;
-  return currentDocumentSource !== 'external' || canonicalPath(entry.path) !== canonicalPath(currentDocumentPath ?? '');
+  return documentHistoryEntryKey(entry)
+    !== documentHistoryEntryKey(historyEntryFromWorkColumnTarget(currentWorkColumnTarget));
 }
 
 export interface MainLayoutBusinessController {
@@ -270,20 +263,12 @@ export function MainLayout({
     isDifferentHistoryTarget(
       entry,
       navigationState.target,
-      activeMemoSession,
-      currentDocumentSource,
-      currentDocumentPath,
-      activeAgentConversationId,
     )
   ));
   const canNavigateForward = documentHistory.forwardStack.some((entry) => (
     isDifferentHistoryTarget(
       entry,
       navigationState.target,
-      activeMemoSession,
-      currentDocumentSource,
-      currentDocumentPath,
-      activeAgentConversationId,
     )
   ));
   const [isSearchPanelOpen, setIsSearchPanelOpen] = useState(false);
@@ -340,16 +325,26 @@ export function MainLayout({
     ? memos.find((memo) => memo.id === activeMemoSession.memoId)
       ?? (selectedMemo?.id === activeMemoSession.memoId ? selectedMemo : null)
     : null;
-  const currentDocumentInstanceKey =
-    currentDocumentSource === 'memo' && activeMemoSession
-      ? activeMemoSession.id
-      : activeExternalSession?.id ?? (currentDocumentPath ? getDocumentInstanceKey(currentDocumentPath) : null);
+  const currentFileIdentity = activeMemoSession?.fileIdentity
+    ?? activeExternalSession?.fileIdentity
+    ?? null;
+  const currentDocumentInstanceKey = currentFileIdentity?.displayId ?? null;
   const mainMemoEditorIdentity = activeMemoSession
-    ? { kind: 'memo' as const, id: activeMemoSession.memoId }
+    ? {
+        kind: 'md' as const,
+        memoId: activeMemoSession.memoId,
+        path: activeMemoSession.fileIdentity.path,
+        displayId: activeMemoSession.fileIdentity.displayId,
+      }
     : null;
   const mainEditorMode = useDocumentEditorMode(
     'main-third',
-    mainMemoEditorIdentity ?? { kind: 'external', path: currentDocumentPath ?? '' },
+    mainMemoEditorIdentity ?? {
+      kind: 'md',
+      memoId: null,
+      path: currentDocumentPath ?? '',
+      displayId: activeExternalSession?.fileIdentity.displayId ?? 'inactive-external-display',
+    },
   );
   const getCurrentDocumentContent = useCallback(() => currentDocumentContentRef.current, []);
   const getCurrentDocumentEditor = useCallback(() => currentDocumentEditorRef.current, []);
@@ -377,6 +372,40 @@ export function MainLayout({
     setMemoColors,
     onExported: handleDocumentExported,
   });
+
+  const handleDeleteExternalFile = useCallback(async () => {
+    const session = activeExternalSession;
+    if (!session) return;
+    const filePath = session.fileIdentity.path;
+    const identity = {
+      kind: 'md' as const,
+      memoId: null,
+      ...session.fileIdentity,
+    };
+
+    captureLatestDocumentContent(identity);
+    const flushed = await flushDocumentPath(identity, filePath, session.scopePath);
+    const queueSettled = await waitForSaveQueue(documentIdentityKey(identity));
+    if (!flushed || !queueSettled || hasDocumentUnsavedChanges(identity)) {
+      toast.error(t('document.external.deleteFileUnsaved'));
+      return;
+    }
+
+    const cancelExpectedDelete = expectExternalDocumentDelete(filePath);
+    try {
+      await localDocumentOperations.delete({ path: filePath, scopePath: session.scopePath });
+      discardDocumentDraft(identity);
+      useBrowserColumnStore.getState().clearExternalPath(filePath);
+      const currentSession = useDocumentStore.getState().activeExternalSession;
+      if (currentSession?.fileIdentity.displayId === session.fileIdentity.displayId) {
+        await clearWorkspaceDocument();
+      }
+    } catch (error) {
+      cancelExpectedDelete();
+      console.warn('[MainLayout] Failed to delete external file:', error);
+      toast.error(t('document.external.deleteFileFailed'));
+    }
+  }, [activeExternalSession, t]);
 
   // The DocumentContainer owns the import hook (it needs the editor's
   // contentRef + saveDoc) but the titlebar renders the file path and the
@@ -468,22 +497,20 @@ export function MainLayout({
   }, [mediaTarget]);
 
   const handleToggleEditorMode = useCallback(() => {
-    if (!currentMemo || !activeMemoSession) return;
-    const identity = { kind: 'memo' as const, id: activeMemoSession.memoId };
+    if (!currentMemo || !mainMemoEditorIdentity) return;
     // Publish the active editor's latest serialized content before replacing
     // its React subtree. The autosave pipeline continues asynchronously from
     // the shared document buffer; mode switching itself must stay immediate.
-    captureLatestDocumentContent(identity, 'main-third');
+    captureLatestDocumentContent(mainMemoEditorIdentity, 'main-third');
     const nextMode = mainEditorMode === 'source' ? 'rich' : 'source';
-    setDocumentEditorMode('main-third', identity, nextMode);
-  }, [activeMemoSession, currentMemo, mainEditorMode]);
+    setDocumentEditorMode('main-third', mainMemoEditorIdentity, nextMode);
+  }, [currentMemo, mainEditorMode, mainMemoEditorIdentity]);
 
   const handleViewSourceMode = useCallback(() => {
-    if (!currentMemo || !activeMemoSession || mainEditorMode === 'source') return;
-    const identity = { kind: 'memo' as const, id: activeMemoSession.memoId };
-    captureLatestDocumentContent(identity, 'main-third');
-    setDocumentEditorMode('main-third', identity, 'source');
-  }, [activeMemoSession, currentMemo, mainEditorMode]);
+    if (!currentMemo || !mainMemoEditorIdentity || mainEditorMode === 'source') return;
+    captureLatestDocumentContent(mainMemoEditorIdentity, 'main-third');
+    setDocumentEditorMode('main-third', mainMemoEditorIdentity, 'source');
+  }, [currentMemo, mainEditorMode, mainMemoEditorIdentity]);
 
   useEffect(() => {
     const handleViewSource = () => handleViewSourceMode();
@@ -491,13 +518,13 @@ export function MainLayout({
     return () => window.removeEventListener('flowix:view-source-mode', handleViewSource);
   }, [handleViewSourceMode]);
 
-  const workColumnDocument: DocumentSurfaceContext | null = currentDocumentPath
+  const workColumnDocument: DocumentSurfaceContext | null = currentDocumentPath && currentFileIdentity
     ? activeMemoSession
       ? {
           identity: {
             kind: 'memo' as const,
             memoId: activeMemoSession.memoId,
-            path: activeMemoSession.path,
+            fileIdentity: activeMemoSession.fileIdentity,
             notebookId: activeMemoSession.notebookId,
             notebookPath: activeMemoSession.notebookPath,
             transitionId: activeMemoSession.transitionId,
@@ -506,9 +533,9 @@ export function MainLayout({
           surface: {
             kind: 'note' as const,
             memoId: activeMemoSession.memoId,
-            instanceKey: currentDocumentInstanceKey ?? getDocumentInstanceKey(currentDocumentPath),
+            instanceKey: activeMemoSession.fileIdentity.displayId,
+            fileIdentity: activeMemoSession.fileIdentity,
             props: {
-              filePath: currentDocumentPath,
               notebookId: activeMemoSession.notebookId,
               notebookPath: activeMemoSession.notebookPath,
               transitionId: activeMemoSession.transitionId,
@@ -526,23 +553,22 @@ export function MainLayout({
             },
           },
         }
-      : {
+      : activeExternalSession ? {
           identity: {
             kind: 'external' as const,
-            path: activeExternalSession?.path ?? currentDocumentPath,
-            scopePath: activeExternalSession?.scopePath ?? null,
-            transitionId: activeExternalSession?.transitionId ?? null,
+            fileIdentity: activeExternalSession.fileIdentity,
+            scopePath: activeExternalSession.scopePath,
+            transitionId: activeExternalSession.transitionId,
           },
-          instanceKey: currentDocumentInstanceKey ?? getDocumentInstanceKey(currentDocumentPath),
+          instanceKey: activeExternalSession.fileIdentity.displayId,
           memo: null,
           documentProps: {
-            filePath: currentDocumentPath,
             memoId: null,
             notebookId: null,
             notebookPath: null,
-            transitionId: activeExternalSession?.transitionId ?? null,
+            transitionId: activeExternalSession.transitionId,
             isExternalDocument: true,
-            externalScopePath: activeExternalSession?.scopePath ?? null,
+            externalScopePath: activeExternalSession.scopePath,
             searchPanelOpen: isSearchPanelOpen,
             onSearchPanelOpenChange: setIsSearchPanelOpen,
             toolbarCollapsed,
@@ -552,7 +578,7 @@ export function MainLayout({
             },
             onEditorReady: handleDocumentEditorReady,
           },
-        }
+        } : null
     : null;
   const visibleNavigationState = selectedNotebook && (
     (navigationState.target.kind === 'memo'
@@ -622,6 +648,7 @@ export function MainLayout({
       onExportWord: handleExportWord,
       onExportPdf: handleExportPdf,
       onRequestDeleteMemo: handleRequestDeleteMemo,
+      onDeleteExternalFile: handleDeleteExternalFile,
       onColorsChange: handleColorsChange,
       editorMode: mainEditorMode,
       onToggleEditorMode: handleToggleEditorMode,
@@ -677,43 +704,42 @@ export function MainLayout({
             onPreviewLeave={handleMemoListPreviewLeave}
             onPointerDown={() => focusWorkspaceHost('main-third')}
           >
-            <div
-              className={`absolute inset-0 ${
-                showMemoListSurface
-                  ? 'visible'
-                  : 'invisible pointer-events-none'
-              }`}
-              aria-hidden={!showMemoListSurface}
+            <ListColumnContent
+              activeView={middleColumnView === 'conversations' ? 'conversations' : 'notes'}
+              onViewChange={(tab) => setActiveFilter(tab === 'conversations' ? 'agents' : 'all')}
+              navigationDrawerOpen={noteNavigationPhase !== 'closed'}
+              onToggleNavigationDrawer={handleToggleNoteNavigation}
+              conversationLoading={isAgentConversationView && !agentConversationListReady}
             >
-              <MemoList
-                navigationDrawerEnabled
-                navigationDrawerOpen={noteNavigationPhase !== 'closed'}
-                onToggleNavigationDrawer={handleToggleNoteNavigation}
-                isActive={!isAgentConversationView}
-                dataLoadingEnabled={!isAgentConversationView}
-              />
-            </div>
-            {shouldRenderAgentConversationList && (
-              <div
-                className={`absolute inset-0 ${
-                  showAgentConversationSurface
-                    ? 'visible z-10'
-                    : 'invisible pointer-events-none'
-                }`}
-                aria-hidden={!showAgentConversationSurface}
-              >
-                {agentConversationListNode}
-              </div>
-            )}
-            {isAgentConversationView && !agentConversationListReady && (
-              <div
-                className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-[color-mix(in_oklch,var(--card)_78%,transparent)] text-sm text-[var(--muted-foreground)] backdrop-blur-[1px]"
-                role="status"
-                aria-live="polite"
-              >
-                {t('status.agent.loadingConversations')}
-              </div>
-            )}
+                <div
+                  className={`absolute inset-0 ${
+                    showMemoListSurface
+                      ? 'visible'
+                      : 'invisible pointer-events-none'
+                  }`}
+                  aria-hidden={!showMemoListSurface}
+                >
+                  <MemoList
+                    navigationDrawerEnabled
+                    navigationDrawerOpen={noteNavigationPhase !== 'closed'}
+                    onToggleNavigationDrawer={handleToggleNoteNavigation}
+                    isActive={!isAgentConversationView}
+                    dataLoadingEnabled={!isAgentConversationView}
+                  />
+                </div>
+                {shouldRenderAgentConversationList && (
+                  <div
+                    className={`absolute inset-0 ${
+                      showAgentConversationSurface
+                        ? 'visible z-10'
+                        : 'invisible pointer-events-none'
+                    }`}
+                    aria-hidden={!showAgentConversationSurface}
+                  >
+                    {agentConversationListNode}
+                  </div>
+                )}
+            </ListColumnContent>
           </ListColumn>
           {/* List <-> Memo detail divider */}
           {!isMemoListHidden && (

@@ -9,6 +9,7 @@ export {
   type DocumentHistoryEntry,
   type MediaHistoryEntry,
   type MemoHistoryEntry,
+  type WebHistoryEntry,
 } from '@features/document/store/document-history-store';
 export {
   getActiveDocumentDraft,
@@ -34,13 +35,17 @@ export {
 } from '@features/document/store/document-session-service';
 export {
   documentIdentityKey,
+  documentLocator,
+  documentLocatorKey,
   normalizeDocumentIdentity,
   type DocumentIdentity,
+  type DocumentLocator,
 } from '@features/document/store/document-identity';
 export {
   documentEditorViewKey,
   getDocumentEditorMode,
   setDocumentEditorMode,
+  clearDocumentEditorViews,
   useDocumentEditorMode,
   useDocumentEditorViewStore,
   type DocumentEditorMode,

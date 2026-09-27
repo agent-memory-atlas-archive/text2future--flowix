@@ -39,8 +39,8 @@ function note(): NoteSurface {
     kind: 'note',
     memoId: 'memo-1',
     instanceKey: 'memo:memo-1',
+    fileIdentity: { path: '/notebook/note.md', displayId: 'display:note' },
     props: {
-      filePath: '/notebook/note.md',
       notebookId: 'notebook-1',
       notebookPath: '/notebook',
       transitionId: null,
@@ -64,7 +64,7 @@ describe('work column presentation', () => {
         identity: {
           kind: 'memo',
           memoId: 'memo-1',
-          path: '/notebook/note.md',
+          fileIdentity: { path: '/notebook/note.md', displayId: 'display:note' },
           notebookId: 'notebook-1',
           notebookPath: '/notebook',
           transitionId: null,

@@ -1,7 +1,8 @@
 import { FONT_FAMILY_OPTIONS, type FontFamilyOption } from '@/lib/constants';
 import { fontCache, type CachedFontResult, type FontCacheStatus } from '@platform/tauri/client';
 
-const STYLE_ID = 'flowix-downloaded-fonts';
+const registeredFontIds = new Set<string>();
+const registrationPromises = new Map<string, Promise<boolean>>();
 
 export function getFontOptionById(fontId: string | undefined): FontFamilyOption | undefined {
   if (!fontId) return undefined;
@@ -29,33 +30,44 @@ export async function getDownloadedFontStatus(): Promise<Record<string, boolean>
   }
 }
 
-export async function ensureDownloadedFontRegistered(fontId: string): Promise<void> {
+export function ensureDownloadedFontRegistered(fontId: string): Promise<boolean> {
+  const pending = registrationPromises.get(fontId);
+  if (pending) return pending;
+  if (registeredFontIds.has(fontId)) return Promise.resolve(false);
+
+  const registration = ensureAndRegisterFont(fontId).finally(() => {
+    registrationPromises.delete(fontId);
+  });
+  registrationPromises.set(fontId, registration);
+  return registration;
+}
+
+async function ensureAndRegisterFont(fontId: string): Promise<boolean> {
   const result = await fontCache.ensureCached(fontId);
-  registerDownloadedFontFaces(result);
+  await registerCachedFontFaces(result);
+  return result.downloaded;
 }
 
-function registerDownloadedFontFaces(result: CachedFontResult): void {
-  if (typeof document === 'undefined' || result.files.length === 0) return;
-  const styleId = `${STYLE_ID}-${result.fontId}`;
-  let style = document.getElementById(styleId) as HTMLStyleElement | null;
-  if (!style) {
-    style = document.createElement('style');
-    style.id = styleId;
-    document.head.appendChild(style);
+async function registerCachedFontFaces(result: CachedFontResult): Promise<void> {
+  if (typeof document === 'undefined' || !document.fonts) return;
+  if (registeredFontIds.has(result.fontId)) return;
+
+  const faces: FontFace[] = [];
+  try {
+    for (const [index, file] of result.files.entries()) {
+      const bytes = await fontCache.getCachedBytes(result.fontId, index);
+      const face = new FontFace(file.family, bytes, {
+        weight: file.weight,
+        style: file.style,
+      });
+      await face.load();
+      document.fonts.add(face);
+      faces.push(face);
+    }
+    if (faces.length === 0) throw new Error('No cached font faces were found');
+    registeredFontIds.add(result.fontId);
+  } catch (error) {
+    for (const face of faces) document.fonts.delete(face);
+    throw error;
   }
-  style.textContent = result.files.map((file) => {
-    const src = fontCache.toAssetUrl(file.path);
-    const unicodeRange = file.unicodeRange ? `\n  unicode-range: ${file.unicodeRange};` : '';
-    return `@font-face {
-  font-family: '${escapeCssString(file.family)}';
-  font-style: ${file.style};
-  font-weight: ${file.weight};
-  font-display: swap;
-  src: url('${src}') format('${escapeCssString(file.format)}');${unicodeRange}
-}`;
-  }).join('\n\n');
-}
-
-function escapeCssString(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }

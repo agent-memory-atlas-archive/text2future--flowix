@@ -21,7 +21,8 @@ const Frontmatter = Node.create({
 
   addOptions() {
     return {
-      memoId: undefined as string | undefined,
+      propertyTargetId: undefined as string | undefined,
+      onViewSourceMode: undefined as (() => void) | undefined,
     };
   },
 
@@ -39,7 +40,8 @@ const Frontmatter = Node.create({
       node,
       view,
       getPos,
-      this.options.memoId,
+      this.options.propertyTargetId,
+      this.options.onViewSourceMode,
     );
   },
 

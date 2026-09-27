@@ -56,7 +56,6 @@ import {
   DropdownMenuTrigger,
 } from '@shared/ui/dropdown-menu';
 import { AgentIcon } from '@features/agent/components/agent-icon';
-import { MemoListViewTabs } from '@features/memo/components/memo-list-view-tabs';
 import { Input } from '@shared/ui/input';
 import { Button } from '@shared/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@shared/ui/dialog';
@@ -141,8 +140,6 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
   const agentRuntimeIsChecking = useAgentRuntimeStore((state) => state.isChecking);
   const refreshAgentRuntimeIfStale = useAgentRuntimeStore((state) => state.refreshIfStale);
   const currentNotebookId = useMemoStore((state) => state.selectedNotebook?.id ?? null);
-  const middleColumnView = useMemoStore((state) => state.middleColumnView);
-  const setActiveFilter = useMemoStore((state) => state.setActiveFilter);
   const selectedInstanceId = useWorkspaceRestoreStore(
     (state) => state.agentConversation.selectedInstanceId,
   );
@@ -619,12 +616,8 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
     <section className="relative flex h-full min-h-0 flex-1 flex-col bg-[var(--list-bg)]" aria-label={t('memo.navigation.conversations')}>
       {/* 标题行 ── 与 MemoList / FolderFileTree 共用同一套中间列头部结构:
           左侧标题占据剩余空间, 右侧保留本列表自己的筛选控件。 */}
-      <div className="flex items-center justify-between px-3 pb-2 gap-2">
+      <div className="flex items-center justify-between gap-2 pb-2 pl-[74px] pr-3">
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            <MemoListViewTabs
-              activeTab={middleColumnView === 'conversations' ? 'conversations' : 'notes'}
-              onChange={(tab) => setActiveFilter(tab === 'conversations' ? 'agents' : 'all')}
-            />
             <span className="min-w-0 truncate text-[15px] font-medium text-[var(--foreground)]">
               {t('memo.navigation.conversations')}
             </span>

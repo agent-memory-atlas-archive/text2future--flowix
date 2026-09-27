@@ -1,6 +1,6 @@
 ﻿import { useCallback, useEffect, useRef } from 'react';
 
-import { externalDocuments, memos as memosClient } from '@platform/tauri/client';
+import { documentContentOperations } from '@features/document/use-cases/document-operations';
 import {
   getDocumentDraft,
   applyLoadedDocumentContent,
@@ -43,8 +43,14 @@ function waitForSave(promise: Promise<boolean>): Promise<boolean | 'timeout'> {
   });
 }
 
+function identityAtPath(identity: DocumentIdentity, path: string): DocumentIdentity {
+  return { ...identity, path };
+}
+
 interface UseDocumentAutosaveOptions {
   filePath: string;
+  /** Resolve the live path after an in-place external-file rename. */
+  getCurrentFilePath?: () => string;
   identity: DocumentIdentity;
   /**
    * 内部 memo 文档的 memoId, 走 `key+channel='internal'` 走 key 反查;
@@ -61,6 +67,7 @@ interface UseDocumentAutosaveOptions {
 
 export function useDocumentAutosave({
   filePath,
+  getCurrentFilePath,
   identity,
   memoId,
   isExternalDocument,
@@ -202,9 +209,9 @@ export function useDocumentAutosave({
     // internal write. Resolve that ambiguity before showing a conflict toast.
     let onDisk: string | null;
     try {
-      onDisk = isExternalDocument
-        ? await externalDocuments.read(path, externalScopePath)
-        : await memosClient.readDocument(path);
+      onDisk = await documentContentOperations(isExternalDocument ? 'external' : 'internal').read({
+        path, scopePath: externalScopePath, memoId,
+      });
     } catch {
       const language = getCurrentAppLanguage();
       if (!options?.silent) {
@@ -235,10 +242,11 @@ export function useDocumentAutosave({
   const flushDocument = useCallback(async (
     options?: { silent?: boolean },
   ): Promise<boolean> => {
+    const livePath = getCurrentFilePath?.() ?? filePath;
     const flushedContent = flushPendingContent?.() ?? null;
-    const draft = getDocumentDraft(identity, filePath);
+    const draft = getDocumentDraft(identity, livePath);
     const content = flushedContent ?? draft?.content;
-    const path = draft?.path ?? filePath;
+    const path = draft?.path ?? livePath;
     clearSaveTimer();
     if (content == null || !path || !hasDocumentUnsavedChanges(identity)) return true;
     const result = await waitForSave(saveDoc(content, path, options));
@@ -248,11 +256,11 @@ export function useDocumentAutosave({
     // start a competing write; protect the captured revision separately and
     // let the per-document save queue keep its ordering.
     return protectDocumentDraft(
-      identity,
+      identityAtPath(identity, path),
       path,
       result === 'timeout' ? 'save-timeout' : 'save-error',
     );
-  }, [clearSaveTimer, filePath, flushPendingContent, identity, saveDoc]);
+  }, [clearSaveTimer, filePath, flushPendingContent, getCurrentFilePath, identity, saveDoc]);
 
   const discardDocument = useCallback(() => {
     clearSaveTimer();
@@ -265,9 +273,9 @@ export function useDocumentAutosave({
     // 1. 拉磁盘看是否变了
     let onDisk: string | null = null;
     try {
-      onDisk = isExternalDocument
-        ? await externalDocuments.read(path, externalScopePath)
-        : await memosClient.readDocument(path);
+      onDisk = await documentContentOperations(isExternalDocument ? 'external' : 'internal').read({
+        path, scopePath: externalScopePath, memoId,
+      });
     } catch {
       // IPC 失败: 保守走 saveDoc, 让原 onCasRefused 兜底 (弹 toast + 刷新 CAS 基线)
       void saveDoc(content, path);
@@ -303,7 +311,8 @@ export function useDocumentAutosave({
 
 
   const handleChange = useCallback((content: string) => {
-    if (!filePath) return;
+    const livePath = getCurrentFilePath?.() ?? filePath;
+    if (!livePath) return;
     const edit = recordDocumentEdit(identity, content);
     if (!edit.changed) {
       clearSaveTimer();
@@ -323,19 +332,19 @@ export function useDocumentAutosave({
     scheduleDerivedStatsUpdate(content);
 
     clearRecoveryDraftTimer();
-    const recoveryPath = filePath;
+    const recoveryPath = livePath;
     recoveryDraftTimerRef.current = setTimeout(() => {
       recoveryDraftTimerRef.current = null;
-      void protectDocumentDraft(identity, recoveryPath, 'autosave');
+      void protectDocumentDraft(identityAtPath(identity, recoveryPath), recoveryPath, 'autosave');
     }, RECOVERY_DRAFT_DEBOUNCE_MS);
 
     clearSaveTimer();
-    const pathAtSchedule = filePath;
     saveTimerRef.current = setTimeout(() => {
-      void saveDoc(content, pathAtSchedule);
+      void saveDoc(content, getCurrentFilePath?.() ?? livePath);
     }, 1000);
   }, [
     filePath,
+    getCurrentFilePath,
     identity,
     clearSaveTimer,
     clearRecoveryDraftTimer,
@@ -357,24 +366,26 @@ export function useDocumentAutosave({
     // 走) 不走这条路径, 不会浪费 IPC。
     const handleVisibilityChange = () => {
       if (!document.hidden) return;
+      const livePath = getCurrentFilePath?.() ?? filePath;
       const flushedContent = flushPendingContent?.() ?? null;
-      const draft = getDocumentDraft(identity, filePath);
+      const draft = getDocumentDraft(identity, livePath);
       const content = flushedContent ?? draft?.content;
-      const path = draft?.path ?? filePath;
+      const path = draft?.path ?? livePath;
       if (content == null || !path) return;
       clearSaveTimer();
       void maybeSaveOrReloadOnHide(content, path);
     };
 
     const handleBeforeUnload = () => {
+      const livePath = getCurrentFilePath?.() ?? filePath;
       const flushedContent = flushPendingContent?.() ?? null;
-      const draft = getDocumentDraft(identity, filePath);
+      const draft = getDocumentDraft(identity, livePath);
       const content = flushedContent ?? draft?.content;
-      const path = draft?.path ?? filePath;
+      const path = draft?.path ?? livePath;
       if (content == null || !path) return;
       clearSaveTimer();
       clearRecoveryDraftTimer();
-      void protectDocumentDraft(identity, path, 'shutdown');
+      void protectDocumentDraft(identityAtPath(identity, path), path, 'shutdown');
       void saveDoc(content, path);
     };
 
@@ -396,7 +407,7 @@ export function useDocumentAutosave({
       clearDerivedStatsTimer();
       clearRecoveryDraftTimer();
     };
-  }, [filePath, flushDocument, flushPendingContent, saveDoc, clearSaveTimer, clearDerivedStatsTimer, clearRecoveryDraftTimer, maybeSaveOrReloadOnHide, identity, isolatedSession]);
+  }, [filePath, flushDocument, flushPendingContent, getCurrentFilePath, saveDoc, clearSaveTimer, clearDerivedStatsTimer, clearRecoveryDraftTimer, maybeSaveOrReloadOnHide, identity, isolatedSession]);
 
   return {
     clearSaveTimer,

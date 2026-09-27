@@ -421,7 +421,7 @@ pub fn run() {
             commands::plugin::plugin_resolve_note,
             commands::artifact::artifact_resolve,
             commands::settings::get_preference,
-            commands::settings::set_preference,
+            commands::settings::patch_preference,
             commands::settings::get_deepseek_harness_config,
             commands::settings::get_deepseek_harness_configs,
             commands::settings::set_deepseek_harness_config,
@@ -563,8 +563,11 @@ pub fn run() {
             commands::file::create_folder,
             commands::file::create_document,
             // font cache
+            commands::font::begin_font_selection,
+            commands::font::commit_font_selection,
             commands::font::get_font_cache_status,
             commands::font::ensure_font_cached,
+            commands::font::get_cached_font_bytes,
             commands::font::remove_cached_font,
             // web page metadata
             commands::web::parse_web_page,

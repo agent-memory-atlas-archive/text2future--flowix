@@ -2,26 +2,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const renameMemoTitle = vi.hoisted(() => vi.fn());
-
-vi.mock('@platform/tauri/client', () => ({
-  memos: { renameMemoTitle },
-}));
-vi.mock('@features/document/store/document-session-service', () => ({
-  markSelfDocumentPathUpdate: vi.fn(),
-  rebaseActiveDocumentPath: vi.fn(),
-}));
-vi.mock('@features/memo/store/memo-store', () => ({
-  useMemoStore: {
-    getState: () => ({ handleMemoUpdated: vi.fn() }),
-  },
-}));
-vi.mock('@features/workspace/use-cases/browser-column-navigation', () => ({
-  replaceBrowserColumnMemoPath: vi.fn(),
-}));
-vi.mock('@features/workspace/use-cases/workspace-navigation', () => ({
-  replaceActiveMemoPath: vi.fn(),
-}));
+const renameTitle = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/toast', () => ({
   toast: { error: vi.fn() },
 }));
@@ -39,8 +20,8 @@ describe('useMemoTitleSession', () => {
   let root: Root;
   let session: ReturnType<typeof useMemoTitleSession> | null;
 
-  function Harness({ memoId }: { memoId: string }) {
-    const currentSession = useMemoTitleSession(memoId, 'Original.md');
+  function Harness({ displayId }: { displayId: string }) {
+    const currentSession = useMemoTitleSession(displayId, 'Original.md', renameTitle);
     session = currentSession;
     return createElement('div', { 'data-title': currentSession.snapshot.draft });
   }
@@ -53,7 +34,7 @@ describe('useMemoTitleSession', () => {
     document.body.appendChild(container);
     root = createRoot(container);
     act(() => {
-      root.render(createElement(Harness, { memoId: `memo-title-${Math.random()}` }));
+      root.render(createElement(Harness, { displayId: `display:title-${Math.random()}` }));
     });
   });
 
@@ -73,7 +54,7 @@ describe('useMemoTitleSession', () => {
       await vi.advanceTimersByTimeAsync(TITLE_SAVE_DEBOUNCE_MS);
     });
 
-    expect(renameMemoTitle).not.toHaveBeenCalled();
+    expect(renameTitle).not.toHaveBeenCalled();
     expect(container.firstElementChild?.getAttribute('data-title')).toBe('');
   });
 
@@ -83,31 +64,24 @@ describe('useMemoTitleSession', () => {
     act(() => session?.setDraft(''));
     await act(async () => session?.commit());
 
-    expect(renameMemoTitle).not.toHaveBeenCalled();
+    expect(renameTitle).not.toHaveBeenCalled();
     expect(container.firstElementChild?.getAttribute('data-title')).toBe('Original');
   });
 
   it('waits 1500ms before submitting a non-empty title', async () => {
     expect(session).not.toBeNull();
-    renameMemoTitle.mockResolvedValue({
-      memo: { filename: 'Renamed.md' },
-      path: '/notes/Renamed.md',
-    });
+    renameTitle.mockResolvedValue('Renamed.md');
 
     act(() => session?.setDraft('Renamed'));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(TITLE_SAVE_DEBOUNCE_MS - 1);
     });
-    expect(renameMemoTitle).not.toHaveBeenCalled();
+    expect(renameTitle).not.toHaveBeenCalled();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1);
       await Promise.resolve();
     });
-    expect(renameMemoTitle).toHaveBeenCalledWith({
-      id: expect.any(String),
-      title: 'Renamed',
-      expectedFilename: 'Original.md',
-    });
+    expect(renameTitle).toHaveBeenCalledWith('Renamed', 'Original.md');
   });
 });

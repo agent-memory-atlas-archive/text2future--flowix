@@ -6,11 +6,13 @@ describe('workspace restore store', () => {
   beforeEach(() => {
     localStorage.clear();
     useWorkspaceRestoreStore.setState({
-      version: 1,
+      version: 4,
       agentConversation: {
         selectedInstanceId: null,
         detailOpen: false,
       },
+      desiredTarget: null,
+      restoreStatus: 'idle',
     });
   });
 

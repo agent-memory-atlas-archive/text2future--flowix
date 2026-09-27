@@ -1,4 +1,5 @@
 import type { Editor } from '@tiptap/core';
+import type { FileDisplayIdentity } from '@features/workspace/store/file-display-store';
 
 export interface LoadContentOptions {
   preservePending?: boolean;
@@ -23,7 +24,8 @@ export interface DocumentContainerState {
 }
 
 export interface DocumentContainerProps {
-  filePath: string;
+  /** Runtime identity supplied by the owning open session or file surface. */
+  fileIdentity: FileDisplayIdentity;
   memoId?: string | null;
   notebookId?: string | null;
   notebookPath?: string | null;

@@ -6,6 +6,7 @@ import { toast } from '@/lib/toast';
 import { useI18n } from '@/lib/i18n';
 import { createLogger } from '@/lib/logger';
 import { memos } from '@platform/tauri/client';
+import { memoDocumentOperations } from '@features/document/use-cases/memo-document-operations';
 import { useMemoStore } from '@features/memo/store/memo-store';
 import { NotePropertiesDialog } from '@features/document/components/note-properties-dialog';
 import {
@@ -14,9 +15,12 @@ import {
   getDocumentBuffer,
   hasDocumentUnsavedChanges,
 } from '@features/document/store/document-session-service';
+import { documentIdentityFromFile } from '@features/document/store/document-identity';
+import type { DocumentIdentity } from '@features/document/store/document-identity';
 
 interface NotePropertiesTarget {
   memoId: string;
+  identity: DocumentIdentity;
   content: string;
   /** The content against which the global save performs its CAS check. */
   expectedContent: string;
@@ -50,12 +54,6 @@ export function NotePropertiesHost() {
 
     void (async () => {
       try {
-        const identity = { kind: 'memo' as const, id: memoId };
-
-        // If this memo is already open, publish the latest editor state before
-        // choosing the content for the standalone properties editor. This
-        // preserves unsaved body edits without navigating the work column.
-        captureLatestDocumentContent(identity);
         const session = await memos.openMemoSession(memoId);
         if (sequence !== requestSequence.current) return;
         if (!session) {
@@ -63,10 +61,16 @@ export function NotePropertiesHost() {
           return;
         }
 
+        const identity = documentIdentityFromFile(session.fileIdentity);
+        // Resolve the memo's current path first, then publish any live editor
+        // bytes through the same path-based identity used by its surfaces.
+        captureLatestDocumentContent(identity);
+
         const hasDraft = hasDocumentUnsavedChanges(identity);
         const buffer = hasDraft ? getDocumentBuffer(identity) : null;
         setTarget({
           memoId,
+          identity,
           content: buffer?.content ?? session.content,
           expectedContent: buffer?.lastSavedContent ?? session.content,
         });
@@ -86,12 +90,12 @@ export function NotePropertiesHost() {
   const handleSave = useCallback(async (nextContent: string) => {
     if (!target) return;
 
-    let result: Awaited<ReturnType<typeof memos.writeDocument>>;
+    let result: Awaited<ReturnType<typeof memoDocumentOperations.write>>;
     try {
       // Write by memo id rather than by the currently selected notebook/path.
       // The backend resolves the current path and performs the CAS check.
-      result = await memos.writeDocument({
-        key: target.memoId,
+      result = await memoDocumentOperations.write({
+        memoId: target.memoId,
         content: nextContent,
         expectedContent: target.expectedContent,
       });
@@ -101,7 +105,7 @@ export function NotePropertiesHost() {
       throw error;
     }
 
-    if (!result) {
+    if (result.status !== 'saved') {
       toast.error(t('document.save.casRefused'));
       throw new Error('Note properties save was refused');
     }
@@ -109,7 +113,7 @@ export function NotePropertiesHost() {
     // Reconcile any mounted editor sharing this memo's buffer without making
     // this target the current document when it was opened from another row.
     applyLoadedDocumentContent(
-      { kind: 'memo', id: target.memoId },
+      target.identity,
       result.path,
       result.content,
       { preservePending: false, setAsCurrent: false },

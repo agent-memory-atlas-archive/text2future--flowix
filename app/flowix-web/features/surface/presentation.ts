@@ -45,11 +45,11 @@ function documentHeaderPresentation(
     case 'code':
     case 'md':
     case 'html-file':
-      return { currentMemo: null, externalFilePath: surface.props.filePath };
+      return { currentMemo: null, externalFilePath: surface.fileIdentity.path };
     case 'image-file':
     case 'video-file':
     case 'unavailable-file':
-      return { currentMemo: null, externalFilePath: surface.filePath };
+      return { currentMemo: null, externalFilePath: surface.fileIdentity.path };
     default:
       return { currentMemo: null, externalFilePath: null };
   }

@@ -11,6 +11,7 @@ import type {
   WorkColumnSurface,
 } from './types';
 import type { WorkColumnTarget } from '@features/workspace/store/work-column-target';
+import { requireFileDisplayIdentity } from '@features/workspace/store/file-display-store';
 
 function assertNever(value: never): never {
   throw new Error(`Unsupported plugin artifact renderer: ${String(value)}`);
@@ -56,23 +57,24 @@ function resolveDocumentSurface(
 function resolveExternalDocumentSurface(
   document: Extract<DocumentSurfaceContext, { identity: { kind: 'external' } }>,
 ): WorkColumnSurface {
-  const { filePath } = document.documentProps;
   const { instanceKey } = document;
+  const { fileIdentity } = document.identity;
+  const filePath = fileIdentity.path;
   const scopePath = document.identity.scopePath;
 
   switch (externalFileViewKind(filePath)) {
     case 'markdown':
-      return { kind: 'md', instanceKey, props: document.documentProps };
+      return { kind: 'md', instanceKey, fileIdentity, props: document.documentProps };
     case 'html':
-      return { kind: 'html-file', instanceKey, filePath, scopePath, props: document.documentProps };
+      return { kind: 'html-file', instanceKey, fileIdentity, scopePath, props: document.documentProps };
     case 'image':
-      return { kind: 'image-file', instanceKey, filePath, scopePath, props: document.documentProps };
+      return { kind: 'image-file', instanceKey, fileIdentity, scopePath, props: document.documentProps };
     case 'video':
-      return { kind: 'video-file', instanceKey, filePath, scopePath, props: document.documentProps };
+      return { kind: 'video-file', instanceKey, fileIdentity, scopePath, props: document.documentProps };
     case 'code':
-      return { kind: 'code', instanceKey, props: document.documentProps };
+      return { kind: 'code', instanceKey, fileIdentity, props: document.documentProps };
     case 'unavailable':
-      return { kind: 'unavailable-file', instanceKey, filePath, props: document.documentProps };
+      return { kind: 'unavailable-file', instanceKey, fileIdentity, props: document.documentProps };
   }
 }
 
@@ -83,10 +85,11 @@ function resolveMediaTargetContent(
   if (!filePath || !target.notebookPath?.trim()) {
     return emptyContent('媒体资源上下文无效', 'invalid-target');
   }
+  const fileIdentity = requireFileDisplayIdentity(filePath);
   return surfaceContent({
     kind: 'media',
-    instanceKey: `media:${filePath}`,
-    filePath,
+    instanceKey: fileIdentity.displayId,
+    fileIdentity,
     notebookId: target.notebookId,
     notebookPath: target.notebookPath,
     resourceKind: target.resourceKind,
@@ -126,18 +129,18 @@ function isMemoDocumentContext(
   const props = document.surface.props;
   return document.identity.kind === 'memo'
     && document.identity.memoId === target.memoId
-    && samePath(document.identity.path, target.path)
+    && samePath(document.identity.fileIdentity.path, target.path)
     && document.identity.notebookId === target.notebookId
     && ((document.identity.notebookPath == null && target.notebookPath == null)
       || samePath(document.identity.notebookPath, target.notebookPath))
     && sameTransition(document.identity.transitionId, target.transitionId)
     && document.memo?.id === target.memoId
     && document.surface.memoId === target.memoId
+    && samePath(document.surface.fileIdentity.path, target.path)
     && props.notebookId === target.notebookId
     && ((props.notebookPath == null && target.notebookPath == null)
       || samePath(props.notebookPath, target.notebookPath))
     && !props.isExternalDocument
-    && samePath(props.filePath, target.path)
     && sameTransition(props.transitionId, target.transitionId);
 }
 
@@ -147,14 +150,13 @@ function isExternalDocumentContext(
 ): document is Extract<DocumentSurfaceContext, { identity: { kind: 'external' } }> {
   if (!('documentProps' in document) || document.identity.kind !== 'external') return false;
   const props = document.documentProps;
-  return samePath(document.identity.path, target.path)
+  return samePath(document.identity.fileIdentity.path, target.path)
     && ((document.identity.scopePath == null && target.scopePath == null)
       || samePath(document.identity.scopePath, target.scopePath))
     && sameTransition(document.identity.transitionId, target.transitionId)
     && document.memo === null
     && props.memoId === null
     && props.isExternalDocument === true
-    && samePath(props.filePath, target.path)
     && ((props.externalScopePath == null && target.scopePath == null)
       || samePath(props.externalScopePath, target.scopePath))
     && sameTransition(props.transitionId, target.transitionId);

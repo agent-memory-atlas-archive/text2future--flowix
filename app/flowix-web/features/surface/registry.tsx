@@ -70,11 +70,11 @@ function defineSurface<K extends WorkColumnSurfaceKind>(
 }
 
 function NoteSurfaceView({ surface }: { surface: NoteSurface }) {
-  return <DocumentContainer {...surface.props} memoId={surface.memoId} />;
+  return <DocumentContainer {...surface.props} fileIdentity={surface.fileIdentity} memoId={surface.memoId} />;
 }
 
 function MDSurfaceView({ surface }: { surface: MDSurface }) {
-  return <DocumentContainer {...surface.props} externalEditorMode="markdown" />;
+  return <DocumentContainer {...surface.props} fileIdentity={surface.fileIdentity} externalEditorMode="markdown" />;
 }
 
 function CodeSurfaceView({ surface }: { surface: CodeSurface }) {
@@ -83,7 +83,7 @@ function CodeSurfaceView({ surface }: { surface: CodeSurface }) {
 
 function ImageFileSurfaceView({ surface }: { surface: ImageFileSurface }) {
   return <MediaResourceView
-    filePath={surface.filePath}
+    filePath={surface.fileIdentity.path}
     notebookPath={surface.scopePath}
     resourceKind="image"
     propertiesVisibleByDefault={false}
@@ -92,7 +92,7 @@ function ImageFileSurfaceView({ surface }: { surface: ImageFileSurface }) {
 
 function VideoFileSurfaceView({ surface }: { surface: VideoFileSurface }) {
   return <MediaResourceView
-    filePath={surface.filePath}
+    filePath={surface.fileIdentity.path}
     notebookPath={surface.scopePath}
     resourceKind="video"
     propertiesVisibleByDefault={false}
@@ -101,19 +101,19 @@ function VideoFileSurfaceView({ surface }: { surface: VideoFileSurface }) {
 
 function HtmlFileSurfaceView({ surface }: { surface: HtmlFileSurface }) {
   return <HtmlResourceView
-    filePath={surface.filePath}
+    filePath={surface.fileIdentity.path}
     scopePath={surface.scopePath}
-    documentProps={surface.props}
+    documentProps={{ ...surface.props, fileIdentity: surface.fileIdentity }}
   />;
 }
 
 function UnavailableFileSurfaceView({ surface }: { surface: UnavailableFileSurface }) {
-  return <UnavailableFileView filePath={surface.filePath} />;
+  return <UnavailableFileView filePath={surface.fileIdentity.path} />;
 }
 
 function MediaResourceSurfaceView({ surface }: { surface: MediaResourceSurface }) {
   return <MediaResourceView
-    filePath={surface.filePath}
+    filePath={surface.fileIdentity.path}
     notebookPath={surface.notebookPath}
     resourceKind={surface.resourceKind}
     propertiesVisibleByDefault={false}
@@ -159,7 +159,7 @@ export const workColumnSurfaceRegistry = Object.freeze({
   }),
   md: defineSurface('md', {
     chrome: 'document',
-    capabilities: ['edit', 'search', 'copy-content'],
+    capabilities: ['edit', 'search', 'copy-content', 'export-content', 'save-template'],
     component: MDSurfaceView,
   }),
   code: defineSurface('code', {

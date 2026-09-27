@@ -333,7 +333,7 @@ type PropertyPointerDrag = {
 export class FrontmatterPropertyNodeView implements NodeView {
   readonly dom: HTMLElement;
   private node: ProseMirrorNode;
-  private readonly memoId?: string;
+  private readonly propertyTargetId?: string;
   private validationError: string | null = null;
   private activePropertyEdit: ActivePropertyEdit | null = null;
   private activePropertyMenu: HTMLElement | null = null;
@@ -367,8 +367,8 @@ export class FrontmatterPropertyNodeView implements NodeView {
     event.preventDefault();
   };
   private readonly handleAddPropertyRequest = (event: Event) => {
-    const detail = (event as CustomEvent<{ memoId?: string }>).detail;
-    if (detail?.memoId !== this.memoId || !this.view.editable) return;
+    const detail = (event as CustomEvent<{ propertyTargetId?: string }>).detail;
+    if (detail?.propertyTargetId !== this.propertyTargetId || !this.view.editable) return;
     this.addEmptyProperty();
   };
 
@@ -376,10 +376,11 @@ export class FrontmatterPropertyNodeView implements NodeView {
     node: ProseMirrorNode,
     private readonly view: EditorView,
     private readonly getPos: () => number | undefined,
-    memoId?: string,
+    propertyTargetId?: string,
+    private readonly onViewSourceMode?: () => void,
   ) {
     this.node = node;
-    this.memoId = memoId;
+    this.propertyTargetId = propertyTargetId;
     this.dom = createElement('div', 'frontmatter-property-node');
     this.dom.contentEditable = 'false';
     const unsubscribeLanguage = subscribeAppLanguage(() => this.render());
@@ -2195,7 +2196,8 @@ export class FrontmatterPropertyNodeView implements NodeView {
         );
         source.type = 'button';
         source.addEventListener('click', () => {
-          window.dispatchEvent(new CustomEvent('flowix:view-source-mode'));
+          if (this.onViewSourceMode) this.onViewSourceMode();
+          else window.dispatchEvent(new CustomEvent('flowix:view-source-mode'));
         });
         container.append(source);
       }

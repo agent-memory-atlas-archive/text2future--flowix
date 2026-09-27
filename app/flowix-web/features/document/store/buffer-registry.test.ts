@@ -15,7 +15,7 @@ import { subscribeDocumentBufferChanges } from './buffer-registry';
 
 describe('document buffer change notifications', () => {
   it('captures only the requested document host when one is provided', () => {
-    const identity = { kind: 'memo' as const, id: 'memo-capture-host' };
+    const identity = { kind: 'md' as const, memoId: 'memo-capture-host', path: '/memo-capture-host.md', displayId: 'display-capture-host' };
     const mainCapture = vi.fn(() => '# main');
     const browserCapture = vi.fn(() => '# browser');
     const unregisterMain = registerDocumentCapture(identity, mainCapture, 'main-third');
@@ -36,7 +36,7 @@ describe('document buffer change notifications', () => {
   });
 
   it('notifies listeners when a memo is loaded and edited', () => {
-    const identity = { kind: 'memo' as const, id: 'memo-buffer-events' };
+    const identity = { kind: 'md' as const, memoId: 'memo-buffer-events', path: '/memo-buffer-events.md', displayId: 'display-buffer-events' };
     const listener = vi.fn();
     const unsubscribe = subscribeDocumentBufferChanges(listener);
 
@@ -52,7 +52,7 @@ describe('document buffer change notifications', () => {
   });
 
   it('stops notifying after unsubscribe', () => {
-    const identity = { kind: 'memo' as const, id: 'memo-buffer-unsubscribe' };
+    const identity = { kind: 'md' as const, memoId: 'memo-buffer-unsubscribe', path: '/memo-buffer-unsubscribe.md', displayId: 'display-buffer-unsubscribe' };
     const listener = vi.fn();
     const unsubscribe = subscribeDocumentBufferChanges(listener);
     unsubscribe();
@@ -63,7 +63,7 @@ describe('document buffer change notifications', () => {
   });
 
   it('rebases a renamed memo path without changing the unsaved content baseline', () => {
-    const identity = { kind: 'memo' as const, id: 'memo-path-rebase' };
+    const identity = { kind: 'md' as const, memoId: 'memo-path-rebase', path: '/before.md', displayId: 'display-path-rebase' };
     applyLoadedDocumentContent(identity, '/notes/old.md', 'saved body');
     recordDocumentEdit(identity, 'unsaved body');
 
@@ -78,7 +78,7 @@ describe('document buffer change notifications', () => {
   });
 
   it('clears the dirty barrier when a missing source is explicitly discarded', () => {
-    const identity = { kind: 'memo' as const, id: 'memo-missing-source' };
+    const identity = { kind: 'md' as const, memoId: 'memo-missing-source', path: '/memo-missing-source.md', displayId: 'display-missing-source' };
     applyLoadedDocumentContent(identity, '/notes/deleted.md', 'saved body');
     recordDocumentEdit(identity, 'unsaved body');
 

@@ -9,7 +9,7 @@ export function parentRelativePathForTreeCreate(
   if (!session || session.notebookId !== notebookId) return undefined;
 
   const root = canonicalPath(notebookPath).replace(/\/+$/, '');
-  const notePath = canonicalPath(session.path);
+  const notePath = canonicalPath(session.fileIdentity.path);
   if (!root || !notePath.startsWith(`${root}/`)) return undefined;
 
   const relative = notePath.slice(root.length + 1);

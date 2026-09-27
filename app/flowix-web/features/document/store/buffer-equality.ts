@@ -65,7 +65,7 @@ export function isContentSemanticallyEqual(a: string, b: string): boolean {
   return normalizeForEquality(a) === normalizeForEquality(b);
 }
 
-function isMarkdownExternalPath(path: string): boolean {
+function isMarkdownPath(path: string): boolean {
   const extension = path.split('.').pop()?.toLowerCase();
   return extension === 'md' || extension === 'markdown';
 }
@@ -80,7 +80,7 @@ export function isDocumentContentEqual(
   a: string,
   b: string,
 ): boolean {
-  if (identity.kind === 'external' && !isMarkdownExternalPath(identity.path)) {
+  if (!isMarkdownPath(identity.path)) {
     return a === b;
   }
   return isContentSemanticallyEqual(a, b);

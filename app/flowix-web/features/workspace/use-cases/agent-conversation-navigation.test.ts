@@ -47,6 +47,9 @@ vi.mock('@features/workspace/store/workspace-restore-store', () => ({
   useWorkspaceRestoreStore: {
     getState: () => ({
       agentConversation: mocks.agentRestore,
+      desiredTarget: mocks.agentRestore.detailOpen && mocks.agentRestore.selectedInstanceId
+        ? { kind: 'agent-conversation', instanceId: mocks.agentRestore.selectedInstanceId }
+        : null,
       selectAgentConversation: mocks.selectAgentConversation,
     }),
   },
@@ -89,7 +92,7 @@ describe('agent conversation navigation', () => {
     });
     expect(mocks.setActivePluginId).toHaveBeenCalledWith(null);
     expect(mocks.setSelectedMemo).toHaveBeenCalledWith(null);
-    expect(mocks.openAgentConversation).toHaveBeenCalledWith('conversation-a', undefined);
+    expect(mocks.openAgentConversation).toHaveBeenCalledWith('conversation-a');
     expect(mocks.selectAgentConversation).toHaveBeenCalledWith('conversation-a', true);
   });
 
@@ -119,7 +122,7 @@ describe('agent conversation navigation', () => {
     await restoreAgentConversationWorkspace();
 
     expect(mocks.hydrateInstance).toHaveBeenCalledWith('conversation-a');
-    expect(mocks.openAgentConversation).toHaveBeenCalledWith('conversation-a', { history: 'skip' });
+    expect(mocks.openAgentConversation).toHaveBeenCalledWith('conversation-a');
     expect(mocks.selectAgentConversation).toHaveBeenCalledWith('conversation-a', true);
   });
 });

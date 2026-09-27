@@ -39,7 +39,6 @@ describe('initializeMainWindowStartup', () => {
     expect(mocks.calls).toEqual([
       'memo-library',
       'memo-session',
-      'agent-workspace',
     ]);
   });
 

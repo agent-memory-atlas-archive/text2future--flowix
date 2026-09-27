@@ -4,7 +4,7 @@ import { closeAgentTarget, openAgentTarget } from './workspace-navigation';
 
 export async function selectAndOpenAgentConversation(
   instanceId: string,
-  options?: { history?: 'push' | 'skip' },
+  options?: { history?: 'push' | 'skip'; destination?: 'main-third' },
 ): Promise<void> {
   const normalized = instanceId.trim();
   if (!normalized) return;
@@ -26,8 +26,11 @@ export function clearRestoredAgentConversation(instanceId: string): void {
 }
 
 export async function restoreAgentConversationWorkspace(): Promise<void> {
-  const restore = useWorkspaceRestoreStore.getState().agentConversation;
-  const instanceId = restore.selectedInstanceId?.trim() ?? '';
+  const store = useWorkspaceRestoreStore.getState();
+  const desiredTarget = store.desiredTarget;
+  const instanceId = desiredTarget?.kind === 'agent-conversation'
+    ? desiredTarget.instanceId.trim()
+    : '';
   if (!instanceId) return;
 
   const instance = await hydrateWorkspaceAgentConversation(instanceId);
@@ -39,7 +42,5 @@ export async function restoreAgentConversationWorkspace(): Promise<void> {
   // Selection belongs to the conversations list, while the detail is a
   // separate work-column target. Reopen it independently of the current
   // middle-column filter so switching lists does not lose the detail.
-  if (restore.detailOpen) {
-    await selectAndOpenAgentConversation(instanceId, { history: 'skip' });
-  }
+  await selectAndOpenAgentConversation(instanceId, { history: 'skip' });
 }

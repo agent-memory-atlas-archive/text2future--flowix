@@ -39,7 +39,7 @@ function normalizeFontFamily(fontFamily: string): string {
 }
 
 function normalizeFontId(fontId: string | undefined, fontFamily: string): string | undefined {
-  if (fontId && FONT_FAMILY_OPTIONS.some((font) => font.id === fontId)) {
+  if (fontId && FONT_FAMILY_OPTIONS.some((font) => font.id === fontId && font.value === fontFamily)) {
     return fontId;
   }
   return FONT_FAMILY_OPTIONS.find((font) => font.value === fontFamily)?.id;
@@ -308,6 +308,8 @@ interface UserSettingsState {
   /** 更新 settings: 同步写状态, 异步 debounce 落盘 (200ms)。
    *  返回 Promise<void> 以保持与旧 useUserSettings 的 Promise 签名兼容。 */
   updateSettings: (updates: UserSettingsUpdate) => Promise<void>;
+  /** Apply a font choice already committed atomically by the native preference store. */
+  applyTypographyFont: (fontId: string, fontFamily: string) => void;
   /** 写一个快捷键覆盖 — 立刻生效, debounce 落盘。 */
   setShortcutOverride: (actionId: string, chord: string) => void;
   /** 重置单个 action 的覆盖, 回到 defaultBinding。 */
@@ -320,24 +322,54 @@ interface UserSettingsState {
 
 const FLUSH_DELAY_MS = 200;
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
-let pendingSettings: UserSettings | null = null;
+type PreferencePatch = Record<string, unknown>;
+let pendingPatch: PreferencePatch | null = null;
 
-async function writeToBackend(settings: UserSettings): Promise<void> {
+function normalizePreferencePatch(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(normalizePreferencePatch);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, child]) => child !== undefined)
+        .map(([key, child]) => [key, normalizePreferencePatch(child)]),
+    );
+  }
+  return value;
+}
+
+function mergePreferencePatches(current: PreferencePatch | null, incoming: PreferencePatch): PreferencePatch {
+  const merged = { ...(current ?? {}) };
+  for (const [key, rawValue] of Object.entries(incoming)) {
+    const value = normalizePreferencePatch(rawValue);
+    const previous = merged[key];
+    if (
+      previous !== null && typeof previous === 'object' && !Array.isArray(previous)
+      && value !== null && typeof value === 'object' && !Array.isArray(value)
+    ) {
+      merged[key] = mergePreferencePatches(previous as PreferencePatch, value as PreferencePatch);
+    } else {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+async function writeToBackend(patch: PreferencePatch): Promise<void> {
   try {
-    await tauriPreferences.set(settings);
+    await tauriPreferences.patch(patch);
   } catch (error) {
     logger.error('persist failed', { error });
   }
 }
 
 /** debounced flush — 拖动滑块 / 连续敲键盘时合并多次写盘 */
-function scheduleFlush(settings: UserSettings): void {
-  pendingSettings = settings;
+function scheduleFlush(patch: PreferencePatch): void {
+  pendingPatch = mergePreferencePatches(pendingPatch, patch);
   if (flushTimer) return;
   flushTimer = setTimeout(() => {
-    const toWrite = pendingSettings;
+    const toWrite = pendingPatch;
     flushTimer = null;
-    pendingSettings = null;
+    pendingPatch = null;
     if (toWrite) void writeToBackend(toWrite);
   }, FLUSH_DELAY_MS);
 }
@@ -379,7 +411,7 @@ export const useUserSettingsStore = create<UserSettingsState>((set, get) => ({
       // 首次安装时立即落盘 (不走 debounce), 避免用户首次启动后立刻改语言
       // 又被下次启动的"首次安装"判定覆盖。
       if (isFirstInstall) {
-        await writeToBackend(sanitized);
+        await tauriPreferences.patch(sanitized as unknown as PreferencePatch);
       }
     } catch (error) {
       logger.error('load failed', { error });
@@ -392,7 +424,7 @@ export const useUserSettingsStore = create<UserSettingsState>((set, get) => ({
     const next = shareUnchangedSettings(prev, sanitizeSettings(mergeSettings(prev, updates)));
     if (next === prev) return Promise.resolve();
     set({ settings: next });
-    scheduleFlush(next);
+    scheduleFlush(updates as PreferencePatch);
     // 主题变更: 立即通知后端更新原生窗口 chrome (set_theme + 背景色), 不等 200ms 防抖落盘。
     if (next.theme !== prev.theme) {
       void windows.applyWindowTheme(next.theme);
@@ -401,6 +433,16 @@ export const useUserSettingsStore = create<UserSettingsState>((set, get) => ({
     // (section 内部有些代码 await 这个返回值)。
     return Promise.resolve();
   },
+
+  applyTypographyFont: (fontId, fontFamily) => set((state) => {
+    if (state.settings.format.fontId === fontId && state.settings.format.fontFamily === fontFamily) return state;
+    return {
+      settings: {
+        ...state.settings,
+        format: { ...state.settings.format, fontId, fontFamily },
+      },
+    };
+  }),
 
   setShortcutOverride: (actionId, chord) => {
     const cur = get().settings;
@@ -411,7 +453,7 @@ export const useUserSettingsStore = create<UserSettingsState>((set, get) => ({
       shortcuts: { ...cur.shortcuts, [actionId]: chord },
     };
     set({ settings: next });
-    scheduleFlush(next);
+    scheduleFlush({ shortcuts: { [actionId]: chord } });
   },
 
   resetShortcutOverride: actionId => {
@@ -420,14 +462,14 @@ export const useUserSettingsStore = create<UserSettingsState>((set, get) => ({
     const nextShortcuts = { ...cur.shortcuts };
     delete nextShortcuts[actionId];
     set({ settings: { ...cur, shortcuts: nextShortcuts } });
-    scheduleFlush({ ...cur, shortcuts: nextShortcuts });
+    scheduleFlush({ shortcuts: { [actionId]: null } });
   },
 
   resetAllShortcutOverrides: () => {
     const cur = get().settings;
     if (Object.keys(cur.shortcuts).length === 0) return;
     set({ settings: { ...cur, shortcuts: {} } });
-    scheduleFlush({ ...cur, shortcuts: {} });
+    scheduleFlush({ shortcuts: null });
   },
 
   flushPending: async () => {
@@ -435,9 +477,9 @@ export const useUserSettingsStore = create<UserSettingsState>((set, get) => ({
       clearTimeout(flushTimer);
       flushTimer = null;
     }
-    if (pendingSettings) {
-      const toWrite = pendingSettings;
-      pendingSettings = null;
+    if (pendingPatch) {
+      const toWrite = pendingPatch;
+      pendingPatch = null;
       await writeToBackend(toWrite);
     }
   },

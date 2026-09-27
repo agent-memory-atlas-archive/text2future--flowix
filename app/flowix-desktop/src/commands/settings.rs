@@ -3,7 +3,7 @@
 //! (原子写, 0o600)。写入成功后 emit `user-config-changed` 事件,
 //! 让各窗口 React 树重新 load。
 use crate::events as dispatcher;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::config::{AiConfigFile, AiModelConfig, PreferenceFile};
 use crate::connection_probe::TestConnectionResult;
@@ -21,19 +21,18 @@ pub fn get_preference(state: State<AppState>) -> PreferenceFile {
 }
 
 #[tauri::command]
-pub fn set_preference(
-    preference: PreferenceFile,
+pub fn patch_preference(
+    patch: serde_json::Value,
     state: State<AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
     state
         .user_config
-        .set_preference(preference)
+        .patch_preference(patch)
         .map(|_| {
-            dispatcher::emit_to(&app, USER_CONFIG_CHANGED_EVENT, "preference");
-            Ok(())
+            let _ = app.emit(USER_CONFIG_CHANGED_EVENT, "preference");
         })
-        .map_err(|e| e.to_string())?
+        .map_err(|error| error.to_string())
 }
 
 /// DeepSeek Harness model configuration. This is persisted by llm-pi-ai's
@@ -144,11 +143,9 @@ pub fn update_watcher_config(
     state: State<AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    let mut pref = state.user_config.get_preference();
-    pref.watcher = config;
     state
         .user_config
-        .set_preference(pref)
+        .patch_preference(serde_json::json!({ "watcher": config }))
         .map(|_| {
             dispatcher::emit_to(&app, USER_CONFIG_CHANGED_EVENT, "watcher");
             Ok(())

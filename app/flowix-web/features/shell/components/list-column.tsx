@@ -27,7 +27,7 @@ interface ListColumnProps {
   children: ReactNode;
 }
 
-function ListColumnChrome({
+function ListColumnTitlebar({
   previewVisible,
   selectedNotebook,
   noteNavigationPhase,
@@ -58,7 +58,7 @@ function ListColumnChrome({
 }
 
 /**
- * The middle list column shared by the docked sidebar and the hover preview.
+ * The list column shared by the docked sidebar and the hover preview.
  * The list content stays mounted as one subtree. The preview keeps the
  * titlebar's layout space while hiding its docked-only controls.
  */
@@ -174,7 +174,7 @@ export function ListColumn({
           ? { left: 'calc(var(--flowix-note-navigation-drawer-width) + 0.25rem)' }
           : undefined}
       >
-        <ListColumnChrome
+        <ListColumnTitlebar
           previewVisible={previewVisible}
           selectedNotebook={selectedNotebook}
           noteNavigationPhase={noteNavigationPhase}

@@ -19,31 +19,10 @@ export function joinNotebookMemoPath(notebookPath: string, memoPath: string | nu
   return `${cleanNotebook}/${cleanMemo}`;
 }
 
-/**
- * 给文档实例生成唯一 key:
- * - memo 文档: 走 `memo:${memoId}` 形式 (memoId 由调用方提供, 不再从路径解析)
- * - 外部文件: 退化为 `path:${path}` 形式
- *
- * 该函数仅作为"外部文件"分支的兜底入口; memo 文档应直接用 `memo:${memoId}`。
- */
-export function getDocumentInstanceKey(path: string): string {
-  return `path:${path}`;
-}
-
 export function isWindowsPlatform(): boolean {
   return /Windows/i.test(navigator.userAgent) || /Win/i.test(navigator.platform);
 }
 
-/**
- * v3 stub — 原本 v3 改造已移除本函数 (memo id 由 memo index
- * 持有, 不从 path 解析)。但 buffer-registry.ts 在双 Map 设计
- * 中仍 import 本函数作为 classifyPath 的 fallback 判定, 这里
- * 以 stub 形式保留导出以保证模块加载。调用方
- * 遇到 stub 返回 null 会走 external 分支, 不影响现有语义。
- */
-export function extractMemoIdFromPath(_path: string): string | null {
-  return null;
-}
 
 /**
  * 跨平台 path 归一: \ → /, 重复 / 压缩。不动大小写 (文件系统权威)。
@@ -52,6 +31,11 @@ export function extractMemoIdFromPath(_path: string): string | null {
  */
 export function canonicalPath(path: string): string {
   return path.replace(/\\/g, '/').replace(/\/+/g, '/');
+}
+
+/** Stable locator key for a local file, independent of any open surface. */
+export function fileLocatorKey(path: string): string {
+  return `file:${canonicalPath(path)}`;
 }
 
 export function canonicalDirectoryPath(path: string): string {

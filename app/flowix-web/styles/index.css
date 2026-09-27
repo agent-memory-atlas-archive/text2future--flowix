@@ -484,7 +484,7 @@
 	 * focused selector must be more specific than CodeMirror's runtime rule. */
 	.code-editor .cm-editor .cm-content .cm-source-header .memo-title-editor:focus::selection,
 	.code-editor .memo-title-editor::selection,
-	.source-memo-title-row .memo-title-editor::selection,
+	.source-document-title-row .memo-title-editor::selection,
 	.memo-title-editor::selection {
 		background: color-mix(in oklch, var(--brand) 26%, transparent) !important;
 		background-color: color-mix(in oklch, var(--brand) 26%, transparent) !important;
@@ -493,7 +493,7 @@
 
 	.code-editor .cm-editor .cm-content .cm-source-header .memo-title-editor:focus::-moz-selection,
 	.code-editor .memo-title-editor::-moz-selection,
-	.source-memo-title-row .memo-title-editor::-moz-selection,
+	.source-document-title-row .memo-title-editor::-moz-selection,
 	.memo-title-editor::-moz-selection {
 		background: color-mix(in oklch, var(--brand) 26%, transparent) !important;
 		background-color: color-mix(in oklch, var(--brand) 26%, transparent) !important;

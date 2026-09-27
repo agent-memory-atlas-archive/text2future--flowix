@@ -40,14 +40,14 @@ const mocks = vi.hoisted(() => ({
   },
   documentState: {
     activeMemoSession: null as {
+      fileIdentity: { displayId: string; path: string };
       memoId: string;
-      path: string;
       notebookId: string | null;
       notebookPath: string | null;
       transitionId: number;
     } | null,
     activeExternalSession: null as {
-      path: string;
+      fileIdentity: { displayId: string; path: string };
       scopePath: string | null;
       transitionId: number;
     } | null,
@@ -151,7 +151,8 @@ describe('workspace navigation transaction', () => {
   it('opens a memo in work while retaining its existing browser tab', async () => {
     mocks.openMemoDocument.mockImplementation(async (params) => {
       mocks.documentState.activeMemoSession = {
-        memoId: params.memoId, path: params.path, notebookId: null,
+        fileIdentity: { displayId: 'display-test-memo', path: params.path },
+        memoId: params.memoId, notebookId: null,
         notebookPath: null, transitionId: 1,
       };
     });
@@ -183,6 +184,58 @@ describe('workspace navigation transaction', () => {
     expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('main-third');
   });
 
+  it('promotes a same-path external browser tab to Memo before opening the Memo in work', async () => {
+    const path = '/notes/shared.md';
+    mocks.openMemoDocument.mockImplementation(async (params) => {
+      mocks.documentState.activeMemoSession = {
+        fileIdentity: { displayId: 'display-test-shared', path: params.path },
+        memoId: params.memoId,
+        notebookId: null,
+        notebookPath: null,
+        transitionId: 5,
+      };
+    });
+    useBrowserColumnStore.getState().openTab({
+      id: `file:${path}`,
+      title: 'shared',
+      icon: null,
+      target: {
+        kind: 'file-browser',
+        folderPath: '/notes',
+        notebookId: null,
+        fileTreeVisible: true,
+        fileTreeWidth: 220,
+        activeFilePath: path,
+        scopePath: '/notes',
+      },
+    });
+
+    await openMemoTarget({
+      memoId: 'shared',
+      path,
+      memo: memo('shared'),
+    });
+
+    expect(useBrowserColumnStore.getState().tabs).toEqual([
+      expect.objectContaining({
+        id: `file:${path}`,
+        target: {
+          kind: 'memo',
+          memoId: 'shared',
+          notebookId: '',
+          notebookPath: '',
+          filePath: path,
+        },
+      }),
+    ]);
+    expect(mocks.memoState.selectedMemo).toEqual({ id: 'shared' });
+    expect(useWorkColumnStore.getState().navigation.target).toMatchObject({
+      kind: 'memo',
+      memoId: 'shared',
+      path,
+    });
+  });
+
   it('rolls back memo selection and retains the previous target on failure', async () => {
     const failure = new Error('save refused');
     mocks.openMemoDocument.mockRejectedValueOnce(failure);
@@ -207,8 +260,8 @@ describe('workspace navigation transaction', () => {
       .mockRejectedValueOnce(new Error('temporary failure'))
       .mockImplementationOnce(async (params) => {
         mocks.documentState.activeMemoSession = {
+          fileIdentity: { displayId: 'display-test-memo', path: params.path },
           memoId: params.memoId,
-          path: params.path,
           notebookId: null,
           notebookPath: null,
           transitionId: 2,
@@ -242,8 +295,8 @@ describe('workspace navigation transaction', () => {
         params,
         resolve: () => {
           mocks.documentState.activeMemoSession = {
+            fileIdentity: { displayId: 'display-test-memo', path: params.path },
             memoId: params.memoId,
-            path: params.path,
             notebookId: null,
             notebookPath: null,
             transitionId: params.memoId === 'first' ? 1 : 2,
@@ -300,8 +353,8 @@ describe('workspace navigation transaction', () => {
     ));
     mocks.openMemoDocument.mockImplementation(async (params) => {
       mocks.documentState.activeMemoSession = {
+        fileIdentity: { displayId: 'display-test-memo', path: params.path },
         memoId: params.memoId,
-        path: params.path,
         notebookId: params.notebookId ?? null,
         notebookPath: params.notebookPath ?? null,
         transitionId: params.memoId === 'first' ? 1 : 2,
@@ -363,8 +416,8 @@ describe('workspace navigation transaction', () => {
       .mockRejectedValueOnce(failure)
       .mockImplementationOnce(async (params) => {
         mocks.documentState.activeMemoSession = {
+          fileIdentity: { displayId: 'display-test-memo', path: params.path },
           memoId: params.memoId,
-          path: params.path,
           notebookId: null,
           notebookPath: null,
           transitionId: 2,

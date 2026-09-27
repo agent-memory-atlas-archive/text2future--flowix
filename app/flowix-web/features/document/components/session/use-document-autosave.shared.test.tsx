@@ -16,14 +16,14 @@ describe('shared document autosave', () => {
 
   it('saves the latest shared draft when the outgoing surface timer fires', async () => {
     vi.useFakeTimers();
-    const identity = { kind: 'memo' as const, id: 'shared-autosave' };
+    const identity = { kind: 'md' as const, memoId: 'shared-autosave', path: '/shared-autosave.md', displayId: 'display-shared-autosave' };
     applyLoadedDocumentContent(identity, '/notes/shared.md', '# Base');
     let onChange: ((content: string) => void) | undefined;
     const setState = vi.fn();
     const reloadDocument = vi.fn().mockResolvedValue(undefined);
     function Surface() {
       onChange = useDocumentAutosave({
-        identity, filePath: '/notes/shared.md', memoId: identity.id,
+        identity, filePath: '/notes/shared.md', memoId: identity.memoId,
         isExternalDocument: false, externalScopePath: null, setState, reloadDocument,
       }).handleChange;
       return null;
@@ -45,12 +45,12 @@ describe('shared document autosave', () => {
   });
 
   it('publishes unsaved edits to both subscribers and preserves them when another surface loads', () => {
-    const identity = { kind: 'memo' as const, id: 'shared-live' };
+    const identity = { kind: 'md' as const, memoId: 'shared-live', path: '/shared-live.md', displayId: 'display-shared-live' };
     applyLoadedDocumentContent(identity, '/notes/live.md', '# Disk');
     const left: string[] = [];
     const right: string[] = [];
     const subscribe = (view: string[]) => subscribeDocumentBufferChanges((changed) => {
-      if (changed.kind === 'memo' && changed.id === identity.id) view.push(getBuffer(identity)!.content);
+      if (changed.displayId === identity.displayId) view.push(getBuffer(identity)!.content);
     });
     const stopLeft = subscribe(left);
     const stopRight = subscribe(right);

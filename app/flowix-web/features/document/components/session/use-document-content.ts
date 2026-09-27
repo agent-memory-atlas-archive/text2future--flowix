@@ -1,6 +1,7 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { externalDocuments, memos as memosClient } from '@platform/tauri/client';
+import { memos as memosClient } from '@platform/tauri/client';
+import { documentContentOperations } from '@features/document/use-cases/document-operations';
 import { useMemoStore } from '@features/memo/store/memo-store';
 import {
   setActiveDocumentPath,
@@ -13,7 +14,7 @@ import { useDocumentStore } from '@features/document/store/document-store';
 import type { DocumentIdentity } from '@features/document/store/document-identity';
 import { translate } from '@/lib/i18n';
 import { replaceActiveMemoPath } from '@features/workspace/use-cases/workspace-navigation';
-import { replaceBrowserColumnMemoPath } from '@features/workspace/use-cases/browser-column-navigation';
+import { isFileDisplayIdLive } from '@features/workspace/store/file-display-store';
 import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
 import { formatDateTime } from '@/lib/utils';
 import { markDocumentOpenTrace } from '@/lib/document-open-perf';
@@ -88,6 +89,12 @@ export function useDocumentContent({
   // Monotonic counter for the latest reloadDocument call. Stale IPC
   // reads compare against this and abort.
   const counter = useRef(0);
+
+  useEffect(() => () => {
+    // Prevent an IPC read from recreating a buffer after its last surface has
+    // unmounted and the runtime display identity has been reclaimed.
+    counter.current += 1;
+  }, []);
 
   const applyLoadedContent = useCallback(
     (
@@ -200,6 +207,7 @@ export function useDocumentContent({
           source: 'staged',
           found: recovery !== null,
         });
+        if (currentLoadId !== counter.current || !isFileDisplayIdLive(identity.displayId)) return;
         applyLoadedContent(path, stagedContent, { preservePending: true, recovery });
         logOpenDocPerf('reloadDocument:staged', startedAt, {
           memoId,
@@ -235,9 +243,9 @@ export function useDocumentContent({
           isExternalDocument,
         });
         let readPath = path;
-        let fullContent = isExternalDocument
-          ? await externalDocuments.read(readPath, externalScopePath)
-          : await memosClient.readDocument(readPath);
+        let fullContent = await documentContentOperations(isExternalDocument ? 'external' : 'internal').read({
+          path: readPath, scopePath: externalScopePath, memoId,
+        });
         if (
           (fullContent === null || fullContent === undefined) &&
           !isExternalDocument
@@ -245,7 +253,9 @@ export function useDocumentContent({
           const latestPath = await resolveLatestMemoPathFromBackend(memoId, notebookPath);
           if (latestPath && latestPath !== path) {
             const retryStartedAt = performance.now();
-            const retryContent = await memosClient.readDocument(latestPath);
+            const retryContent = await documentContentOperations('internal').read({
+              path: latestPath, scopePath: externalScopePath, memoId,
+            });
             logOpenDocPerf('readDocument:retry-latest-path', retryStartedAt, {
               memoId,
               transitionId,
@@ -256,10 +266,8 @@ export function useDocumentContent({
             if (retryContent !== null && retryContent !== undefined) {
               readPath = latestPath;
               fullContent = retryContent;
-              replaceBrowserColumnMemoPath(memoId!, latestPath);
-              if (!isolatedSession) {
-                setActiveDocumentPath(identity, latestPath);
-                replaceActiveMemoPath(memoId!, latestPath);
+              if (memoId) {
+                replaceActiveMemoPath(memoId, latestPath);
               }
             }
           }
@@ -287,14 +295,14 @@ export function useDocumentContent({
           return;
         }
 
-        if (currentLoadId !== counter.current) return;
+        if (currentLoadId !== counter.current || !isFileDisplayIdLive(identity.displayId)) return;
         markDocumentOpenTrace(transitionId, 'recovery:read-start', { memoId });
         const recovery = await readRecoveryDraft(identity).catch(() => null);
         markDocumentOpenTrace(transitionId, 'recovery:read-end', {
           memoId,
           found: recovery !== null,
         });
-        if (currentLoadId !== counter.current) return;
+        if (currentLoadId !== counter.current || !isFileDisplayIdLive(identity.displayId)) return;
         applyLoadedContent(readPath, fullContent, {
           preservePending: options?.preservePending,
           recovery,

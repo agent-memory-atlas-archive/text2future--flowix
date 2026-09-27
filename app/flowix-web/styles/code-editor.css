@@ -55,6 +55,14 @@
 	--code-editor-content-padding-bottom: 28px;
 }
 
+.document-container .code-editor {
+	--code-editor-font-family: var(--app-font-family);
+}
+
+.document-container .code-editor .cm-scroller {
+	font-family: var(--app-font-family);
+}
+
 .code-editor.code-editor--with-scroll-header .cm-source-header {
 	display: block;
 	width: 100%;
@@ -67,7 +75,7 @@
 	white-space: normal;
 }
 
-.code-editor .source-memo-title-row {
+.code-editor .source-document-title-row {
 	box-sizing: border-box;
 	width: 100%;
 	min-width: 0;
@@ -93,11 +101,16 @@
 	padding-top: var(--code-editor-content-padding-top, 14px) !important;
 }
 
-.code-editor .source-memo-title-row .memo-title-shell {
+.code-editor .source-document-title-row .memo-title-shell {
 	width: 100%;
 }
 
-.code-editor .source-memo-title-row .memo-title-editor {
+.code-editor .source-document-title-row .memo-document-header {
+	max-width: none;
+	padding: 0;
+}
+
+.code-editor .source-document-title-row .memo-title-editor {
 	box-sizing: border-box;
 	min-height: calc(var(--source-memo-title-font-size, 16px) * var(--code-editor-line-height, 1.65));
 	padding: 0 var(--code-editor-line-padding-right, 20px) 0 var(--code-editor-line-padding-left, 10px);
@@ -111,7 +124,6 @@
 	word-break: break-word;
 	overflow-wrap: anywhere;
 }
-
 .code-editor .cm-content {
 	display: block;
 	min-height: 100%;

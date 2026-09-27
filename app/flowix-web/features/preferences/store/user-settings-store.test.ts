@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferences } from '@platform/tauri/client';
 
-// 把 Tauri client 的 preferences.set 拦截掉, 避免触发真实 IPC。
+// 把 Tauri client 的 preferences IPC 拦截掉, 避免触发真实 IPC。
 vi.mock('@platform/tauri/client', () => ({
   preferences: {
     get: vi.fn(async () => ({})),
-    set: vi.fn(async () => undefined),
+    patch: vi.fn(async () => undefined),
   },
 }));
 

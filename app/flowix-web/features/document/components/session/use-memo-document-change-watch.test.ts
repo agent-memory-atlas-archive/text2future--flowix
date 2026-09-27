@@ -17,8 +17,13 @@ function tagsRenamed(affectedMemoIds: string[]): Extract<MemoEvent, { kind: 'tag
   };
 }
 
-const memoIdentity: DocumentIdentity = { kind: 'memo', id: 'memo-1' };
-const externalIdentity: DocumentIdentity = { kind: 'external', path: '/notes/ext.md' };
+const memoIdentity: DocumentIdentity = { kind: 'md', memoId: 'memo-1', path: '/memo-1.md', displayId: 'display-1' };
+const externalIdentity: DocumentIdentity = {
+  kind: 'md',
+  memoId: null,
+  path: '/notes/ext.md',
+  displayId: 'display:test-external',
+};
 
 describe('shouldReloadDocumentForTagsRenamed', () => {
   it('returns true when the current memo id is in affectedMemoIds and the doc is clean', () => {

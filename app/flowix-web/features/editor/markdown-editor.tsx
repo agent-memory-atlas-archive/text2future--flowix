@@ -50,6 +50,8 @@ import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
 
 interface MarkdownEditorProps {
   memoId?: string;
+  propertyTargetId?: string;
+  onViewSourceMode?: () => void;
   transitionId?: number | null;
   content: string;
   editable?: boolean;
@@ -70,7 +72,8 @@ interface MarkdownEditorProps {
   /** Move focus from the first editable body block to the title. */
   onFocusTitle?: () => void;
   /** Append the first editable body line to the existing title. */
-  onAppendToTitle?: (title: string) => void;
+  /** Return false when the title update was refused; the body block is then preserved. */
+  onAppendToTitle?: (title: string) => void | boolean | Promise<boolean>;
   /** Content in the document scroller that stays outside ProseMirror. */
   header?: ReactNode;
 }
@@ -545,6 +548,8 @@ function focusEmptyParagraphAfterMedia(
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(function MarkdownEditor({
   memoId,
+  propertyTargetId,
+  onViewSourceMode,
   transitionId = null,
   content,
   editable = true,
@@ -871,12 +876,36 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       return true;
     }
 
-    const tr = blockIndex === editor.state.doc.childCount - 1
-      ? editor.state.tr.replaceWith(position, position + block.nodeSize, createEmptyParagraph(editor))
-      : editor.state.tr.delete(position, position + block.nodeSize);
-    tr.scrollIntoView();
-    editor.view.dispatch(tr);
-    onAppendToTitleRef.current?.(title);
+    const removeMergedBodyBlock = () => {
+      if (editor.isDestroyed) return;
+      const currentBlock = editor.state.doc.nodeAt(position);
+      // The async external-file rename may finish after another transaction.
+      // Only remove the exact block that was offered to the title.
+      if (
+        !currentBlock
+        || currentBlock.type !== block.type
+        || currentBlock.textContent.trim() !== title
+      ) return;
+      const tr = blockIndex === editor.state.doc.childCount - 1
+        ? editor.state.tr.replaceWith(
+            position,
+            position + currentBlock.nodeSize,
+            createEmptyParagraph(editor),
+          )
+        : editor.state.tr.delete(position, position + currentBlock.nodeSize);
+      tr.scrollIntoView();
+      editor.view.dispatch(tr);
+    };
+
+    const appendResult = onAppendToTitleRef.current?.(title);
+    if (appendResult instanceof Promise) {
+      void appendResult.then((accepted) => {
+        if (accepted) removeMergedBodyBlock();
+      }, () => undefined);
+      return true;
+    }
+    if (appendResult === false) return true;
+    removeMergedBodyBlock();
     return true;
   }, []);
 
@@ -1002,7 +1031,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         Tag,
         ManagedPasteRules.configure({ memoId }),
         MarkdownPaste,
-        Frontmatter.configure({ memoId }),
+        Frontmatter.configure({ propertyTargetId, onViewSourceMode }),
         NoteReference,
         NoteMention,
         WikiNoteMention,

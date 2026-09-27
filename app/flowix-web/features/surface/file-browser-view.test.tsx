@@ -44,7 +44,7 @@ it('derives the tree from the owning notebook without remounting or changing fil
     kind: 'file-browser', activeFilePath: '/workspace/src/a.md', folderPath: null, notebookId: 'owner',
     scopePath: '/granted-scope', fileTreeVisible: true, fileTreeWidth: 220,
     content: <DocumentContainer
-      filePath="/workspace/src/a.md"
+      fileIdentity={{ path: '/workspace/src/a.md', displayId: 'display:test-file' }}
       isExternalDocument
       externalScopePath="/granted-scope"
       onFlushReady={flushReady}

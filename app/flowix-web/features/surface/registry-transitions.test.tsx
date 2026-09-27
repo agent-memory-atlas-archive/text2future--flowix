@@ -35,8 +35,8 @@ function externalSurface(
     : kind === 'video-file' ? '/notebook/movie.mp4' : '/notebook/report.pdf';
   const base = {
     instanceKey: `${kind}:${filePath}`,
-    filePath,
-    props: { filePath, isExternalDocument: true as const, transitionId },
+    fileIdentity: { path: filePath, displayId: `display:${filePath}` },
+    props: { isExternalDocument: true as const, transitionId },
   };
   switch (kind) {
     case 'unavailable-file': return { ...base, kind };
@@ -47,23 +47,26 @@ function externalSurface(
 
 function contentSurface(kind: 'note' | 'md' | 'code' | 'html-file', transitionId: number): WorkColumnSurface {
   const filePath = kind === 'html-file' ? '/notebook/index.html' : '/notebook/readme.md';
-  const base = { instanceKey: `${kind}:${filePath}`, filePath };
+  const base = {
+    instanceKey: `${kind}:${filePath}`,
+    fileIdentity: { path: filePath, displayId: `display:${filePath}` },
+  };
   switch (kind) {
     case 'note': return {
       ...base, kind, memoId: 'memo-1',
-      props: { filePath, transitionId },
+      props: { transitionId },
     };
     case 'md': return {
       ...base, kind,
-      props: { filePath, isExternalDocument: true, transitionId },
+      props: { isExternalDocument: true, transitionId },
     };
     case 'code': return {
       ...base, kind,
-      props: { filePath, isExternalDocument: true, transitionId },
+      props: { isExternalDocument: true, transitionId },
     };
     case 'html-file': return {
       ...base, kind, scopePath: '/notebook',
-      props: { filePath, isExternalDocument: true, transitionId },
+      props: { isExternalDocument: true, transitionId },
     };
   }
 }

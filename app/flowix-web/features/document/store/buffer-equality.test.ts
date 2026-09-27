@@ -34,13 +34,23 @@ describe('document buffer semantic equality', () => {
   });
 
   it('keeps code and plain-text whitespace byte-sensitive', () => {
-    const identity = { kind: 'external' as const, path: '/project/src/main.ts' };
+    const identity = {
+      kind: 'md' as const,
+      memoId: null,
+      path: '/project/src/main.ts',
+      displayId: 'display:test-main-ts',
+    };
     expect(isDocumentContentEqual(identity, 'const value = 1;\n', 'const value = 1;')).toBe(false);
     expect(isDocumentContentEqual(identity, '\nconst value = 1;', 'const value = 1;')).toBe(false);
   });
 
   it('retains semantic comparison for external Markdown', () => {
-    const identity = { kind: 'external' as const, path: '/notes/readme.md' };
+    const identity = {
+      kind: 'md' as const,
+      memoId: null,
+      path: '/notes/readme.md',
+      displayId: 'display:test-readme-md',
+    };
     expect(isDocumentContentEqual(identity, 'body\n', 'body')).toBe(true);
   });
 

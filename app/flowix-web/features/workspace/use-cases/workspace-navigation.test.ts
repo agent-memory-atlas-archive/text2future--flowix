@@ -41,8 +41,8 @@ const mocks = vi.hoisted(() => ({
     loadMemos: vi.fn(),
   },
   documentState: {
-    activeMemoSession: null as { memoId: string; path: string; notebookId: string | null; notebookPath: string | null; transitionId: number } | null,
-    activeExternalSession: null as { path: string; scopePath: string | null; transitionId: number } | null,
+    activeMemoSession: null as { fileIdentity: { displayId: string; path: string }; memoId: string; notebookId: string | null; notebookPath: string | null; transitionId: number } | null,
+    activeExternalSession: null as { fileIdentity: { displayId: string; path: string }; scopePath: string | null; transitionId: number } | null,
     activeAgentConversationId: null as string | null,
   },
 }));
@@ -130,8 +130,8 @@ describe('workspace navigation', () => {
   it('publishes the committed memo session as the workspace target', async () => {
     mocks.openMemoDocument.mockImplementationOnce(async () => {
       mocks.documentState.activeMemoSession = {
+        fileIdentity: { displayId: 'display-test-memo', path: '/notes/note.md' },
         memoId: 'memo-1',
-        path: '/notes/note.md',
         notebookId: 'notebook-1',
         notebookPath: '/notes',
         transitionId: 4,
@@ -199,8 +199,8 @@ describe('workspace navigation', () => {
 
   it('flushes the active memo without clearing its document session', async () => {
     mocks.documentState.activeMemoSession = {
+      fileIdentity: { displayId: 'display-memo-1', path: '/notes/memo-1.md' },
       memoId: 'memo-1',
-      path: '/notes/memo-1.md',
       notebookId: 'notebook-1',
       notebookPath: '/notes',
       transitionId: 4,
@@ -208,7 +208,7 @@ describe('workspace navigation', () => {
     await flushWorkspaceDocument();
 
     expect(mocks.flushDocumentPath).toHaveBeenCalledWith(
-      { kind: 'memo', id: 'memo-1' },
+      { kind: 'md', memoId: 'memo-1', path: '/notes/memo-1.md', displayId: 'display-memo-1' },
       '/notes/memo-1.md',
       undefined,
     );
@@ -228,8 +228,8 @@ describe('workspace navigation', () => {
     mocks.memoState.selectedNotebook = previousNotebook;
     mocks.memoState.selectedNotebookId = previousNotebook.id;
     mocks.documentState.activeMemoSession = {
+      fileIdentity: { displayId: 'display-memo-1', path: '/notes/one/memo-1.md' },
       memoId: 'memo-1',
-      path: '/notes/one/memo-1.md',
       notebookId: previousNotebook.id,
       notebookPath: previousNotebook.path,
       transitionId: 4,
@@ -246,7 +246,7 @@ describe('workspace navigation', () => {
     await selectNotebook(nextNotebook);
 
     expect(mocks.flushDocumentPath).toHaveBeenCalledWith(
-      { kind: 'memo', id: 'memo-1' },
+      { kind: 'md', memoId: 'memo-1', path: '/notes/one/memo-1.md', displayId: 'display-memo-1' },
       '/notes/one/memo-1.md',
       undefined,
     );

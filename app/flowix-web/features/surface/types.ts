@@ -9,6 +9,7 @@ import type { PluginArtifactRendererId } from '@features/plugin/plugin-note';
 import type { MemoItem } from '@/types/memo-item';
 import type { PluginDescriptor } from '@platform/tauri/client';
 import type { WorkColumnNavigationState } from '@features/workspace/store/work-column-target';
+import type { FileDisplayIdentity } from '@features/workspace/store/file-display-store';
 
 export type WorkColumnSurfaceCapability =
   | 'edit'
@@ -41,60 +42,60 @@ interface SurfaceBase {
   instanceKey: string;
 }
 
-export type ExternalDocumentProps = Omit<ComponentProps<typeof DocumentContainer>, 'isExternalDocument'> & {
+interface FileSurfaceBase extends SurfaceBase {
+  /** Runtime identity shared by every open surface showing the same local file. */
+  fileIdentity: FileDisplayIdentity;
+}
+
+export type ExternalDocumentProps = Omit<ComponentProps<typeof DocumentContainer>, 'isExternalDocument' | 'fileIdentity'> & {
   isExternalDocument: true;
 };
 
-export interface NoteSurface extends SurfaceBase {
+export interface NoteSurface extends FileSurfaceBase {
   kind: 'note';
   memoId: string;
-  props: Omit<ComponentProps<typeof DocumentContainer>, 'isExternalDocument' | 'memoId'> & {
+  props: Omit<ComponentProps<typeof DocumentContainer>, 'isExternalDocument' | 'memoId' | 'fileIdentity'> & {
     isExternalDocument?: false;
   };
 }
 
 /** Markdown files opened as external documents, outside the memo model. */
-export interface MDSurface extends SurfaceBase {
+export interface MDSurface extends FileSurfaceBase {
   kind: 'md';
   props: ExternalDocumentProps;
 }
 
 /** Plain-text/code documents opened from outside the notebook memo model. */
-export interface CodeSurface extends SurfaceBase {
+export interface CodeSurface extends FileSurfaceBase {
   kind: 'code';
   props: ExternalDocumentProps;
 }
 
-export interface ImageFileSurface extends SurfaceBase {
+export interface ImageFileSurface extends FileSurfaceBase {
   kind: 'image-file';
-  filePath: string;
   scopePath: string | null;
   props: ExternalDocumentProps;
 }
 
-export interface VideoFileSurface extends SurfaceBase {
+export interface VideoFileSurface extends FileSurfaceBase {
   kind: 'video-file';
-  filePath: string;
   scopePath: string | null;
   props: ExternalDocumentProps;
 }
 
-export interface HtmlFileSurface extends SurfaceBase {
+export interface HtmlFileSurface extends FileSurfaceBase {
   kind: 'html-file';
-  filePath: string;
   scopePath: string | null;
   props: ExternalDocumentProps;
 }
 
-export interface UnavailableFileSurface extends SurfaceBase {
+export interface UnavailableFileSurface extends FileSurfaceBase {
   kind: 'unavailable-file';
-  filePath: string;
   props: ExternalDocumentProps;
 }
 
-export interface MediaResourceSurface extends SurfaceBase {
+export interface MediaResourceSurface extends FileSurfaceBase {
   kind: 'media';
-  filePath: string;
   notebookId: string | null;
   notebookPath: string | null;
   resourceKind: 'image' | 'video';
@@ -180,14 +181,14 @@ export type DocumentSurfaceIdentity =
   | {
       kind: 'memo';
       memoId: string;
-      path: string;
+      fileIdentity: FileDisplayIdentity;
       notebookId: string | null;
       notebookPath: string | null;
       transitionId: number | null;
     }
   | {
       kind: 'external';
-      path: string;
+      fileIdentity: FileDisplayIdentity;
       scopePath: string | null;
       transitionId: number | null;
     };

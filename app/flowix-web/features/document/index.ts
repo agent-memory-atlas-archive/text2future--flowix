@@ -6,7 +6,7 @@ export { useDocumentCommands } from '@features/document/components/use-document-
 export {
   flushWorkspaceDocumentPath,
   getWorkspaceDocumentState,
-  pushWorkspaceDocumentHistory,
+  recordWorkspaceDocumentNavigation,
   type WorkspaceDocumentState,
 } from '@features/document/public/workspace-api';
 export * from '@features/document/store';

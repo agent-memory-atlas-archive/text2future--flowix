@@ -28,6 +28,7 @@ import { resourceKindFromPath } from '@features/editor/code-file';
 import { setShowHiddenNotebookFilesPreference } from '@features/preferences/public/runtime-api';
 import { FileTypeIcon } from '@features/memo/components/file-type-icon';
 import { memos, product, type DocTreeItem } from '@platform/tauri/client';
+import { memoDocumentOperations } from '@features/document/public/file-operations-api';
 import { canUseNativeContextMenu, logNativeContextMenuError, popupNativeContextMenu, type NativeContextMenuItems } from '@platform/tauri/native-context-menu';
 
 const TREE_MENU_CLASS =
@@ -328,7 +329,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
         },
         {
           text: t('document.action.copyFullText'),
-          action: () => void memos.readDocument(item.fullPath)
+          action: () => void memoDocumentOperations.read({ path: item.fullPath, scopePath: null, memoId })
             .then((content) => navigator.clipboard.writeText(content ?? '')),
         },
         {

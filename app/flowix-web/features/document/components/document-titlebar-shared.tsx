@@ -1,7 +1,7 @@
 'use client';
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronRight, Code2, Ellipsis, Loader2, Palette } from 'lucide-react';
+import { Check, ChevronRight, Code2, Ellipsis, Loader2, Palette, Type } from 'lucide-react';
 import {
   LinkSimpleIcon,
   CopyIcon,
@@ -35,13 +35,14 @@ import {
 } from '@features/memo/store/memo-store';
 import type { MemoColor, MemoItem } from '@/types/memo-item';
 import type { DocumentEditorMode } from '@features/document/store/document-editor-view-store';
+import { EditorFontSwitcher, useEditorFontSwitch } from '@features/document/components/editor-font-switcher';
 import {
   flushDocumentPath,
   getDocumentBuffer,
 } from '@features/document/store/document-session-service';
 import { useDocumentStore } from '@features/document/store/document-store';
 import type { DocumentIdentity } from '@features/document/store/document-identity';
-import { memos as memosClient, type MemoVersionMeta } from '@platform/tauri/client';
+import { memos as memosClient, product, windows, type MemoVersionMeta } from '@platform/tauri/client';
 import { toast } from '@/lib/toast';
 import { replaceActiveMemoPath } from '@features/workspace/use-cases/workspace-navigation';
 import type { WorkspaceHostId } from '@features/workspace/store/workspace-focus-store';
@@ -102,6 +103,7 @@ export interface DocumentTitlebarProps {
     onExportWord: () => void;
     onExportPdf: () => void;
     onRequestDeleteMemo: () => void;
+    onDeleteExternalFile: () => void | Promise<void>;
     onColorsChange?: (next: MemoColor[]) => void;
     editorMode: DocumentEditorMode;
     onToggleEditorMode: () => void;
@@ -152,6 +154,130 @@ export function ExternalTitlebarBadge() {
     >
       {t("document.external.titlebarBadge")}
     </span>
+  );
+}
+
+export function ExternalDocumentActions({
+  filePath,
+  iconButtonClass,
+  onCopyPath,
+  onCopyFullText,
+  onExportMarkdown,
+  onExportWord,
+  onExportPdf,
+  onSaveAsTemplate,
+  onDeleteExternalFile,
+  canCopyFullText,
+  canExportContent,
+  canSaveAsTemplate,
+}: {
+  filePath: string;
+  iconButtonClass: string;
+  onCopyPath: () => void;
+  onCopyFullText: () => void;
+  onExportMarkdown: () => void;
+  onExportWord: () => void;
+  onExportPdf: () => void;
+  onSaveAsTemplate: () => void;
+  onDeleteExternalFile: () => void | Promise<void>;
+  canCopyFullText: boolean;
+  canExportContent: boolean;
+  canSaveAsTemplate: boolean;
+}) {
+  const { t } = useI18n();
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const fontSwitch = useEditorFontSwitch();
+  const itemClass = 'group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]';
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={iconButtonClass}
+          aria-label={t('document.titlebar.moreTooltip')}
+          title={t('document.titlebar.moreTooltip')}
+        >
+          <Ellipsis className="h-4 w-4" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-[200px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
+        <EditorFontSwitcher fontMode={fontSwitch.fontMode} downloadingMode={fontSwitch.downloadingMode} percent={fontSwitch.percent} onSelect={fontSwitch.selectFontMode} />
+        <DropdownMenuItem onClick={onCopyPath} className={itemClass}>
+          <LinkSimpleIcon className="mr-2 h-4 w-4" /> {t('memo.fileTree.copyPath')}
+        </DropdownMenuItem>
+        {canCopyFullText && (
+          <DropdownMenuItem onClick={onCopyFullText} className={itemClass}>
+            <CopyIcon className="mr-2 h-4 w-4" /> {t('document.action.copyFullText')}
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem
+          onClick={() => {
+            void product.revealInFileManager(filePath).catch(() => {
+              toast.error(t('memo.fileTree.openFailed'));
+            });
+          }}
+          className={itemClass}
+        >
+          <FolderOpenIcon className="mr-2 h-4 w-4" /> {t('document.file.reveal')}
+        </DropdownMenuItem>
+        {(canSaveAsTemplate || canExportContent) && (
+          <>
+            <div role="separator" aria-hidden="true" className="mx-2 my-1 h-px bg-[var(--border-popup)] opacity-60" />
+            {canSaveAsTemplate && (
+              <DropdownMenuItem onClick={onSaveAsTemplate} className={itemClass}>
+                <SwatchesIcon className="mr-2 h-4 w-4" /> {t('document.action.saveAsTemplate')}
+              </DropdownMenuItem>
+            )}
+            {canExportContent && (
+              <>
+                <DropdownMenuItem onClick={onExportMarkdown} className={itemClass}>
+                  <FileMdIcon className="mr-2 h-4 w-4" /> {t('document.action.exportMarkdown')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={onExportWord} className={itemClass}>
+                  <FileDocIcon className="mr-2 h-4 w-4" /> {t('document.action.exportWord')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={onExportPdf} className={itemClass}>
+                  <FilePdfIcon className="mr-2 h-4 w-4" /> {t('document.action.exportPdf')}
+                </DropdownMenuItem>
+              </>
+            )}
+          </>
+        )}
+        <div role="separator" aria-hidden="true" className="mx-2 my-1 h-px bg-[var(--border-popup)] opacity-60" />
+        <DropdownMenuItem
+          onClick={() => setConfirmDelete(true)}
+          className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-transparent hover:text-[var(--destructive)]"
+        >
+          <TrashSimpleIcon className="mr-2 h-4 w-4" /> {t('document.external.deleteFile')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('document.external.deleteFileTitle')}</DialogTitle>
+            <DialogDescription>
+              {t('document.external.deleteFileDescription', { name: filePath.split(/[\\/]/).pop() ?? filePath })}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-4 flex justify-end gap-2">
+            <button type="button" onClick={() => setConfirmDelete(false)} className="h-8 rounded-lg px-3 text-sm hover:bg-[var(--muted)]">
+              {t('dialog.cancel')}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setConfirmDelete(false);
+                void onDeleteExternalFile();
+              }}
+              className="h-8 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 text-sm text-[var(--foreground)] hover:border-[var(--destructive)] hover:bg-transparent hover:text-[var(--destructive)]"
+            >
+              {t('document.external.deleteFileConfirm')}
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </DropdownMenu>
   );
 }
 
@@ -749,20 +875,24 @@ export function MemoActions({
   const [confirmVersion, setConfirmVersion] = useState<MemoVersionMeta | null>(null);
   const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null);
   const [versionRefreshKey, setVersionRefreshKey] = useState(0);
+  const fontSwitch = useEditorFontSwitch();
   const handleConfirmRestoreVersion = async () => {
     if (!confirmVersion || restoringVersionId) return;
 
     const version = confirmVersion;
-    const identity: DocumentIdentity = { kind: 'memo', id: memo.id };
     setRestoringVersionId(version.id);
 
     try {
       const activeMemoSession = useDocumentStore.getState().activeMemoSession;
-      const activePath = activeMemoSession?.memoId === memo.id
-        ? activeMemoSession.path
-        : null;
+      const activeSession = activeMemoSession?.memoId === memo.id ? activeMemoSession : null;
+      const activePath = activeSession?.fileIdentity.path ?? null;
+      const identity: DocumentIdentity | null = activeSession ? {
+        kind: 'md',
+        memoId: memo.id,
+        ...activeSession.fileIdentity,
+      } : null;
 
-      if (activePath) {
+      if (identity && activePath) {
         const flushed = await flushDocumentPath(identity, activePath);
         if (!flushed) {
           toast.error(t("document.version.saveCurrentFailed"));
@@ -770,7 +900,7 @@ export function MemoActions({
         }
       }
 
-      const expectedContent = activePath
+      const expectedContent = identity && activePath
         ? getDocumentBuffer(identity).lastSavedContent
         : undefined;
       const restored = await memosClient.restoreVersion(memo.id, version.id, expectedContent);
@@ -821,6 +951,13 @@ export function MemoActions({
           </Tooltip>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-[200px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
+          <EditorFontSwitcher fontMode={fontSwitch.fontMode} downloadingMode={fontSwitch.downloadingMode} percent={fontSwitch.percent} onSelect={fontSwitch.selectFontMode} />
+          <DropdownMenuItem
+            onClick={() => { void windows.openPreferences('format'); }}
+            className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
+          >
+            <Type className="mr-2 h-4 w-4" /> {t('preferences.tabs.format')}
+          </DropdownMenuItem>
           <DropdownMenuItem
             onClick={onCopyLink}
             className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"

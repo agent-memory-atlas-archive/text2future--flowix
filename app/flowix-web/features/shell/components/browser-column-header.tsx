@@ -32,6 +32,8 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@shared/ui/dropdown-menu';
+import { documentIdentityFromFile } from '@features/document/store/document-identity';
+import { requireFileDisplayIdentity } from '@features/workspace/store/file-display-store';
 
 function isWindowsPlatform(): boolean {
   return typeof navigator !== 'undefined'
@@ -64,13 +66,18 @@ function tabIcon(tab: BrowserColumnTab) {
 
 function MemoEditorModeContextMenuItem({
   memoId,
+  filePath,
   onToggle,
 }: {
   memoId: string;
+  filePath: string;
   onToggle: () => void | Promise<void>;
 }) {
   const { t } = useI18n();
-  const editorMode = useDocumentEditorMode('browser-column', { kind: 'memo', id: memoId });
+  const editorMode = useDocumentEditorMode(
+    'browser-column',
+    documentIdentityFromFile(requireFileDisplayIdentity(filePath), memoId),
+  );
 
   return (
     <ContextMenuItem
@@ -203,7 +210,13 @@ export function BrowserColumnHeader({
     try {
       const canMoveToWorkColumn = canMoveBrowserColumnTargetToWorkColumn(tab.target);
       const editorMode = tab.target.kind === 'memo'
-        ? getDocumentEditorMode('browser-column', { kind: 'memo', id: tab.target.memoId })
+        ? getDocumentEditorMode(
+            'browser-column',
+            documentIdentityFromFile(
+              requireFileDisplayIdentity(tab.target.filePath),
+              tab.target.memoId,
+            ),
+          )
         : null;
       await popupNativeContextMenu(event, buildBrowserTabContextMenuItems({
         tab,
@@ -255,7 +268,7 @@ export function BrowserColumnHeader({
         aria-label={t('tabWindow.closeColumn')}
         title={t('tabWindow.closeColumn')}
         onClick={onCloseColumn}
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] [-webkit-app-region:no-drag]"
+        className="flex h-8 w-8 shrink-0 items-center justify-center text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)] [-webkit-app-region:no-drag]"
       >
         <ChevronRight className="h-4 w-4" />
       </button>
@@ -403,6 +416,7 @@ export function BrowserColumnHeader({
                 {tab.target.kind === 'memo' && (
                   <MemoEditorModeContextMenuItem
                     memoId={tab.target.memoId}
+                    filePath={tab.target.filePath}
                     onToggle={() => onToggleMemoEditorMode(tab.id)}
                   />
                 )}

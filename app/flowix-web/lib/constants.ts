@@ -150,11 +150,15 @@ export interface FontFamilyOption {
   source: FontSource;
 }
 
+export const INTER_FONT_STACK = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif";
+export const NOTO_SERIF_SC_FONT_STACK = "'Noto Serif SC', 'Songti SC', 'SimSun', Georgia, serif";
+export const LXGW_WENKAI_FONT_STACK = "'霞鹜文楷', 'LXGW WenKai', 'Nunito Sans', 'PingFang SC', sans-serif";
+
 export const FONT_FAMILY_OPTIONS: FontFamilyOption[] = [
   {
     id: 'inter',
     label: 'Inter',
-    value: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif",
+    value: INTER_FONT_STACK,
     source: 'bundled',
   },
   {
@@ -172,7 +176,13 @@ export const FONT_FAMILY_OPTIONS: FontFamilyOption[] = [
   {
     id: 'noto-serif-sc',
     label: 'Noto Serif',
-    value: "'Noto Serif SC', 'Songti SC', 'SimSun', Georgia, serif",
+    value: NOTO_SERIF_SC_FONT_STACK,
+    source: 'downloadable',
+  },
+  {
+    id: 'lxgw-wenkai',
+    label: '霞鹜文楷',
+    value: LXGW_WENKAI_FONT_STACK,
     source: 'downloadable',
   },
   {

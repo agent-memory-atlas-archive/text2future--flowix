@@ -12,7 +12,9 @@ use thiserror::Error;
 
 use crate::lock_utils::read_lock;
 use crate::watcher::path::normalize_for_compare;
-use flowix_core::memo_file::{notebook_relative_path, MemoFile, NotebookConfig};
+use flowix_core::memo_file::{
+    is_ignored_notebook_relative_path, notebook_relative_path, MemoFile, NotebookConfig,
+};
 
 use super::parser::OpenTarget;
 
@@ -57,6 +59,9 @@ pub fn resolve_open_target(
     // 1. 物理�?��模式: �?filename 反查 memo index �? 必须�??传入�?��
     //    �?notebook 根目�?+ entry.filename 的完整�?范化�?��一致。这�?    //    `/notebook/subdir/Note.md` 不会�?���?���?���?`Note.md`�?
     if let Some(abs_path) = target_physical_path(&target) {
+        if is_ignored_notebook_path(&configs, Path::new(&abs_path)) {
+            return Err(ResolveError::NotFound(abs_path));
+        }
         if let Some(filename) = Path::new(&abs_path).file_name().and_then(|n| n.to_str()) {
             if let Some((cfg, memo)) =
                 find_memo_by_path_in_notebooks(memo_file, &configs, &abs_path, filename)
@@ -88,6 +93,26 @@ pub fn resolve_open_target(
         &location.notebook,
         abs,
     ))
+}
+
+/// Hidden and internal Markdown files are opened through the external Markdown
+/// surface. Keep them out of the memo resolver so opening one can never stamp
+/// a Flowix key as a side effect.
+fn is_ignored_notebook_path(configs: &[NotebookConfig], target: &Path) -> bool {
+    let target_norm = normalize_for_compare(target);
+    let Some(cfg) = configs
+        .iter()
+        .filter(|cfg| target_norm.starts_with(normalize_for_compare(Path::new(&cfg.path))))
+        .max_by_key(|cfg| Path::new(&cfg.path).components().count())
+    else {
+        return false;
+    };
+
+    let base = Path::new(&cfg.path);
+    let relative = target
+        .strip_prefix(base)
+        .or_else(|_| target_norm.strip_prefix(normalize_for_compare(base)));
+    relative.is_ok_and(is_ignored_notebook_relative_path)
 }
 
 fn register_in_notebook_markdown(

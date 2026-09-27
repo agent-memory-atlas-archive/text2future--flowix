@@ -1,5 +1,5 @@
 ﻿/**
- * Per-path coalescing save queue.
+ * Per-document coalescing save queue.
  *
  * Why this exists
  * ---------------
@@ -18,7 +18,9 @@
  *
  * What this module does
  * ---------------------
- * - Serializes writes for a given path through a single chain.
+ * - Serializes writes for a live document identity through a single chain.
+ *   The display ID stays pinned until the chain settles, so closing and
+ *   reopening the same path cannot create a second queue mid-write.
  * - Coalesces: if a write is in flight and another comes in, the new
  *   content is queued as `pending`. The chain processes the in-flight
  *   one, then runs the pending one (with the latest expectedContent read
@@ -28,17 +30,15 @@
  *
  * Buffer ownership
  * ----------------
- * The save queue does NOT own the DocumentBuffer. It calls back into the
- * React hook for two things: `readExpected` (just before IPC) and
- * `onSaved` (just after a successful IPC). This keeps buffer state in
- * React-land where it stays reactive, while the queue orchestrates IPC
- * ordering.
+ * The save queue does NOT own the DocumentBuffer. The document session
+ * service supplies `readExpected` and completion callbacks while this queue
+ * handles IPC ordering and coalescing.
  */
-import { externalDocuments, memos as memosClient } from '@platform/tauri/client';
+import { documentContentOperations } from '@features/document/use-cases/document-operations';
 import { markMemoCommitApplied } from '@features/document/store/memo-content-revision';
 
 export interface SaveContext {
-  /** Stable queue key for this editing session (`memo:<id>` or `external:<path>`). */
+  /** Stable queue key for this runtime Markdown identity (`md:<displayId>`). */
   queueKey: string;
   /** The document path this save targets. */
   path: string;
@@ -88,6 +88,12 @@ interface QueueEntry {
 }
 
 const queue = new Map<string, QueueEntry>();
+
+/** Wait for every write already queued for a document identity to settle. */
+export async function waitForSaveQueue(queueKey: string): Promise<boolean> {
+  const inFlight = queue.get(queueKey)?.inFlight;
+  return inFlight ? inFlight : true;
+}
 
 /**
  * Schedule a save for the given path/content. Coalesces with any in-flight
@@ -176,38 +182,26 @@ async function runChain(ctx: SaveContext): Promise<boolean> {
 async function runOne(ctx: SaveContext, content: string): Promise<boolean> {
   const expected = ctx.readExpected();
   try {
-    if (ctx.channel === 'external') {
-      const result = await externalDocuments.write({
-          filePath: ctx.path,
-          content,
-          expectedContent: expected,
-          scopePath: ctx.scopePath,
-        });
-      if (result.status === 'saved') {
-        ctx.onSaved(result.path, result.content, ctx.revision);
-        return true;
-      }
-      if (result.status === 'conflict') {
-        ctx.onCasRefused(content, ctx.revision);
-        return false;
-      }
-      const message = result.status === 'missing'
-        ? `External document is unavailable: ${ctx.path}`
-        : result.message;
-      ctx.onError(content, ctx.revision, new Error(message));
-      return false;
-    }
-    const result = await memosClient.writeDocument({
-      key: ctx.key!,
+    const result = await documentContentOperations(ctx.channel).write({
+      path: ctx.path,
+      scopePath: ctx.scopePath,
+      memoId: ctx.key,
       content,
       expectedContent: expected,
     });
-    if (result !== null) {
+    if (result.status === 'saved') {
       if (ctx.key) markMemoCommitApplied(ctx.key, result);
       ctx.onSaved(result.path, result.content, ctx.revision);
       return true;
     }
-    ctx.onCasRefused(content, ctx.revision);
+    if (result.status === 'conflict' || result.status === 'refused') {
+      ctx.onCasRefused(content, ctx.revision);
+      return false;
+    }
+    const message = result.status === 'missing'
+      ? `External document is unavailable: ${ctx.path}`
+      : result.message;
+    ctx.onError(content, ctx.revision, new Error(message));
     return false;
   } catch (err) {
     console.error('[runOne] IPC threw', { path: ctx.path, err });

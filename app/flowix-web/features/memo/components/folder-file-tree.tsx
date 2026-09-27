@@ -6,6 +6,7 @@ import { CaretRightIcon, FolderOpenIcon, FolderSimpleIcon, TrashSimpleIcon } fro
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { files, type DocTreeItem } from '@platform/tauri/client';
+import { localDocumentOperations } from '@features/document/public/file-operations-api';
 import { openPath } from '@platform/tauri/opener';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
 import { DROPDOWN_DIVIDER_SKIN } from '@shared/ui/dropdown-divider';
@@ -137,8 +138,9 @@ export function FolderFileTree({
   }, [folderPath, onFileSelect]);
 
   const handleDelete = useCallback(async (item: DocTreeItem) => {
-    const ok = await files.delete(item.fullPath, folderPath);
-    if (!ok) {
+    try {
+      await localDocumentOperations.delete({ path: item.fullPath, scopePath: folderPath });
+    } catch {
       toast.error(t('memo.fileTree.deleteFailed'));
       return;
     }
@@ -153,7 +155,7 @@ export function FolderFileTree({
     if (!trimmed || trimmed === item.name) return;
     if (item.type === 'document') {
       try {
-        await files.rename(item.fullPath, trimmed, folderPath);
+        await localDocumentOperations.rename({ path: item.fullPath, name: trimmed, scopePath: folderPath });
       } catch (error) {
         toast.error(t(String(error).includes('FILE_EXISTS') ? 'memo.fileTree.nameConflict' : 'memo.fileTree.renameFailed'));
         return;

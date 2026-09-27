@@ -28,6 +28,7 @@ import {
   type BrowserColumnWebRuntime,
 } from '@features/workspace/store/browser-column-store';
 import { canonicalUrl } from '@features/workspace/store/workspace-content-identity';
+import { requireFileDisplayIdentity, type FileDisplayIdentity } from '@features/workspace/store/file-display-store';
 import { openUrl } from '@platform/tauri/opener';
 
 export type BrowserColumnSurfaceCapability =
@@ -44,22 +45,29 @@ interface SurfaceBase {
   tabId: string;
 }
 
-export interface BrowserDocumentSurface extends SurfaceBase {
-  kind: 'document';
-  props: ComponentProps<typeof DocumentContainer>;
+interface FileSurfaceBase extends SurfaceBase {
+  fileIdentity: FileDisplayIdentity;
 }
 
-export interface BrowserMediaSurface extends SurfaceBase {
+export interface BrowserDocumentSurface extends FileSurfaceBase {
+  kind: 'document';
+  props: Omit<ComponentProps<typeof DocumentContainer>, 'fileIdentity'>;
+}
+
+export interface BrowserMediaSurface extends FileSurfaceBase {
   kind: 'media';
-  filePath: string;
   notebookId: string;
   notebookPath: string;
   resourceKind: 'image' | 'video';
 }
 
-export interface BrowserFileBrowserSurface extends SurfaceBase, FileBrowserViewSurface {
-  documentProps: ComponentProps<typeof DocumentContainer>;
-}
+export type BrowserFileBrowserSurface = SurfaceBase
+  & FileBrowserViewSurface
+  & { documentProps: Omit<ComponentProps<typeof DocumentContainer>, 'fileIdentity'> }
+  & (
+    | { activeFilePath: string; fileIdentity: FileDisplayIdentity }
+    | { activeFilePath: null; fileIdentity?: never }
+  );
 
 export interface BrowserWebSurface extends SurfaceBase {
   kind: 'web';
@@ -335,13 +343,13 @@ function BrowserWebSurfaceView({ surface }: { surface: BrowserWebSurface }) {
 }
 
 function BrowserDocumentSurfaceView({ surface }: { surface: BrowserDocumentSurface }) {
-  return <DocumentContainer {...surface.props} />;
+  return <DocumentContainer {...surface.props} fileIdentity={surface.fileIdentity} />;
 }
 
 function BrowserMediaSurfaceView({ surface }: { surface: BrowserMediaSurface }) {
   return (
     <MediaResourceView
-      filePath={surface.filePath}
+      filePath={surface.fileIdentity.path}
       notebookPath={surface.notebookPath}
       resourceKind={surface.resourceKind}
     />
@@ -356,9 +364,9 @@ function BrowserFileBrowserSurfaceView({ surface }: { surface: BrowserFileBrowse
   const fileKind = externalFileViewKind(surface.activeFilePath);
   switch (fileKind) {
     case 'markdown':
-      return <DocumentContainer {...surface.documentProps} externalEditorMode="markdown" />;
+      return <DocumentContainer {...surface.documentProps} fileIdentity={surface.fileIdentity} externalEditorMode="markdown" />;
     case 'code':
-      return <CodeSurfaceView props={surface.documentProps} fileTree={surface} />;
+      return <CodeSurfaceView props={{ ...surface.documentProps, fileIdentity: surface.fileIdentity }} fileTree={surface} />;
     case 'image':
     case 'video':
       return <MediaResourceView
@@ -370,7 +378,7 @@ function BrowserFileBrowserSurfaceView({ surface }: { surface: BrowserFileBrowse
       return <HtmlResourceView
         filePath={surface.activeFilePath}
         scopePath={surface.scopePath}
-        documentProps={surface.documentProps}
+        documentProps={{ ...surface.documentProps, fileIdentity: surface.fileIdentity }}
       />;
     case 'unavailable':
       return <UnavailableFileView filePath={surface.activeFilePath} openContainingFolder />;
@@ -459,9 +467,9 @@ export function resolveBrowserColumnSurface(
     case 'memo':
       return {
         ...base,
+        fileIdentity: requireFileDisplayIdentity(tab.target.filePath),
         kind: 'document',
         props: {
-          filePath: tab.target.filePath,
           memoId: tab.target.memoId,
           notebookId: tab.target.notebookId || null,
           notebookPath: tab.target.notebookPath || null,
@@ -475,19 +483,18 @@ export function resolveBrowserColumnSurface(
     case 'media':
       return {
         ...base,
+        fileIdentity: requireFileDisplayIdentity(tab.target.filePath),
         kind: 'media',
-        filePath: tab.target.filePath,
         notebookId: tab.target.notebookId,
         notebookPath: tab.target.notebookPath,
         resourceKind: tab.target.resourceKind,
       };
     case 'file-browser': {
       const target = tab.target;
-      return {
+      const surface = {
         ...base,
         ...target,
         documentProps: {
-          filePath: target.activeFilePath ?? '',
           isExternalDocument: true,
           externalScopePath: target.scopePath,
           documentSessionMode: 'isolated',
@@ -500,6 +507,13 @@ export function resolveBrowserColumnSurface(
         onTreeVisibleChange: (visible) => useBrowserColumnStore.getState().setFileBrowserTreeVisible(tab.id, visible),
         onTreeWidthChange: (width) => useBrowserColumnStore.getState().setFileBrowserTreeWidth(tab.id, width),
       };
+      return target.activeFilePath
+        ? {
+            ...surface,
+            activeFilePath: target.activeFilePath,
+            fileIdentity: requireFileDisplayIdentity(target.activeFilePath),
+          }
+        : { ...surface, activeFilePath: null };
     }
     case 'web':
       return {

@@ -7,15 +7,20 @@ import {
   type MemoTitleBodyNavigation,
   type MemoTitleEditorHandle,
 } from './memo-title-editor';
+import type { RenameDocumentTitle } from './memo-title-session';
 import type { ClipboardSnapshot } from '@features/editor/extensions/paste-rules/clipboard';
 import type { DocumentEditorMode } from '@features/document/store/document-editor-view-store';
 
 interface MemoDocumentHeaderProps {
-  memoId: string;
+  displayId: string;
   filename: string;
+  renameTitle: RenameDocumentTitle;
   updatedAt: Date | null;
   editable: boolean;
   autoFocus?: boolean;
+  useDocumentSelection?: boolean;
+  showPropertiesToggle?: boolean;
+  allowReadOnlyBoundaryNavigation?: boolean;
   onMoveToBody: (request: MemoTitleBodyNavigation) => void;
   onPasteToBody?: (snapshot: ClipboardSnapshot) => void;
   editorMode?: DocumentEditorMode;
@@ -48,11 +53,15 @@ function formatDocumentDateTime(date: Date, language: 'zh-CN' | 'en-US'): string
 }
 
 export function MemoDocumentHeader({
-  memoId,
+  displayId,
   filename,
+  renameTitle,
   updatedAt,
   editable,
   autoFocus = false,
+  useDocumentSelection = false,
+  showPropertiesToggle = true,
+  allowReadOnlyBoundaryNavigation = true,
   onMoveToBody,
   onPasteToBody,
   editorMode,
@@ -70,11 +79,14 @@ export function MemoDocumentHeader({
       )}
       <MemoTitleEditor
         ref={titleRef}
-        memoId={memoId}
+        displayId={displayId}
         filename={filename}
+        renameTitle={renameTitle}
         editable={editable}
         autoFocus={autoFocus}
-        allowReadOnlyBoundaryNavigation
+        useDocumentSelection={useDocumentSelection}
+        showPropertiesToggle={showPropertiesToggle}
+        allowReadOnlyBoundaryNavigation={allowReadOnlyBoundaryNavigation}
         onMoveToBody={onMoveToBody}
         onPasteToBody={onPasteToBody}
         editorMode={editorMode}

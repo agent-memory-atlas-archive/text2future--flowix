@@ -1,18 +1,20 @@
 import { canonicalPath } from '@/lib/path';
 import {
+  documentHistoryEntryKey,
   useDocumentHistoryStore,
   type DocumentHistoryEntry,
-  type MemoHistoryEntry,
 } from '@features/document/store/document-history-store';
 import { useDocumentStore } from '@features/document/store/document-store';
 import { useMemoStore } from '@features/memo/store/memo-store';
-import type { MemoItem } from '@/types/memo-item';
+import { openNoteByTarget, resolveMemoById, resolveMemoByPath } from '@features/memo/use-cases/open-by-target';
+import { resolveAbsolutePath } from '@platform/open-target/path-helper';
 import { selectAndOpenAgentConversation } from '@features/workspace/use-cases/agent-conversation-navigation';
 import {
   openArtifactTarget,
   openExternalTarget,
   openMediaTarget,
-  openMemoTarget,
+  openWebTarget,
+  historyEntryFromWorkColumnTarget,
 } from '@features/workspace/use-cases/workspace-navigation';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
 
@@ -20,27 +22,9 @@ export type DocumentHistoryDirection = 'back' | 'forward';
 
 function currentHistoryEntry(): DocumentHistoryEntry | null {
   const workColumnTarget = useWorkColumnStore.getState().navigation.target;
-  if (workColumnTarget.kind === 'media') {
-    return {
-      kind: 'media',
-      filePath: workColumnTarget.filePath,
-      notebookId: workColumnTarget.notebookId,
-      notebookPath: workColumnTarget.notebookPath,
-      resourceKind: workColumnTarget.resourceKind,
-      openedAt: Date.now(),
-    };
-  }
-  if (workColumnTarget.kind === 'artifact') {
-    return {
-      kind: 'artifact',
-      pointerMemoId: workColumnTarget.pointerMemoId,
-      notebookId: workColumnTarget.notebookId,
-      notebookPath: workColumnTarget.notebookPath,
-      pluginId: workColumnTarget.pluginId,
-      renderer: workColumnTarget.renderer,
-      openedAt: Date.now(),
-    };
-  }
+  const workColumnHistoryEntry = historyEntryFromWorkColumnTarget(workColumnTarget);
+  if (workColumnHistoryEntry) return workColumnHistoryEntry;
+
   const state = useDocumentStore.getState();
   const memo = state.activeMemoSession;
   if (memo) {
@@ -49,7 +33,7 @@ function currentHistoryEntry(): DocumentHistoryEntry | null {
       memoId: memo.memoId,
       notebookId: memo.notebookId,
       notebookPath: memo.notebookPath,
-      path: memo.path,
+      path: memo.fileIdentity.path,
       openedAt: memo.openedAt,
     };
   }
@@ -57,7 +41,7 @@ function currentHistoryEntry(): DocumentHistoryEntry | null {
   if (external) {
     return {
       kind: 'external',
-      path: external.path,
+      path: external.fileIdentity.path,
       scopePath: external.scopePath,
       openedAt: external.openedAt,
     };
@@ -71,65 +55,57 @@ function currentHistoryEntry(): DocumentHistoryEntry | null {
     : null;
 }
 
-function filenameFromPath(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-}
-
-function memoFromHistoryEntry(entry: MemoHistoryEntry): MemoItem {
-  const existing = useMemoStore.getState().memos.find((memo) => memo.id === entry.memoId);
-  if (existing) return existing;
-
-  return {
-    id: entry.memoId,
-    filename: entry.title ?? filenameFromPath(entry.path),
-    preview: '',
-    tags: [],
-    todos: [],
-    agents: [],
-    createdAt: 0,
-    updatedAt: entry.openedAt,
-    favorited: false,
-    icon: null,
-    colors: [],
-    properties: {},
-    isOpen: true,
-  };
-}
-
-async function openMemoHistoryEntry(entry: MemoHistoryEntry): Promise<void> {
-  const memo = memoFromHistoryEntry(entry);
-  const notebook = entry.notebookId
-    ? useMemoStore.getState().notebooks.find((item) => item.id === entry.notebookId) ?? null
-    : useMemoStore.getState().selectedNotebook;
+async function openMemoHistoryEntry(
+  entry: Extract<DocumentHistoryEntry, { kind: 'memo' }>,
+): Promise<Extract<DocumentHistoryEntry, { kind: 'memo' }>> {
   const path = canonicalPath(entry.path);
-  await openMemoTarget({
-    memoId: entry.memoId,
-    path,
-    notebookId: entry.notebookId ?? notebook?.id ?? null,
-    notebookPath: entry.notebookPath ?? notebook?.path ?? null,
+  const resolvedByPath = path ? await resolveMemoByPath(path) : null;
+  if (resolvedByPath) {
+    await openNoteByTarget(resolvedByPath, { history: 'skip', destination: 'main-third' });
+    const resolvedPath = canonicalPath(resolveAbsolutePath(resolvedByPath));
+    if (entry.memoId && resolvedPath && resolvedPath !== path) {
+      useDocumentHistoryStore.getState().replaceMemoPath(entry.memoId, resolvedPath);
+    }
+    return resolvedPath ? { ...entry, path: resolvedPath } : entry;
+  }
+
+  // The id remains a recovery hint for a Memo moved outside the app before
+  // its old path could be rebased in the in-memory history stack.
+  const resolvedById = entry.memoId ? await resolveMemoById(entry.memoId) : null;
+  if (resolvedById) {
+    await openNoteByTarget(resolvedById, { history: 'skip', destination: 'main-third' });
+    const resolvedPath = canonicalPath(resolveAbsolutePath(resolvedById));
+    if (resolvedPath && resolvedPath !== path) {
+      if (entry.memoId) {
+        useDocumentHistoryStore.getState().replaceMemoPath(entry.memoId, resolvedPath);
+      }
+      return { ...entry, path: resolvedPath };
+    }
+    return entry;
+  }
+
+  await openExternalTarget(path, {
     history: 'skip',
-    memo,
-    notebook,
+    scopePath: entry.notebookPath,
+    destination: 'main-third',
   });
+  return entry;
 }
 
-function historyEntryKey(entry: DocumentHistoryEntry | null): string | null {
-  if (!entry) return null;
-  if (entry.kind === 'memo') return `memo:${entry.memoId}:${canonicalPath(entry.path)}`;
-  if (entry.kind === 'agent-conversation') return `agent-conversation:${entry.instanceId}`;
-  if (entry.kind === 'artifact') return `artifact:${entry.pointerMemoId}`;
-  if (entry.kind === 'media') return `media:${canonicalPath(entry.filePath)}`;
-  return `external:${canonicalPath(entry.path)}`;
-}
-
-async function openHistoryEntry(entry: DocumentHistoryEntry): Promise<void> {
+async function openHistoryEntry(entry: DocumentHistoryEntry): Promise<DocumentHistoryEntry> {
   if (entry.kind === 'memo') {
-    await openMemoHistoryEntry(entry);
-    return;
+    return openMemoHistoryEntry(entry);
   }
   if (entry.kind === 'agent-conversation') {
-    await selectAndOpenAgentConversation(entry.instanceId, { history: 'skip' });
-    return;
+    await selectAndOpenAgentConversation(entry.instanceId, {
+      history: 'skip',
+      destination: 'main-third',
+    });
+    return entry;
+  }
+  if (entry.kind === 'web') {
+    await openWebTarget(entry.url, { history: 'skip', destination: 'main-third' });
+    return entry;
   }
   if (entry.kind === 'artifact') {
     const notebook = entry.notebookId
@@ -146,7 +122,7 @@ async function openHistoryEntry(entry: DocumentHistoryEntry): Promise<void> {
       memo,
       notebook,
     });
-    return;
+    return entry;
   }
   if (entry.kind === 'media') {
     await openMediaTarget({
@@ -155,42 +131,63 @@ async function openHistoryEntry(entry: DocumentHistoryEntry): Promise<void> {
       notebookPath: entry.notebookPath,
       resourceKind: entry.resourceKind,
       history: 'skip',
+      destination: 'main-third',
     });
-    return;
+    return entry;
   }
   await openExternalTarget(entry.path, {
     history: 'skip',
     scopePath: entry.scopePath,
+    destination: 'main-third',
   });
+  return entry;
 }
 
 export async function navigateDocumentHistory(direction: DocumentHistoryDirection): Promise<boolean> {
+  const navigationId = ++historyNavigationSequence;
   const current = currentHistoryEntry();
+  const history = useDocumentHistoryStore.getState();
+  const stack = direction === 'back' ? history.backStack : history.forwardStack;
+  const currentKey = documentHistoryEntryKey(current);
+  let discardCount = 0;
   let target: DocumentHistoryEntry | null = null;
-
-  while (true) {
-    const history = useDocumentHistoryStore.getState();
-    target = direction === 'back' ? history.peekBack() : history.peekForward();
-
-    if (!target) return false;
-    if (historyEntryKey(current) !== historyEntryKey(target)) {
+  for (let index = stack.length - 1; index >= 0; index -= 1) {
+    const candidate = stack[index];
+    discardCount += 1;
+    if (documentHistoryEntryKey(candidate) !== currentKey) {
+      target = candidate;
       break;
     }
-
-    if (direction === 'back') {
-      useDocumentHistoryStore.getState().commitBackNavigation(null);
-    } else {
-      useDocumentHistoryStore.getState().commitForwardNavigation(null);
-    }
   }
+  if (!target) return false;
+
+  let openedTarget: DocumentHistoryEntry;
+  try {
+    openedTarget = await openHistoryEntry(target);
+  } catch {
+    // Navigation errors are surfaced by the workspace transaction. Keep both
+    // history stacks untouched so the user can retry the same destination.
+    return false;
+  }
+
+  if (navigationId !== historyNavigationSequence) return false;
+  if (documentHistoryEntryKey(currentHistoryEntry()) !== documentHistoryEntryKey(openedTarget)) {
+    return false;
+  }
+
+  const currentStack = direction === 'back'
+    ? useDocumentHistoryStore.getState().backStack
+    : useDocumentHistoryStore.getState().forwardStack;
+  if (documentHistoryEntryKey(currentStack[currentStack.length - discardCount] ?? null)
+    !== documentHistoryEntryKey(openedTarget)) return false;
 
   if (direction === 'back') {
-    useDocumentHistoryStore.getState().commitBackNavigation(current);
+    useDocumentHistoryStore.getState().commitBackNavigation(current, discardCount);
   } else {
-    useDocumentHistoryStore.getState().commitForwardNavigation(current);
+    useDocumentHistoryStore.getState().commitForwardNavigation(current, discardCount);
   }
-
-  await openHistoryEntry(target);
 
   return true;
 }
+
+let historyNavigationSequence = 0;

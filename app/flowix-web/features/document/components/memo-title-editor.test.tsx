@@ -13,6 +13,7 @@ const titleSession = vi.hoisted(() => ({
   commit: vi.fn(() => Promise.resolve()),
   cancel: vi.fn(),
 }));
+const renameTitle = vi.fn(() => Promise.resolve('Original.md'));
 
 vi.mock('./memo-title-session', () => ({
   useMemoTitleSession: () => titleSession,
@@ -72,8 +73,9 @@ describe('MemoTitleEditor IME handling', () => {
     onMoveToBody = vi.fn();
     act(() => {
       root.render(createElement(MemoTitleEditor, {
-        memoId: 'memo-1',
+        displayId: 'display:title-test',
         filename: 'Original.md',
+        renameTitle,
         editable: true,
         onMoveToBody,
       }));
@@ -155,8 +157,9 @@ describe('MemoTitleEditor IME handling', () => {
   it('keeps title-to-body navigation available when read-only', async () => {
     await act(async () => {
       root.render(createElement(MemoTitleEditor, {
-        memoId: 'memo-1',
+        displayId: 'display:title-test',
         filename: 'Original.md',
+        renameTitle,
         editable: false,
         allowReadOnlyBoundaryNavigation: true,
         onMoveToBody,
@@ -175,8 +178,9 @@ describe('MemoTitleEditor IME handling', () => {
   it('does not enable read-only boundary navigation without the mode opt-in', async () => {
     await act(async () => {
       root.render(createElement(MemoTitleEditor, {
-        memoId: 'memo-1',
+        displayId: 'display:title-test',
         filename: 'Original.md',
+        renameTitle,
         editable: false,
         onMoveToBody,
       }));
@@ -202,8 +206,9 @@ describe('MemoTitleEditor IME handling', () => {
   it('uses a document-selection surface in source mode', async () => {
     await act(async () => {
       root.render(createElement(MemoTitleEditor, {
-        memoId: 'memo-1',
+        displayId: 'display:title-test',
         filename: 'Original.md',
+        renameTitle,
         editable: true,
         useDocumentSelection: true,
         onMoveToBody,
@@ -237,8 +242,9 @@ describe('MemoTitleEditor title paste splitting', () => {
     const onPasteToBody = vi.fn();
     act(() => {
       root.render(createElement(MemoTitleEditor, {
-        memoId: 'memo-1',
+        displayId: 'display:title-test',
         filename: 'Original.md',
+        renameTitle,
         editable: true,
         onMoveToBody: vi.fn(),
         onPasteToBody,

@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useEffect, useCallback, useRef, useMemo } from 'react';
+import { useEffect, useCallback, useRef, useMemo, useState } from 'react';
 import { useMemoStore } from '@features/memo/store/memo-store';
 import {
   applyLoadedDocumentContent,
@@ -15,10 +15,17 @@ import {
   setDocumentEditorMode,
   useDocumentEditorMode,
 } from '@features/document/store/document-editor-view-store';
-import type { DocumentIdentity } from '@features/document/store/document-identity';
-import { fileNameFromPath, getDocumentInstanceKey } from '@/lib/path';
+import {
+  documentIdentityFromFile,
+  documentPropertyTargetId,
+  type DocumentIdentity,
+} from '@features/document/store/document-identity';
+import { canonicalPath, fileNameFromPath } from '@/lib/path';
+import { displayTitleFromFilename } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { product } from '@platform/tauri/client/desktop';
+import { localDocumentOperations } from '@features/document/use-cases/local-document-operations';
+import { memoDocumentOperations } from '@features/document/use-cases/memo-document-operations';
 import { openPath } from '@platform/tauri/opener';
 import {
   initialDocumentContainerState,
@@ -37,26 +44,48 @@ import {
   preloadDocumentEditor,
 } from '@features/document/components/lazy-document-editor';
 import { LazyCodeEditor } from '@features/document/components/lazy-code-editor';
-import { SourceMemoEditor } from '@features/document/components/source-memo-editor';
 import { MemoDocumentHeader } from '@features/document/components/memo-document-header';
 import type {
   MemoTitleBodyNavigation,
   MemoTitleEditorHandle,
 } from '@features/document/components/memo-title-editor';
+import type { RenameDocumentTitle } from '@features/document/components/memo-title-session';
 import type { MarkdownEditorHandle } from '@features/editor/markdown-editor';
 import type { ClipboardSnapshot } from '@features/editor/extensions/paste-rules/clipboard';
 import { useI18n } from '@/lib/i18n';
 import { CenteredLoadingSpinner } from '@shared/ui/centered-loading-spinner';
 import { WorkspaceEmptyState } from '@shared/ui/workspace-empty-state';
-import { clearWorkspaceDocument } from '@features/workspace/use-cases/workspace-navigation';
+import {
+  clearWorkspaceDocument,
+  replaceExternalDocumentPath,
+} from '@features/workspace/use-cases/workspace-navigation';
 import { removeBrowserColumnTabsByMemoId } from '@features/workspace/use-cases/browser-column-navigation';
 import { useWorkspaceFocusStore } from '@features/workspace/store/workspace-focus-store';
 import { getBuffer, subscribeDocumentBufferChanges } from '@features/document/store/buffer-registry';
 import { documentIdentityKey } from '@features/document/store/document-identity';
+import { waitForSaveQueue } from '@features/document/store/save-queue';
+import {
+  beginExternalDocumentRename,
+  expectExternalDocumentWrite,
+  isExternalDocumentRenameInProgress,
+  subscribeExternalDocumentRenameLock,
+} from '@features/document/store/external-document-operation';
+import { rebaseActiveDocumentPath } from '@features/document/store/document-session-service';
+import { syncMemoPathAfterLocalWrite } from '@features/document/use-cases/sync-memo-path-after-local-write';
 import type { Editor } from '@tiptap/core';
 
+function externalMarkdownTitleParts(path: string): { title: string; extension: string } {
+  const filename = fileNameFromPath(path);
+  const extensionMatch = filename.match(/(\.markdown|\.md)$/i);
+  const extension = extensionMatch?.[0] ?? '';
+  return {
+    title: extension ? filename.slice(0, -extension.length) : filename,
+    extension,
+  };
+}
+
 export function DocumentContainer({
-  filePath,
+  fileIdentity,
   memoId = null,
   notebookPath = null,
   transitionId = null,
@@ -74,32 +103,48 @@ export function DocumentContainer({
   onEditorReady,
   onFlushReady,
 }: DocumentContainerProps) {
+  const filePath = fileIdentity.path;
+  const displayId = fileIdentity.displayId;
   const { t } = useI18n();
   const hostId = documentSessionMode === 'isolated' ? 'browser-column' : 'main-third';
   const focusedHostId = useWorkspaceFocusStore((store) => store.focusedHostId);
   const readOnly = forcedReadOnly || focusedHostId !== hostId;
   const containerRef = useRef<HTMLDivElement>(null);
+  const resolvedExternalDisplayId = isExternalDocument ? displayId : null;
   const documentInstanceKey = useMemo(
-    () => memoId ? `memo:${memoId}` : getDocumentInstanceKey(filePath),
-    [filePath, memoId]
+    () => `md:${displayId}`,
+    [displayId]
   );
   const documentIdentity = useMemo<DocumentIdentity>(
-    () => !isExternalDocument && memoId
-      ? { kind: 'memo', id: memoId }
-      : { kind: 'external', path: filePath },
-    [filePath, isExternalDocument, memoId],
+    () => documentIdentityFromFile({ path: filePath, displayId }, memoId ?? null),
+    [filePath, displayId, memoId],
   );
+  const propertyTargetId = documentPropertyTargetId(displayId);
   const editorMode = useDocumentEditorMode(hostId, documentIdentity);
-  // External Markdown files use Tiptap while other external text files use
-  // CodeMirror. Memo documents keep their per-memo rich/source editor setting.
+  // Rich/source mode belongs to the open Markdown file identity. Non-Markdown
+  // external files retain their independent CodeMirror presentation setting.
   const usesCodeEditor = isExternalDocument
-    ? externalEditorMode === 'code'
+    ? externalEditorMode === 'code' || editorMode === 'source'
     : editorMode === 'source';
   const loadedDocumentInstanceKeyRef = useRef<string | null>(null);
   const prevFilePathRef = useRef<string | null>(null);
   const editorHandleRef = useRef<MarkdownEditorHandle | null>(null);
   const titleEditorRef = useRef<MemoTitleEditorHandle | null>(null);
   const memoFilename = fileNameFromPath(filePath);
+  const [isRenamingExternalTitle, setIsRenamingExternalTitle] = useState(false);
+  const [isExternalDisplayRenameLocked, setIsExternalDisplayRenameLocked] = useState(
+    () => resolvedExternalDisplayId
+      ? isExternalDocumentRenameInProgress(resolvedExternalDisplayId)
+      : false,
+  );
+  const renameInProgressRef = useRef(false);
+  const runtimeFilePathRef = useRef(filePath);
+  const observedFilePathRef = useRef(filePath);
+  if (observedFilePathRef.current !== filePath) {
+    observedFilePathRef.current = filePath;
+    runtimeFilePathRef.current = filePath;
+  }
+  const getCurrentFilePath = useCallback(() => runtimeFilePathRef.current, []);
   const {
     state,
     setState,
@@ -148,22 +193,39 @@ export function DocumentContainer({
       editorHandleRef.current?.focusStart?.();
       return;
     }
-    editorHandleRef.current?.moveTitleToBody?.(trailingContent ?? '');
-  }, []);
+    const moveToBody = () => editorHandleRef.current?.moveTitleToBody?.(trailingContent ?? '');
+    if (isExternalDocument) requestAnimationFrame(moveToBody);
+    else moveToBody();
+  }, [isExternalDocument]);
 
   const handlePasteTitleContentToBody = useCallback((snapshot: ClipboardSnapshot) => {
     editorHandleRef.current?.pasteToBody?.(snapshot);
   }, []);
 
   const handleToggleEditorMode = useCallback(() => {
-    if (isExternalDocument || !memoId) return;
+    if (isExternalDocument && externalEditorMode !== 'markdown') return;
     captureLatestDocumentContent(documentIdentity, hostId);
     setDocumentEditorMode(
       hostId,
       documentIdentity,
       editorMode === 'source' ? 'rich' : 'source',
     );
-  }, [documentIdentity, editorMode, hostId, isExternalDocument, memoId]);
+  }, [documentIdentity, editorMode, externalEditorMode, hostId, isExternalDocument]);
+
+  // The title editor owns file-scoped draft/IME state. This backend adapter
+  // captures Memo ID because indexed-note renames must update the Memo index.
+  const renameDocumentTitle = useCallback(async (title: string, expectedFilename: string) => {
+    if (!memoId) throw new Error('Memo is no longer available');
+    if (title === displayTitleFromFilename(expectedFilename)) return expectedFilename;
+    const result = await memoDocumentOperations.renameTitle({
+      memoId,
+      title,
+      expectedFilename,
+    });
+    useMemoStore.getState().handleMemoUpdated(result.memo);
+    syncMemoPathAfterLocalWrite(memoId, result.path);
+    return result.memo.filename;
+  }, [memoId]);
 
   useEffect(() => (
     registerDocumentCapture(documentIdentity, flushPendingEditorChanges, hostId)
@@ -176,6 +238,7 @@ export function DocumentContainer({
     handleChange,
   } = useDocumentAutosave({
     filePath,
+    getCurrentFilePath,
     identity: documentIdentity,
     memoId,
     isExternalDocument,
@@ -185,6 +248,108 @@ export function DocumentContainer({
     flushPendingContent: flushPendingEditorChanges,
     isolatedSession: documentSessionMode === 'isolated',
   });
+
+  useEffect(() => {
+    if (!resolvedExternalDisplayId) {
+      setIsExternalDisplayRenameLocked(false);
+      return;
+    }
+    const syncLock = (displayId: string) => {
+      if (displayId === resolvedExternalDisplayId) {
+        setIsExternalDisplayRenameLocked(isExternalDocumentRenameInProgress(displayId));
+      }
+    };
+    syncLock(resolvedExternalDisplayId);
+    return subscribeExternalDocumentRenameLock(syncLock);
+  }, [resolvedExternalDisplayId]);
+
+  const commitExternalTitle = useCallback(async (
+    requestedTitle: string,
+    expectedFilename: string,
+    options?: { expectBodyMutation?: boolean },
+  ): Promise<string | null> => {
+    if (
+      renameInProgressRef.current
+      || (resolvedExternalDisplayId && isExternalDocumentRenameInProgress(resolvedExternalDisplayId))
+      || !isExternalDocument
+      || externalEditorMode !== 'markdown'
+      || !externalScopePath
+      || !resolvedExternalDisplayId
+    ) return null;
+
+    const currentPath = runtimeFilePathRef.current;
+    const currentFilename = fileNameFromPath(currentPath);
+    if (currentFilename !== expectedFilename) {
+      toast.error(t('document.save.externalChanged'));
+      return null;
+    }
+
+    const current = externalMarkdownTitleParts(currentPath);
+    let nextTitle = requestedTitle.trim();
+    if (current.extension && nextTitle.toLowerCase().endsWith(current.extension.toLowerCase())) {
+      nextTitle = nextTitle.slice(0, -current.extension.length).trimEnd();
+    }
+    if (!nextTitle || nextTitle === '.' || nextTitle === '..') return null;
+    if (nextTitle === current.title) {
+      if (options?.expectBodyMutation) expectExternalDocumentWrite(currentPath);
+      return currentFilename;
+    }
+
+    renameInProgressRef.current = true;
+    const renameOperation = beginExternalDocumentRename(resolvedExternalDisplayId);
+    setIsRenamingExternalTitle(true);
+    try {
+      clearSaveTimer();
+
+      const flushed = await flushDocument();
+      const queueSettled = await waitForSaveQueue(documentIdentityKey(documentIdentity));
+      if (!flushed || !queueSettled || hasDocumentUnsavedChanges(documentIdentity)) {
+        toast.error('文档尚未保存，无法重命名');
+        return null;
+      }
+
+      const cancelExpectedDelete = renameOperation.expectSourceDelete(currentPath);
+      let newPath: string;
+      try {
+        ({ path: newPath } = await localDocumentOperations.rename({
+          path: currentPath,
+          name: `${nextTitle}${current.extension}`,
+          scopePath: externalScopePath,
+        }));
+      } catch (error) {
+        cancelExpectedDelete();
+        throw error;
+      }
+      const normalizedNewPath = canonicalPath(newPath);
+      if (options?.expectBodyMutation) {
+        // Boundary edits continue the rename by writing the changed body at
+        // the new path. A plain filename edit does not reserve this event.
+        renameOperation.expectFollowupWrite(normalizedNewPath);
+      }
+      // Publish the new path synchronously for editor callbacks created by the
+      // previous render. React/store propagation can complete afterwards.
+      runtimeFilePathRef.current = normalizedNewPath;
+      replaceExternalDocumentPath(resolvedExternalDisplayId, currentPath, normalizedNewPath);
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      return fileNameFromPath(normalizedNewPath);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+      return null;
+    } finally {
+      renameOperation.finish();
+      renameInProgressRef.current = false;
+      setIsRenamingExternalTitle(false);
+    }
+  }, [
+    clearSaveTimer,
+    documentIdentity,
+    externalEditorMode,
+    externalScopePath,
+    flushDocument,
+    isExternalDocument,
+    resolvedExternalDisplayId,
+    t,
+  ]);
 
   useEffect(() => {
     const key = documentIdentityKey(documentIdentity);
@@ -302,6 +467,21 @@ export function DocumentContainer({
       // Restoring a retained document starts a new document transition, but
       // this mounted editor already has the current content.
       // Skip the redundant reload while still releasing the loading overlay.
+      if (documentSessionMode !== 'isolated' && transitionId !== null) {
+        useDocumentStore.getState().finishDocumentTransition(transitionId);
+      }
+      return;
+    }
+
+    if (
+      !instanceKeyChanged
+      && isExternalDocument
+      && !documentIdentity.memoId
+      && prevFilePathRef.current
+      && filePath !== prevFilePathRef.current
+    ) {
+      prevFilePathRef.current = filePath;
+      rebaseActiveDocumentPath(documentIdentity, filePath);
       if (documentSessionMode !== 'isolated' && transitionId !== null) {
         useDocumentStore.getState().finishDocumentTransition(transitionId);
       }
@@ -430,14 +610,28 @@ export function DocumentContainer({
     );
   }
 
-  const memoDocumentHeader = !isExternalDocument && memoId ? (
+  const hasMarkdownTitle = (!isExternalDocument && Boolean(memoId))
+    || (isExternalDocument && externalEditorMode === 'markdown');
+  const renameTitle: RenameDocumentTitle = isExternalDocument
+    ? commitExternalTitle
+    : renameDocumentTitle;
+  const documentHeader = hasMarkdownTitle ? (
     <MemoDocumentHeader
       titleRef={titleEditorRef}
-      memoId={memoId}
+      displayId={displayId}
       filename={memoFilename}
-      updatedAt={state.updatedAtDate}
-      editable={!readOnly}
+      renameTitle={renameTitle}
+      updatedAt={!isExternalDocument && !usesCodeEditor ? state.updatedAtDate : null}
+      editable={
+        !readOnly
+        && (!isExternalDocument || Boolean(externalScopePath))
+        && !isRenamingExternalTitle
+        && !isExternalDisplayRenameLocked
+      }
       autoFocus={initialFocus === 'title'}
+      useDocumentSelection={usesCodeEditor}
+      showPropertiesToggle={!usesCodeEditor}
+      allowReadOnlyBoundaryNavigation={!usesCodeEditor}
       onMoveToBody={handleMoveTitleToBody}
       onPasteToBody={handlePasteTitleContentToBody}
       editorMode={editorMode}
@@ -446,60 +640,50 @@ export function DocumentContainer({
   ) : null;
 
   return (
-    <div ref={containerRef} data-document-session-mode={documentSessionMode} onFocusCapture={() => useWorkspaceFocusStore.getState().focusHost(hostId)} onPointerDownCapture={() => useWorkspaceFocusStore.getState().focusHost(hostId)} className="document-container h-full w-full min-w-0 flex flex-col bg-transparent relative overflow-hidden">
+    <div
+      ref={containerRef}
+      data-document-session-mode={documentSessionMode}
+      onFocusCapture={() => useWorkspaceFocusStore.getState().focusHost(hostId)}
+      onPointerDownCapture={() => useWorkspaceFocusStore.getState().focusHost(hostId)}
+      className="document-container h-full w-full min-w-0 flex flex-col bg-transparent relative overflow-hidden"
+    >
       <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
         {state.isLoading && (
           <CenteredLoadingSpinner className="h-full w-full" />
         )}
         {!state.isLoading && usesCodeEditor && (
-          !isExternalDocument && memoId ? (
-            <SourceMemoEditor
-              ref={editorHandleRef}
-              key={documentInstanceKey}
-              filePath={filePath}
-              content={state.fullContent}
-              editable={!readOnly}
-              onChange={handleChange}
-              autoFocus={initialFocus === 'body'}
-              memoId={memoId}
-              filename={memoFilename}
-              titleAutoFocus={initialFocus === 'title'}
-              titleRef={titleEditorRef}
-              onMoveToBody={handleMoveTitleToBody}
-              onPasteToBody={handlePasteTitleContentToBody}
-              editorMode={editorMode}
-              onToggleEditorMode={handleToggleEditorMode}
-              sourceModeToggleLabel={t('document.action.richTextMode')}
-              onEditorScroll={handleEditorScroll}
-              onEditingFinished={flushPendingEditorChanges}
-              searchPanelOpen={searchPanelOpen}
-              onSearchPanelOpenChange={onSearchPanelOpenChange}
-            />
-          ) : (
-            <LazyCodeEditor
-              ref={editorHandleRef}
-              key={documentInstanceKey}
-              filePath={filePath}
-              content={state.fullContent}
-              editable={!readOnly}
-              onChange={handleChange}
-              autoFocus={initialFocus === 'body'}
-              onEditorScroll={handleEditorScroll}
-              onEditingFinished={flushPendingEditorChanges}
-              searchPanelOpen={searchPanelOpen}
-              onSearchPanelOpenChange={onSearchPanelOpenChange}
-            />
-          )
+          <LazyCodeEditor
+            ref={editorHandleRef}
+            key={documentInstanceKey}
+            filePath={filePath}
+            content={state.fullContent}
+            editable={!readOnly && !isRenamingExternalTitle && !isExternalDisplayRenameLocked}
+            onChange={handleChange}
+            autoFocus={initialFocus === 'body'}
+            onEditorScroll={handleEditorScroll}
+            onEditingFinished={flushPendingEditorChanges}
+            scrollHeader={documentHeader ? (
+              <div className="source-document-title-row">
+                {documentHeader}
+              </div>
+            ) : undefined}
+            onToggleEditorMode={hasMarkdownTitle ? handleToggleEditorMode : undefined}
+            sourceModeToggleLabel={t('document.action.richTextMode')}
+            searchPanelOpen={searchPanelOpen}
+            onSearchPanelOpenChange={onSearchPanelOpenChange}
+          />
         )}
         {!state.isLoading && state.isLoaded && !usesCodeEditor && (
           <LazyDocumentEditor
             memoId={memoId ?? undefined}
+            propertyTargetId={propertyTargetId}
+            onViewSourceMode={handleToggleEditorMode}
             transitionId={transitionId}
             ref={editorHandleRef}
             key={documentInstanceKey}
             content={state.fullContent}
-            header={memoDocumentHeader}
-            editable={!readOnly}
+            header={documentHeader}
+            editable={!readOnly && !isRenamingExternalTitle && !isExternalDisplayRenameLocked}
             onChange={(content) => {
               handleChange(content);
             }}
@@ -508,8 +692,12 @@ export function DocumentContainer({
             onEditingFinished={() => {
               flushPendingEditorChanges();
             }}
-            onFocusTitle={() => titleEditorRef.current?.focusEnd()}
-            onAppendToTitle={(title) => titleEditorRef.current?.appendBodyLine(title)}
+            onFocusTitle={() => {
+              titleEditorRef.current?.focusEnd();
+            }}
+            onAppendToTitle={(title) => {
+              return titleEditorRef.current?.appendBodyLine(title) ?? false;
+            }}
             autoFocus={initialFocus === 'body'}
             searchPanelOpen={searchPanelOpen}
             onSearchPanelOpenChange={onSearchPanelOpenChange}

@@ -22,7 +22,8 @@ import { getMemoColorLabel, MemoCardActions } from '@features/memo/components/me
 import { buildMemoCardContextMenuItems } from '@features/memo/menus/memo-card-context-menu';
 import { assetUrl, decodeStorageKey } from '@features/editor/extensions/attachment-link/utils';
 import { TagIcon } from '@shared/ui/tag-icon';
-import { memos as memosClient, product } from '@platform/tauri/client';
+import { product } from '@platform/tauri/client';
+import { memoDocumentOperations } from '@features/document/public/file-operations-api';
 import { resolveMemoSessionPath } from '@features/memo/use-cases/open-memo-session';
 import { toast } from '@/lib/toast';
 import { canUseNativeContextMenu, logNativeContextMenuError, popupNativeContextMenu } from '@platform/tauri/native-context-menu';
@@ -224,7 +225,7 @@ function MemoCardShell({
         onCopyFullText: () => {
           const path = resolvePath();
           if (!path) return;
-          void memosClient.readDocument(path)
+          void memoDocumentOperations.read({ path, scopePath: null, memoId: memo.id })
             .then((content) => writeClipboardText(content ?? ''))
             .catch(() => toast.error(t('document.command.copyFailed')));
         },

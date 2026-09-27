@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import type { WorkspaceHostId } from '@features/workspace/store/workspace-focus-store';
+import { subscribeFileDisplayRelease } from '@features/workspace/store/file-display-store';
 import {
   documentIdentityKey,
   type DocumentIdentity,
@@ -55,6 +56,18 @@ export function setDocumentEditorMode(
 ): void {
   useDocumentEditorViewStore.getState().setMode(documentEditorViewKey(hostId, identity), mode);
 }
+
+/** Drop every host-specific view preference for a reclaimed runtime display. */
+export function clearDocumentEditorViews(displayId: string): void {
+  const suffix = `:md:${displayId}`;
+  useDocumentEditorViewStore.setState((state) => {
+    const modes = Object.fromEntries(Object.entries(state.modes).filter(([key]) => !key.endsWith(suffix)));
+    if (Object.keys(modes).length === Object.keys(state.modes).length) return state;
+    return { modes };
+  });
+}
+
+subscribeFileDisplayRelease(clearDocumentEditorViews);
 
 export function useDocumentEditorMode(
   hostId: WorkspaceHostId,

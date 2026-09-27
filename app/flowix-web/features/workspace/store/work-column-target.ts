@@ -46,6 +46,19 @@ export type WorkColumnTarget =
   | { kind: 'plugin-workbench'; plugin: PluginDescriptor }
   | { kind: 'web'; url: string };
 
+/** Local file path for the last successfully committed workColumn target. */
+export function workColumnTargetFilePath(target: WorkColumnTarget): string | null {
+  switch (target.kind) {
+    case 'memo':
+    case 'external':
+      return target.path;
+    case 'media':
+      return target.filePath;
+    default:
+      return null;
+  }
+}
+
 export const EMPTY_WORK_COLUMN_TARGET = { kind: 'empty' } as const satisfies WorkColumnTarget;
 
 export type WorkColumnNavigationPhase = 'idle' | 'loading' | 'committed' | 'failed';

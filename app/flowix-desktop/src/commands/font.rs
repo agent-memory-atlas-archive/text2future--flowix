@@ -1,8 +1,15 @@
-use regex::Regex;
-use serde::{Deserialize, Serialize};
+use once_cell::sync::Lazy;
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex as StdMutex};
+use tauri::{AppHandle, Emitter, State};
+use tokio::sync::Mutex;
 
+use crate::app::state::AppState;
 use crate::USER_CONFIG_DIR_NAME;
 
 #[derive(Debug, Clone, Serialize)]
@@ -18,54 +25,165 @@ pub struct CachedFontFile {
     pub family: String,
     pub weight: String,
     pub style: String,
-    pub format: String,
-    pub unicode_range: Option<String>,
-    pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CachedFontResult {
     pub font_id: String,
-    pub cached: bool,
+    pub downloaded: bool,
     pub files: Vec<CachedFontFile>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct FontManifest {
+struct FontDownloadProgress {
     font_id: String,
-    source_css_url: String,
-    css_len: usize,
-    files: Vec<FontManifestFile>,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+    percent: Option<u8>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FontManifestFile {
-    family: String,
-    weight: String,
-    style: String,
-    format: String,
-    unicode_range: Option<String>,
-    file_name: String,
+const FONT_DOWNLOAD_PROGRESS_EVENT: &str = "font-download-progress";
+const MAX_FONT_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_CACHED_FONT_FILE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_FONT_LICENSE_BYTES: u64 = 256 * 1024;
+static FONT_CACHE_LOCKS: Lazy<Mutex<HashMap<String, Arc<Mutex<()>>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static FONT_SELECTION_SEQUENCE: Lazy<StdMutex<u64>> = Lazy::new(|| StdMutex::new(0));
+
+#[tauri::command]
+pub fn begin_font_selection() -> u64 {
+    let mut sequence = FONT_SELECTION_SEQUENCE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *sequence = sequence.wrapping_add(1);
+    *sequence
+}
+
+#[tauri::command]
+pub fn commit_font_selection(
+    selection_id: u64,
+    font_id: String,
+    font_family: String,
+    state: State<AppState>,
+    app: AppHandle,
+) -> Result<bool, String> {
+    let sequence = FONT_SELECTION_SEQUENCE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if *sequence != selection_id {
+        return Ok(false);
+    }
+
+    if !is_supported_preference_font(&font_id) || font_family.len() > 512 {
+        return Err(format!("unsupported font id: {font_id}"));
+    }
+    state
+        .user_config
+        .set_preferred_font(font_id, font_family)
+        .map_err(|error| error.to_string())?;
+    let _ = app.emit("user-config-changed", "preference");
+    Ok(true)
+}
+
+fn is_supported_preference_font(font_id: &str) -> bool {
+    matches!(
+        font_id,
+        "inter"
+            | "nunito-sans"
+            | "noto-sans-sc"
+            | "noto-serif-sc"
+            | "lxgw-wenkai"
+            | "pingfang-sc"
+            | "microsoft-yahei"
+            | "system-ui"
+            | "serif"
+            | "monospace"
+    )
 }
 
 #[derive(Debug, Clone)]
 struct FontDefinition {
     id: &'static str,
-    css_url: &'static str,
+    archive_url: &'static str,
+    archive_sha256: &'static str,
+    archive_files: &'static [RemoteFontFile],
 }
+
+#[derive(Debug, Clone)]
+struct RemoteFontFile {
+    family: &'static str,
+    weight: &'static str,
+    style: &'static str,
+    file_name: &'static str,
+    sha256: &'static str,
+}
+
+const LXGW_WENKAI_FILES: &[RemoteFontFile] = &[
+    RemoteFontFile {
+        family: "霞鹜文楷",
+        weight: "300",
+        style: "normal",
+        file_name: "LXGWWenKai-Light.woff2",
+        sha256: "89eac7b90eac43b0107aadae059c19b5d2ee364e5cb3446b8a744888b953791f",
+    },
+    RemoteFontFile {
+        family: "霞鹜文楷",
+        weight: "400",
+        style: "normal",
+        file_name: "LXGWWenKai-Regular.woff2",
+        sha256: "affc1418e51e3a2324d39dd011caefdc2914f20b0756f063d1d09d0ece81ec2d",
+    },
+    RemoteFontFile {
+        family: "霞鹜文楷",
+        weight: "500",
+        style: "normal",
+        file_name: "LXGWWenKai-Medium.woff2",
+        sha256: "5e68b006ac745db42b8eac829b98ad8b3557b80407c06fdb0c453a61a10ff09e",
+    },
+];
+
+const NOTO_SANS_SC_FILES: &[RemoteFontFile] = &[RemoteFontFile {
+    family: "Noto Sans SC",
+    weight: "100 900",
+    style: "normal",
+    file_name: "NotoSansSC-VF.woff2",
+    sha256: "d238a6158deb73fe0287e8a862437124491f2c3865b4da074d668f31bc38d30e",
+}];
+
+const NOTO_SERIF_SC_FILES: &[RemoteFontFile] = &[RemoteFontFile {
+    family: "Noto Serif SC",
+    weight: "200 900",
+    style: "normal",
+    file_name: "NotoSerifSC-VF.woff2",
+    sha256: "13227a1e1d6a40c7beb843687400d235dfe3fad2a6600472dccdadabc43d70b4",
+}];
+
+const LXGW_WENKAI_ARCHIVE_URL: &str =
+    "https://download.flowix-memo.com/fonts/lxgw-wenkai/v1.522/lxgw-wenkai-v1.522.zip";
+const NOTO_SANS_SC_ARCHIVE_URL: &str =
+    "https://download.flowix-memo.com/fonts/noto-sans-sc/google-fonts-23e54b5-v1/noto-sans-sc.zip";
+const NOTO_SERIF_SC_ARCHIVE_URL: &str = "https://download.flowix-memo.com/fonts/noto-serif-sc/google-fonts-23e54b5-v1/noto-serif-sc.zip";
 
 const FONT_DEFINITIONS: &[FontDefinition] = &[
     FontDefinition {
         id: "noto-sans-sc",
-        css_url: "https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@100..900&display=swap",
+        archive_url: NOTO_SANS_SC_ARCHIVE_URL,
+        archive_sha256: "bca5910cb10c45ab2059f960574c8e1912e9b2e2cee8f54599ed3ba37c014f57",
+        archive_files: NOTO_SANS_SC_FILES,
     },
     FontDefinition {
         id: "noto-serif-sc",
-        css_url:
-            "https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@200..900&display=swap",
+        archive_url: NOTO_SERIF_SC_ARCHIVE_URL,
+        archive_sha256: "be378355ba1979a8227c69f8bd9b9da4f6b30ea9945a9ac4bf93c24aa4f626a1",
+        archive_files: NOTO_SERIF_SC_FILES,
+    },
+    FontDefinition {
+        id: "lxgw-wenkai",
+        archive_url: LXGW_WENKAI_ARCHIVE_URL,
+        archive_sha256: "ac8d33bca3a1dab9863e178c33488070020c906659e23e8e1a9f970440c711c7",
+        archive_files: LXGW_WENKAI_FILES,
     },
 ];
 
@@ -75,28 +193,61 @@ pub fn get_font_cache_status() -> Vec<FontCacheStatus> {
         .iter()
         .map(|definition| FontCacheStatus {
             font_id: definition.id.to_string(),
-            cached: cached_manifest(definition.id).is_some(),
+            cached: cached_font_result(definition).is_some(),
         })
         .collect()
 }
 
 #[tauri::command]
-pub async fn ensure_font_cached(font_id: String) -> Result<CachedFontResult, String> {
+pub async fn ensure_font_cached(
+    app: AppHandle,
+    font_id: String,
+) -> Result<CachedFontResult, String> {
     let definition = FONT_DEFINITIONS
         .iter()
         .find(|definition| definition.id == font_id)
         .ok_or_else(|| format!("unsupported font id: {font_id}"))?;
 
-    if let Some(result) = cached_manifest(definition.id) {
+    let font_lock = font_cache_lock(&font_id).await;
+    let _guard = font_lock.lock().await;
+
+    if let Some(result) = cached_font_result(definition) {
         return Ok(result);
     }
 
-    download_font(definition).await
+    download_font(&app, definition).await
 }
 
 #[tauri::command]
-pub fn remove_cached_font(font_id: String) -> Result<(), String> {
+pub fn get_cached_font_bytes(
+    font_id: String,
+    file_index: usize,
+) -> Result<tauri::ipc::Response, String> {
+    let definition = FONT_DEFINITIONS
+        .iter()
+        .find(|definition| definition.id == font_id)
+        .ok_or_else(|| format!("unsupported font id: {font_id}"))?;
+    let font = definition
+        .archive_files
+        .get(file_index)
+        .ok_or("font file index is invalid")?;
+    let path = font_dir(definition.id).join(font.file_name);
+    let size = fs::metadata(&path).map_err(|e| e.to_string())?.len();
+    if !(4..=MAX_CACHED_FONT_FILE_BYTES).contains(&size) {
+        return Err("cached font file has an invalid size".into());
+    }
+    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 != size || format!("{:x}", Sha256::digest(&bytes)) != font.sha256 {
+        return Err("cached font file failed its integrity check".into());
+    }
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+#[tauri::command]
+pub async fn remove_cached_font(font_id: String) -> Result<(), String> {
     ensure_supported_font_id(&font_id)?;
+    let font_lock = font_cache_lock(&font_id).await;
+    let _guard = font_lock.lock().await;
     let dir = font_dir(&font_id);
     if dir.exists() {
         fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -104,27 +255,42 @@ pub fn remove_cached_font(font_id: String) -> Result<(), String> {
     Ok(())
 }
 
-async fn download_font(definition: &FontDefinition) -> Result<CachedFontResult, String> {
+async fn font_cache_lock(font_id: &str) -> Arc<Mutex<()>> {
+    let mut locks = FONT_CACHE_LOCKS.lock().await;
+    locks
+        .entry(font_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
+
+async fn download_font(
+    app: &AppHandle,
+    definition: &FontDefinition,
+) -> Result<CachedFontResult, String> {
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 Flowix Font Cache")
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(180))
         .build()
         .map_err(|e| e.to_string())?;
+    download_font_archive(app, &client, definition).await
+}
 
-    let css = client
-        .get(definition.css_url)
-        .header(reqwest::header::ACCEPT, "text/css,*/*;q=0.1")
+async fn download_font_archive(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    definition: &FontDefinition,
+) -> Result<CachedFontResult, String> {
+    let mut response = client
+        .get(definition.archive_url)
         .send()
         .await
-        .map_err(|e| format!("failed to fetch font css: {e}"))?
+        .map_err(|e| format!("failed to download font archive: {e}"))?
         .error_for_status()
-        .map_err(|e| format!("font css request failed: {e}"))?
-        .text()
-        .await
-        .map_err(|e| format!("failed to read font css: {e}"))?;
-
-    let faces = parse_google_font_css(&css)?;
-    if faces.is_empty() {
-        return Err("font css did not contain downloadable font faces".into());
+        .map_err(|e| format!("font archive request failed: {e}"))?;
+    let total_bytes = response.content_length();
+    if total_bytes.is_some_and(|size| size > MAX_FONT_ARCHIVE_BYTES) {
+        return Err("font archive exceeds the 64 MiB limit".into());
     }
 
     let root = fonts_root();
@@ -134,48 +300,114 @@ async fn download_font(definition: &FontDefinition) -> Result<CachedFontResult, 
     fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
 
     let result = async {
-        let mut files = Vec::with_capacity(faces.len());
-        for (index, face) in faces.into_iter().enumerate() {
-            let file_name = format!("font-{index}.{}", face.extension);
-            let target = tmp_dir.join(&file_name);
-            let bytes = client
-                .get(&face.url)
-                .send()
-                .await
-                .map_err(|e| format!("failed to download font file: {e}"))?
-                .error_for_status()
-                .map_err(|e| format!("font file request failed: {e}"))?
-                .bytes()
-                .await
-                .map_err(|e| format!("failed to read font file: {e}"))?;
-            if bytes.is_empty() {
-                return Err("downloaded font file was empty".into());
+        let archive_path = tmp_dir.join("font-bundle.zip");
+        let mut archive_file = fs::File::create(&archive_path).map_err(|e| e.to_string())?;
+        let mut downloaded_bytes = 0_u64;
+        let mut last_progress_bytes = 0_u64;
+        let mut archive_hasher = Sha256::new();
+        emit_font_download_progress(app, definition.id, 0, total_bytes);
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| format!("failed to read font archive: {e}"))?
+        {
+            downloaded_bytes = downloaded_bytes.saturating_add(chunk.len() as u64);
+            if downloaded_bytes > MAX_FONT_ARCHIVE_BYTES {
+                return Err("font archive exceeds the 64 MiB limit".into());
             }
-            fs::write(&target, &bytes).map_err(|e| e.to_string())?;
-            files.push(FontManifestFile {
-                family: face.family,
-                weight: face.weight,
-                style: face.style,
-                format: face.format,
-                unicode_range: face.unicode_range,
-                file_name,
-            });
+            archive_hasher.update(&chunk);
+            archive_file.write_all(&chunk).map_err(|e| e.to_string())?;
+            if downloaded_bytes.saturating_sub(last_progress_bytes) >= 256 * 1024 {
+                emit_font_download_progress(app, definition.id, downloaded_bytes, total_bytes);
+                last_progress_bytes = downloaded_bytes;
+            }
+        }
+        archive_file.flush().map_err(|e| e.to_string())?;
+        if downloaded_bytes == 0 || total_bytes.is_some_and(|size| size != downloaded_bytes) {
+            return Err("downloaded font archive is empty or incomplete".into());
+        }
+        let actual_sha256 = format!("{:x}", archive_hasher.finalize());
+        if actual_sha256 != definition.archive_sha256 {
+            return Err("font archive SHA-256 checksum mismatch".into());
+        }
+        emit_font_download_progress(app, definition.id, downloaded_bytes, total_bytes);
+        drop(archive_file);
+
+        let archive_file = fs::File::open(&archive_path).map_err(|e| e.to_string())?;
+        let mut archive = zip::ZipArchive::new(archive_file)
+            .map_err(|e| format!("invalid font ZIP archive: {e}"))?;
+        if archive.len() != definition.archive_files.len() + 1 {
+            return Err("font archive contains an unexpected number of files".into());
+        }
+        for index in 0..archive.len() {
+            let name = archive
+                .name_for_index(index)
+                .ok_or("font archive contains an invalid entry")?;
+            if name != "OFL.txt"
+                && !definition
+                    .archive_files
+                    .iter()
+                    .any(|file| file.file_name == name)
+            {
+                return Err(format!("unexpected file in font archive: {name}"));
+            }
         }
 
-        let manifest = FontManifest {
-            font_id: definition.id.to_string(),
-            source_css_url: definition.css_url.to_string(),
-            css_len: css.len(),
-            files,
-        };
-        let manifest_json = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
-        fs::write(tmp_dir.join("manifest.json"), manifest_json).map_err(|e| e.to_string())?;
-
-        if final_dir.exists() {
-            fs::remove_dir_all(&final_dir).map_err(|e| e.to_string())?;
+        for font in definition.archive_files {
+            let mut entry = archive
+                .by_name(font.file_name)
+                .map_err(|e| format!("font archive is missing {}: {e}", font.file_name))?;
+            let size = entry.size();
+            if entry.is_dir()
+                || entry.compression() != zip::CompressionMethod::Stored
+                || !(4..=MAX_CACHED_FONT_FILE_BYTES).contains(&size)
+            {
+                return Err(format!("invalid font archive entry: {}", font.file_name));
+            }
+            let mut signature = [0_u8; 4];
+            entry
+                .read_exact(&mut signature)
+                .map_err(|e| format!("invalid font file {}: {e}", font.file_name))?;
+            if signature != *b"wOF2" {
+                return Err(format!("{} is not a WOFF2 font", font.file_name));
+            }
+            let target_path = tmp_dir.join(font.file_name);
+            let mut target = fs::File::create(&target_path).map_err(|e| e.to_string())?;
+            target.write_all(&signature).map_err(|e| e.to_string())?;
+            let copied = std::io::copy(&mut entry, &mut target).map_err(|e| e.to_string())?;
+            if copied + signature.len() as u64 != size {
+                return Err(format!("font file {} is incomplete", font.file_name));
+            }
+            target.flush().map_err(|e| e.to_string())?;
+            let (_, actual_sha256) = sha256_file(&target_path)?;
+            if actual_sha256 != font.sha256 {
+                return Err(format!(
+                    "font file {} failed its SHA-256 check",
+                    font.file_name
+                ));
+            }
         }
-        fs::rename(&tmp_dir, &final_dir).map_err(|e| e.to_string())?;
-        manifest_to_result(&final_dir, manifest, true)
+
+        {
+            let mut license = archive
+                .by_name("OFL.txt")
+                .map_err(|e| format!("font archive is missing OFL.txt: {e}"))?;
+            if license.is_dir() || license.size() > MAX_FONT_LICENSE_BYTES {
+                return Err("font archive contains an invalid OFL.txt".into());
+            }
+            let mut contents = Vec::with_capacity(license.size() as usize);
+            license
+                .read_to_end(&mut contents)
+                .map_err(|e| format!("failed to read font license: {e}"))?;
+            std::str::from_utf8(&contents)
+                .map_err(|e| format!("invalid font license text: {e}"))?;
+            fs::write(tmp_dir.join("OFL.txt"), contents).map_err(|e| e.to_string())?;
+        }
+        drop(archive);
+        fs::remove_file(archive_path).map_err(|e| e.to_string())?;
+
+        install_font_cache(&tmp_dir, &final_dir)?;
+        Ok(font_result(definition, true))
     }
     .await;
 
@@ -185,133 +417,91 @@ async fn download_font(definition: &FontDefinition) -> Result<CachedFontResult, 
     result
 }
 
-#[derive(Debug)]
-struct ParsedFontFace {
-    family: String,
-    weight: String,
-    style: String,
-    unicode_range: Option<String>,
-    url: String,
-    format: String,
-    extension: String,
+fn emit_font_download_progress(
+    app: &AppHandle,
+    font_id: &str,
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+) {
+    let percent = total_bytes
+        .filter(|total| *total > 0)
+        .map(|total| ((downloaded_bytes.saturating_mul(100) / total).min(100)) as u8);
+    let _ = app.emit(
+        FONT_DOWNLOAD_PROGRESS_EVENT,
+        FontDownloadProgress {
+            font_id: font_id.to_string(),
+            downloaded_bytes,
+            total_bytes,
+            percent,
+        },
+    );
 }
 
-fn parse_google_font_css(css: &str) -> Result<Vec<ParsedFontFace>, String> {
-    let face_re = Regex::new(r"(?s)@font-face\s*\{(?P<body>.*?)\}").map_err(|e| e.to_string())?;
-    let prop_re =
-        Regex::new(r"(?m)(font-family|font-style|font-weight|unicode-range)\s*:\s*([^;]+);")
-            .map_err(|e| e.to_string())?;
-    let url_re = Regex::new(
-        r#"url\(['"]?(?P<url>https://[^)'"]+?\.(?P<ext>woff2|ttf))['"]?\)\s*format\(['"]?(?P<format>[^)'"]+)['"]?\)"#,
-    )
-    .map_err(|e| e.to_string())?;
-
-    let mut faces = Vec::new();
-    for cap in face_re.captures_iter(css) {
-        let body = cap.name("body").map(|m| m.as_str()).unwrap_or_default();
-        let mut family = None;
-        let mut weight = None;
-        let mut style = None;
-        let mut unicode_range = None;
-        for prop in prop_re.captures_iter(body) {
-            let key = prop.get(1).map(|m| m.as_str()).unwrap_or_default();
-            let value = prop
-                .get(2)
-                .map(|m| {
-                    m.as_str()
-                        .trim()
-                        .trim_matches('\'')
-                        .trim_matches('"')
-                        .to_string()
-                })
-                .unwrap_or_default();
-            match key {
-                "font-family" => family = Some(value),
-                "font-weight" => weight = Some(value),
-                "font-style" => style = Some(value),
-                "unicode-range" => unicode_range = Some(value),
-                _ => {}
-            }
+fn cached_font_result(definition: &FontDefinition) -> Option<CachedFontResult> {
+    let dir = font_dir(definition.id);
+    for font in definition.archive_files {
+        let (_, sha256) = sha256_file(&dir.join(font.file_name)).ok()?;
+        if sha256 != font.sha256 {
+            return None;
         }
-        let Some(url_cap) = url_re.captures(body) else {
-            continue;
-        };
-        let url = url_cap
-            .name("url")
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_default();
-        let extension = url_cap
-            .name("ext")
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_else(|| "ttf".into());
-        let format = url_cap
-            .name("format")
-            .map(|m| m.as_str().to_string())
-            .unwrap_or_else(|| {
-                if extension == "woff2" {
-                    "woff2"
-                } else {
-                    "truetype"
-                }
-                .into()
-            });
-        faces.push(ParsedFontFace {
-            family: family.unwrap_or_else(|| "Flowix Downloaded Font".into()),
-            weight: weight.unwrap_or_else(|| "400".into()),
-            style: style.unwrap_or_else(|| "normal".into()),
-            unicode_range,
-            url,
-            format,
-            extension,
-        });
     }
-    Ok(faces)
+    let license_size = fs::metadata(dir.join("OFL.txt")).ok()?.len();
+    if !(1..=MAX_FONT_LICENSE_BYTES).contains(&license_size) {
+        return None;
+    }
+    Some(font_result(definition, false))
 }
 
-fn cached_manifest(font_id: &str) -> Option<CachedFontResult> {
-    ensure_supported_font_id(font_id).ok()?;
-    let dir = font_dir(font_id);
-    let manifest_path = dir.join("manifest.json");
-    let manifest = fs::read_to_string(manifest_path)
-        .ok()
-        .and_then(|content| serde_json::from_str::<FontManifest>(&content).ok())?;
-    if manifest.font_id != font_id {
-        return None;
+fn install_font_cache(tmp_dir: &Path, final_dir: &Path) -> Result<(), String> {
+    let backup_dir = final_dir.with_extension(format!("backup-{}", uuid::Uuid::new_v4()));
+    let had_previous_cache = final_dir.exists();
+    if had_previous_cache {
+        fs::rename(final_dir, &backup_dir).map_err(|e| e.to_string())?;
     }
-    if manifest.files.is_empty() {
-        return None;
+    if let Err(error) = fs::rename(tmp_dir, final_dir) {
+        if had_previous_cache {
+            let _ = fs::rename(&backup_dir, final_dir);
+        }
+        return Err(error.to_string());
     }
-    if manifest
-        .files
-        .iter()
-        .any(|file| !dir.join(&file.file_name).exists())
-    {
-        return None;
+    if had_previous_cache {
+        let _ = fs::remove_dir_all(backup_dir);
     }
-    manifest_to_result(&dir, manifest, true).ok()
+    Ok(())
 }
 
-fn manifest_to_result(
-    dir: &Path,
-    manifest: FontManifest,
-    cached: bool,
-) -> Result<CachedFontResult, String> {
-    Ok(CachedFontResult {
-        font_id: manifest.font_id,
-        cached,
-        files: manifest
-            .files
-            .into_iter()
-            .map(|file| CachedFontFile {
-                family: file.family,
-                weight: file.weight,
-                style: file.style,
-                format: file.format,
-                unicode_range: file.unicode_range,
-                path: dir.join(file.file_name).to_string_lossy().to_string(),
+fn sha256_file(path: &Path) -> Result<(u64, String), String> {
+    let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let size = file.metadata().map_err(|e| e.to_string())?.len();
+    if !(4..=MAX_CACHED_FONT_FILE_BYTES).contains(&size) {
+        return Err("cached font file has an invalid size".into());
+    }
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok((size, format!("{:x}", hasher.finalize())))
+}
+
+fn font_result(definition: &FontDefinition, downloaded: bool) -> CachedFontResult {
+    CachedFontResult {
+        font_id: definition.id.to_string(),
+        downloaded,
+        files: definition
+            .archive_files
+            .iter()
+            .map(|font| CachedFontFile {
+                family: font.family.to_string(),
+                weight: font.weight.to_string(),
+                style: font.style.to_string(),
             })
             .collect(),
-    })
+    }
 }
 
 fn ensure_supported_font_id(font_id: &str) -> Result<(), String> {

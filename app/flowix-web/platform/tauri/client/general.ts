@@ -1,4 +1,4 @@
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { invoke } from '@tauri-apps/api/core';
 import type { UserSettings } from '@/lib/constants';
 import type { AgentAccessConfig, AgentAccessEntry } from '@/lib/types/agent-access';
 import type { UsageInfo } from '@/types/agent';
@@ -6,7 +6,7 @@ import type { AgentConfig, TestConnectionResult } from './agent';
 
 export const preferences = {
   get: () => invoke<UserSettings>('get_preference'),
-  set: (preference: UserSettings) => invoke<void>('set_preference', { preference }),
+  patch: (patch: Record<string, unknown>) => invoke<void>('patch_preference', { patch }),
 };
 
 export interface BootFeatures {
@@ -36,25 +36,33 @@ export interface FontCacheStatus {
   cached: boolean;
 }
 
+export interface FontDownloadProgress {
+  fontId: string;
+  downloadedBytes: number;
+  totalBytes: number | null;
+  percent: number | null;
+}
+
 export interface CachedFontFile {
   family: string;
   weight: string;
   style: string;
-  format: string;
-  unicodeRange?: string | null;
-  path: string;
 }
 
 export interface CachedFontResult {
   fontId: string;
-  cached: boolean;
+  downloaded: boolean;
   files: CachedFontFile[];
 }
 
 export const fontCache = {
+  beginSelection: () => invoke<number>('begin_font_selection'),
+  commitSelection: (selectionId: number, fontId: string, fontFamily: string) =>
+    invoke<boolean>('commit_font_selection', { selectionId, fontId, fontFamily }),
   getStatus: () => invoke<FontCacheStatus[]>('get_font_cache_status'),
   ensureCached: (fontId: string) => invoke<CachedFontResult>('ensure_font_cached', { fontId }),
-  toAssetUrl: (path: string) => convertFileSrc(path),
+  getCachedBytes: (fontId: string, fileIndex: number) =>
+    invoke<ArrayBuffer>('get_cached_font_bytes', { fontId, fileIndex }),
 };
 
 export interface WebPageMetadata {

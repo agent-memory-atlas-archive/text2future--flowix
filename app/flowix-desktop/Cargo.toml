@@ -52,6 +52,7 @@ uuid = { workspace = true }
 hostname = "0.4"
 machine-uid = "0.5"
 sha2 = { workspace = true }
+zip = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }
 semver = { workspace = true }

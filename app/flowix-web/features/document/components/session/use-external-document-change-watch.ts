@@ -7,6 +7,7 @@ import { translate } from '@/lib/i18n';
 import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
 import { toast } from '@/lib/toast';
 import { canonicalPath } from '@/lib/path';
+import { consumeExpectedExternalDocumentEvent } from '@features/document/store/external-document-operation';
 import { createLogger } from '@/lib/logger';
 import {
   windows,
@@ -44,7 +45,7 @@ export function useExternalDocumentChangeWatch({
   };
 
   useEffect(() => {
-    if (!filePath || identity.kind !== 'external') return;
+    if (!filePath || identity.memoId) return;
 
     let disposed = false;
     let leaseId: string | null = null;
@@ -64,6 +65,11 @@ export function useExternalDocumentChangeWatch({
             matchesCurrentDocument: canonicalPath(payload.path) === currentPath,
           });
           if (disposed || canonicalPath(payload.path) !== currentPath) return;
+          if (consumeExpectedExternalDocumentEvent(
+            payload.path,
+            payload.kind,
+            payload.revision,
+          )) return;
           if (hasDocumentUnsavedChanges(identity)) {
             maybeWarnAboutConflict();
             return;

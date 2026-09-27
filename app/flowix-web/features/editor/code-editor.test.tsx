@@ -176,7 +176,7 @@ describe('CodeEditor', () => {
         content={'---\nflowix_key: memo-1\n---\nBody'}
         onChange={vi.fn()}
         scrollHeader={(
-          <div className="source-memo-title-row">
+          <div className="source-document-title-row">
             <div contentEditable data-testid="source-title-editable" />
           </div>
         )}

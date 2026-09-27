@@ -1155,7 +1155,7 @@ describe('frontmatter property helpers', () => {
     document.body.append(host);
     const editor = new Editor({
       element: host,
-      extensions: [StarterKit, Markdown, Frontmatter.configure({ memoId: '8c7dxu0l' })],
+      extensions: [StarterKit, Markdown, Frontmatter.configure({ propertyTargetId: 'file:display-frontmatter' })],
       content: '---\nflowix_key: 8c7dxu0l\nstatus: todo\n---\nBody',
       contentType: 'markdown',
     });
@@ -1168,7 +1168,7 @@ describe('frontmatter property helpers', () => {
       .map((element) => element.textContent)).toEqual(['status']);
 
     window.dispatchEvent(new CustomEvent('flowix:add-property', {
-      detail: { memoId: '8c7dxu0l' },
+      detail: { propertyTargetId: 'file:display-frontmatter' },
     }));
     expect([...host.querySelectorAll('.frontmatter-property__key')]
       .map((element) => element.textContent)).toEqual(['status', 'key1']);
@@ -1179,7 +1179,7 @@ describe('frontmatter property helpers', () => {
     ).userData.key1).toBe('');
 
     window.dispatchEvent(new CustomEvent('flowix:add-property', {
-      detail: { memoId: '8c7dxu0l' },
+      detail: { propertyTargetId: 'file:display-frontmatter' },
     }));
     expect([...host.querySelectorAll('.frontmatter-property__key')]
       .map((element) => element.textContent)).toEqual(['status', 'key1', 'key2']);
@@ -1193,7 +1193,7 @@ describe('frontmatter property helpers', () => {
     document.body.append(host);
     const editor = new Editor({
       element: host,
-      extensions: [StarterKit, Markdown, Frontmatter.configure({ memoId: '8c7dxu0l' })],
+      extensions: [StarterKit, Markdown, Frontmatter.configure({ propertyTargetId: 'file:display-frontmatter' })],
       content: '---\nflowix_key: 8c7dxu0l\n---\nBody',
       contentType: 'markdown',
     });
@@ -1204,7 +1204,7 @@ describe('frontmatter property helpers', () => {
     expect(host.querySelector('.frontmatter-property__add-property')).toBeNull();
 
     window.dispatchEvent(new CustomEvent('flowix:add-property', {
-      detail: { memoId: '8c7dxu0l' },
+      detail: { propertyTargetId: 'file:display-frontmatter' },
     }));
 
     expect(host.querySelector('.frontmatter-property__list')).not.toBeNull();

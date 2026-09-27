@@ -19,6 +19,8 @@ import {
   getDocumentEditorMode,
   setDocumentEditorMode,
 } from '@features/document/public/shell-api';
+import { documentIdentityFromFile } from '@features/document/store/document-identity';
+import { requireFileDisplayIdentity } from '@features/workspace/store/file-display-store';
 import {
   BrowserColumnSurfaceHost,
   getBrowserColumnSurfaceDefinition,
@@ -117,7 +119,10 @@ export function BrowserColumn({
     const tab = tabs.find((candidate) => candidate.id === tabId);
     if (tab?.target.kind !== 'memo') return;
 
-    const identity = { kind: 'memo' as const, id: tab.target.memoId };
+    const identity = documentIdentityFromFile(
+      requireFileDisplayIdentity(tab.target.filePath),
+      tab.target.memoId,
+    );
     // Publish the latest CodeMirror / rich-text content before replacing the
     // editor subtree. The browser-column host keeps this isolated from a
     // possible copy of the same memo in the main work column.

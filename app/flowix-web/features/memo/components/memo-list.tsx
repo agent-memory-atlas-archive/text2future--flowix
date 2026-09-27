@@ -49,7 +49,8 @@ import {
 } from '@features/preferences/public/runtime-api';
 import { createLogger } from '@/lib/logger';
 import { useDocumentStore } from '@features/document/store';
-import { files as fileApi, memos as memoApi } from '@platform/tauri/client';
+import { files as fileApi } from '@platform/tauri/client';
+import { memoDocumentOperations } from '@features/document/public/file-operations-api';
 import { canonicalDirectoryPath, canonicalPath } from '@/lib/path';
 
 import {
@@ -57,7 +58,6 @@ import {
   ColorFilterSubmenuContent,
 } from './memo-list/color-filter-submenu';
 import { MemoNavigationDropdown, MemoNavigationSubmenu } from './memo-navigation-dropdown';
-import { MemoListViewTabs } from './memo-list-view-tabs';
 import { MemoListNavigationDrawer } from './memo-list-navigation-drawer';
 import { NotebookFolderView } from './notebook-folder-view';
 import type { NotebookNoteCreateRequest } from './notebook-file-tree';
@@ -132,7 +132,6 @@ export function MemoList({
   const startupError = useMemoStore((s) => s.startupError);
   const initialMemoQueryKey = useMemoStore((s) => s.initialMemoQueryKey);
   const memoListQueryKey = useMemoStore((s) => s.memoListQueryKey);
-  const middleColumnView = useMemoStore((s) => s.middleColumnView);
   const selectedNotebookId = selectedNotebook?.id;
   const [hiddenListFolders, setHiddenListFolders] = useState<string[]>([]);
   const selectedTagId = useTagStore((s) => s.selectedTagId);
@@ -218,9 +217,6 @@ export function MemoList({
   const navigationDrawerOpen = navigationDrawerControlled
     ? controlledNavigationDrawerOpen
     : localNavigationDrawerOpen;
-  const toggleNavigationDrawer = onToggleNavigationDrawer ?? (() => {
-    setLocalNavigationDrawerOpen((isOpen) => !isOpen);
-  });
 
   const handleRetryStartup = useCallback(() => {
     void initializeMainWindowStartup().catch((error) => {
@@ -644,8 +640,8 @@ export function MemoList({
     const requestedTitle = titleOverride?.trim();
     if (requestedTitle && requestedTitle !== result.filename.replace(/\.md$/i, '')) {
       try {
-        const renamed = await memoApi.renameMemoTitle({
-          id: result.id,
+        const renamed = await memoDocumentOperations.renameTitle({
+          memoId: result.id,
           title: requestedTitle,
           expectedFilename: result.filename,
         });
@@ -770,18 +766,7 @@ export function MemoList({
         setIsMemoListLoading={setIsMemoListLoading}
         onLoadError={handleMemoListLoadError}
       />
-      <>
-      {/* Memo Tab */}
-      <div className="flex min-w-0 items-center gap-2 px-3 pb-2">
-        <div className="shrink-0">
-          <MemoListViewTabs
-            activeTab={middleColumnView === 'conversations' ? 'conversations' : 'notes'}
-            onChange={(tab) => setActiveFilter(tab === 'conversations' ? 'agents' : 'all')}
-            navigationDrawerEnabled={navigationDrawerEnabled}
-            navigationDrawerOpen={navigationDrawerOpen}
-            onToggleNavigationDrawer={toggleNavigationDrawer}
-          />
-        </div>
+      <div className="flex min-w-0 items-center gap-2 pb-2 pl-[74px] pr-3">
         <div className="min-w-0 flex-1">
           <MemoNavigationDropdown
             title={headerLabel}
@@ -992,7 +977,6 @@ export function MemoList({
           </Tooltip>
         </div>
       </div>
-      </>
 
       <div className="relative flex min-h-0 flex-1">
         {navigationDrawerEnabled && !navigationDrawerControlled && (

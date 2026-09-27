@@ -11,7 +11,7 @@ import { externalFileViewKind } from '@features/editor/public/code-file';
 import type { CodeSurface } from './types';
 
 export function CodeSurfaceFileBrowser({ surface }: { surface: CodeSurface }) {
-  const props = surface.props;
+  const props = { ...surface.props, fileIdentity: surface.fileIdentity };
   const target = useWorkColumnStore((state) => state.navigation.target);
   const flushRef = useRef<(() => Promise<boolean>) | null>(null);
   const { t } = useI18n();
@@ -55,7 +55,6 @@ export function CodeSurfaceFileBrowser({ surface }: { surface: CodeSurface }) {
   };
   const documentProps = {
     ...props,
-    filePath: target.path,
     externalScopePath: context.scopePath,
     onFlushReady,
   };

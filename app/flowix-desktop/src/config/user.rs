@@ -740,6 +740,36 @@ impl UserConfigStore {
         Ok(())
     }
 
+    /// Merge a partial JSON preference patch with the current value under the
+    /// preference lock, so separate windows cannot overwrite unrelated fields.
+    pub fn patch_preference(&self, patch: serde_json::Value) -> Result<(), UserConfigError> {
+        let mut preference = self.write_preference();
+        let mut value = serde_json::to_value(&*preference)?;
+        merge_preference_patch(&mut value, patch);
+        let next: PreferenceFile = serde_json::from_value(value)?;
+        let content = serde_json::to_string_pretty(&next)?;
+        atomic_write_json(&preference_file_path(&self.config_dir), &content)?;
+        *preference = next;
+        Ok(())
+    }
+
+    /// Update only the effective typography font so a font selection cannot
+    /// overwrite unrelated preference fields from a stale window snapshot.
+    pub fn set_preferred_font(
+        &self,
+        font_id: String,
+        font_family: String,
+    ) -> Result<(), UserConfigError> {
+        let mut preference = self.write_preference();
+        let mut next = preference.clone();
+        next.format.font_id = Some(font_id);
+        next.format.font_family = font_family;
+        let content = serde_json::to_string_pretty(&next)?;
+        atomic_write_json(&preference_file_path(&self.config_dir), &content)?;
+        *preference = next;
+        Ok(())
+    }
+
     /// Legacy compatibility accessor. DSH runtime code must use
     /// `get_deepseek_harness_config(s)` instead; this accessor exists only for
     /// migration-era callers and tests.
@@ -987,6 +1017,28 @@ impl UserConfigStore {
         fs::read_to_string(&path)
             .ok()
             .and_then(|s| toml::from_str(&s).ok())
+    }
+}
+
+fn merge_preference_patch(target: &mut serde_json::Value, patch: serde_json::Value) {
+    match patch {
+        serde_json::Value::Object(patch_fields) => {
+            if !target.is_object() {
+                *target = serde_json::Value::Object(serde_json::Map::new());
+            }
+            let target_fields = target.as_object_mut().expect("object initialized above");
+            for (key, value) in patch_fields {
+                if value.is_null() {
+                    target_fields.remove(&key);
+                } else {
+                    merge_preference_patch(
+                        target_fields.entry(key).or_insert(serde_json::Value::Null),
+                        value,
+                    );
+                }
+            }
+        }
+        replacement => *target = replacement,
     }
 }
 

@@ -8,7 +8,6 @@ import { toast } from '@/lib/toast';
 import { useI18n } from '@/lib/i18n';
 import { useShowHiddenNotebookFiles } from '@features/preferences/public/runtime-api';
 import { useShowNotebookAgentsFile } from '@features/preferences/public/runtime-api';
-import { useDocumentStore } from '@features/document/store';
 import { resourceKindFromPath } from '@features/editor/public/code-file';
 import {
   NotebookFileTree,
@@ -25,7 +24,13 @@ import {
   openBrowserColumnMedia,
   openBrowserColumnMemoById,
 } from '@features/workspace/use-cases/browser-column-navigation';
-import { openExternalTarget, openMediaTarget } from '@features/workspace/use-cases/workspace-navigation';
+import {
+  openExternalTarget,
+  openMediaTarget,
+  replaceActiveMemoPath,
+} from '@features/workspace/use-cases/workspace-navigation';
+import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
+import { workColumnTargetFilePath } from '@features/workspace/store/work-column-target';
 import {
   files,
   mediaResources,
@@ -198,7 +203,9 @@ export function NotebookFolderView({
     tree.refreshDirectories,
     tree.reload,
   ]);
-  const currentDocumentPath = useDocumentStore((state) => state.currentDocumentPath);
+  const activeFilePath = useWorkColumnStore((state) => (
+    workColumnTargetFilePath(state.navigation.target)
+  ));
   const refreshDirectoriesRef = useRef(tree.refreshDirectories);
   refreshDirectoriesRef.current = tree.refreshDirectories;
 
@@ -341,7 +348,7 @@ export function NotebookFolderView({
             parentRelativePath,
           );
           movedPaths.push(moved.path);
-          useDocumentStore.getState().replaceActiveMemoPath(moved.memo.id, moved.path);
+          replaceActiveMemoPath(moved.memo.id, moved.path);
         } else {
           const movedPath = await files.move(sourcePath, target, notebook.path);
           movedPaths.push(movedPath);
@@ -386,7 +393,7 @@ export function NotebookFolderView({
     <NotebookFileTree
       notebookName={notebook.name}
       notebookPath={notebook.path}
-      activeFilePath={currentDocumentPath}
+      activeFilePath={activeFilePath}
       tree={noteTree}
       hiddenListFolders={hiddenListFolders}
       onToggleListFolderVisibility={onToggleListFolderVisibility}

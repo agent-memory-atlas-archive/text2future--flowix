@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import { Button } from '@shared/ui/button';
 import {
   Select,
@@ -25,7 +26,11 @@ import {
 import { FieldRow, SectionHeader } from '@features/preferences/sections/primitives';
 import { useI18n } from '@/lib/i18n';
 import { toast } from '@/lib/toast';
+import { subscribe } from '@platform/tauri/event-bus';
+import type { FontDownloadProgress } from '@platform/tauri/client/general';
 import {
+  beginTypographyFontSelection,
+  commitTypographyFontSelection,
   ensureDownloadedFontRegistered,
   getDownloadedFontStatus,
   getFontOptionById,
@@ -104,41 +109,73 @@ export function FormatSection({ settings, updateSettings }: FormatSectionProps) 
   const { t } = useI18n();
   const [fontCacheStatus, setFontCacheStatus] = useState<Record<string, boolean>>({});
   const [loadingFontId, setLoadingFontId] = useState<string | null>(null);
+  const [fontDownloadProgress, setFontDownloadProgress] = useState<FontDownloadProgress | null>(null);
+  const fontSelectionId = useRef(0);
   // Find the label for the currently active font; fall back to its raw stack
   // so a previously-saved unknown font still surfaces in the trigger.
   const currentFont = getFontOptionById(settings.fontId) ?? getFontOptionByValue(settings.fontFamily);
   const fontLabel = currentFont?.label ?? settings.fontFamily;
   const selectValue = currentFont?.id ?? settings.fontFamily;
+  const activeProgress = loadingFontId && fontDownloadProgress?.fontId === loadingFontId
+    ? fontDownloadProgress
+    : null;
+  const activeProgressLabel = activeProgress?.percent == null ? '' : ` · ${activeProgress.percent}%`;
 
   useEffect(() => {
-    getDownloadedFontStatus().then(setFontCacheStatus);
+    getDownloadedFontStatus().then((status) => {
+      setFontCacheStatus((current) => ({ ...status, ...current }));
+    });
   }, []);
 
+  useEffect(() => subscribe<FontDownloadProgress>(
+    'font-download-progress',
+    setFontDownloadProgress,
+  ), []);
+
   async function handleFontChange(fontId: string) {
+    const selectionId = ++fontSelectionId.current;
+    setLoadingFontId(null);
+    setFontDownloadProgress(null);
     const font = getFontOptionById(fontId);
-    if (!font) {
-      await updateSettings({ format: { fontFamily: fontId, fontId: undefined } });
+    if (!font) return;
+    let nativeSelectionId: number;
+    try {
+      nativeSelectionId = await beginTypographyFontSelection();
+    } catch (error) {
+      if (fontSelectionId.current === selectionId) {
+        const message = error instanceof Error ? error.message : String(error);
+        toast.error(t('preferences.format.fontDownloadFailed', { message }));
+      }
       return;
     }
-    if (isDownloadableFont(font) && !fontCacheStatus[font.id]) {
+    if (fontSelectionId.current !== selectionId) return;
+    if (isDownloadableFont(font)) {
       setLoadingFontId(font.id);
       try {
-        await ensureDownloadedFontRegistered(font.id);
+        const downloaded = await ensureDownloadedFontRegistered(font.id);
         setFontCacheStatus((status) => ({ ...status, [font.id]: true }));
-        toast.success(t('preferences.format.fontDownloaded'));
+        if (fontSelectionId.current !== selectionId) return;
+        if (downloaded) toast.success(t('preferences.format.fontDownloaded'));
       } catch (error) {
+        if (fontSelectionId.current !== selectionId) return;
         const message = error instanceof Error ? error.message : String(error);
         toast.error(t('preferences.format.fontDownloadFailed', { message }));
         return;
       } finally {
-        setLoadingFontId(null);
+        if (fontSelectionId.current === selectionId) {
+          setLoadingFontId(null);
+          setFontDownloadProgress(null);
+        }
       }
-    } else if (isDownloadableFont(font)) {
-      await ensureDownloadedFontRegistered(font.id).catch((error) => {
-        console.warn('Failed to register cached font:', error);
-      });
     }
-    await updateSettings({ format: { fontFamily: font.value, fontId: font.id } });
+    if (fontSelectionId.current !== selectionId) return;
+    try {
+      await commitTypographyFontSelection(nativeSelectionId, font.id);
+    } catch (error) {
+      if (fontSelectionId.current !== selectionId) return;
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(t('preferences.format.fontDownloadFailed', { message }));
+    }
   }
 
   return (
@@ -182,29 +219,40 @@ export function FormatSection({ settings, updateSettings }: FormatSectionProps) 
         >
           <SelectTrigger className="w-72">
             <span
-              className="flex-1 text-left"
+              className="flex min-w-0 flex-1 items-center gap-2 text-left"
               style={{ fontFamily: settings.fontFamily }}
             >
-              {loadingFontId === currentFont?.id ? t('preferences.format.downloading') : fontLabel}
+              <span className="truncate">
+                {loadingFontId
+                  ? `${t('preferences.format.downloading')} ${getFontOptionById(loadingFontId)?.label ?? ''}${activeProgressLabel ? ` ${activeProgressLabel}` : ''}`
+                  : fontLabel}
+              </span>
+              {loadingFontId && (
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--primary)]" aria-hidden="true" />
+              )}
             </span>
           </SelectTrigger>
           <SelectContent align="end" className="flowix-preferences-select-content w-72">
-            {FONT_FAMILY_OPTIONS.map((font) => (
-              <SelectItem key={font.id} value={font.id}>
-                <span className="flex w-full items-center justify-between gap-3" style={{ fontFamily: font.value }}>
-                  <span>{font.label}</span>
-                  {font.source === 'downloadable' && (
-                    <span className="text-[10px] text-[var(--muted-foreground)]">
-                      {loadingFontId === font.id
-                        ? t('preferences.format.fontStatus.downloading')
-                        : fontCacheStatus[font.id]
-                          ? t('preferences.format.fontStatus.downloaded')
+            {FONT_FAMILY_OPTIONS.map((font) => {
+              const isLoading = loadingFontId === font.id;
+              return (
+                <SelectItem key={font.id} value={font.id}>
+                  <span className="flex w-full items-center justify-between gap-3" style={{ fontFamily: font.value }}>
+                    <span>{font.label}</span>
+                    {font.source === 'downloadable' && (isLoading || fontCacheStatus[font.id] === false) && (
+                      <span className="flex items-center gap-1.5 text-[10px] text-[var(--muted-foreground)]">
+                        {isLoading
+                          ? `${t('preferences.format.fontStatus.downloading')}${activeProgressLabel}`
                           : t('preferences.format.fontStatus.needsDownload')}
-                    </span>
-                  )}
-                </span>
-              </SelectItem>
-            ))}
+                        {isLoading && (
+                          <Loader2 className="h-3 w-3 animate-spin text-[var(--primary)]" aria-hidden="true" />
+                        )}
+                      </span>
+                    )}
+                  </span>
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
       </FieldRow>

@@ -54,6 +54,58 @@ describe('browser column navigation', () => {
     });
   });
 
+  it('upgrades an existing same-path file tab when opened as a Memo', async () => {
+    const path = '/notes/shared.md';
+    await openBrowserColumnMarkdown(path);
+
+    const result = await openBrowserColumnTarget({
+      kind: 'memo',
+      memoId: 'shared',
+      notebookId: 'notebook-a',
+      notebookPath: '/notes',
+      filePath: path,
+    }, 'open-in-column');
+
+    expect(result).toEqual({
+      host: 'browser-column',
+      tabId: `file:${path}`,
+      alreadyOpen: true,
+    });
+    expect(useBrowserColumnStore.getState().tabs).toHaveLength(1);
+    expect(useBrowserColumnStore.getState().tabs[0].target).toEqual({
+      kind: 'memo',
+      memoId: 'shared',
+      notebookId: 'notebook-a',
+      notebookPath: '/notes',
+      filePath: path,
+    });
+  });
+
+  it('upgrades an existing same-path file tab when focusing a Memo target', async () => {
+    const path = '/notes/shared-focus.md';
+    await openBrowserColumnMarkdown(path);
+
+    const result = await openBrowserColumnTarget({
+      kind: 'memo',
+      memoId: 'shared-focus',
+      notebookId: 'notebook-a',
+      notebookPath: '/notes',
+      filePath: path,
+    }, 'focus-existing');
+
+    expect(result).toEqual({
+      host: 'browser-column',
+      tabId: `file:${path}`,
+      alreadyOpen: true,
+    });
+    expect(useBrowserColumnStore.getState().tabs).toHaveLength(1);
+    expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({
+      kind: 'memo',
+      memoId: 'shared-focus',
+      filePath: path,
+    });
+  });
+
   it('opens one file-browser tab per folder and switches its active file', async () => {
     await openBrowserColumnFileBrowser('/workspace');
     await openBrowserColumnFileBrowser('/workspace', '/workspace/src/main.ts');

@@ -6,7 +6,7 @@ import { Check } from 'lucide-react';
 
 import { useI18n } from '@/lib/i18n';
 import { useComposingValue } from '@shared/hooks/use-composing-value';
-import { useMemoTitleSession } from './memo-title-session';
+import { useMemoTitleSession, type RenameDocumentTitle } from './memo-title-session';
 import { useSettingsStore } from '@/lib/store/settings-store';
 import { windows } from '@platform/tauri/client';
 import { readClipboardSnapshot, type ClipboardSnapshot } from '@features/editor/extensions/paste-rules/clipboard';
@@ -15,10 +15,12 @@ import { hasLeadingFrontmatter } from '@features/editor/extensions/paste-rules/m
 import { BlockActionMenu } from '@features/editor/components/drag-context-menu/block-action-menu';
 import type { BlockMenuAction } from '@features/editor/components/drag-context-menu/block-menu-actions';
 import type { DocumentEditorMode } from '@features/document/store/document-editor-view-store';
+import { documentPropertyTargetId } from '@features/document/store/document-identity';
 
 interface MemoTitleEditorProps {
-  memoId: string;
+  displayId: string;
   filename: string;
+  renameTitle: RenameDocumentTitle;
   editable: boolean;
   autoFocus?: boolean;
   /** Source mode uses DOM text selection so WebView does not paint the native textarea blue. */
@@ -41,12 +43,13 @@ export interface MemoTitleBodyNavigation {
 
 export interface MemoTitleEditorHandle {
   focusEnd: () => void;
-  appendBodyLine: (title: string) => void;
+  appendBodyLine: (title: string) => Promise<boolean>;
 }
 
 export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditorProps>(function MemoTitleEditor({
-  memoId,
+  displayId,
   filename,
+  renameTitle,
   editable,
   autoFocus = false,
   useDocumentSelection = false,
@@ -69,7 +72,7 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
   const [propertiesMenuPosition, setPropertiesMenuPosition] = useState<{ left: number; top: number } | null>(null);
   const [propertiesMenuIndex, setPropertiesMenuIndex] = useState(0);
   const [propertiesMenuInputMode, setPropertiesMenuInputMode] = useState<'mouse' | 'keyboard'>('mouse');
-  const session = useMemoTitleSession(memoId, filename);
+  const session = useMemoTitleSession(displayId, filename, renameTitle);
   const { snapshot } = session;
   const titleInput = useComposingValue(
     snapshot.draft,
@@ -114,7 +117,9 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
       icon: <PlusIcon size={16} weight="bold" />,
       label: t('document.properties.add'),
       onSelect: () => {
-        window.dispatchEvent(new CustomEvent('flowix:add-property', { detail: { memoId } }));
+        window.dispatchEvent(new CustomEvent('flowix:add-property', {
+          detail: { propertyTargetId: documentPropertyTargetId(displayId) },
+        }));
         closePropertiesMenu();
       },
     },
@@ -138,7 +143,7 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
         closePropertiesMenu();
       },
     }] : []),
-  ], [closePropertiesMenu, editorMode, memoId, onToggleEditorMode, propertiesVisible, t, togglePropertiesVisible]);
+  ], [closePropertiesMenu, displayId, editorMode, onToggleEditorMode, propertiesVisible, t, togglePropertiesVisible]);
 
   const handlePropertiesMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'Tab') {
@@ -223,8 +228,10 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
       : (textareaRef.current?.value ?? snapshot.draft);
     const caretPosition = currentTitle.length;
     session.setDraft(`${currentTitle}${title}`);
-    void session.commit().then(() => {
-      requestAnimationFrame(() => focusAt(caretPosition));
+    return session.commit({ expectBodyMutation: true }).then((committed) => {
+      const succeeded = committed !== false;
+      if (succeeded) requestAnimationFrame(() => focusAt(caretPosition));
+      return succeeded;
     });
   }, [focusAt, session, snapshot.draft, useDocumentSelection]);
 
@@ -298,7 +305,7 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
     } else {
       (element as HTMLTextAreaElement).select();
     }
-  }, [autoFocus, editable, memoId, useDocumentSelection]);
+  }, [autoFocus, displayId, editable, useDocumentSelection]);
 
   const getDocumentSelection = useCallback(() => {
     const element = documentTitleRef.current;
@@ -369,7 +376,9 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
         onMoveToBody({ insertEmptyLine: false });
         return;
       }
-      void session.commit().then(() => onMoveToBody({ insertEmptyLine: false }));
+      void session.commit().then((committed) => {
+        if (committed !== false) onMoveToBody({ insertEmptyLine: false });
+      });
     } else if (!editable) {
       return;
     } else if (event.key === 'Enter') {
@@ -377,10 +386,13 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
       const nextTitle = selection.value.slice(0, selection.start);
       const trailingContent = selection.value.slice(selection.end);
       session.setDraft(nextTitle);
-      void session.commit().then(() => onMoveToBody({
-        trailingContent,
-        insertEmptyLine: true,
-      }));
+      void session.commit({ expectBodyMutation: true }).then((committed) => {
+        if (committed === false) return;
+        onMoveToBody({
+          trailingContent,
+          insertEmptyLine: true,
+        });
+      });
     } else if (event.key === 'Escape') {
       session.cancel();
       event.currentTarget.blur();
@@ -491,7 +503,9 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
               onMoveToBody({ insertEmptyLine: false });
               return;
             }
-            void session.commit().then(() => onMoveToBody({ insertEmptyLine: false }));
+            void session.commit().then((committed) => {
+              if (committed !== false) onMoveToBody({ insertEmptyLine: false });
+            });
           } else if (!editable) {
             return;
           } else if (event.key === 'Enter') {
@@ -502,10 +516,13 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
             const nextTitle = value.slice(0, selectionStart);
             const trailingContent = value.slice(selectionEnd);
             session.setDraft(nextTitle);
-            void session.commit().then(() => onMoveToBody({
-              trailingContent,
-              insertEmptyLine: true,
-            }));
+            void session.commit({ expectBodyMutation: true }).then((committed) => {
+              if (committed === false) return;
+              onMoveToBody({
+                trailingContent,
+                insertEmptyLine: true,
+              });
+            });
           } else if (event.key === 'Escape') {
             session.cancel();
             event.currentTarget.blur();

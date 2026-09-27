@@ -63,9 +63,9 @@ let restoringMemoId: string | null = null;
  * hover/secondary list instance from reopening a document and avoids a
  * mount-only React effect with captured state.
  */
-export async function restorePersistedMemoSession(): Promise<void> {
+export async function restorePersistedMemoSession(requestedMemoId?: string | null): Promise<void> {
   const memoState = useMemoStore.getState();
-  const memoId = memoState.selectedMemoId ?? memoState.selectedMemo?.id ?? null;
+  const memoId = requestedMemoId ?? memoState.selectedMemoId ?? memoState.selectedMemo?.id ?? null;
   if (!memoId || restoringMemoId === memoId) return;
 
   const documentState = useDocumentStore.getState();

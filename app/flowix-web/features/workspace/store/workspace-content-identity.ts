@@ -1,4 +1,7 @@
-import { canonicalPath } from '@/lib/path';
+import { canonicalPath, fileLocatorKey } from '@/lib/path';
+import { canonicalUrl } from '@/lib/url';
+
+export { canonicalUrl } from '@/lib/url';
 
 /**
  * Stable identity for content that can be opened by either workspace host.
@@ -8,7 +11,7 @@ import { canonicalPath } from '@/lib/path';
  * corrupt the `//` in an URL scheme.
  */
 export type ContentIdentity =
-  | { kind: 'memo'; memoId: string }
+  | { kind: 'memo'; memoId: string; path?: string }
   | { kind: 'artifact'; pointerMemoId: string }
   | { kind: 'media'; path: string }
   | { kind: 'external'; path: string }
@@ -16,35 +19,28 @@ export type ContentIdentity =
   | { kind: 'web'; url: string }
   | { kind: 'agent-conversation'; instanceId: string };
 
-export function canonicalUrl(url: string): string | null {
-  try {
-    const parsed = new URL(url.trim());
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
-    return parsed.href;
-  } catch {
-    return null;
-  }
-}
-
 export function contentIdentityKey(
   identity: ContentIdentity,
 ): string | null {
   switch (identity.kind) {
     case 'memo': {
       const memoId = identity.memoId.trim();
-      return memoId ? `memo:${memoId}` : null;
+      const path = identity.path;
+      return path?.trim()
+        ? fileLocatorKey(path)
+        : memoId ? `memo:${memoId}` : null;
     }
     case 'artifact': {
       const pointerMemoId = identity.pointerMemoId.trim();
       return pointerMemoId ? `artifact:${pointerMemoId}` : null;
     }
     case 'media': {
-      const path = identity.path.trim();
-      return path ? `media:${canonicalPath(path)}` : null;
+      const path = identity.path;
+      return path.trim() ? fileLocatorKey(path) : null;
     }
     case 'external': {
-      const path = identity.path.trim();
-      return path ? `external:${canonicalPath(path)}` : null;
+      const path = identity.path;
+      return path.trim() ? fileLocatorKey(path) : null;
     }
     case 'file-browser': {
       const folderPath = identity.folderPath.trim();
@@ -60,8 +56,3 @@ export function contentIdentityKey(
     }
   }
 }
-
-/** @deprecated Use ContentIdentity. */
-export type WorkspaceContentIdentity = ContentIdentity;
-/** @deprecated Use contentIdentityKey. */
-export const workspaceContentIdentityKey = contentIdentityKey;
