@@ -9,7 +9,9 @@ use crate::lock_utils::{read_lock, write_lock};
 use crate::watcher::runtime::current_watcher;
 
 use crate::app::state::AppState;
-use flowix_core::memo_file::NotebookConfig;
+use flowix_core::memo_file::{
+    is_ignored_notebook_relative_path, notebook_relative_path, MemoFile, NotebookConfig,
+};
 
 pub(crate) fn watch_created_notebook(state: &AppState, app: &AppHandle, config: &NotebookConfig) {
     start_security_bookmark_access(state, Path::new(&config.path));
@@ -25,6 +27,64 @@ pub(crate) fn watch_created_notebook(state: &AppState, app: &AppHandle, config: 
 
 pub(crate) fn start_security_bookmark_access(state: &AppState, path: &Path) {
     state.security_bookmarks.start_accessing_for_path(path);
+}
+
+/// Resolve a notebook-relative Markdown address without consulting the legacy
+/// memo ID table. `None` means the path is outside notebooks or is not Markdown.
+pub(crate) fn notebook_note_address(
+    memo_file: &MemoFile,
+    path: &Path,
+) -> Result<Option<(String, String)>, String> {
+    let requested = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut notebooks = memo_file
+        .read_notebook_configs()
+        .map_err(|error| error.to_string())?;
+    notebooks.sort_by_key(|notebook| std::cmp::Reverse(notebook.path.len()));
+    for notebook in notebooks {
+        let configured_root = Path::new(&notebook.path);
+        let root =
+            dunce::canonicalize(configured_root).unwrap_or_else(|_| configured_root.to_path_buf());
+        let Ok(relative_path) = notebook_relative_path(&root, &requested) else {
+            continue;
+        };
+        let relative = Path::new(&relative_path);
+        if is_ignored_notebook_relative_path(relative) {
+            return Err("document path is inside an ignored notebook directory".into());
+        }
+        if !relative
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                matches!(extension.to_ascii_lowercase().as_str(), "md" | "markdown")
+            })
+        {
+            return Ok(None);
+        }
+        return Ok(Some((notebook.id, relative_path)));
+    }
+    Ok(None)
+}
+
+/// Refresh one Markdown path's rebuildable projection after generic file I/O.
+/// Filesystem mutations already completed, so index errors are reported and
+/// left for watcher/startup reconciliation instead of changing their outcome.
+pub(crate) fn refresh_notebook_note_index(memo_file: &MemoFile, path: &Path) {
+    match notebook_note_address(memo_file, path) {
+        Ok(Some((notebook_id, relative_path))) => {
+            if let Err(error) = memo_file.refresh_v2_note_path(&notebook_id, &relative_path) {
+                tracing::warn!(
+                    notebook_id,
+                    relative_path,
+                    "notebook note changed but V2 index refresh failed: {error}"
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(error) => tracing::warn!(
+            path = %path.display(),
+            "could not resolve notebook path for V2 index refresh: {error}"
+        ),
+    }
 }
 
 pub(crate) fn refresh_watcher_roots(state: &AppState, app: &AppHandle) {
@@ -48,6 +108,19 @@ pub(crate) fn set_notebook_watching_suspended(app: &AppHandle, notebook_id: &str
             watcher.set_notebook_suspended(notebook_id, suspended);
         }
     }
+}
+
+pub(crate) fn refresh_notebook_watcher(state: &AppState, app: &AppHandle, notebook_id: &str) {
+    let config = read_lock(&state.memo_file, "memo_file").get_notebook_config_by_id(notebook_id);
+    if let (Some(config), Some(watcher)) = (config, current_watcher(app)) {
+        if let Ok(mut watcher) = watcher.write() {
+            if watcher.refresh_notebook_root(&config) {
+                return;
+            }
+        }
+    }
+    // Startup and watcher failures still use the established full recovery path.
+    refresh_watcher_roots(state, app);
 }
 
 pub(crate) fn switch_notebook_trusting_index(
@@ -91,7 +164,7 @@ fn switch_notebook(
 
     if prev == notebook_id && idx_nb == notebook_id && idx_loaded {
         if let Some(notebook_id) = notebook_id.as_deref() {
-            let notebook_path = {
+            let (notebook_path, moved_legacy_files) = {
                 let memo_file = read_lock(&state.memo_file, "memo_file");
                 let report = memo_file
                     .ensure_notebook_migrations(notebook_id)
@@ -102,9 +175,12 @@ fn switch_notebook(
                     rebuilt_tags = report.rebuilt_tags,
                     "notebook migrations checked"
                 );
-                memo_file
-                    .get_notebook_config_by_id(notebook_id)
-                    .map(|notebook| notebook.path)
+                (
+                    memo_file
+                        .get_notebook_config_by_id(notebook_id)
+                        .map(|notebook| notebook.path),
+                    report.moved_files > 0,
+                )
             };
             if let Some(notebook_path) = notebook_path {
                 crate::plugin::migrate_notebook_data(
@@ -112,6 +188,7 @@ fn switch_notebook(
                     Path::new(&notebook_path),
                     &state.memo_file,
                     Some(app),
+                    moved_legacy_files,
                 )?;
             }
         }
@@ -128,7 +205,7 @@ fn switch_notebook(
         .set_current_notebook(notebook_id.clone());
 
     if let Some(notebook_id) = notebook_id.as_deref() {
-        let notebook_path = {
+        let (notebook_path, moved_legacy_files) = {
             let memo_file = read_lock(&state.memo_file, "memo_file");
             let report = memo_file
                 .ensure_notebook_migrations(notebook_id)
@@ -141,9 +218,12 @@ fn switch_notebook(
                     "notebook migrations completed"
                 );
             }
-            memo_file
-                .get_notebook_config_by_id(notebook_id)
-                .map(|notebook| notebook.path)
+            (
+                memo_file
+                    .get_notebook_config_by_id(notebook_id)
+                    .map(|notebook| notebook.path),
+                report.moved_files > 0,
+            )
         };
         if let Some(notebook_path) = notebook_path {
             crate::plugin::migrate_notebook_data(
@@ -151,6 +231,7 @@ fn switch_notebook(
                 Path::new(&notebook_path),
                 &state.memo_file,
                 Some(app),
+                moved_legacy_files,
             )?;
         }
     }
@@ -263,23 +344,4 @@ pub(crate) fn is_agent_access_folder_with_state(path: &Path, state: &AppState) -
             && entry.enabled
             && path_is_inside(path, Path::new(&entry.path))
     })
-}
-
-pub(crate) fn synthesize_minimal_memo(id: &str) -> flowix_core::memo_file::Memo {
-    flowix_core::memo_file::Memo {
-        id: id.to_string(),
-        filename: String::new(),
-        relative_path: String::new(),
-        preview: String::new(),
-        thumbnail: None,
-        tags: vec![],
-        todos: vec![],
-        agents: vec![],
-        created_at: 0,
-        updated_at: 0,
-        favorited: false,
-        icon: None,
-        colors: vec![],
-        properties: serde_json::json!({}),
-    }
 }

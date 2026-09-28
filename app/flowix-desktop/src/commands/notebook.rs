@@ -15,7 +15,9 @@ use flowix_core::MemoService;
 use flowix_sync::V2LocalNotebook;
 
 use super::agent_access::AGENT_ACCESS_CHANGED_EVENT;
-use super::helpers::{refresh_watcher_roots, switch_notebook_trusting_index, watch_created_notebook};
+use super::helpers::{
+    refresh_watcher_roots, switch_notebook_trusting_index, watch_created_notebook,
+};
 use crate::app::state::{AppState, NotebookImportStatus, NotebookImportStatusKind};
 
 const NOTEBOOK_IMPORT_COMPLETE_EVENT: &str = "notebook-import-complete";
@@ -343,6 +345,7 @@ fn activate_created_notebook(
 }
 
 fn run_notebook_import(app: AppHandle, notebook_id: String) {
+    let started = std::time::Instant::now();
     tracing::info!(
         "[create_notebook] background import start id={}",
         notebook_id
@@ -350,35 +353,60 @@ fn run_notebook_import(app: AppHandle, notebook_id: String) {
     let app_state = app.state::<AppState>();
 
     let import_result = (|| {
-        let memo_file = read_lock(&app_state.memo_file, "memo_file");
-        tracing::info!(
-            "[create_notebook] import/reconcile start id={}",
-            notebook_id
-        );
+        let notebook_path = {
+            let memo_file = read_lock(&app_state.memo_file, "memo_file");
+            memo_file
+                .ensure_notebook_migrations(&notebook_id)
+                .map_err(|error| format!("notebook import migration failed: {error}"))?;
+            tracing::info!(
+                "[create_notebook] import/reconcile start id={}",
+                notebook_id
+            );
 
-        // Reconcile by explicit notebook ID. This keeps the background job
-        // independent from whichever notebook the user currently views and
-        // avoids switching the global MemoFile context from a worker thread.
-        let report =
-            memo_file.reconcile_notebook_with_disk_bidirectional_for_import(&notebook_id)?;
-        tracing::info!(
-            "[create_notebook] import/reconcile done id={} added={} removed={}",
-            notebook_id,
-            report.added,
-            report.removed
-        );
+            // Reconcile by explicit notebook ID. This keeps the background job
+            // independent from whichever notebook the user currently views and
+            // avoids switching the global MemoFile context from a worker thread.
+            let report =
+                memo_file.reconcile_notebook_with_disk_bidirectional_for_import(&notebook_id)?;
+            tracing::info!(
+                "[create_notebook] import/reconcile done id={} added={} removed={}",
+                notebook_id,
+                report.added,
+                report.removed
+            );
 
-        tracing::info!("[create_notebook] seed onboarding start id={}", notebook_id);
-        match memo_file.seed_onboarding_docs_for_notebook_id(&notebook_id) {
-            Ok(true) => tracing::info!("[create_notebook] seeded onboarding documents"),
-            Ok(false) => tracing::debug!(
+            tracing::info!("[create_notebook] seed onboarding start id={}", notebook_id);
+            match memo_file.seed_onboarding_docs_for_notebook_id(&notebook_id) {
+                Ok(true) => tracing::info!("[create_notebook] seeded onboarding documents"),
+                Ok(false) => tracing::debug!(
                 "[create_notebook] onboarding documents skipped (notebook already has documents)"
             ),
-            Err(error) => return Err(format!("seed onboarding documents failed: {error}")),
-        }
+                Err(error) => return Err(format!("seed onboarding documents failed: {error}")),
+            }
+            memo_file
+                .get_notebook_config_by_id(&notebook_id)
+                .map(|notebook| notebook.path)
+                .ok_or_else(|| "NOTEBOOK_NOT_FOUND".to_string())?
+        };
+        // Importing into an existing notebook can add artifacts after its
+        // one-time migration markers were written. Register those outputs as
+        // part of this import before reporting completion.
+        crate::plugin::migrate_notebook_data(
+            &notebook_id,
+            Path::new(&notebook_path),
+            &app_state.memo_file,
+            Some(&app),
+            true,
+        )?;
         Ok::<(), String>(())
     })();
 
+    crate::runtime_log::record_event(
+        "info",
+        "notebook.import.timing",
+        format!("notebook={} total_ms={} success={}", notebook_id,
+            started.elapsed().as_millis(), import_result.is_ok()),
+    );
     if let Err(error) = import_result {
         tracing::warn!("[create_notebook] background import failed: {error}");
         emit_notebook_import_status(
@@ -438,7 +466,8 @@ pub async fn create_notebook(
     activate: Option<bool>,
     app: AppHandle,
 ) -> Result<Notebook, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let started = std::time::Instant::now();
+    let result = tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let trimmed_name = name.trim();
         if trimmed_name.is_empty() {
@@ -488,7 +517,13 @@ pub async fn create_notebook(
         Ok(notebook_from_config(config))
     })
     .await
-    .map_err(|error| format!("notebook creation task failed: {error}"))?
+    .map_err(|error| format!("notebook creation task failed: {error}"))?;
+    crate::runtime_log::record_event(
+        "info",
+        "notebook.create.timing",
+        format!("total_ms={} success={}", started.elapsed().as_millis(), result.is_ok()),
+    );
+    result
 }
 
 /// Start importing an ordinary local notebook after the frontend has applied

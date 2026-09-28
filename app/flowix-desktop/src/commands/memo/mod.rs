@@ -1,19 +1,18 @@
 //! Memo and document IPC commands.
 //!
-//! User-facing memo operations resolve globally by memo id. Watcher and
-//! reconcile code stay scoped to the current notebook to avoid treating copied
-//! files from another notebook as the original memo.
+//! Note file CRUD addresses Markdown by notebook-relative path. Internal IDs
+//! remain temporarily in compatibility projections, version history, and cloud
+//! association while their callers migrate independently.
 //!
 //! File layout (split from the original 1414-line `commands/memo.rs` because
 //! the file carried five distinct sub-domains):
 //!
 //! - [`helpers`] 鈥?shared functions used by every other section
-//!   (`read_memo_or_none`, `emit_updated_after_write`, `cas_content_matches`,
-//!   etc.) plus the unit tests for `cas_content_matches`.
+//!   (`read_memo_or_none`, `cas_content_matches`, etc.) plus the unit tests
+//!   for `cas_content_matches`.
 //! - [`reads`]   鈥?read-only IPC: list / search / get_memos / read_document /
 //!   mention / todo metadata / version listing.
-//! - [`creates`] 鈥?create / import / template commands, plus single-field
-//!   updates (favorite, unfavorite, set_colors).
+//! - [`creates`] 鈥?create / import / template and move commands.
 //! - [`versions`] 鈥?memo version history (list / read / create / restore).
 //! - [`deletes`] 鈥?delete commands.
 //!
@@ -29,13 +28,12 @@ pub(crate) mod helpers;
 pub mod reads;
 pub mod versions;
 
-// `helpers` is `pub(crate)`: memo commands access it via `super::helpers`,
-// and `commands::tag` reuses `emit_updated_after_write` for move_memo_tag.
+// `helpers` is `pub(crate)`: memo commands access it via `super::helpers`.
 pub use reads::*;
 
 use serde::Serialize;
 
-use flowix_core::memo_file::Memo;
+use flowix_core::memo_file::{Memo, V2NoteEntry};
 use flowix_core::search::MemoSearchHit;
 
 // Shared response / item structs 鈹€鈹€ referenced by multiple sections below.
@@ -46,6 +44,14 @@ pub struct GetMemosResponse {
     #[serde(rename = "nextCursor")]
     pub next_cursor: Option<String>,
     #[serde(rename = "hasMore")]
+    pub has_more: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPathNotesResponse {
+    pub notes: Vec<V2NoteEntry>,
+    pub next_cursor: Option<String>,
     pub has_more: bool,
 }
 

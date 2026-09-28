@@ -20,6 +20,7 @@
 // v3 鏀归€? 涓嶅啀瑙ｆ瀽 filename 鏈熬鐨?`#<id>`, 鏀规垚 IPC 鎷?memo index
 // 鍚庢寜 filename 鍙嶆煡 memoId銆?
 import { notebooks } from '@platform/tauri/client';
+import { buildNoteOpenLinkFromPath } from '@platform/open-target/path-link';
 
 // 鈹€鈹€鈹€ Types 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
@@ -47,6 +48,10 @@ interface CacheEntry {
 
 let cached: CacheEntry[] | null = null;
 let cachePromise: Promise<CacheEntry[]> | null = null;
+
+export function noteLinkForIndexedPath(path: string): string | null {
+  return cached ? buildNoteOpenLinkFromPath(path, cached.map(({ notebook }) => notebook)) : null;
+}
 
 function fetchNotebooks(): Promise<CacheEntry[]> {
   return notebooks.getAll().then(async (list) => {

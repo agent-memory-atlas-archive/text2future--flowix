@@ -23,12 +23,11 @@ interface MemoTitleEditorProps {
   renameTitle: RenameDocumentTitle;
   editable: boolean;
   autoFocus?: boolean;
-  /** Source mode uses DOM text selection so WebView does not paint the native textarea blue. */
+  /** Use a DOM selection surface when a host needs to avoid native textarea selection rendering. */
   useDocumentSelection?: boolean;
   /** Rich-text mode may navigate across the boundary while read-only. */
   allowReadOnlyBoundaryNavigation?: boolean;
-  /** The source editor has its own gutter controls and must not render the
-   * rich-text title's left-side properties affordance. */
+  /** Whether to render the title's properties affordance. */
   showPropertiesToggle?: boolean;
   onMoveToBody: (request: MemoTitleBodyNavigation) => void;
   onPasteToBody?: (snapshot: ClipboardSnapshot) => void;
@@ -43,7 +42,7 @@ export interface MemoTitleBodyNavigation {
 
 export interface MemoTitleEditorHandle {
   focusEnd: () => void;
-  appendBodyLine: (title: string) => Promise<boolean>;
+  appendBodyLine: (title: string) => boolean;
 }
 
 export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditorProps>(function MemoTitleEditor({
@@ -228,11 +227,9 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
       : (textareaRef.current?.value ?? snapshot.draft);
     const caretPosition = currentTitle.length;
     session.setDraft(`${currentTitle}${title}`);
-    return session.commit({ expectBodyMutation: true }).then((committed) => {
-      const succeeded = committed !== false;
-      if (succeeded) requestAnimationFrame(() => focusAt(caretPosition));
-      return succeeded;
-    });
+    void session.commit({ expectBodyMutation: true });
+    requestAnimationFrame(() => focusAt(caretPosition));
+    return true;
   }, [focusAt, session, snapshot.draft, useDocumentSelection]);
 
   useImperativeHandle(ref, () => ({
@@ -376,9 +373,8 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
         onMoveToBody({ insertEmptyLine: false });
         return;
       }
-      void session.commit().then((committed) => {
-        if (committed !== false) onMoveToBody({ insertEmptyLine: false });
-      });
+      void session.commit();
+      onMoveToBody({ insertEmptyLine: false });
     } else if (!editable) {
       return;
     } else if (event.key === 'Enter') {
@@ -386,12 +382,10 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
       const nextTitle = selection.value.slice(0, selection.start);
       const trailingContent = selection.value.slice(selection.end);
       session.setDraft(nextTitle);
-      void session.commit({ expectBodyMutation: true }).then((committed) => {
-        if (committed === false) return;
-        onMoveToBody({
-          trailingContent,
-          insertEmptyLine: true,
-        });
+      void session.commit({ expectBodyMutation: true });
+      onMoveToBody({
+        trailingContent,
+        insertEmptyLine: true,
       });
     } else if (event.key === 'Escape') {
       session.cancel();
@@ -455,10 +449,11 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
           role="textbox"
           aria-label={t('memo.untitled')}
           aria-multiline="false"
+          aria-readonly={!editable}
+          tabIndex={editable ? undefined : 0}
           contentEditable={editable ? 'plaintext-only' : false}
           suppressContentEditableWarning
           data-placeholder={t('memo.untitled')}
-          data-saving={snapshot.saving || undefined}
           className="memo-title-editor memo-title-editor--document-selection"
           onInput={(event) => {
             if (documentTitleComposingRef.current) return;
@@ -483,7 +478,6 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
         readOnly={!editable}
         aria-label={t('memo.untitled')}
         placeholder={t('memo.untitled')}
-        data-saving={snapshot.saving || undefined}
         className="memo-title-editor"
         onChange={titleInput.onChange}
         onCompositionStart={titleInput.onCompositionStart}
@@ -503,9 +497,8 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
               onMoveToBody({ insertEmptyLine: false });
               return;
             }
-            void session.commit().then((committed) => {
-              if (committed !== false) onMoveToBody({ insertEmptyLine: false });
-            });
+            void session.commit();
+            onMoveToBody({ insertEmptyLine: false });
           } else if (!editable) {
             return;
           } else if (event.key === 'Enter') {
@@ -516,12 +509,10 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
             const nextTitle = value.slice(0, selectionStart);
             const trailingContent = value.slice(selectionEnd);
             session.setDraft(nextTitle);
-            void session.commit({ expectBodyMutation: true }).then((committed) => {
-              if (committed === false) return;
-              onMoveToBody({
-                trailingContent,
-                insertEmptyLine: true,
-              });
+            void session.commit({ expectBodyMutation: true });
+            onMoveToBody({
+              trailingContent,
+              insertEmptyLine: true,
             });
           } else if (event.key === 'Escape') {
             session.cancel();

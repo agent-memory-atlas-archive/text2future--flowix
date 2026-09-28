@@ -2,12 +2,13 @@ use serde::Serialize;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use tauri::State;
+use tauri::{Manager, State};
 
 use crate::app::state::AppState;
 use crate::commands::external_document_watch::ExternalDocumentWatchState;
 use crate::commands::helpers::{
-    can_access_document_path, can_access_scoped_file, start_security_bookmark_access,
+    can_access_document_path, can_access_scoped_file, refresh_notebook_note_index,
+    start_security_bookmark_access,
 };
 use crate::lock_utils::read_lock;
 use flowix_core::memo_file::FileWriteOutcome;
@@ -177,63 +178,86 @@ pub(crate) fn exact_existing_external_path(
 }
 
 #[tauri::command]
-pub fn read_external_document(
+pub async fn read_external_document(
     window: tauri::WebviewWindow,
     file_path: String,
     #[allow(non_snake_case)] scopePath: Option<String>,
-    state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    let path =
-        exact_existing_external_path(&file_path, scopePath.as_deref(), window.label(), &state)?;
-    fs::read_to_string(&path).map_err(|error| format!("failed to read {}: {error}", path.display()))
+    crate::document_io::run("read_external", move || {
+        let state = app.state::<AppState>();
+        let path =
+            exact_existing_external_path(&file_path, scopePath.as_deref(), window.label(), &state)?;
+        fs::read_to_string(&path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))
+    })
+    .await?
 }
 
 #[tauri::command]
 #[allow(non_snake_case)]
-pub fn write_external_document(
+pub async fn write_external_document(
     window: tauri::WebviewWindow,
+    operation_id: Option<String>,
     file_path: String,
     content: String,
     expectedContent: Option<String>,
     scopePath: Option<String>,
-    state: State<'_, AppState>,
-    watches: State<'_, ExternalDocumentWatchState>,
+    app: tauri::AppHandle,
 ) -> ExternalDocumentWriteOutcome {
-    let path = match exact_existing_external_path(
-        &file_path,
-        scopePath.as_deref(),
-        window.label(),
-        &state,
-    ) {
-        Ok(path) => path,
-        Err(_) if !Path::new(&file_path).is_file() => return ExternalDocumentWriteOutcome::Missing,
-        Err(message) => return ExternalDocumentWriteOutcome::Error { message },
-    };
+    crate::commands::document_operations::run(
+        "save_external",
+        operation_id,
+        window.label().to_owned(),
+        move || {
+            Ok((|| {
+                let state = app.state::<AppState>();
+                let watches = app.state::<ExternalDocumentWatchState>();
+                let path = match exact_existing_external_path(
+                    &file_path,
+                    scopePath.as_deref(),
+                    window.label(),
+                    &state,
+                ) {
+                    Ok(path) => path,
+                    Err(_) if !Path::new(&file_path).is_file() => {
+                        return ExternalDocumentWriteOutcome::Missing
+                    }
+                    Err(message) => return ExternalDocumentWriteOutcome::Error { message },
+                };
 
-    let outcome = read_lock(&state.memo_file, "memo_file").write_file_if_matches(
-        &path,
-        &content,
-        expectedContent.as_deref(),
-    );
-    match outcome {
-        Ok(FileWriteOutcome::Saved) => {}
-        Ok(FileWriteOutcome::Conflict { disk_content }) => {
-            return ExternalDocumentWriteOutcome::Conflict { disk_content };
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return ExternalDocumentWriteOutcome::Missing;
-        }
-        Err(error) => {
-            return ExternalDocumentWriteOutcome::Error {
-                message: format!("failed to save {}: {error}", path.display()),
-            };
-        }
-    }
-    watches.acknowledge_window_write(window.label(), &path);
-    ExternalDocumentWriteOutcome::Saved {
-        path: path.to_string_lossy().to_string(),
-        content,
-    }
+                let memo_file = read_lock(&state.memo_file, "memo_file");
+                let outcome = memo_file.write_file_if_matches(
+                    &path,
+                    &content,
+                    expectedContent.as_deref(),
+                );
+                match outcome {
+                    Ok(FileWriteOutcome::Saved) => {
+                        refresh_notebook_note_index(&memo_file, &path);
+                    }
+                    Ok(FileWriteOutcome::Conflict { disk_content }) => {
+                        return ExternalDocumentWriteOutcome::Conflict { disk_content };
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return ExternalDocumentWriteOutcome::Missing;
+                    }
+                    Err(error) => {
+                        return ExternalDocumentWriteOutcome::Error {
+                            message: format!("failed to save {}: {error}", path.display()),
+                        };
+                    }
+                }
+                watches.acknowledge_window_write(window.label(), &path);
+                ExternalDocumentWriteOutcome::Saved {
+                    path: path.to_string_lossy().to_string(),
+                    content,
+                }
+            })())
+        },
+    )
+    .await
+    .unwrap_or_else(|message| ExternalDocumentWriteOutcome::Error { message })
 }
 
 #[cfg(test)]

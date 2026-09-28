@@ -1,3 +1,4 @@
+import { captureLatestDocumentContent } from '../../store/document-session-service';
 import { useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@platform/tauri/window';
 
@@ -132,6 +133,7 @@ export function useMemoDocumentChangeWatch({
 
     const unsubscribeMemoEvents = registerMemoEventHandler(
       async (event: MemoEvent) => {
+        captureLatestDocumentContent(identity);
         // tags_renamed: move_memo_tag 批量改写 .md body 完成后的一次性事件。
         // 当前打开的 memo 如果在被改写的 affectedMemoIds 列表里, 需要
         // reloadDocument 把磁盘最新内容 (含新 tag token) 拉进来, 否则

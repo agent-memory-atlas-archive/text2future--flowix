@@ -6,6 +6,7 @@ export interface FileDisplayIdentity {
 }
 
 const displayIdsByFile = new Map<string, string>();
+const pathsByDisplay = new Map<string, string>();
 const pinnedDisplayIds = new Map<string, number>();
 const displayReleaseSubscribers = new Set<(displayId: string) => void>();
 let nextDisplaySequence = 0;
@@ -26,6 +27,7 @@ function getFileDisplayId(path: string): string {
   if (existing) return existing;
   const displayId = createDisplayId();
   displayIdsByFile.set(key, displayId);
+  pathsByDisplay.set(displayId, canonicalPath(path));
   return displayId;
 }
 
@@ -54,6 +56,11 @@ export function requireFileDisplayIdentity(path: string): FileDisplayIdentity {
 /** Read a live file identity without allocating one. */
 export function findFileDisplayId(path: string): string | null {
   return displayIdsByFile.get(fileLocatorKey(path)) ?? null;
+}
+
+/** Resolve the latest path at the instant a queued write executes. */
+export function findFileDisplayPath(displayId: string): string | null {
+  return pathsByDisplay.get(displayId) ?? null;
 }
 
 /** True while an open surface or an in-flight file operation still owns this ID. */
@@ -88,20 +95,24 @@ export function rebaseFileDisplayPath(
   previousPath: string,
   nextPath: string,
   expectedDisplayId?: string,
-): void {
+): boolean {
   const previous = canonicalPath(previousPath);
   const next = canonicalPath(nextPath);
-  if (!previous || !next || previous === next) return;
+  if (!previous || !next || previous === next) return false;
   const previousKey = fileLocatorKey(previous);
   const nextKey = fileLocatorKey(next);
   const displayId = expectedDisplayId ?? displayIdsByFile.get(previousKey);
-  if (!displayId) return;
+  if (!displayId) return false;
+  // A delayed event for A->B must not move an already confirmed C back to B.
+  if (pathsByDisplay.get(displayId) !== previous) return false;
   const destinationDisplayId = displayIdsByFile.get(nextKey);
-  if (destinationDisplayId && destinationDisplayId !== displayId) return;
+  if (destinationDisplayId && destinationDisplayId !== displayId) return false;
   if (displayIdsByFile.get(previousKey) === displayId) displayIdsByFile.delete(previousKey);
   displayIdsByFile.set(nextKey, displayId);
+  pathsByDisplay.set(displayId, next);
   if (currentLiveFileKeys.delete(previousKey)) currentLiveFileKeys.add(nextKey);
   if (deferredLiveFileKeys?.delete(previousKey)) deferredLiveFileKeys.add(nextKey);
+  return true;
 }
 
 function reconcileFileDisplayKeys(liveKeys: Set<string>): void {
@@ -112,11 +123,16 @@ function reconcileFileDisplayKeys(liveKeys: Set<string>): void {
   }
 
   for (const key of liveKeys) {
-    if (!displayIdsByFile.has(key)) displayIdsByFile.set(key, createDisplayId());
+    if (!displayIdsByFile.has(key)) {
+      const displayId = createDisplayId();
+      displayIdsByFile.set(key, displayId);
+      pathsByDisplay.set(displayId, key.slice('file:'.length));
+    }
   }
   for (const [key, displayId] of displayIdsByFile) {
     if (!liveKeys.has(key) && !pinnedDisplayIds.has(displayId)) {
       displayIdsByFile.delete(key);
+      pathsByDisplay.delete(displayId);
       for (const subscriber of displayReleaseSubscribers) subscriber(displayId);
     }
   }

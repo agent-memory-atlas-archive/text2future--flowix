@@ -4,6 +4,7 @@ import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { AllSelection, Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
 import type { Selection } from '@tiptap/pm/state';
 import { FrontmatterPropertyNodeView } from '@features/editor/extensions/frontmatter-node-view';
+import { updateVisibleFrontmatterProperty } from '@features/document/properties/frontmatter-model';
 
 // Consume a BOM both at the true file boundary and immediately after the
 // frontmatter block. The latter repairs legacy imports where key injection
@@ -53,6 +54,20 @@ const Frontmatter = Node.create({
 
   addProseMirrorPlugins() {
     return [
+      new Plugin({
+        key: new PluginKey('frontmatter-add-first-property'),
+        view: (view) => {
+          const handleAddProperty = (event: Event) => {
+            const detail = (event as CustomEvent<{ propertyTargetId?: string }>).detail;
+            if (!this.options.propertyTargetId || detail?.propertyTargetId !== this.options.propertyTargetId || !view.editable) return;
+            if (view.state.doc.firstChild?.type.name === this.name) return;
+            const yamlContent = updateVisibleFrontmatterProperty('', null, 'key1', '', 'Text');
+            view.dispatch(view.state.tr.insert(0, view.state.schema.nodes.frontmatter.create({ yamlContent })));
+          };
+          window.addEventListener('flowix:add-property', handleAddProperty);
+          return { destroy: () => window.removeEventListener('flowix:add-property', handleAddProperty) };
+        },
+      }),
       new Plugin({
         key: new PluginKey('frontmatter-protection'),
         appendTransaction: (_transactions, _oldState, newState) => {

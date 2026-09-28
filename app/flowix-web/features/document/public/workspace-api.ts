@@ -1,3 +1,4 @@
+import { getDocumentSession } from '../store/document-runtime-session';
 import { useDocumentStore } from '@features/document/store/document-store';
 import type {
   ExternalDocumentSession,
@@ -13,10 +14,33 @@ import {
   flushDocumentPath,
   rebaseActiveDocumentPath,
 } from '@features/document/store/document-session-service';
-import { findFileDisplayId, rebaseFileDisplayPath } from '@features/workspace/store/file-display-store';
+import { findFileDisplayId, rebaseFileDisplayPath } from '@/lib/file-display-registry';
 import { canonicalPath } from '@/lib/path';
 import type { DocumentIdentity } from '@features/document/store/document-identity';
 import { rebaseRecoveryDraftPath } from '@features/document/store/recovery-draft-store';
+import { waitForSaveQueue } from '@features/document/store/save-queue';
+import { documentIdentityKey } from '@features/document/store/document-identity';
+
+export { documentIdentityFromFile } from '@features/document/store/document-identity';
+export { deleteExternalDocument } from '@features/document/use-cases/delete-external-document';
+
+/** Navigation waits for document persistence without knowing queue keys. */
+export function waitForWorkspaceDocumentSaves(identity: DocumentIdentity): Promise<boolean> {
+  return waitForSaveQueue(documentIdentityKey(identity));
+}
+
+export function getWorkspaceDocumentPaths(): string[] {
+  const state = useDocumentStore.getState();
+  return [state.activeMemoSession?.fileIdentity.path, state.activeExternalSession?.fileIdentity.path]
+    .filter((path): path is string => Boolean(path));
+}
+
+export function subscribeWorkspaceDocumentPaths(listener: () => void): () => void {
+  return useDocumentStore.subscribe((state, previous) => {
+    if (state.activeMemoSession !== previous.activeMemoSession
+      || state.activeExternalSession !== previous.activeExternalSession) listener();
+  });
+}
 
 type DocumentState = ReturnType<typeof useDocumentStore.getState>;
 
@@ -63,7 +87,7 @@ export function replaceWorkspaceDocumentPath(
   const previous = canonicalPath(identity.path);
   const next = canonicalPath(path);
   if (!previous || !next || previous === next) return;
-  rebaseWorkspaceDocumentPath(identity, next);
+  if (!rebaseWorkspaceDocumentPath(identity, next)) return;
   useDocumentStore.getState().replaceActiveExternalPath(identity.displayId, next);
   useDocumentHistoryStore.getState().replaceFilePath(previous, next);
   if (identity.memoId) {
@@ -75,17 +99,17 @@ export function replaceWorkspaceDocumentPath(
 export function rebaseWorkspaceDocumentPath(
   identity: DocumentIdentity,
   path: string,
-): void {
+): boolean {
   const previous = canonicalPath(identity.path);
   const next = canonicalPath(path);
-  if (!previous || !next || previous === next) return;
-  // A memo rename can carry several stale historical paths. Only the path
-  // that currently owns this runtime ID is the live file whose draft moves.
-  if (findFileDisplayId(previous) === identity.displayId) {
-    rebaseRecoveryDraftPath(identity, next);
-  }
-  rebaseFileDisplayPath(previous, next, identity.displayId);
+  if (!previous || !next) return false;
+  if (previous === next) return true;
+  const ownsPrevious = findFileDisplayId(previous) === identity.displayId;
+  if (!rebaseFileDisplayPath(previous, next, identity.displayId)) return false;
+  if (ownsPrevious) rebaseRecoveryDraftPath({ ...identity, path: previous }, next);
+  getDocumentSession(identity).fallbackPath = next;
   rebaseActiveDocumentPath(identity, next);
+  return true;
 }
 
 export async function flushWorkspaceDocumentPath(

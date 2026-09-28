@@ -27,8 +27,14 @@ import {
   MEMO_COLOR_HEX,
   useMemoStore,
 } from '@features/memo/store/memo-store';
-import type { MemoItem, MemoColor } from '@/types/memo-item';
-import { resolveMemoSessionPath } from '@features/memo/use-cases/open-memo-session';
+import {
+  isPathNoteListItem,
+  memoListItemRelativePath,
+  type MemoListItem,
+  type MemoColor,
+} from '@/types/memo-item';
+import { buildNoteOpenLinkFromPath } from '@platform/open-target/path-link';
+import { joinNotebookMemoPath } from '@/lib/path';
 
 // Minimal contract every shadcn-style item primitive in this app satisfies:
 // it accepts an onClick, a className, and renders children. Both
@@ -42,18 +48,18 @@ export interface MenuItemComponent {
   }): React.ReactElement | null;
 }
 
-interface MemoCardActionsProps {
-  memo: MemoItem;
+interface MemoCardActionsProps<T extends MemoListItem> {
+  memo: T;
   /** Use the tree item's authoritative path when this menu is rendered there. */
   filePath?: string;
-  onFavoriteToggle: (memo: MemoItem) => void;
-  onDelete: (memo: MemoItem) => void;
-  onColorsChange?: (memo: MemoItem, colors: MemoColor[]) => void;
+  onFavoriteToggle: (memo: T) => void;
+  onDelete: (memo: T) => void;
+  onColorsChange?: (memo: T, colors: MemoColor[]) => void;
   /**
    * Opens the memo in the browser column. Optional because the menu is also
    * rendered where a split target makes no sense; the item hides when absent.
    */
-  onOpenInSplit?: (memo: MemoItem) => void;
+  onOpenInSplit?: (memo: T) => void;
   Item: MenuItemComponent;
 }
 
@@ -197,7 +203,7 @@ function MemoCardColorRow({ colors, onChange }: MemoCardColorRowProps) {
   );
 }
 
-export function MemoCardActions({
+export function MemoCardActions<T extends MemoListItem>({
   memo,
   filePath,
   onFavoriteToggle,
@@ -205,7 +211,7 @@ export function MemoCardActions({
   onColorsChange,
   onOpenInSplit,
   Item,
-}: MemoCardActionsProps) {
+}: MemoCardActionsProps<T>) {
   const { t } = useI18n();
 
   // Resolve the on-disk path the same way `openMemoSession` does, so the
@@ -213,14 +219,17 @@ export function MemoCardActions({
   // the titlebar's commands would when the memo is actively open.
   const resolvePath = () => {
     const notebook = useMemoStore.getState().selectedNotebook;
-    return resolveMemoSessionPath(memo, notebook);
+    const relativePath = memoListItemRelativePath(memo);
+    return notebook?.path
+      ? joinNotebookMemoPath(notebook.path, relativePath)
+      : relativePath;
   };
 
   const handleCopyLink = async () => {
     const path = resolvePath();
     if (!path) return;
     try {
-      await writeClipboardText(path);
+      await writeClipboardText(buildNoteOpenLinkFromPath(path, useMemoStore.getState().notebooks) ?? path);
       toast.success(t('document.command.copySuccess'));
     } catch (error) {
       console.warn('[MemoCardActions] copy link failed', error);
@@ -232,7 +241,7 @@ export function MemoCardActions({
     const path = resolvePath();
     if (!path) return;
     try {
-      const content = await memoDocumentOperations.read({ path, scopePath: null, memoId: memo.id });
+      const content = await memoDocumentOperations.read({ path, scopePath: null });
       await writeClipboardText(content ?? '');
       toast.success(t('document.command.copySuccess'));
     } catch (error) {
@@ -253,9 +262,13 @@ export function MemoCardActions({
   // Properties are owned by the application-level host. Requesting them must
   // not navigate the work column or change the currently-open memo.
   const handleOpenProperties = () => {
+    const path = resolvePath();
+    const notebook = useMemoStore.getState().selectedNotebook;
     window.dispatchEvent(
       new CustomEvent('flowix:open-note-properties', {
-        detail: { memoId: memo.id },
+        detail: isPathNoteListItem(memo)
+          ? { path, scopePath: notebook?.path ?? null }
+          : { memoId: memo.id },
       }),
     );
   };

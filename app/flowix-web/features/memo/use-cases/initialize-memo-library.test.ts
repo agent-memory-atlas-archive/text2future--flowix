@@ -17,7 +17,7 @@ const testState = vi.hoisted(() => ({
   initialMemoQueryKey: null as string | null,
   listNotebooks: vi.fn(),
   listMemos: vi.fn(),
-  loadMemos: vi.fn(),
+  loadPathNotes: vi.fn(),
   setNotebooks: vi.fn((notebooks: Notebook[]) => {
     testState.notebooks = notebooks;
     testState.selectedNotebook = notebooks.find(
@@ -72,7 +72,7 @@ vi.mock('@features/memo/store/memo-store', () => ({
       setSelectedNotebook: testState.setSelectedNotebook,
       setSelectedMemo: testState.setSelectedMemo,
       setMemos: testState.setMemos,
-      loadMemos: testState.loadMemos,
+      loadPathNotes: testState.loadPathNotes,
       setStartupPhase: testState.setStartupPhase,
       setStartupReady: testState.setStartupReady,
     }),
@@ -118,7 +118,7 @@ describe('initializeMemoLibrary', () => {
     testState.initialMemoQueryKey = null;
     testState.listNotebooks.mockReset();
     testState.listMemos.mockReset();
-    testState.loadMemos.mockReset();
+    testState.loadPathNotes.mockReset();
     testState.setNotebooks.mockClear();
     testState.setSelectedNotebook.mockClear();
     testState.setSelectedMemo.mockClear();
@@ -130,7 +130,7 @@ describe('initializeMemoLibrary', () => {
   it('loads the selected notebook and its first memo query as one startup flow', async () => {
     const initialMemos = [{ id: 'memo-1' }];
     testState.listNotebooks.mockResolvedValue(notebooks);
-    testState.loadMemos.mockImplementation(async () => {
+    testState.loadPathNotes.mockImplementation(async () => {
       testState.memos = initialMemos;
       return true;
     });
@@ -138,7 +138,7 @@ describe('initializeMemoLibrary', () => {
     await initializeMemoLibrary();
 
     expect(testState.listNotebooks).toHaveBeenCalledOnce();
-    expect(testState.loadMemos).toHaveBeenCalledWith({
+    expect(testState.loadPathNotes).toHaveBeenCalledWith({
       notebookId: 'notebook-2',
       filter: 'all',
       sort: 'createdAt',
@@ -150,6 +150,18 @@ describe('initializeMemoLibrary', () => {
     expect(testState.initialMemoQueryKey).toBe('notebook-2:all:createdAt:::');
   });
 
+  it('uses the native startup notebook when the browser snapshot differs', async () => {
+    testState.listNotebooks.mockResolvedValue(notebooks);
+    testState.loadPathNotes.mockResolvedValue(true);
+
+    await initializeMemoLibrary('notebook-1');
+
+    expect(testState.selectedNotebook?.id).toBe('notebook-1');
+    expect(testState.loadPathNotes).toHaveBeenCalledWith(expect.objectContaining({
+      notebookId: 'notebook-1',
+    }));
+  });
+
   it('publishes an error and allows a later retry', async () => {
     testState.listNotebooks.mockRejectedValueOnce(new Error('backend unavailable'));
 
@@ -158,7 +170,7 @@ describe('initializeMemoLibrary', () => {
     expect(testState.startupError).toBe('backend unavailable');
 
     testState.listNotebooks.mockResolvedValue(notebooks);
-    testState.loadMemos.mockResolvedValue(true);
+    testState.loadPathNotes.mockResolvedValue(true);
     await initializeMemoLibrary();
 
     expect(testState.startupPhase).toBe('ready');
@@ -170,7 +182,7 @@ describe('initializeMemoLibrary', () => {
     testState.listNotebooks.mockImplementation(() => new Promise((resolve) => {
       resolveList = resolve;
     }));
-    testState.loadMemos.mockResolvedValue(true);
+    testState.loadPathNotes.mockResolvedValue(true);
 
     const first = initializeMemoLibrary();
     const second = initializeMemoLibrary();
@@ -183,7 +195,7 @@ describe('initializeMemoLibrary', () => {
 
   it('does not mark a superseded memo response as the initial query', async () => {
     testState.listNotebooks.mockResolvedValue(notebooks);
-    testState.loadMemos.mockResolvedValue(false);
+    testState.loadPathNotes.mockResolvedValue(false);
 
     await initializeMemoLibrary();
 

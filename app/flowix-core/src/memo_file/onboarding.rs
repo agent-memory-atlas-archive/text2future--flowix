@@ -224,7 +224,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(report.added, 1);
-        let imported = mf
+        let _imported = mf
             .read_index_for_notebook_id(Some("nb_default"))
             .unwrap()
             .unwrap()
@@ -237,10 +237,7 @@ mod tests {
             content.contains(original),
             "original Markdown body must survive"
         );
-        assert_eq!(
-            crate::memo_file::extract_frontmatter_key(&content),
-            Some(imported.id)
-        );
+        assert_eq!(crate::memo_file::extract_frontmatter_key(&content), None);
     }
 
     #[test]

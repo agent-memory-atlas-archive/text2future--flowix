@@ -174,17 +174,32 @@ impl AgentExternalConfig {
     /// 此刻注册表尚�?���?(`REGISTRY = None`), �?`resolve_*_binary` 会走原探测链
     /// (env > PATH > 鍊欓€?> shell), 涓庢敼閫犲墠琛屼负涓€鑷淬€?
     pub fn run_startup_detect(&self) {
-        let mut changed = false;
+        let started = std::time::Instant::now();
+        let pending: Vec<&str> = {
+            let data = self.read_data();
+            EXTERNAL_AGENT_KEYS
+                .iter()
+                .copied()
+                .filter(|key| {
+                    data.agents.get(*key).cloned().unwrap_or_default().source
+                        != AgentExternalSource::User
+                })
+                .collect()
+        };
+        let detected: Vec<(&str, Option<PathBuf>)> = pending
+            .into_iter()
+            .map(|key| (key, detect_external_binary(key)))
+            .collect();
         {
             let mut data = self.write_data();
-            for &key in EXTERNAL_AGENT_KEYS {
+            let mut changed = false;
+            for (key, path) in detected {
                 let current = data.agents.get(key).cloned().unwrap_or_default();
                 if current.source == AgentExternalSource::User {
                     continue;
                 }
-                let detected = detect_external_binary(key);
                 let entry = AgentExternalEntry {
-                    path: detected,
+                    path,
                     source: AgentExternalSource::Auto,
                 };
                 data.agents.insert(key.to_string(), entry);
@@ -195,6 +210,10 @@ impl AgentExternalConfig {
             }
         }
         self.load_into_registry();
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "[startup] external CLI detection completed"
+        );
     }
 
     /// 把当�?JSON �?path 内存镜像灌进 `REGISTRY`�?

@@ -5,7 +5,12 @@ import { displayTitleFromFilename } from '@/lib/utils';
 import { ChevronRight, ListTodo } from 'lucide-react';
 import { PushPin } from '@phosphor-icons/react';
 import { MEMO_COLORS, MEMO_COLOR_HEX, useMemoStore } from '@features/memo/store/memo-store';
-import type { MemoColor, MemoItem } from '@/types/memo-item';
+import {
+  isPathNoteListItem,
+  memoListItemRelativePath,
+  type MemoColor,
+  type MemoListItem,
+} from '@/types/memo-item';
 import { cn } from '@/lib/utils';
 import { getAgentType } from '@/lib/agent-types';
 import type { AgentTypeKey } from '@/types/agent';
@@ -24,8 +29,9 @@ import { assetUrl, decodeStorageKey } from '@features/editor/extensions/attachme
 import { TagIcon } from '@shared/ui/tag-icon';
 import { product } from '@platform/tauri/client';
 import { memoDocumentOperations } from '@features/document/public/file-operations-api';
-import { resolveMemoSessionPath } from '@features/memo/use-cases/open-memo-session';
 import { toast } from '@/lib/toast';
+import { buildNoteOpenLinkFromPath } from '@platform/open-target/path-link';
+import { joinNotebookMemoPath } from '@/lib/path';
 import { canUseNativeContextMenu, logNativeContextMenuError, popupNativeContextMenu } from '@platform/tauri/native-context-menu';
 import { loadNativeMenuIcons } from '@platform/tauri/native-menu-icons';
 
@@ -34,19 +40,19 @@ const MEMO_CARD_NATIVE_ICON_NAMES = [
 ] as const;
 
 interface MemoCardProps {
-  memo: MemoItem;
+  memo: MemoListItem;
   tagMap: Record<string, string>;
   isSelected: boolean;
-  onSelect: (memo: MemoItem) => void;
-  onOpenInWindow?: (memo: MemoItem) => void;
-  onFavoriteToggle: (memo: MemoItem) => void;
-  onDelete: (memo: MemoItem) => void;
-  onColorsChange?: (memo: MemoItem, colors: MemoColor[]) => void;
+  onSelect: (memo: MemoListItem) => void;
+  onOpenInWindow?: (memo: MemoListItem) => void;
+  onFavoriteToggle: (memo: MemoListItem) => void;
+  onDelete: (memo: MemoListItem) => void;
+  onColorsChange?: (memo: MemoListItem, colors: MemoColor[]) => void;
   runningAgentType?: AgentTypeKey;
 }
 
 interface MemoCardBodyProps {
-  memo: MemoItem;
+  memo: MemoListItem;
   tagMap: Record<string, string>;
   title: string;
   timeLabel: string;
@@ -60,14 +66,14 @@ interface MemoCardBodyProps {
 }
 
 interface MemoCardShellProps {
-  memo: MemoItem;
+  memo: MemoListItem;
   isSelected: boolean;
   children: ReactNode;
-  onSelect: (memo: MemoItem) => void;
-  onOpenInWindow?: (memo: MemoItem) => void;
-  onFavoriteToggle: (memo: MemoItem) => void;
-  onDelete: (memo: MemoItem) => void;
-  onColorsChange?: (memo: MemoItem, colors: MemoColor[]) => void;
+  onSelect: (memo: MemoListItem) => void;
+  onOpenInWindow?: (memo: MemoListItem) => void;
+  onFavoriteToggle: (memo: MemoListItem) => void;
+  onDelete: (memo: MemoListItem) => void;
+  onColorsChange?: (memo: MemoListItem, colors: MemoColor[]) => void;
 }
 
 function thumbnailSrc(thumbnail: string | null | undefined): string | null {
@@ -76,7 +82,7 @@ function thumbnailSrc(thumbnail: string | null | undefined): string | null {
   return storageKey ? assetUrl(storageKey) : thumbnail;
 }
 
-function memoFolderDisplayPath(memo: Pick<MemoItem, 'filename' | 'relativePath'>): string[] | null {
+function memoFolderDisplayPath(memo: Pick<MemoListItem, 'filename' | 'relativePath'>): string[] | null {
   const relativePath = (memo.relativePath?.trim() || memo.filename).replace(/\\/g, '/');
   const pathSegments = relativePath.split('/').filter((segment) => segment && segment !== '.');
   if (pathSegments.length < 2) return null;
@@ -124,7 +130,7 @@ function AgentTodoIcons({
   );
 }
 
-function ColorDots({ colors, limit, className }: { colors: MemoItem['colors']; limit?: number; className?: string }) {
+function ColorDots({ colors, limit, className }: { colors: MemoListItem['colors']; limit?: number; className?: string }) {
   const visibleColors = limit ? colors.slice(0, limit) : colors;
   if (visibleColors.length === 0) return null;
   return (
@@ -158,10 +164,21 @@ function MemoCardShell({
       .catch((error) => logNativeContextMenuError('memo card icon preload', error));
   }, [memo.favorited]);
 
-  const resolvePath = () => resolveMemoSessionPath(
-    memo,
-    useMemoStore.getState().selectedNotebook,
-  );
+  const resolvePath = () => {
+    const notebook = useMemoStore.getState().selectedNotebook;
+    const relativePath = memoListItemRelativePath(memo);
+    return notebook?.path
+      ? joinNotebookMemoPath(notebook.path, relativePath)
+      : relativePath;
+  };
+  const openProperties = () => {
+    const path = resolvePath();
+    window.dispatchEvent(new CustomEvent('flowix:open-note-properties', {
+      detail: isPathNoteListItem(memo)
+        ? { path, scopePath: useMemoStore.getState().selectedNotebook?.path ?? null }
+        : { memoId: memo.id },
+    }));
+  };
 
   const writeClipboardText = async (text: string) => {
     if (navigator.clipboard?.writeText) {
@@ -215,17 +232,15 @@ function MemoCardShell({
         },
         onOpenInSplit: onOpenInWindow ? () => onOpenInWindow(memo) : undefined,
         onFavoriteToggle: () => onFavoriteToggle(memo),
-        onOpenProperties: () => window.dispatchEvent(new CustomEvent('flowix:open-note-properties', {
-          detail: { memoId: memo.id },
-        })),
+        onOpenProperties: openProperties,
         onCopyLink: () => {
           const path = resolvePath();
-          if (path) void writeClipboardText(path).catch(() => toast.error(t('document.command.copyFailed')));
+          if (path) void writeClipboardText(buildNoteOpenLinkFromPath(path, useMemoStore.getState().notebooks) ?? path).catch(() => toast.error(t('document.command.copyFailed')));
         },
         onCopyFullText: () => {
           const path = resolvePath();
           if (!path) return;
-          void memoDocumentOperations.read({ path, scopePath: null, memoId: memo.id })
+          void memoDocumentOperations.read({ path, scopePath: null })
             .then((content) => writeClipboardText(content ?? ''))
             .catch(() => toast.error(t('document.command.copyFailed')));
         },
@@ -411,7 +426,8 @@ export function MemoCardImpl({
   const hasAgents = (memo.agents?.length ?? 0) > 0;
   const hasTodos = (memo.todos?.length ?? 0) > 0;
   const timeLabel = formatTimeAgo(memo.updatedAt || memo.createdAt, t);
-  const title = displayTitleFromFilename(memo.filename) || t('memo.untitled');
+  const title = (isPathNoteListItem(memo) ? memo.title : displayTitleFromFilename(memo.filename))
+    || t('memo.untitled');
   const bodyProps: MemoCardBodyProps = {
     memo,
     tagMap,

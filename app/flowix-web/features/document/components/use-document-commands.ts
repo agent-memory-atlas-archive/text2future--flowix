@@ -1,8 +1,13 @@
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('use-document-commands');
 import { useCallback } from 'react';
 
 import { displayTitleFromFilename } from '@/lib/utils';
 import { sanitizeFileName, stripFrontmatter } from '@/lib/export-utils';
 import { memos as memosClient, dialogs, type SaveFileFilter } from '@platform/tauri/client';
+import { setDocumentProperties } from '@features/document/public/path-properties';
+import { buildNoteOpenLinkFromPath } from '@platform/open-target/path-link';
+import { useMemoStore } from '@features/memo/store/memo-store';
 import { memoDocumentOperations } from '@features/document/use-cases/memo-document-operations';
 import { translate } from '@/lib/i18n';
 import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
@@ -112,9 +117,9 @@ export function useDocumentCommands({
     let raw = getCurrentDocumentContent();
     if (!raw) {
       try {
-        raw = (await memoDocumentOperations.read({ path: currentDocumentPath })) ?? '';
+        raw = (await memoDocumentOperations.read({ path: currentDocumentPath, scopePath: null })) ?? '';
       } catch (error) {
-        console.warn('[useDocumentCommands] Failed to read document for export:', error);
+        logger.warn('[useDocumentCommands] Failed to read document for export:', { error: error });
         toast.error(tCmd('document.command.readFailed'));
         return null;
       }
@@ -144,11 +149,11 @@ export function useDocumentCommands({
     if (!currentDocumentPath) return;
 
     try {
-      const content = getCurrentDocumentContent() || await memoDocumentOperations.read({ path: currentDocumentPath }) || '';
+      const content = getCurrentDocumentContent() || await memoDocumentOperations.read({ path: currentDocumentPath, scopePath: null }) || '';
       await writeClipboardText(content);
       toast.success(tCmd('document.command.copySuccess'));
     } catch (error) {
-      console.warn('[useDocumentCommands] Failed to copy document content:', error);
+      logger.warn('[useDocumentCommands] Failed to copy document content:', { error: error });
       toast.error(tCmd('document.command.copyFailed'));
     }
   }, [currentDocumentPath, getCurrentDocumentContent]);
@@ -157,22 +162,21 @@ export function useDocumentCommands({
     if (!currentDocumentPath) return;
 
     try {
-      await writeClipboardText(currentDocumentPath);
+      const link = buildNoteOpenLinkFromPath(currentDocumentPath, useMemoStore.getState().notebooks);
+      await writeClipboardText(link ?? currentDocumentPath);
       toast.success(tCmd('document.command.copySuccess'));
     } catch (error) {
-      console.warn('[useDocumentCommands] Failed to copy document link:', error);
+      logger.warn('[useDocumentCommands] Failed to copy document link:', { error: error });
       toast.error(tCmd('document.command.copyFailed'));
     }
   }, [currentDocumentPath]);
 
   const handleTogglePin = useCallback(async () => {
-    if (!currentMemo) return;
+    if (!currentMemo || !currentDocumentPath) return;
 
     const wasFavorited = currentMemo.favorited;
     try {
-      const ok = wasFavorited
-        ? await memosClient.unfavoriteMemo(currentMemo.id)
-        : await memosClient.favoriteMemo(currentMemo.id);
+      const ok = await setDocumentProperties(currentDocumentPath, { flowix_favorited: !wasFavorited }, currentMemo.id);
 
       if (!ok) {
         toast.error(tCmd(wasFavorited ? 'document.command.unpinFailed' : 'document.command.pinFailed'));
@@ -182,10 +186,10 @@ export function useDocumentCommands({
       updateMemoMeta(currentMemo.id, { favorited: !wasFavorited });
       toast.success(tCmd(wasFavorited ? 'document.command.unpinSuccess' : 'document.command.pinSuccess'));
     } catch (error) {
-      console.warn('[useDocumentCommands] Failed to toggle pin:', error);
+      logger.warn('[useDocumentCommands] Failed to toggle pin:', { error: error });
       toast.error(tCmd(wasFavorited ? 'document.command.unpinFailed' : 'document.command.pinFailed'));
     }
-  }, [currentMemo, updateMemoMeta]);
+  }, [currentDocumentPath, currentMemo, updateMemoMeta]);
 
   const handleColorsChange = useCallback((next: MemoColor[]) => {
     if (!currentMemo) return;
@@ -212,7 +216,7 @@ export function useDocumentCommands({
       const template = await memosClient.saveTemplate(doc.title, doc.markdown);
       toast.success(tCmd('document.command.saveAsTemplate', { name: template.name }));
     } catch (error) {
-      console.warn('[useDocumentCommands] Failed to save template:', error);
+      logger.warn('[useDocumentCommands] Failed to save template:', { error: error });
       toast.error(tCmd('document.command.saveTemplateFailed'));
     }
   }, [requireExportableDocument]);
@@ -231,7 +235,7 @@ export function useDocumentCommands({
       exportModule = await import('@/lib/export');
       bodyHtml = exportModule.markdownToHtml(doc.markdown);
     } catch (error) {
-      console.warn('[useDocumentCommands] Failed to convert markdown for Word export:', error);
+      logger.warn('[useDocumentCommands] Failed to convert markdown for Word export:', { error: error });
       toast.error(tCmd('document.command.exportFailed'));
       return;
     }
@@ -262,7 +266,7 @@ export function useDocumentCommands({
         tCmd(ok ? 'document.command.exportPdf.success' : 'document.command.exportPdf.failed'),
       );
     } catch (error) {
-      console.warn('[useDocumentCommands] Failed to export PDF:', error);
+      logger.warn('[useDocumentCommands] Failed to export PDF:', { error: error });
       toast.error(tCmd('document.command.exportPdf.failed'));
     } finally {
       const restore = restorePrintView;

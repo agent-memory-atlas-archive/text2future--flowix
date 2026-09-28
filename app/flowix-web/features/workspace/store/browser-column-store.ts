@@ -641,7 +641,7 @@ export const useBrowserColumnStore = create<BrowserColumnState>()(
             ? {
                 ...tab,
                 title: displayTitleFromFilename(
-                  tab.target.folderPath.split(/[\\/]/).filter(Boolean).pop() ?? tab.target.folderPath,
+                  tab.target.folderPath?.split(/[\\/]/).filter(Boolean).pop() ?? '',
                 ),
                 target: { ...tab.target, activeFilePath: null },
               }

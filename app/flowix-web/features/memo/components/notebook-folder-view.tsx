@@ -27,7 +27,6 @@ import {
 import {
   openExternalTarget,
   openMediaTarget,
-  replaceActiveMemoPath,
 } from '@features/workspace/use-cases/workspace-navigation';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
 import { workColumnTargetFilePath } from '@features/workspace/store/work-column-target';
@@ -39,7 +38,7 @@ import {
   type FileBrowserDirectoriesChangedEvent,
 } from '@platform/tauri/client';
 import { subscribe } from '@platform/tauri/event-bus';
-import type { Notebook } from '@features/memo/store';
+import { useMemoStore, type Notebook } from '@features/memo/store';
 import type { SortType } from '@features/memo/services';
 
 const FILE_BROWSER_DIRECTORIES_CHANGED_EVENT = 'file-browser-directories-changed';
@@ -246,6 +245,7 @@ export function NotebookFolderView({
   }, [isActive, notebook.path, showHiddenNotebookFiles, showAgentsFile]);
 
   const openFile = useCallback(async (filePath: string) => {
+    const startedAt = performance.now();
     try {
       if (resourceKindFromPath(filePath) !== 'note') {
         const resourceKind = resourceKindFromPath(filePath);
@@ -264,7 +264,17 @@ export function NotebookFolderView({
         }
         return;
       }
+      const indexedId = tree.nodes.get(canonicalPath(filePath))?.memoMeta?.id;
+      const cachedMemo = indexedId
+        ? useMemoStore.getState().memos.find((candidate) => candidate.id === indexedId)
+        : null;
+      if (cachedMemo) {
+        console.info('[perf:file-tree-open] cached memo resolved', { elapsedMs: performance.now() - startedAt, memoId: indexedId });
+        await openMemoSession(cachedMemo, notebook);
+        return;
+      }
       const memo = await resolveMemoByPath(filePath);
+      console.info('[perf:file-tree-open] backend memo resolved', { elapsedMs: performance.now() - startedAt, memoId: memo?.memoId });
       if (memo?.notebookId === notebook.id) {
         // Keep the file-tree entry point aligned with the memo list. Plugin
         // pointer notes (for example mindmaps) must open their artifact
@@ -280,7 +290,7 @@ export function NotebookFolderView({
       logger.warn('opening notebook tree file failed', { error, filePath });
       toast.error(t('memo.fileTree.openFailed'));
     }
-  }, [notebook.id, notebook.path, t]);
+  }, [notebook, t, tree.nodes]);
 
   const openFileInNewTab = useCallback(async (filePath: string) => {
     try {
@@ -333,22 +343,15 @@ export function NotebookFolderView({
           movedPaths.push(movedPath);
           continue;
         }
-        const memo = source.memoId
-          ? { memoId: source.memoId, notebookId: notebook.id }
-          : source.resourceKind && source.resourceKind !== 'note'
-            ? null
-            : await resolveMemoByPath(sourcePath);
-        if (memo) {
-          if (memo.notebookId !== notebook.id) {
-            throw new Error('selected file belongs to another notebook');
-          }
+        const isMarkdownNote = source.resourceKind === 'note'
+          || /\.(md|markdown)$/i.test(sourcePath);
+        if (isMarkdownNote) {
           const moved = await memos.moveMemoToDirectory(
-            memo.memoId,
+            sourcePath,
             notebook.id,
             parentRelativePath,
           );
           movedPaths.push(moved.path);
-          replaceActiveMemoPath(moved.memo.id, moved.path);
         } else {
           const movedPath = await files.move(sourcePath, target, notebook.path);
           movedPaths.push(movedPath);

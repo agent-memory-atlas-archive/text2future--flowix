@@ -1,3 +1,5 @@
+import { getDocumentSession, findDocumentSession, releaseDocumentSession, notifyDocumentSessions } from './document-runtime-session';
+import { hasTitleDraft } from './document-title-session';
 import { scheduleSave } from '@features/document/store/save-queue';
 import { emptyDocumentBuffer, type DocumentBuffer } from '@features/document/store/document-buffer';
 import { canonicalPath } from '@/lib/path';
@@ -8,9 +10,8 @@ import {
   type DocumentIdentity,
 } from '@features/document/store/document-identity';
 import { clearRecoveryDraftThrough } from '@features/document/store/recovery-draft-store';
-import { pinFileDisplayId } from '@features/workspace/store/file-display-store';
+import { pinFileDisplayId } from '@/lib/file-display-registry';
 
-const documentBuffers = new Map<string, DocumentBuffer>();
 
 let currentPath: string | null = null;
 let currentIdentity: DocumentIdentity | null = null;
@@ -49,23 +50,20 @@ export function getCurrentIdentity(): DocumentIdentity | null {
 
 export function getBuffer(identity: DocumentIdentity): DocumentBuffer | undefined {
   const normalized = normalizeDocumentIdentity(identity);
-  return documentBuffers.get(documentIdentityKey(normalized));
+  return findDocumentSession(normalized.displayId)?.buffer;
 }
 
 export function getOrCreateBuffer(identity: DocumentIdentity): DocumentBuffer {
   const normalized = normalizeDocumentIdentity(identity);
-  const key = documentIdentityKey(normalized);
-  const existing = documentBuffers.get(key);
-  if (existing) return existing;
-  const created = emptyDocumentBuffer();
-  documentBuffers.set(key, created);
-  return created;
+  const session = getDocumentSession(normalized);
+  return session.buffer ??= emptyDocumentBuffer();
 }
 
 /** Drop an unowned buffer once its latest revision is safely durable. */
 export function releaseDocumentBuffer(displayId: string): void {
   const key = `md:${displayId}`;
-  const buffer = documentBuffers.get(key);
+  const session = findDocumentSession(displayId);
+  const buffer = session?.buffer;
   if (buffer && (
     buffer.savingRevision !== null
     || (buffer.saveState !== 'clean' && buffer.durableRevision < buffer.capturedRevision)
@@ -75,7 +73,12 @@ export function releaseDocumentBuffer(displayId: string): void {
     currentIdentity = null;
     currentPath = null;
   }
-  documentBuffers.delete(key);
+  if (session) {
+    session.buffer = undefined;
+    session.loaded = false;
+    notifyDocumentSessions();
+  }
+  releaseDocumentSession(displayId);
 }
 
 export function setCurrentDocument(identity: DocumentIdentity | null, path: string | null): void {
@@ -116,7 +119,7 @@ export function hasUnsavedLocalChanges(identity?: DocumentIdentity): boolean {
   if (!target) return false;
   const buf = getBuffer(target);
   if (!buf) return false;
-  return !isDocumentContentEqual(target, buf.content, buf.lastSavedContent);
+  return buf.savingRevision !== null || buf.conflicted || !isDocumentContentEqual(target, buf.content, buf.lastSavedContent);
 }
 
 /**
@@ -135,7 +138,10 @@ export function discardUnsavedLocalChanges(identity: DocumentIdentity): void {
   buf.pendingRevision = null;
   buf.savingRevision = null;
   buf.saveState = 'clean';
-  void clearRecoveryDraftThrough(normalized, buf.savedRevision);
+  buf.saveError = null;
+  buf.conflicted = false;
+  buf.conflictContent = null;
+  void clearRecoveryDraftThrough(normalized, getDocumentSession(normalized).recoveryRevision);
   notifyDocumentBufferChanged(normalized, 'save_settled');
 }
 
@@ -147,17 +153,19 @@ export function applyLoadedContent(
 ): DocumentBuffer {
   if (options?.setAsCurrent !== false) setCurrentDocument(identity, path);
   const buf = getOrCreateBuffer(identity);
+  getDocumentSession(identity).loaded = true;
   const initialContent = options?.preservePending
     ? (buf.pendingContent ?? fullContent)
     : fullContent;
   buf.content = initialContent;
   buf.lastSavedContent = fullContent;
   if (!options?.preservePending) {
+    buf.saveError = null;
+    buf.conflicted = false;
+    buf.conflictContent = null;
     buf.pendingContent = null;
-    buf.editRevision = 0;
-    buf.capturedRevision = 0;
-    buf.durableRevision = 0;
-    buf.savedRevision = 0;
+    buf.durableRevision = buf.capturedRevision;
+    buf.savedRevision = buf.capturedRevision;
     buf.savingRevision = null;
     buf.pendingRevision = null;
     buf.saveState = 'clean';
@@ -185,7 +193,8 @@ export async function flushDocument(
   const normalized = normalizeDocumentIdentity(identity);
   const buf = getBuffer(normalized);
   if (!buf) return true;
-  if (!callbacks?.force && isDocumentContentEqual(normalized, buf.content, buf.lastSavedContent)) {
+  if (buf.conflicted) return false;
+  if (buf.savingRevision === null && !callbacks?.force && isDocumentContentEqual(normalized, buf.content, buf.lastSavedContent)) {
     return true;
   }
 
@@ -197,6 +206,7 @@ export async function flushDocument(
   buf.savingRevision = revision;
   buf.pendingRevision = revision;
   buf.saveState = 'saving';
+  notifyDocumentBufferChanged(normalized, 'save_settled');
 
   const releaseDisplayPin = pinFileDisplayId(normalized.displayId);
   try {
@@ -208,8 +218,15 @@ export async function flushDocument(
       revision,
       scopePath: callbacks?.scopePath ?? null,
       readExpected: () => buf.lastSavedContent,
+      latest: () => ({ content: buf.content, revision: buf.capturedRevision }),
+      isBlocked: () => buf.conflicted,
+      onStarted: (revision) => {
+        buf.savingRevision = revision; buf.saveState = 'saving';
+        notifyDocumentBufferChanged(normalized, 'save_settled');
+      },
       onSaved: (writtenPath, writtenContent, savedRevision) => {
         buf.lastSavedContent = writtenContent;
+        buf.saveError = null;
         buf.savedRevision = Math.max(buf.savedRevision, savedRevision);
         buf.durableRevision = Math.max(buf.durableRevision, savedRevision);
         if (buf.savingRevision === savedRevision) buf.savingRevision = null;
@@ -228,19 +245,25 @@ export async function flushDocument(
         } else {
           buf.saveState = buf.savingRevision !== null ? 'saving' : 'dirty';
         }
-        void clearRecoveryDraftThrough(normalized, buf.savedRevision);
+        if (!hasTitleDraft(normalized.displayId) && buf.saveState === 'clean') {
+          void clearRecoveryDraftThrough({ ...normalized, path: writtenPath }, getDocumentSession(normalized).recoveryRevision);
+        }
         callbacks?.onSaved?.(writtenPath, writtenContent, savedRevision);
         notifyDocumentBufferChanged(normalized, 'save_settled');
       },
       onCasRefused: (written, refusedRevision) => {
-        if (buf.savingRevision === refusedRevision) buf.savingRevision = null;
-        buf.saveState = buf.savingRevision !== null ? 'saving' : 'conflict';
+        // All queued body writes are blocked by this conflict, including a
+        // newer revision queued while the refused request was in flight.
+        buf.savingRevision = null;
+        buf.conflicted = true;
+        buf.saveState = 'conflict';
         callbacks?.onCasRefused?.(written, refusedRevision);
         notifyDocumentBufferChanged(normalized, 'save_settled');
       },
       onError: (written, failedRevision, err) => {
         if (buf.savingRevision === failedRevision) buf.savingRevision = null;
-        buf.saveState = buf.savingRevision !== null ? 'saving' : 'error';
+        buf.saveError = err instanceof Error ? err.message : String(err);
+        buf.saveState = 'error';
         callbacks?.onError?.(written, failedRevision, err);
         notifyDocumentBufferChanged(normalized, 'save_settled');
       },

@@ -30,7 +30,9 @@ export function isWindowsPlatform(): boolean {
  * 事件路径比较都走这里, 不要在其他文件重复定义。
  */
 export function canonicalPath(path: string): string {
-  return path.replace(/\\/g, '/').replace(/\/+/g, '/');
+  const slashes = path.replace(/\\/g, '/');
+  const normalized = slashes.replace(/\/+/g, '/');
+  return slashes.startsWith('//') ? '/' + normalized : normalized;
 }
 
 /** Stable locator key for a local file, independent of any open surface. */

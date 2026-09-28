@@ -1,4 +1,4 @@
-import { beforeAll } from 'vitest';
+import { beforeAll, beforeEach } from 'vitest';
 import { loadLanguage } from '@/lib/i18n';
 
 // i18n 按语言分包后, en-US 走动态 import (独立 chunk); 单测不挂 I18nProvider,
@@ -7,4 +7,9 @@ import { loadLanguage } from '@/lib/i18n';
 // 触发实际加载, 后续文件立即 resolve。
 beforeAll(async () => {
   await loadLanguage('en-US');
+});
+
+// Individual suites may reset this flag on teardown; restore it for every case.
+beforeEach(() => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 });

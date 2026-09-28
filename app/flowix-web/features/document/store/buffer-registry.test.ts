@@ -11,9 +11,23 @@ import {
   registerDocumentCapture,
   captureLatestDocumentContent,
 } from './document-session-service';
-import { subscribeDocumentBufferChanges } from './buffer-registry';
+import { subscribeDocumentBufferChanges, releaseDocumentBuffer } from './buffer-registry';
+import { getDocumentSession, findDocumentSession } from './document-runtime-session';
 
 describe('document buffer change notifications', () => {
+  it('clears the loaded flag when a retained session releases its body', () => {
+    const identity = { kind: 'md' as const, memoId: null, path: '/released.md', displayId: 'display-released-body' };
+    applyLoadedDocumentContent(identity, identity.path, 'body');
+    const runtime = getDocumentSession(identity);
+    const capture = { capture: () => null };
+    runtime.captures.add(capture);
+    releaseDocumentBuffer(identity.displayId);
+    expect(runtime.loaded).toBe(false);
+    expect(runtime.buffer).toBeUndefined();
+    runtime.captures.delete(capture);
+    releaseDocumentBuffer(identity.displayId);
+    expect(findDocumentSession(identity.displayId)).toBeUndefined();
+  });
   it('captures only the requested document host when one is provided', () => {
     const identity = { kind: 'md' as const, memoId: 'memo-capture-host', path: '/memo-capture-host.md', displayId: 'display-capture-host' };
     const mainCapture = vi.fn(() => '# main');

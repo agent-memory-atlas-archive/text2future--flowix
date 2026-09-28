@@ -12,7 +12,7 @@ export function getCurrentThreadCardSource(): AgentConversationSource {
     const notebookId = session?.notebookId ?? useMemoStore.getState().selectedNotebook?.id ?? null;
     return {
       kind: "thread-card",
-      documentPath: session?.path ?? documentState.currentDocumentPath ?? null,
+      documentPath: session?.fileIdentity.path ?? documentState.currentDocumentPath ?? null,
       memoId: session?.memoId ?? null,
       notebookId,
     };

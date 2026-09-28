@@ -3,10 +3,35 @@ use std::collections::HashMap;
 use super::*;
 
 impl MemoFile {
+    pub fn occupied_filenames_in_directory(
+        &self,
+        notebook_id: &str,
+        parent: Option<&str>,
+    ) -> std::io::Result<Vec<String>> {
+        if self.v2_index_is_ready(notebook_id)? {
+            return self.v2_occupied_filenames(notebook_id, parent);
+        }
+        let conn = self.open_memo_index_db_for_notebook_id(notebook_id)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT filename FROM memos WHERE notebook_id = ?1 AND \
+             CASE WHEN relative_path = filename THEN '' \
+             ELSE substr(relative_path, 1, length(relative_path) - length(filename) - 1) END = ?2",
+            )
+            .map_err(sqlite_to_io)?;
+        let rows = stmt
+            .query_map(params![notebook_id, parent.unwrap_or("")], |row| row.get(0))
+            .map_err(sqlite_to_io)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_to_io)
+    }
     /// Read every notebook's memo count from its notebook-local index.
     pub fn memo_counts_by_notebook(&self) -> std::io::Result<HashMap<String, usize>> {
         let mut counts = HashMap::new();
         for notebook in self.read_notebook_configs()? {
+            if self.v2_index_is_ready(&notebook.id)? {
+                counts.insert(notebook.id.clone(), self.v2_note_count(&notebook.id)?);
+                continue;
+            }
             let conn = self.open_memo_index_db_for_notebook_id(&notebook.id)?;
             let count: i64 = conn
                 .query_row(
@@ -243,20 +268,45 @@ impl MemoFile {
         memo: &Memo,
     ) -> std::io::Result<()> {
         let mut conn = self.open_memo_index_db_for_notebook_id(notebook_id)?;
+        let old_path: Option<String> = conn
+            .query_row(
+                "SELECT relative_path FROM memos WHERE notebook_id = ?1 AND id = ?2",
+                params![notebook_id, memo.id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sqlite_to_io)?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sqlite_to_io)?;
         Self::upsert_entry_in_tx(&tx, notebook_id, &Self::memo_to_index_entry(memo))?;
+        let updated_at = chrono::Utc::now().timestamp_millis();
         self.mark_index_state(
             &tx,
             notebook_id,
             MemoIndexFile::default().version,
-            chrono::Utc::now().timestamp_millis(),
+            updated_at,
         )?;
         tx.commit().map_err(sqlite_to_io)?;
+        if let Some(path) = old_path.filter(|path| path != &memo.relative_path) {
+            self.refresh_v2_note_path(notebook_id, &path)?;
+        }
+        self.refresh_v2_note_path(notebook_id, &memo.relative_path)?;
         if self.current_notebook_id_for_index() == notebook_id {
-            let refreshed = self.read_index_from_db(&conn, notebook_id)?;
-            *self.index_cache.write().expect("index_cache poisoned") = refreshed;
+            let mut cache = self.index_cache.write().expect("index_cache poisoned");
+            if let Some(index) = cache.as_mut() {
+                let entry = Self::memo_to_index_entry(memo);
+                if let Some(existing) = index.memos.iter_mut().find(|item| item.id == memo.id) {
+                    *existing = entry;
+                } else {
+                    index.memos.push(entry);
+                }
+                index.last_updated = updated_at;
+            } else {
+                drop(cache);
+                let initialized = self.read_index_from_db(&conn, notebook_id)?;
+                *self.index_cache.write().expect("index_cache poisoned") = initialized;
+            }
         }
         Ok(())
     }
@@ -281,6 +331,14 @@ impl MemoFile {
         memo_id: &str,
     ) -> std::io::Result<()> {
         let mut conn = self.open_memo_index_db_for_notebook_id(notebook_id)?;
+        let old_path: Option<String> = conn
+            .query_row(
+                "SELECT relative_path FROM memos WHERE notebook_id = ?1 AND id = ?2",
+                params![notebook_id, memo_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(sqlite_to_io)?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sqlite_to_io)?;
@@ -296,6 +354,9 @@ impl MemoFile {
             chrono::Utc::now().timestamp_millis(),
         )?;
         tx.commit().map_err(sqlite_to_io)?;
+        if let Some(path) = old_path {
+            self.refresh_v2_note_path(notebook_id, &path)?;
+        }
         if self.current_notebook_id_for_index() == notebook_id {
             let refreshed = self.read_index_from_db(&conn, notebook_id)?;
             *self.index_cache.write().expect("index_cache poisoned") = refreshed;

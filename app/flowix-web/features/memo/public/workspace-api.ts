@@ -23,6 +23,7 @@ export type WorkspaceMemoState = Pick<
   | 'setActivePluginId'
   | 'upsertMemo'
   | 'loadMemos'
+  | 'loadPathNotes'
   | 'loadNotebooks'
 >;
 
@@ -34,6 +35,7 @@ export function getWorkspaceMemoState(): WorkspaceMemoState {
 export function useWorkspaceMemoViewModel() {
   return useMemoStore(useShallow((state) => ({
     selectedNotebook: state.selectedNotebook,
+    startupPhase: state.startupPhase,
     setActiveFilter: state.setActiveFilter,
     setActivePluginId: state.setActivePluginId,
     triggerRefresh: state.triggerRefresh,

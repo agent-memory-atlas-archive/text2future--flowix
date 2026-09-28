@@ -18,6 +18,7 @@ import { useI18n } from '@/lib/i18n';
 import { getMemoColorLabel, MemoCardActions } from '@features/memo/components/memo-card-actions';
 import { memoRepository } from '@features/memo/services/memo-repository';
 import { MEMO_COLORS, MEMO_COLOR_HEX, useMemoStore } from '@features/memo/store/memo-store';
+import { buildNoteOpenLinkFromPath } from '@platform/open-target/path-link';
 import type { MemoColor, MemoItem } from '@/types/memo-item';
 import { resolveMemoByPath } from '@features/memo/use-cases/open-by-target';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, useContextMenuContext } from '@shared/ui/context-menu';
@@ -181,21 +182,22 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   }, [isFolder, isNote, item.fullPath, item.memoMeta?.id]);
 
   const toggleFavorite = useCallback(async (nextMemo: Pick<MemoItem, 'id' | 'favorited'>) => {
-    await (nextMemo.favorited
-      ? memoRepository.unfavorite(nextMemo.id)
-      : memoRepository.favorite(nextMemo.id));
+    const saved = await (nextMemo.favorited
+      ? memoRepository.unfavorite(item.fullPath, nextMemo.id)
+      : memoRepository.favorite(item.fullPath, nextMemo.id));
+    if (!saved) return;
     setMemo((current) => current?.id === nextMemo.id
       ? { ...current, favorited: !nextMemo.favorited }
       : current);
     useMemoStore.getState().triggerRefresh();
-  }, []);
+  }, [item.fullPath]);
 
   const changeColors = useCallback(async (nextMemo: Pick<MemoItem, 'id'>, colors: MemoColor[]) => {
-    await useMemoStore.getState().setMemoColors(nextMemo.id, colors);
+    if (!await memoRepository.setColors(item.fullPath, colors, nextMemo.id)) return;
     setMemo((current) => current?.id === nextMemo.id
       ? { ...current, colors }
       : current);
-  }, []);
+  }, [item.fullPath]);
 
   const requestDelete = useCallback((nextMemo: MemoItem) => {
     window.dispatchEvent(new CustomEvent<MemoItem>('flowix:request-delete-memo', {
@@ -325,7 +327,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
         },
         {
           text: t('document.action.copyLink'),
-          action: () => void navigator.clipboard.writeText(item.fullPath),
+          action: () => void navigator.clipboard.writeText(buildNoteOpenLinkFromPath(item.fullPath, useMemoStore.getState().notebooks) ?? item.fullPath),
         },
         {
           text: t('document.action.copyFullText'),

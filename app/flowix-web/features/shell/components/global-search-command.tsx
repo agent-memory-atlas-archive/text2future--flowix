@@ -587,8 +587,8 @@ function StaticGroups({ onClose }: StaticGroupsProps) {
   const handleNewMemo = async () => {
     if (!selectedNotebook) return;
     try {
-      const memo = await createMemo(undefined, selectedNotebook.id);
-      openMemoSession({ ...memo, isOpen: true }, selectedNotebook);
+      const { memo, initialContent } = await createMemo(undefined, selectedNotebook.id);
+      void openMemoSession({ ...memo, isOpen: true }, selectedNotebook, { initialContent });
     } catch (err) {
       logger.error('create memo failed', { error: err });
     }

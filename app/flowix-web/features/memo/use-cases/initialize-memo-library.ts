@@ -17,14 +17,15 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function performInitialization(): Promise<void> {
+async function performInitialization(startupNotebookId?: string | null): Promise<void> {
   const store = useMemoStore.getState();
   store.setStartupPhase('loading');
 
   try {
     const notebooks = await notebookRepository.list();
     const latestStore = useMemoStore.getState();
-    const persistedNotebookId = latestStore.selectedNotebookId
+    const persistedNotebookId = startupNotebookId
+      ?? latestStore.selectedNotebookId
       ?? latestStore.selectedNotebook?.id
       ?? null;
 
@@ -63,7 +64,7 @@ async function performInitialization(): Promise<void> {
       current.activeCustomFilterId,
     );
 
-    const memoLoadApplied = await current.loadMemos({
+    const memoLoadApplied = await current.loadPathNotes({
       notebookId: selectedNotebook.id,
       filter,
       sort,
@@ -109,10 +110,10 @@ async function performInitialization(): Promise<void> {
   }
 }
 
-export function initializeMemoLibrary(): Promise<void> {
+export function initializeMemoLibrary(startupNotebookId?: string | null): Promise<void> {
   if (initializationPromise) return initializationPromise;
 
-  initializationPromise = performInitialization().finally(() => {
+  initializationPromise = performInitialization(startupNotebookId).finally(() => {
     initializationPromise = null;
   });
   return initializationPromise;

@@ -25,7 +25,7 @@ impl MemoFile {
             .unwrap_or_else(|| "nb_default".to_string())
     }
 
-    pub(super) fn notebook_id_for_index(&self, notebook_id: Option<&str>) -> String {
+    pub(crate) fn notebook_id_for_index(&self, notebook_id: Option<&str>) -> String {
         notebook_id
             .map(str::to_string)
             .unwrap_or_else(|| self.current_notebook_id_for_index())
@@ -1067,30 +1067,39 @@ impl MemoFile {
         memo_id: &str,
     ) -> std::io::Result<Option<MemoContentRevision>> {
         for notebook in self.read_notebook_configs()? {
-            let conn = self.open_memo_index_db_for_notebook_id(&notebook.id)?;
-            let revision = conn
-                .query_row(
-                    "SELECT notebook_id, content_hash, local_revision, change_id, updated_at
-                     FROM memo_content_revisions WHERE memo_id = ?1",
-                    params![memo_id],
-                    |row| {
-                        Ok(MemoContentRevision {
-                            memo_id: memo_id.to_string(),
-                            notebook_id: row.get(0)?,
-                            content_hash: row.get(1)?,
-                            revision: row.get(2)?,
-                            change_id: row.get(3)?,
-                            updated_at: row.get(4)?,
-                        })
-                    },
-                )
-                .optional()
-                .map_err(sqlite_to_io)?;
+            let revision = self.read_memo_content_revision_for_notebook(&notebook.id, memo_id)?;
             if revision.is_some() {
                 return Ok(revision);
             }
         }
         Ok(None)
+    }
+
+    /// Mutation callers already know the notebook. Avoid opening every local
+    /// database, especially for newly created notes with no revision yet.
+    pub fn read_memo_content_revision_for_notebook(
+        &self,
+        notebook_id: &str,
+        memo_id: &str,
+    ) -> std::io::Result<Option<MemoContentRevision>> {
+        let conn = self.open_memo_index_db_for_notebook_id(notebook_id)?;
+        conn.query_row(
+            "SELECT notebook_id, content_hash, local_revision, change_id, updated_at
+                     FROM memo_content_revisions WHERE memo_id = ?1 AND notebook_id = ?2",
+            params![memo_id, notebook_id],
+            |row| {
+                Ok(MemoContentRevision {
+                    memo_id: memo_id.to_string(),
+                    notebook_id: row.get(0)?,
+                    content_hash: row.get(1)?,
+                    revision: row.get(2)?,
+                    change_id: row.get(3)?,
+                    updated_at: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(sqlite_to_io)
     }
 
     pub(super) fn mark_index_state(
@@ -1120,25 +1129,50 @@ impl MemoFile {
         Ok(())
     }
 
-    pub(crate) fn notebook_data_migration_version(
+    pub fn notebook_data_migration_version(
         &self,
         notebook_id: &str,
         migration_key: &str,
     ) -> std::io::Result<Option<u32>> {
+        let read_version = |conn: &Connection| {
+            conn.query_row(
+                "SELECT version FROM notebook_data_migrations
+                 WHERE notebook_id = ?1 AND migration_key = ?2",
+                params![notebook_id, migration_key],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map(|version| version.map(|value| value.max(0) as u32))
+            .map_err(sqlite_to_io)
+        };
+
+        // Completed notebook migrations are checked on every startup. Read
+        // their marker without running the full memo schema setup and legacy
+        // import. A new notebook still takes the normal initialization path.
+        let path = self.notebook_index_db_path(notebook_id)?;
+        if path.is_file() {
+            let conn =
+                Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .map_err(sqlite_to_io)?;
+            conn.busy_timeout(std::time::Duration::from_secs(10))
+                .map_err(sqlite_to_io)?;
+            let has_marker_table: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                     WHERE type = 'table' AND name = 'notebook_data_migrations')",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(sqlite_to_io)?;
+            if has_marker_table {
+                return read_version(&conn);
+            }
+        }
         let conn = self.open_memo_index_db_for_notebook_id(notebook_id)?;
-        self.ensure_memo_tables(&conn)?;
-        conn.query_row(
-            "SELECT version FROM notebook_data_migrations
-             WHERE notebook_id = ?1 AND migration_key = ?2",
-            params![notebook_id, migration_key],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .map(|version| version.map(|value| value.max(0) as u32))
-        .map_err(sqlite_to_io)
+        read_version(&conn)
     }
 
-    pub(crate) fn mark_notebook_data_migration(
+    pub fn mark_notebook_data_migration(
         &self,
         notebook_id: &str,
         migration_key: &str,

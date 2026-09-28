@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 import { STORAGE_KEYS } from '@/lib/constants';
-import type { MemoItem } from '@/types/memo-item';
+import type { MemoItem, PathNoteListItem } from '@/types/memo-item';
 
 export type CustomFilterOperator = 'contains' | 'equals';
 
@@ -36,7 +36,7 @@ function valueParts(value: unknown): string[] {
 }
 
 /** Match user-defined frontmatter properties without changing the file format. */
-export function memoMatchesCustomFilter(memo: MemoItem, filter: CustomFilter): boolean {
+export function memoMatchesCustomFilter(memo: Pick<MemoItem | PathNoteListItem, 'properties'>, filter: CustomFilter): boolean {
   const actualValues = valueParts(memo.properties?.[filter.key]);
   const expected = filter.value.trim();
   if (!expected || actualValues.length === 0) return false;

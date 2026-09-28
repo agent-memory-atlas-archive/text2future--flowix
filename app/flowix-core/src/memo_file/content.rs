@@ -1,8 +1,8 @@
 //! Markdown reads, memo list queries, and filters.
 //!
-//! Current-notebook methods are used by watcher/reconcile flows. Global methods
-//! resolve a memo id through `index.db` and should be used for user-facing
-//! navigation and document operations.
+//! Current-notebook methods support watcher and legacy reconciliation flows.
+//! Global memo-ID lookups remain for compatibility callers. Normal notebook
+//! lists and path-based document operations use the V2 projection instead.
 
 use std::collections::HashSet;
 use std::fs;
@@ -53,6 +53,14 @@ impl MemoFile {
 
     /// 读 memo index 全表, 转 `Memo`, 按 `created_at` 倒序。
     pub fn read_all_memos(&self) -> Vec<Memo> {
+        let notebook_id = self.current_notebook_id_for_index();
+        if let Ok(Some(entries)) = self.v2_list_entries_with_legacy_ids(&notebook_id) {
+            return Self::memos_from_index(super::types::MemoIndexFile {
+                version: 2,
+                last_updated: chrono::Utc::now().timestamp_millis(),
+                memos: entries,
+            });
+        }
         let list = match self.read_index() {
             Some(l) => l,
             None => return Vec::new(),
@@ -61,6 +69,14 @@ impl MemoFile {
     }
 
     pub fn read_all_memos_for_notebook_id(&self, notebook_id: Option<&str>) -> Vec<Memo> {
+        let resolved_id = self.notebook_id_for_index(notebook_id);
+        if let Ok(Some(entries)) = self.v2_list_entries_with_legacy_ids(&resolved_id) {
+            return Self::memos_from_index(super::types::MemoIndexFile {
+                version: 2,
+                last_updated: chrono::Utc::now().timestamp_millis(),
+                memos: entries,
+            });
+        }
         let list = match self.read_index_for_notebook_id(notebook_id) {
             Ok(Some(list)) => list,
             _ => return Vec::new(),

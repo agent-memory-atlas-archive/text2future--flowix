@@ -19,8 +19,8 @@ import {
   getDocumentEditorMode,
   setDocumentEditorMode,
 } from '@features/document/public/shell-api';
-import { documentIdentityFromFile } from '@features/document/store/document-identity';
-import { requireFileDisplayIdentity } from '@features/workspace/store/file-display-store';
+import { documentIdentityFromFile } from '@features/document/public/shell-api';
+import { requireFileDisplayIdentity } from '@/lib/file-display-registry';
 import {
   BrowserColumnSurfaceHost,
   getBrowserColumnSurfaceDefinition,

@@ -31,6 +31,7 @@ pub struct ResolvedOpenTarget {
     pub absolute_path: String,
     /// memo filename (鐢ㄤ簬 stale check / 鍓嶇鏄剧ず)
     pub memo_title: String,
+    pub heading: Option<String>,
 }
 
 #[derive(Debug, Error, Serialize)]
@@ -41,6 +42,8 @@ pub enum ResolveError {
     NotebookNotFound(String),
     #[error("no memo id resolvable from target")]
     NoMemoId,
+    #[error("ambiguous notebook name: {0}")]
+    AmbiguousNotebook(String),
 }
 
 pub fn resolve_open_target(
@@ -54,6 +57,45 @@ pub fn resolve_open_target(
 
     if configs.is_empty() {
         return Err(ResolveError::NotebookNotFound("<no notebook>".into()));
+    }
+
+    if let OpenTarget::NotebookPath {
+        book,
+        file,
+        heading,
+    } = &target
+    {
+        let matching: Vec<_> = configs.iter().filter(|cfg| cfg.name == *book).collect();
+        if matching.len() > 1 {
+            return Err(ResolveError::AmbiguousNotebook(book.clone()));
+        }
+        let cfg = matching
+            .first()
+            .ok_or_else(|| ResolveError::NotebookNotFound(book.clone()))?;
+        let relative = if file.to_ascii_lowercase().ends_with(".md") {
+            file.clone()
+        } else {
+            format!("{file}.md")
+        };
+        let base = Path::new(&cfg.path);
+        let path = flowix_core::memo_file::notebook_path_from_relative(base, &relative)
+            .map_err(ResolveError::NotFound)?;
+        if !path.is_file() || is_ignored_notebook_path(&configs, &path) {
+            return Err(ResolveError::NotFound(relative));
+        }
+        let canonical =
+            dunce::canonicalize(&path).map_err(|_| ResolveError::NotFound(relative.clone()))?;
+        let canonical_base =
+            dunce::canonicalize(base).map_err(|_| ResolveError::NotebookNotFound(book.clone()))?;
+        if !canonical.starts_with(&canonical_base) {
+            return Err(ResolveError::NotFound(relative));
+        }
+        let memo = read_lock(memo_file, "memo_file")
+            .register_existing_file_for_notebook_id(&cfg.id, &path)
+            .map_err(|_| ResolveError::NotFound(file.clone()))?;
+        let mut resolved = build_resolved(memo, cfg, path.display().to_string());
+        resolved.heading = heading.clone();
+        return Ok(resolved);
     }
 
     // 1. 物理�?��模式: �?filename 反查 memo index �? 必须�??传入�?��
@@ -156,6 +198,7 @@ fn build_resolved(
         notebook_path: cfg.path.clone(),
         absolute_path: abs_path,
         memo_title: memo.filename,
+        heading: None,
     }
 }
 
@@ -208,6 +251,7 @@ fn find_memo_by_path_in_notebooks(
 
 fn extract_memo_id(target: &OpenTarget) -> Option<String> {
     match target {
+        OpenTarget::NotebookPath { .. } => None,
         OpenTarget::DeepLink { memo_id, .. } => memo_id.clone(),
         OpenTarget::PhysicalPath { memo_id, .. } => memo_id.clone(),
     }
@@ -215,6 +259,7 @@ fn extract_memo_id(target: &OpenTarget) -> Option<String> {
 
 fn target_physical_path(target: &OpenTarget) -> Option<String> {
     match target {
+        OpenTarget::NotebookPath { .. } => None,
         OpenTarget::PhysicalPath { path, .. } => Some(path.clone()),
         OpenTarget::DeepLink { physical_path, .. } => physical_path.clone(),
     }
@@ -311,6 +356,53 @@ mod tests {
             normalize_for_compare(Path::new(&resolved.absolute_path)),
             normalize_for_compare(&path_two)
         );
+    }
+
+    #[test]
+    fn notebook_path_resolves_exact_nested_file_without_frontmatter_id() {
+        let (memo_file, nb_one, _) = fresh_memo_file();
+        let nested = nb_one.join("Projects");
+        fs::create_dir_all(&nested).unwrap();
+        let path = nested.join("Plan.md");
+        fs::write(&path, "# Goals\n").unwrap();
+        let target = super::super::parser::parse_open_target(
+            "flowix://open?book=One&file=Projects%2FPlan%23Goals",
+        )
+        .unwrap();
+        let resolved = resolve_open_target(target, &memo_file).unwrap();
+        assert_eq!(resolved.absolute_path, path.display().to_string());
+        assert_eq!(resolved.heading.as_deref(), Some("Goals"));
+        assert_eq!(fs::read_to_string(path).unwrap(), "# Goals\n");
+        assert!(resolve_open_target(
+            OpenTarget::NotebookPath {
+                book: "One".into(),
+                file: "../notebook-two/Secret.md".into(),
+                heading: None,
+            },
+            &memo_file
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn notebook_path_rejects_ambiguous_book_names() {
+        let (memo_file, nb_one, _) = fresh_memo_file();
+        fs::write(nb_one.join("Plan.md"), "# Plan\n").unwrap();
+        {
+            let store = read_lock(&memo_file, "memo_file");
+            let mut configs = store.read_notebook_configs().unwrap();
+            configs[1].name = "One".into();
+            store.write_notebook_configs(&configs).unwrap();
+        }
+        let result = resolve_open_target(
+            OpenTarget::NotebookPath {
+                book: "One".into(),
+                file: "Plan.md".into(),
+                heading: None,
+            },
+            &memo_file,
+        );
+        assert!(matches!(result, Err(ResolveError::AmbiguousNotebook(_))));
     }
 
     #[test]

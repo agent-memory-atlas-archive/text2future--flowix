@@ -15,14 +15,13 @@ import {
   useBrowserColumnStore,
   type BrowserColumnTab,
 } from '@features/workspace/store/browser-column-store';
-import { documentIdentityFromFile } from '@features/document/store/document-identity';
+import { documentIdentityFromFile } from '@features/document/public/workspace-api';
 import {
   findFileDisplayId,
   ensureFileDisplayIdentity,
   suspendFileDisplayReconciliation,
-} from '@features/workspace/store/file-display-store';
-import { documentIdentityKey } from '@features/document/store/document-identity';
-import { waitForSaveQueue } from '@features/document/store/save-queue';
+} from '@/lib/file-display-registry';
+import { waitForWorkspaceDocumentSaves } from '@features/document/public/workspace-api';
 import {
   getWorkspaceMemoState,
   setCurrentWorkspaceNotebook,
@@ -98,20 +97,10 @@ export interface OpenArtifactTargetParams {
 
 type RetryAction = () => Promise<void>;
 
-interface DocumentSnapshot {
-  activeMemoSession: {
-    memoId: string;
-    path: string;
-    notebookId: string | null;
-    notebookPath: string | null;
-    transitionId: number;
-  } | null;
-  activeExternalSession: {
-    path: string;
-    scopePath: string | null;
-  } | null;
-  activeAgentConversationId: string | null;
-}
+type DocumentSnapshot = Pick<
+  ReturnType<typeof getWorkspaceDocumentState>,
+  'activeMemoSession' | 'activeExternalSession' | 'activeAgentConversationId'
+>;
 
 const retryActions = new Map<string, RetryAction>();
 let retrySequence = 0;
@@ -353,25 +342,8 @@ async function runNavigation(
 }
 
 function captureDocumentSnapshot(): DocumentSnapshot {
-  const document = getWorkspaceDocumentState();
-  return {
-    activeMemoSession: document.activeMemoSession
-      ? {
-          memoId: document.activeMemoSession.memoId,
-          path: document.activeMemoSession.fileIdentity.path,
-          notebookId: document.activeMemoSession.notebookId,
-          notebookPath: document.activeMemoSession.notebookPath,
-          transitionId: document.activeMemoSession.transitionId,
-        }
-      : null,
-    activeExternalSession: document.activeExternalSession
-      ? {
-          path: document.activeExternalSession.fileIdentity.path,
-          scopePath: document.activeExternalSession.scopePath,
-        }
-      : null,
-    activeAgentConversationId: document.activeAgentConversationId,
-  };
+  const { activeMemoSession, activeExternalSession, activeAgentConversationId } = getWorkspaceDocumentState();
+  return { activeMemoSession, activeExternalSession, activeAgentConversationId };
 }
 
 export function historyEntryFromWorkColumnTarget(
@@ -452,7 +424,7 @@ async function restoreDocumentSnapshot(snapshot: DocumentSnapshot): Promise<void
   if (snapshot.activeMemoSession) {
     await getWorkspaceDocumentState().openMemoDocument({
       memoId: snapshot.activeMemoSession.memoId,
-      path: snapshot.activeMemoSession.path,
+      path: snapshot.activeMemoSession.fileIdentity.path,
       notebookId: snapshot.activeMemoSession.notebookId,
       notebookPath: snapshot.activeMemoSession.notebookPath,
     });
@@ -460,7 +432,7 @@ async function restoreDocumentSnapshot(snapshot: DocumentSnapshot): Promise<void
   }
   if (snapshot.activeExternalSession) {
     await getWorkspaceDocumentState().openExternalDocument(
-      snapshot.activeExternalSession.path,
+      snapshot.activeExternalSession.fileIdentity.path,
       { scopePath: snapshot.activeExternalSession.scopePath },
     );
     return;
@@ -520,7 +492,7 @@ export async function selectNotebook(notebook: Notebook): Promise<void> {
         if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
 
         getWorkspaceMemoState().setSelectedNotebook(notebook);
-        await getWorkspaceMemoState().loadMemos({ notebookId: notebook.id });
+        await getWorkspaceMemoState().loadPathNotes({ notebookId: notebook.id });
         if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
         if (clearPreviousTarget) {
           await getWorkspaceDocumentState().clearDocument();
@@ -612,7 +584,7 @@ export async function openMemoTarget(
         memoPath,
         activeExternal.scopePath,
       );
-      if (!flushed || !await waitForSaveQueue(documentIdentityKey(externalIdentity))) {
+      if (!flushed || !await waitForWorkspaceDocumentSaves(externalIdentity)) {
         throw new Error('Memo open cancelled because the external document save did not complete');
       }
     }
@@ -641,7 +613,7 @@ export async function openMemoTarget(
           ensureFileDisplayIdentity(memoPath),
           params.memoId,
         );
-        if (!await waitForSaveQueue(documentIdentityKey(runtimeIdentity))) {
+        if (!await waitForWorkspaceDocumentSaves(runtimeIdentity)) {
           throw new Error('Memo open cancelled because the external document save did not complete');
         }
         const tab = useBrowserColumnStore.getState().tabs.find(
@@ -702,14 +674,15 @@ export async function openMemoTarget(
           getWorkspaceMemoState().setSelectedNotebook(targetNotebook);
           if (!isCurrentNavigation(requestId)) return;
         }
-        await getWorkspaceMemoState().loadMemos({ notebookId });
+        await getWorkspaceMemoState().loadPathNotes({ notebookId });
         if (!isCurrentNavigation(requestId)) return;
       }
 
       if (!isCurrentNavigation(requestId)) return;
       if (memo) {
         const latest = getWorkspaceMemoState();
-        latest.upsertMemo(memo);
+        // Create already inserted its authoritative item before navigation.
+        if (params.initialContent === undefined) latest.upsertMemo(memo);
         latest.setSelectedMemo(memo);
         if (!isCurrentNavigation(requestId)) return;
 
@@ -718,7 +691,7 @@ export async function openMemoTarget(
         // main thread before the selected card background got a paint. Keep
         // the selection responsive and start the document transition after
         // that visual update has actually had a chance to render.
-        await waitForSelectionPaint();
+        if (params.initialContent === undefined) await waitForSelectionPaint();
         if (!isCurrentNavigation(requestId)) return;
       }
 
@@ -1246,7 +1219,7 @@ export async function reconcileDeletedNotebook(
       getWorkspaceMemoState().setSelectedNotebook(nextNotebook);
       getWorkspaceMemoState().setSelectedMemo(null);
       if (nextNotebook) {
-        await getWorkspaceMemoState().loadMemos({ notebookId: nextNotebook.id });
+        await getWorkspaceMemoState().loadPathNotes({ notebookId: nextNotebook.id });
         if (!isCurrentNavigation(requestId)) return;
       } else {
         getWorkspaceMemoState().setMemos([]);

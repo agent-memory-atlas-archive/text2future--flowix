@@ -14,6 +14,7 @@ import { useI18n } from '@/lib/i18n';
 import { toast } from '@/lib/toast';
 import { Tooltip } from '@shared/ui/tooltip';
 import { AgentIcon } from '@features/agent/components/agent-icon';
+import { useMemoStore } from '@features/memo/store/memo-store';
 
 interface AgentConversationStatusEntry {
   instance: AgentConversationInstance;
@@ -24,8 +25,12 @@ function conversationStatusEntries(
   instances: Record<string, AgentConversationInstance>,
   runSignatures: Record<string, string>,
   unreadInstanceIds: ReadonlySet<string>,
+  notebookId: string | null = null,
+  threadTombstones: Readonly<Record<string, boolean>> = {},
 ): AgentConversationStatusEntry[] {
   return Object.values(instances)
+    .filter((instance) => !notebookId || instance.source?.notebookId === notebookId)
+    .filter((instance) => !instance.threadId || !threadTombstones[instance.threadId])
     .map((instance) => ({
       instance,
       run: getConversationRunSummary(runSignatures, instance.threadId),
@@ -54,6 +59,8 @@ export function AgentConversationStatusBar() {
   const runSignatures = useAgentSessionStore((state) => state.threadRunSignatures);
   const latestCompletedRunIds = useAgentSessionStore((state) => state.latestCompletedRunIds);
   const readThroughRunIds = useAgentSessionStore((state) => state.readThroughRunIds);
+  const threadTombstones = useAgentSessionStore((state) => state.threadTombstones);
+  const notebookId = useMemoStore((state) => state.selectedNotebook?.id ?? null);
   const markThreadRead = useAgentSessionStore((state) => state.markThreadRead);
   const selectedInstanceId = useWorkspaceRestoreStore(
     (state) => state.agentConversation.selectedInstanceId,
@@ -93,8 +100,10 @@ export function AgentConversationStatusBar() {
       .filter((instance) => instance.threadId
         && latestCompletedRunIds[instance.threadId] !== readThroughRunIds[instance.threadId])
         .map((instance) => instance.instanceId)),
+      notebookId,
+      threadTombstones,
     ),
-    [instances, latestCompletedRunIds, readThroughRunIds, runSignatures],
+    [instances, latestCompletedRunIds, notebookId, readThroughRunIds, runSignatures, threadTombstones],
   );
 
   if (entries.length === 0) return null;

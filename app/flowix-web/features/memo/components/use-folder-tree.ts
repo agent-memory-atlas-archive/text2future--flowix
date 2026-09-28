@@ -115,7 +115,7 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
   const [nodes, setNodes] = useState<Map<string, DocTreeItem>>(() => new Map());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [dirtyDirectories, setDirtyDirectories] = useState<Set<string>>(() => new Set());
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // 请求代际: 每次 folderPath 变化 / 手动刷新自增, 迟到响应按代丢弃。
   const generationRef = useRef(0);

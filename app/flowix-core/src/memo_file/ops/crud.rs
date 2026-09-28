@@ -139,51 +139,31 @@ impl MemoFile {
         let id = self.generate_global_memo_id();
         let now = chrono::Utc::now().timestamp_millis();
         let candidate = base_filename(title);
-        // 读 memo index 拿已占用 filenames ── 跟 `fs::exists` 双维度检测冲突,
-        // 杜绝并发 create_memo 写到同一文件 (前一个 entry 已 memo index
-        // 但磁盘文件被覆盖)。
-        let mut occupied: Vec<String> = self
-            .read_index_for_notebook_id(Some(&resolved_notebook_id))?
-            .unwrap_or_default()
-            .memos
-            .into_iter()
-            .filter(|entry| {
-                let parent = entry
-                    .relative_path
-                    .rsplit_once('/')
-                    .map(|(parent, _)| parent);
-                parent == parent_relative_path.filter(|path| !path.is_empty())
-            })
-            .map(|entry| entry.filename)
-            .collect();
+        // Check indexed names as well as disk existence before atomically
+        // creating a new Markdown file.
+        let mut occupied = self.occupied_filenames_in_directory(
+            &resolved_notebook_id,
+            parent_relative_path.filter(|path| !path.is_empty()),
+        )?;
 
-        // A newly created memo is an explicit import/copy boundary: the
-        // generated canonical id must replace an id carried by source Markdown.
-        let overrides: MergeOverrides = [(CANONICAL_FRONTMATTER_KEY.to_string(), id.clone())]
-            .into_iter()
-            .collect();
-        let content_with_key = if super::super::frontmatter::FRONTMATTER_RE.is_match(body) {
-            merge_frontmatter(body, &overrides)
-        } else {
-            build_md_content(&id, body)
-        };
+        // Markdown owns content and properties; cache IDs are never stamped into files.
+        let prepared_content = super::super::frontmatter::without_flowix_key(body);
         let initial_content = match tag {
             Some(tag) if !tag.trim().is_empty() => {
-                let mut tags = extract_document_metadata(&content_with_key)
+                let mut tags = extract_document_metadata(&prepared_content)
                     .map_err(|error| {
                         std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
                     })?
                     .tags;
                 tags.push(tag.to_string());
-                replace_frontmatter_tags(&content_with_key, &tags).map_err(|error| {
+                replace_frontmatter_tags(&prepared_content, &tags).map_err(|error| {
                     std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
                 })?
             }
-            _ => content_with_key,
+            _ => prepared_content,
         };
         validate_document_frontmatter(&initial_content)?;
-        let persisted_id =
-            super::super::frontmatter::extract_frontmatter_key(&initial_content).unwrap_or(id);
+        let persisted_id = id;
         if mark_external_create {
             self.mark_pending_external_memo_create(&persisted_id, &resolved_notebook_id)?;
         }
@@ -229,12 +209,8 @@ impl MemoFile {
         {
             let path = notebook_path_from_relative(&base, &memo.relative_path)
                 .map_err(std::io::Error::other)?;
-            if fs::read_to_string(&path)
-                .ok()
-                .and_then(|content| super::super::frontmatter::extract_frontmatter_key(&content))
-                .as_deref()
-                == Some(memo.id.as_str())
-            {
+            // Remove only the bytes this create published, never an external replacement.
+            if fs::read_to_string(&path).ok().as_deref() == Some(initial_content.as_str()) {
                 let _ = fs::remove_file(path);
             }
             if mark_external_create {
@@ -250,14 +226,14 @@ impl MemoFile {
     /// 冲突自动追加 `-1` / `-2`。
     pub fn rename_memo(&self, id: &str, new_title: &str) -> std::io::Result<Memo> {
         let _index_io_guard = self.current_index_io.lock().expect("index_io poisoned");
-        self.ensure_dirs()?;
-
-        let mut memo = self.read_current_memo(id).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, format!("memo {id} not found"))
-        })?;
+        let location = self
+            .resolve_memo_location(id)?
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "memo not found"))?;
+        let notebook_id = location.notebook.id;
+        let base = PathBuf::from(location.notebook.path);
+        let mut memo = MemoFile::index_entry_to_memo(&location.memo);
         let old_filename = memo.filename.clone();
         let old_relative_path = memo.relative_path.clone();
-        let base = self.get_memo_base();
         let parent_relative = std::path::Path::new(&old_relative_path)
             .parent()
             .unwrap_or(std::path::Path::new(""))
@@ -272,7 +248,7 @@ impl MemoFile {
             // 锁内读 memo index: 跟 create_memo 同款, 排除本 memo 自身
             // (rename 自己的 entry 也占着 old_filename, 不应触发冲突)。
             let occupied: Vec<String> = self
-                .read_index()
+                .read_index_for_notebook_id(Some(&notebook_id))?
                 .map(|l| {
                     l.memos
                         .into_iter()
@@ -301,17 +277,14 @@ impl MemoFile {
 
         let path = notebook_path_from_relative(&base, &new_relative_path)
             .map_err(std::io::Error::other)?;
-        let existing = fs::read_to_string(&path).unwrap_or_default();
-        let overrides: MergeOverrides =
-            [("key".to_string(), memo.id.clone())].into_iter().collect();
-        let new_content = merge_frontmatter(&existing, &overrides);
-        atomic_write_bytes(&path, new_content.as_bytes())?;
+        let existing = fs::read_to_string(&path)?;
+        let new_content = existing;
 
         memo.filename = new_filename;
         memo.relative_path = new_relative_path;
         memo.updated_at = chrono::Utc::now().timestamp_millis();
         apply_derived_memo_fields(&mut memo, &new_content);
-        MemoFile::sync_index_on_write_locked(self, &memo)?;
+        MemoFile::sync_index_on_write_for_notebook_id_locked(self, &notebook_id, &memo)?;
         Ok(memo)
     }
 
@@ -338,12 +311,11 @@ impl MemoFile {
         fs::create_dir_all(base.join("attachments"))?;
 
         let mut memo = MemoFile::index_entry_to_memo(&location.memo);
-        let overrides: MergeOverrides =
-            [("key".to_string(), memo.id.clone())].into_iter().collect();
-        let merged = merge_frontmatter(body, &overrides);
+        let merged = body.to_string();
         validate_document_frontmatter(&merged)?;
         let path = notebook_path_from_relative(&base, &memo.relative_path)
             .map_err(std::io::Error::other)?;
+        fs::metadata(&path)?;
         atomic_write_bytes(&path, merged.as_bytes())?;
 
         memo.updated_at = chrono::Utc::now().timestamp_millis();
@@ -358,12 +330,11 @@ impl MemoFile {
         let mut memo = self.read_current_memo(id).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::NotFound, format!("memo {id} not found"))
         })?;
-        let overrides: MergeOverrides =
-            [("key".to_string(), memo.id.clone())].into_iter().collect();
-        let merged = merge_frontmatter(body, &overrides);
+        let merged = body.to_string();
         validate_document_frontmatter(&merged)?;
         let path = notebook_path_from_relative(&self.get_memo_base(), &memo.relative_path)
             .map_err(std::io::Error::other)?;
+        fs::metadata(&path)?;
         atomic_write_bytes(&path, merged.as_bytes())?;
 
         memo.updated_at = chrono::Utc::now().timestamp_millis();
@@ -395,7 +366,7 @@ impl MemoFile {
         // 抽最终磁盘内容(同锁内, 写盘已完成, 文件可读)
         let path = notebook_path_from_relative(&self.get_memo_base(), &memo.relative_path)
             .map_err(std::io::Error::other)?;
-        let final_content = fs::read_to_string(&path).unwrap_or_default();
+        let final_content = fs::read_to_string(&path)?;
         let (derived_title, _) = extract_title_and_preview(&final_content);
         let derived_title = if derived_title.is_empty() {
             "Untitled Memo"
@@ -454,13 +425,11 @@ impl MemoFile {
             }
         }
 
-        // 重写新路径的 frontmatter, 锁内保证 frontmatter key == id
+        // 读取新路径的原始内容，再更新内部索引中的相对路径。
         let new_path = notebook_path_from_relative(&self.get_memo_base(), &new_relative_path)
             .map_err(std::io::Error::other)?;
-        let existing = fs::read_to_string(&new_path).unwrap_or_default();
-        let overrides: MergeOverrides =
-            [("key".to_string(), memo.id.clone())].into_iter().collect();
-        let new_content = merge_frontmatter(&existing, &overrides);
+        let existing = fs::read_to_string(&new_path)?;
+        let new_content = existing;
         atomic_write_bytes(&new_path, new_content.as_bytes())?;
 
         let mut updated = memo;
@@ -488,19 +457,18 @@ impl MemoFile {
         fs::create_dir_all(base.join("attachments"))?;
 
         let mut memo = MemoFile::index_entry_to_memo(&location.memo);
-        let overrides: MergeOverrides =
-            [("key".to_string(), memo.id.clone())].into_iter().collect();
-        let merged = merge_frontmatter(body, &overrides);
+        let merged = body.to_string();
         validate_document_frontmatter(&merged)?;
         let path = notebook_path_from_relative(&base, &memo.relative_path)
             .map_err(std::io::Error::other)?;
+        fs::metadata(&path)?;
         atomic_write_bytes(&path, merged.as_bytes())?;
 
         memo.updated_at = chrono::Utc::now().timestamp_millis();
         apply_derived_memo_fields(&mut memo, &merged);
         MemoFile::sync_index_on_write_for_notebook_id_locked(self, &notebook_id, &memo)?;
 
-        let final_content = fs::read_to_string(&path).unwrap_or_default();
+        let final_content = fs::read_to_string(&path)?;
         let (derived_title, _) = extract_title_and_preview(&final_content);
         let derived_title = if derived_title.is_empty() {
             "Untitled Memo"
@@ -553,10 +521,8 @@ impl MemoFile {
 
         let new_path = notebook_path_from_relative(&base, &new_relative_path)
             .map_err(std::io::Error::other)?;
-        let existing = fs::read_to_string(&new_path).unwrap_or_default();
-        let overrides: MergeOverrides =
-            [("key".to_string(), memo.id.clone())].into_iter().collect();
-        let new_content = merge_frontmatter(&existing, &overrides);
+        let existing = fs::read_to_string(&new_path)?;
+        let new_content = existing;
         atomic_write_bytes(&new_path, new_content.as_bytes())?;
 
         let mut updated = memo;

@@ -1,6 +1,62 @@
 use super::*;
 
 impl MemoFile {
+    /// Move a file or directory and rebase every indexed child before releasing
+    /// the write lock. Return before/after pairs for desktop path notifications.
+    pub fn rename_indexed_path(
+        &self,
+        source: &Path,
+        target: &Path,
+    ) -> std::io::Result<Vec<(String, Memo, Memo)>> {
+        let _process_guard = self.acquire_cross_process_write_lock()?;
+        let _guard = self.current_index_io.lock().expect("index_io poisoned");
+        let mut changes = Vec::new();
+        for notebook in self.read_notebook_configs()? {
+            let base = PathBuf::from(&notebook.path);
+            for before in self.read_all_memos_for_notebook_id(Some(&notebook.id)) {
+                let old = notebook_path_from_relative(&base, &before.relative_path)
+                    .map_err(std::io::Error::other)?;
+                let Ok(suffix) = old.strip_prefix(source) else {
+                    continue;
+                };
+                let next = if suffix.as_os_str().is_empty() {
+                    target.to_path_buf()
+                } else {
+                    target.join(suffix)
+                };
+                let relative =
+                    notebook_relative_path(&base, &next).map_err(std::io::Error::other)?;
+                if self
+                    .find_memo_by_relative_path_for_notebook_id(&notebook.id, &relative)
+                    .is_some_and(|m| m.id != before.id)
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::AlreadyExists,
+                        "destination is already indexed",
+                    ));
+                }
+                let mut after = before.clone();
+                after.filename = filename_from_notebook_relative_path(&relative);
+                after.relative_path = relative;
+                changes.push((notebook.id.clone(), before, after));
+            }
+        }
+        rename_file_noclobber(source, target)?;
+        for (notebook, _, after) in &changes {
+            if let Err(error) =
+                Self::sync_index_on_write_for_notebook_id_locked(self, notebook, after)
+            {
+                // Restore the original address on a failed index commit.
+                rename_file_noclobber(target, source)?;
+                for (notebook, before, _) in &changes {
+                    Self::sync_index_on_write_for_notebook_id_locked(self, notebook, before)?;
+                }
+                return Err(error);
+            }
+        }
+        Ok(changes)
+    }
+
     /// 启动 / 切 notebook 时调用: 递归扫描 notebook 内 .md, 把 memo index 没记录的补进来。
     /// **不**重命名磁盘文件, 保留外部工具的句柄。
     /// 跳过 notebook 内部目录; 已在 memo index 里的 .md 跳过 (按 filename 精确比对)。
@@ -180,8 +236,8 @@ impl MemoFile {
         self.reconcile_notebook_with_disk_bidirectional_inner(notebook_id)
     }
 
-    /// Reconcile a newly imported notebook. Every imported Markdown file gets
-    /// a Flowix frontmatter key; an existing conflicting key is re-keyed.
+    /// Reconcile a newly imported notebook by path. Markdown content is not
+    /// stamped with an identity field.
     pub fn reconcile_notebook_with_disk_bidirectional_for_import(
         &self,
         notebook_id: &str,
@@ -484,10 +540,6 @@ impl MemoFile {
         let colors = serde_json::to_string(&memo.colors).map_err(std::io::Error::other)?;
         let icon = serde_json::to_string(&memo.icon).map_err(std::io::Error::other)?;
         let mut overrides: MergeOverrides = [
-            // Ordinary metadata saves also perform the legacy identity
-            // migration: an existing valid `flowix_key` is preserved, while
-            // a legacy-only note copies its `key` value into `flowix_key`.
-            ("key".to_string(), memo.id.clone()),
             ("flowix_favorited".to_string(), memo.favorited.to_string()),
             ("flowix_icon".to_string(), icon),
             ("flowix_colors".to_string(), colors),
@@ -568,6 +620,14 @@ impl MemoFile {
         abs_path: &Path,
     ) -> bool {
         let _index_io_guard = self.current_index_io.lock().expect("index_io poisoned");
+        // A delayed Remove may outlive a watcher suspension. If the path has
+        // reappeared, it is no longer a deletion of the indexed document.
+        // Inspect symlinks too; a dangling link must not delete an index row.
+        match std::fs::symlink_metadata(abs_path) {
+            Ok(_) => return false,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return false,
+        }
         let Ok(base) = self.memo_base_for_notebook_id_result(notebook_id) else {
             return false;
         };
@@ -816,7 +876,7 @@ impl MemoFile {
     }
 
     /// Move one indexed memo into an existing notebook directory while keeping
-    /// its frontmatter key and memo id unchanged.
+    /// its internal cache ID associated with the new relative path.
     pub fn move_memo_to_directory_for_notebook_id(
         &self,
         notebook_id: &str,

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { cloudSyncErrorMessage, isInvalidRefreshTokenError } from '@platform/tauri/errors';
+import { cloudSyncErrorMessage, hasTauriErrorCode, isInvalidRefreshTokenError, tauriErrorMessage } from '@platform/tauri/errors';
+
+it('reads structured IPC errors without matching incidental codes in their message', () => {
+  const error = { code: 'IO_ERROR', message: 'NOT_FOUND appears in a filename' };
+  expect(tauriErrorMessage(error)).toBe(error.message);
+  expect(hasTauriErrorCode(error, 'IO_ERROR')).toBe(true);
+  expect(hasTauriErrorCode(error, 'NOT_FOUND')).toBe(false);
+  expect(tauriErrorMessage(new Error('failed'))).toBe('failed');
+});
 
 describe('cloudSyncErrorMessage', () => {
   const t = (key: string, params?: Record<string, string | number>) =>

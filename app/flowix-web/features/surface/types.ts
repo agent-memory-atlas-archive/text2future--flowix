@@ -9,7 +9,7 @@ import type { PluginArtifactRendererId } from '@features/plugin/plugin-note';
 import type { MemoItem } from '@/types/memo-item';
 import type { PluginDescriptor } from '@platform/tauri/client';
 import type { WorkColumnNavigationState } from '@features/workspace/store/work-column-target';
-import type { FileDisplayIdentity } from '@features/workspace/store/file-display-store';
+import type { FileDisplayIdentity } from '@/lib/file-display-registry';
 
 export type WorkColumnSurfaceCapability =
   | 'edit'

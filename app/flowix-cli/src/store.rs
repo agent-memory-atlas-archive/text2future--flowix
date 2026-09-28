@@ -97,16 +97,8 @@ pub fn find_notebook<'a>(configs: &'a [NotebookConfig], key: &str) -> Option<&'a
 
 /// 给定 notebook key, 构造一个 set_current_notebook 完的 MemoFile。
 pub(crate) fn open_in(notebook_key: &str) -> Result<(MemoFile, NotebookConfig), CliError> {
-    let mf = open()?;
-    let configs = read_notebook_configs_strict(&mf)?;
-    let nb = find_notebook(&configs, notebook_key)
-        .ok_or_else(|| {
-            CliError::NotFound(format!(
-                "notebook `{notebook_key}` (try `flowix notebooks` to list)"
-            ))
-        })?
-        .clone();
     let mut mf = open()?;
+    let nb = MemoService::new(&mf).resolve_notebook(notebook_key)?;
     mf.set_current_notebook(Some(nb.id.clone()));
     Ok((mf, nb))
 }
@@ -1001,7 +993,7 @@ mod tests {
     }
 
     #[test]
-    fn create_note_returns_frontmatter_key_that_resolves_for_later_commands() {
+    fn create_note_returns_cache_id_without_persisting_frontmatter_identity() {
         let tmp = tempfile::tempdir().unwrap();
         let config_dir = tmp.path().join("config");
         let data_dir = tmp.path().join("data");
@@ -1019,10 +1011,7 @@ mod tests {
             let id = created.id.clone();
             let file = created.file.as_str();
             let content = std::fs::read_to_string(file).unwrap();
-            let frontmatter_key =
-                flowix_core::memo_file::extract_frontmatter_key(&content).unwrap();
-
-            assert_eq!(id, frontmatter_key);
+            assert_eq!(flowix_core::memo_file::extract_frontmatter_key(&content), None);
 
             let (_resolved_mf, resolved_id) = resolve_id(&id).unwrap();
             assert_eq!(resolved_id, id);

@@ -1,4 +1,4 @@
-import type { MemoColor, MemoItem } from '@/types/memo-item';
+import type { MemoColor, MemoListItem } from '@/types/memo-item';
 import { MEMO_COLORS } from '@features/memo/store/memo-store';
 import type { NativeContextMenuItems } from '@platform/tauri/native-context-menu';
 import type { NativeMenuIconImage } from '@platform/tauri/native-menu-icons';
@@ -30,7 +30,7 @@ export function buildMemoCardContextMenuItems({
   onColorsChange,
   onDelete,
 }: {
-  memo: MemoItem;
+  memo: MemoListItem;
   labels: MemoCardContextMenuLabels;
   icons: {
     split: NativeMenuIconImage;

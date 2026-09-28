@@ -5,7 +5,7 @@
 //! `<notebook>/.flowix/notebook.db`. It is deliberately separate from the
 //! global notebook registry database (`~/.flowix/index.db`).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -581,6 +581,32 @@ impl MemoFile {
         let root = self
             .memo_base_for_notebook_id_result(notebook_id)
             .map_err(std::io::Error::other)?;
+        // Snapshot the catalog once. Unchanged files need neither another
+        // SQLite connection nor a fingerprint read and write on every launch.
+        let existing: HashMap<String, (String, u64, u64, bool)> = {
+            let conn = self.open_notebook_index_db(notebook_id)?;
+            let mut statement = conn
+                .prepare(
+                    "SELECT relative_path, kind, size_bytes, modified_ms,
+                            fingerprint IS NOT NULL AND missing_since IS NULL AND deleted_at IS NULL
+                     FROM media_resources WHERE notebook_id = ?1",
+                )
+                .map_err(sqlite_to_io)?;
+            let rows = statement
+                .query_map(params![notebook_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        (
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?.max(0) as u64,
+                            row.get::<_, i64>(3)?.max(0) as u64,
+                            row.get::<_, bool>(4)?,
+                        ),
+                    ))
+                })
+                .map_err(sqlite_to_io)?;
+            rows.collect::<Result<_, _>>().map_err(sqlite_to_io)?
+        };
         let mut seen = HashSet::new();
         let mut indexed = 0usize;
         for entry in walkdir::WalkDir::new(&root)
@@ -607,6 +633,24 @@ impl MemoFile {
             };
             let relative = super::notebook_relative_path(&root, entry.path())
                 .map_err(std::io::Error::other)?;
+            if let Some((old_kind, old_size, old_modified, active)) = existing.get(&relative) {
+                let metadata = entry.metadata().map_err(std::io::Error::other)?;
+                let modified = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_millis() as u64)
+                    .unwrap_or(0);
+                if *active
+                    && old_kind == kind.as_str()
+                    && *old_size == metadata.len()
+                    && *old_modified == modified
+                {
+                    seen.insert(relative);
+                    indexed += 1;
+                    continue;
+                }
+            }
             match self.ensure_media_resource(notebook_id, &relative, kind, entry.path()) {
                 Ok(_) => {
                     seen.insert(relative);
@@ -861,6 +905,52 @@ mod tests {
             .read_media_resource("nb_media_test", "photo.png")
             .unwrap()
             .is_some());
+    }
+
+    #[test]
+    fn reconcile_skips_unchanged_media_and_refreshes_changed_files() {
+        let (memo_file, _temp, root) = fixture();
+        let media = root.join("photo.png");
+        fs::write(&media, b"first").unwrap();
+        memo_file
+            .reconcile_media_resources("nb_media_test")
+            .unwrap();
+        {
+            let conn = memo_file.open_notebook_index_db("nb_media_test").unwrap();
+            conn.execute(
+                "UPDATE media_resources SET updated_at = 123 WHERE relative_path = 'photo.png'",
+                [],
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            memo_file
+                .reconcile_media_resources("nb_media_test")
+                .unwrap(),
+            1
+        );
+        let unchanged = memo_file
+            .read_media_resource("nb_media_test", "photo.png")
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.updated_at, 123);
+
+        fs::write(&media, b"longer content").unwrap();
+        assert_eq!(
+            memo_file
+                .reconcile_media_resources("nb_media_test")
+                .unwrap(),
+            1
+        );
+        let changed = memo_file
+            .read_media_resource("nb_media_test", "photo.png")
+            .unwrap()
+            .unwrap();
+        assert_eq!(changed.id, unchanged.id);
+        assert_eq!(changed.size_bytes, b"longer content".len() as u64);
+        assert_ne!(changed.fingerprint, unchanged.fingerprint);
+        assert!(changed.updated_at > 123);
     }
 
     #[test]

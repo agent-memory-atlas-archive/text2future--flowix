@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   activeFilter: 'all',
   hydrateInstance: vi.fn(),
   selectAgentConversation: vi.fn(),
+  setDesiredTarget: vi.fn(),
   agentRestore: {
     selectedInstanceId: 'conversation-a' as string | null,
     detailOpen: true,
@@ -51,6 +52,7 @@ vi.mock('@features/workspace/store/workspace-restore-store', () => ({
         ? { kind: 'agent-conversation', instanceId: mocks.agentRestore.selectedInstanceId }
         : null,
       selectAgentConversation: mocks.selectAgentConversation,
+      setDesiredTarget: mocks.setDesiredTarget,
     }),
   },
 }));

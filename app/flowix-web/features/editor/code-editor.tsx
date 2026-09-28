@@ -30,9 +30,11 @@ import {
   Decoration,
   type DecorationSet,
   EditorView,
+  GutterMarker,
   ViewPlugin,
   type ViewUpdate,
   WidgetType,
+  lineNumberWidgetMarker,
 } from '@codemirror/view';
 import {
   closeSearchPanel,
@@ -114,6 +116,20 @@ class SourceHeaderWidget extends WidgetType {
     return 54;
   }
 }
+
+// Give the line-number gutter a block for the title widget as well. Without
+// one, an empty document can initially paint its sole line number before the
+// portal-mounted title has been measured. A text edit happens to rebuild the
+// gutter, which is why the number then moves to the expected position.
+class SourceHeaderGutterMarker extends GutterMarker {
+  toDOM(): HTMLElement {
+    const dom = document.createElement('span');
+    dom.className = 'cm-source-header-gutter-marker';
+    return dom;
+  }
+}
+
+const sourceHeaderGutterMarker = new SourceHeaderGutterMarker();
 
 const setSourceHeaderDecoration = StateEffect.define<DecorationSet>();
 
@@ -392,6 +408,8 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
         basicSetup,
         codeEditorTheme,
         sourceHeaderField,
+        lineNumberWidgetMarker.of((_view, widget) =>
+          widget instanceof SourceHeaderWidget ? sourceHeaderGutterMarker : null),
         ...(hasScrollHeader ? [rangeSelectionState] : []),
         ...(shikiLang
           ? [shikiHighlighting(shikiLang)]
@@ -506,7 +524,8 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
     gutters.appendChild(gutterBackground);
 
     const syncHeaderHeight = () => {
-      const headerRect = headerMount.getBoundingClientRect();
+      const titleRow = headerMount.querySelector<HTMLElement>('.source-document-title-row') ?? headerMount;
+      const headerRect = titleRow.getBoundingClientRect();
       const gutterRect = gutters.getBoundingClientRect();
       const height = headerRect.height;
       const top = headerRect.top - gutterRect.top;

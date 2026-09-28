@@ -1,12 +1,13 @@
 ﻿'use client';
 
-import { useEffect, useCallback, useRef, useMemo, useState } from 'react';
+import { getDocumentSession } from '../store/document-runtime-session';
+import { rebaseWorkspaceDocumentPath } from '../public/workspace-api';
+
+import { useEffect, useCallback, useRef, useMemo } from 'react';
 import { useMemoStore } from '@features/memo/store/memo-store';
 import {
   applyLoadedDocumentContent,
-  registerDocumentCapture,
   captureLatestDocumentContent,
-  consumeSelfDocumentPathUpdate,
   hasDocumentUnsavedChanges,
 } from '@features/document/store/document-session-service';
 import { useDocumentMetricsStore } from '@features/document/store/document-metrics-store';
@@ -18,7 +19,6 @@ import {
 import {
   documentIdentityFromFile,
   documentPropertyTargetId,
-  type DocumentIdentity,
 } from '@features/document/store/document-identity';
 import { canonicalPath, fileNameFromPath } from '@/lib/path';
 import { displayTitleFromFilename } from '@/lib/utils';
@@ -63,12 +63,10 @@ import { removeBrowserColumnTabsByMemoId } from '@features/workspace/use-cases/b
 import { useWorkspaceFocusStore } from '@features/workspace/store/workspace-focus-store';
 import { getBuffer, subscribeDocumentBufferChanges } from '@features/document/store/buffer-registry';
 import { documentIdentityKey } from '@features/document/store/document-identity';
-import { waitForSaveQueue } from '@features/document/store/save-queue';
 import {
   beginExternalDocumentRename,
   expectExternalDocumentWrite,
   isExternalDocumentRenameInProgress,
-  subscribeExternalDocumentRenameLock,
 } from '@features/document/store/external-document-operation';
 import { rebaseActiveDocumentPath } from '@features/document/store/document-session-service';
 import { syncMemoPathAfterLocalWrite } from '@features/document/use-cases/sync-memo-path-after-local-write';
@@ -115,10 +113,9 @@ export function DocumentContainer({
     () => `md:${displayId}`,
     [displayId]
   );
-  const documentIdentity = useMemo<DocumentIdentity>(
-    () => documentIdentityFromFile({ path: filePath, displayId }, memoId ?? null),
-    [filePath, displayId, memoId],
-  );
+  const documentIdentity = getDocumentSession(
+    documentIdentityFromFile({ path: filePath, displayId }, memoId ?? null),
+  ).identity;
   const propertyTargetId = documentPropertyTargetId(displayId);
   const editorMode = useDocumentEditorMode(hostId, documentIdentity);
   // Rich/source mode belongs to the open Markdown file identity. Non-Markdown
@@ -127,24 +124,11 @@ export function DocumentContainer({
     ? externalEditorMode === 'code' || editorMode === 'source'
     : editorMode === 'source';
   const loadedDocumentInstanceKeyRef = useRef<string | null>(null);
-  const prevFilePathRef = useRef<string | null>(null);
   const editorHandleRef = useRef<MarkdownEditorHandle | null>(null);
   const titleEditorRef = useRef<MemoTitleEditorHandle | null>(null);
   const memoFilename = fileNameFromPath(filePath);
-  const [isRenamingExternalTitle, setIsRenamingExternalTitle] = useState(false);
-  const [isExternalDisplayRenameLocked, setIsExternalDisplayRenameLocked] = useState(
-    () => resolvedExternalDisplayId
-      ? isExternalDocumentRenameInProgress(resolvedExternalDisplayId)
-      : false,
-  );
   const renameInProgressRef = useRef(false);
-  const runtimeFilePathRef = useRef(filePath);
-  const observedFilePathRef = useRef(filePath);
-  if (observedFilePathRef.current !== filePath) {
-    observedFilePathRef.current = filePath;
-    runtimeFilePathRef.current = filePath;
-  }
-  const getCurrentFilePath = useCallback(() => runtimeFilePathRef.current, []);
+  const getCurrentFilePath = useCallback(() => documentIdentity.path, [documentIdentity]);
   const {
     state,
     setState,
@@ -212,30 +196,31 @@ export function DocumentContainer({
     );
   }, [documentIdentity, editorMode, externalEditorMode, hostId, isExternalDocument]);
 
-  // The title editor owns file-scoped draft/IME state. This backend adapter
-  // captures Memo ID because indexed-note renames must update the Memo index.
+  // The title editor owns file-scoped draft/IME state. The cache ID only
+  // updates legacy memo metadata when it is available; the rename address is the path.
   const renameDocumentTitle = useCallback(async (title: string, expectedFilename: string) => {
-    if (!memoId) throw new Error('Memo is no longer available');
     if (title === displayTitleFromFilename(expectedFilename)) return expectedFilename;
-    const result = await memoDocumentOperations.renameTitle({
-      memoId,
-      title,
-      expectedFilename,
-    });
-    useMemoStore.getState().handleMemoUpdated(result.memo);
-    syncMemoPathAfterLocalWrite(memoId, result.path);
-    return result.memo.filename;
-  }, [memoId]);
+    {
+      const result = await memoDocumentOperations.renameTitle({
+        path: getCurrentFilePath(),
+        title,
+        expectedFilename,
+        expectedContent: state.fullContent,
+      });
+      rebaseWorkspaceDocumentPath(documentIdentity, result.path);
+      if (result.memo) useMemoStore.getState().handleMemoUpdated(result.memo);
+      if (memoId) syncMemoPathAfterLocalWrite(memoId, result.path);
+      return result.filename;
+    }
+  }, [displayId, documentIdentity, memoId, state.fullContent]);
 
-  useEffect(() => (
-    registerDocumentCapture(documentIdentity, flushPendingEditorChanges, hostId)
-  ), [documentIdentity, flushPendingEditorChanges, hostId]);
 
   const {
     clearSaveTimer,
     flushDocument,
     discardDocument,
     handleChange,
+    handleDirty,
   } = useDocumentAutosave({
     filePath,
     getCurrentFilePath,
@@ -246,22 +231,10 @@ export function DocumentContainer({
     setState,
     reloadDocument,
     flushPendingContent: flushPendingEditorChanges,
+    hostId,
+    isActive: () => !forcedReadOnly && useWorkspaceFocusStore.getState().focusedHostId === hostId,
     isolatedSession: documentSessionMode === 'isolated',
   });
-
-  useEffect(() => {
-    if (!resolvedExternalDisplayId) {
-      setIsExternalDisplayRenameLocked(false);
-      return;
-    }
-    const syncLock = (displayId: string) => {
-      if (displayId === resolvedExternalDisplayId) {
-        setIsExternalDisplayRenameLocked(isExternalDocumentRenameInProgress(displayId));
-      }
-    };
-    syncLock(resolvedExternalDisplayId);
-    return subscribeExternalDocumentRenameLock(syncLock);
-  }, [resolvedExternalDisplayId]);
 
   const commitExternalTitle = useCallback(async (
     requestedTitle: string,
@@ -277,11 +250,10 @@ export function DocumentContainer({
       || !resolvedExternalDisplayId
     ) return null;
 
-    const currentPath = runtimeFilePathRef.current;
+    const currentPath = getCurrentFilePath();
     const currentFilename = fileNameFromPath(currentPath);
     if (currentFilename !== expectedFilename) {
-      toast.error(t('document.save.externalChanged'));
-      return null;
+      throw new Error(t('document.save.externalChanged'));
     }
 
     const current = externalMarkdownTitleParts(currentPath);
@@ -296,18 +268,16 @@ export function DocumentContainer({
     }
 
     renameInProgressRef.current = true;
-    const renameOperation = beginExternalDocumentRename(resolvedExternalDisplayId);
-    setIsRenamingExternalTitle(true);
+    let renameOperation: ReturnType<typeof beginExternalDocumentRename> | null = null;
     try {
-      clearSaveTimer();
+      if (
+        getCurrentFilePath() !== currentPath
+        || isExternalDocumentRenameInProgress(resolvedExternalDisplayId)
+      ) return null;
 
-      const flushed = await flushDocument();
-      const queueSettled = await waitForSaveQueue(documentIdentityKey(documentIdentity));
-      if (!flushed || !queueSettled || hasDocumentUnsavedChanges(documentIdentity)) {
-        toast.error('文档尚未保存，无法重命名');
-        return null;
-      }
-
+      // Keep editing live. Saves started during the filesystem rename wait for
+      // this operation and then resolve the new path before writing.
+      renameOperation = beginExternalDocumentRename(resolvedExternalDisplayId);
       const cancelExpectedDelete = renameOperation.expectSourceDelete(currentPath);
       let newPath: string;
       try {
@@ -328,17 +298,11 @@ export function DocumentContainer({
       }
       // Publish the new path synchronously for editor callbacks created by the
       // previous render. React/store propagation can complete afterwards.
-      runtimeFilePathRef.current = normalizedNewPath;
       replaceExternalDocumentPath(resolvedExternalDisplayId, currentPath, normalizedNewPath);
-      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
       return fileNameFromPath(normalizedNewPath);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-      return null;
     } finally {
-      renameOperation.finish();
+      renameOperation?.finish();
       renameInProgressRef.current = false;
-      setIsRenamingExternalTitle(false);
     }
   }, [
     clearSaveTimer,
@@ -381,7 +345,7 @@ export function DocumentContainer({
         // enables the incoming surface. Disk persistence remains debounced.
         const active = document.activeElement;
         if (active instanceof HTMLElement && containerRef.current?.contains(active)) active.blur();
-        flushPendingEditorChanges();
+        captureLatestDocumentContent(documentIdentity, hostId);
       }
     });
     return () => {
@@ -452,74 +416,15 @@ export function DocumentContainer({
     const instanceKeyChanged = loadedDocumentInstanceKey !== documentInstanceKey;
     loadedDocumentInstanceKeyRef.current = documentInstanceKey;
 
-    // memoId 仍指向同一 memo 时, 保持 Tiptap 实例不重建 ── 但 filePath
-    // 变化时 (物理 rename) 仍要 reloadDocument: useMemoEvents 在 rename
-    // 场景已经同步过 buffer, 但 store 层 API 不动 React state.fullContent;
-    // reloadDocument 内部 setState 才能把磁盘新内容 (含新 frontmatter /
-    // 派生 title) 推到编辑器视图。否则 VSCode 改首行 / 改 frontmatter
-    // filename 触发 rename 后, 编辑器永远显示旧内容。
-    //
-    // dirty 时跳过 reload ── 否则会覆盖用户未保存字符 (前端 saveDoc 触
-    // 发的 rename 场景, 用户在 1s debounce 内可能又敲了字)。dirty
-    // 状态下的 rename 冲突由 useExternalDocumentChangeWatch 在事件
-    // listener 里走 maybeWarnAboutConflict。
-    if (!instanceKeyChanged && filePath === prevFilePathRef.current) {
-      // Restoring a retained document starts a new document transition, but
-      // this mounted editor already has the current content.
-      // Skip the redundant reload while still releasing the loading overlay.
-      if (documentSessionMode !== 'isolated' && transitionId !== null) {
-        useDocumentStore.getState().finishDocumentTransition(transitionId);
-      }
-      return;
-    }
-
-    if (
-      !instanceKeyChanged
-      && isExternalDocument
-      && !documentIdentity.memoId
-      && prevFilePathRef.current
-      && filePath !== prevFilePathRef.current
-    ) {
-      prevFilePathRef.current = filePath;
+    // A path is an attribute of this session, never an editor lifecycle key.
+    // Actual external content changes arrive through the content watchers.
+    if (!instanceKeyChanged) {
       rebaseActiveDocumentPath(documentIdentity, filePath);
       if (documentSessionMode !== 'isolated' && transitionId !== null) {
         useDocumentStore.getState().finishDocumentTransition(transitionId);
       }
       return;
     }
-
-    if (
-      !instanceKeyChanged &&
-      !isExternalDocument &&
-      memoId &&
-      consumeSelfDocumentPathUpdate(memoId, filePath)
-    ) {
-      prevFilePathRef.current = filePath;
-      // The self-path update has already been applied to the retained editor.
-      // It therefore skips reloadDocument, whose normal completion path would
-      // release the transition overlay. Release it explicitly before leaving.
-      if (documentSessionMode !== 'isolated' && transitionId !== null) {
-        useDocumentStore.getState().finishDocumentTransition(transitionId);
-      }
-      return;
-    }
-
-    const isDirtyForRename = !instanceKeyChanged && hasDocumentUnsavedChanges(documentIdentity);
-    if (isDirtyForRename) {
-      prevFilePathRef.current = filePath;
-      // A dirty rename deliberately skips the disk reload so we do not lose
-      // the live draft, but it still needs to finish the transition that
-      // caused this effect to run.
-      if (documentSessionMode !== 'isolated' && transitionId !== null) {
-        useDocumentStore.getState().finishDocumentTransition(transitionId);
-      }
-      return;
-    }
-    prevFilePathRef.current = filePath;
-
-    // Stop this surface's old timer before loading. The target identity may
-    // already have a live draft owned by the other column; preserve it below.
-    clearSaveTimer();
 
     reloadDocument(filePath, {
       // A second surface for the same identity shares this buffer. Preserve
@@ -621,17 +526,15 @@ export function DocumentContainer({
       displayId={displayId}
       filename={memoFilename}
       renameTitle={renameTitle}
-      updatedAt={!isExternalDocument && !usesCodeEditor ? state.updatedAtDate : null}
+      updatedAt={!isExternalDocument ? state.updatedAtDate : null}
       editable={
         !readOnly
         && (!isExternalDocument || Boolean(externalScopePath))
-        && !isRenamingExternalTitle
-        && !isExternalDisplayRenameLocked
       }
       autoFocus={initialFocus === 'title'}
-      useDocumentSelection={usesCodeEditor}
-      showPropertiesToggle={!usesCodeEditor}
-      allowReadOnlyBoundaryNavigation={!usesCodeEditor}
+      sourceMode={usesCodeEditor}
+      showPropertiesToggle
+      allowReadOnlyBoundaryNavigation
       onMoveToBody={handleMoveTitleToBody}
       onPasteToBody={handlePasteTitleContentToBody}
       editorMode={editorMode}
@@ -657,18 +560,12 @@ export function DocumentContainer({
             key={documentInstanceKey}
             filePath={filePath}
             content={state.fullContent}
-            editable={!readOnly && !isRenamingExternalTitle && !isExternalDisplayRenameLocked}
+            editable={!readOnly}
             onChange={handleChange}
             autoFocus={initialFocus === 'body'}
             onEditorScroll={handleEditorScroll}
             onEditingFinished={flushPendingEditorChanges}
-            scrollHeader={documentHeader ? (
-              <div className="source-document-title-row">
-                {documentHeader}
-              </div>
-            ) : undefined}
-            onToggleEditorMode={hasMarkdownTitle ? handleToggleEditorMode : undefined}
-            sourceModeToggleLabel={t('document.action.richTextMode')}
+            scrollHeader={documentHeader ?? undefined}
             searchPanelOpen={searchPanelOpen}
             onSearchPanelOpenChange={onSearchPanelOpenChange}
           />
@@ -683,7 +580,8 @@ export function DocumentContainer({
             key={documentInstanceKey}
             content={state.fullContent}
             header={documentHeader}
-            editable={!readOnly && !isRenamingExternalTitle && !isExternalDisplayRenameLocked}
+            editable={!readOnly}
+            onDirty={handleDirty}
             onChange={(content) => {
               handleChange(content);
             }}

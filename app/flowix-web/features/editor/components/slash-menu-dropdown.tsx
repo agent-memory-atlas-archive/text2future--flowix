@@ -90,6 +90,7 @@ export interface SlashMenuProps {
   scrollSelectedItem: boolean;
   onSelect: (item: SlashMenuItem) => void;
   onHover: (index: number) => void;
+  onScroll?: () => void;
   /** 空态 CTA: 触发后跳到偏好设置的 AI Agents 配置列表。 */
   onAddAgent?: () => void;
   /** 当前界面语言 ── 弹窗经命令式 createRoot 渲染在 I18nProvider 外,
@@ -321,6 +322,7 @@ export const SlashMenuDropdown = ({
   scrollSelectedItem,
   onSelect,
   onHover,
+  onScroll,
   onAddAgent,
   language,
 }: SlashMenuProps) => {
@@ -357,7 +359,12 @@ export const SlashMenuDropdown = ({
 
     if (itemTop >= visibleTop && itemBottom <= visibleBottom) return;
 
-    const targetTop = itemTop - SLASH_MENU_SCROLL_PADDING_TOP;
+    // Keep the selected row visible with the smallest scroll needed. Moving
+    // every exiting row to the top makes keyboard navigation jump by most of
+    // the popup height near the first items below the fold (H2–H4).
+    const targetTop = itemTop < visibleTop
+      ? itemTop - SLASH_MENU_SCROLL_PADDING_TOP
+      : itemBottom - scroller.clientHeight;
     const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
     scroller.scrollTop = Math.max(0, Math.min(targetTop, maxScrollTop));
     overlayScrollbarRef.current?.update();
@@ -380,6 +387,7 @@ export const SlashMenuDropdown = ({
         className="slash-menu-items-frame"
         scrollerClassName="slash-menu-items"
         scrollerRef={scrollerRef}
+        onScroll={onScroll}
       >
         {(() => {
           // 「AI Agent 分区为空」时 (整菜单空 / 全部 agent 被关 / 当前 query

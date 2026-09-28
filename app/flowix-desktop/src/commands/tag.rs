@@ -90,10 +90,8 @@ pub fn move_memo_tag(
     state: State<AppState>,
     app: AppHandle,
 ) -> Result<MoveTagReport, String> {
-    // 收集每个被改写 memo 的 (id, before): 持锁期间由 core 回调 push,
-    // 释放 read lock 后再 emit。不能在回调里直接 emit ── emit_updated_after_write
-    // 内部会 read_lock(memo_file), 而 move_memo_tag 已持 read lock,
-    // std RwLock 不支持同线程递归 read, 会死锁。
+    // Collect changed memo IDs while the core callback runs under the read lock.
+    // Refresh search/cloud state and emit the aggregate event after releasing it.
     let mut affected_memo_ids: Vec<String> = Vec::new();
     let report = {
         let memo_file = state

@@ -15,6 +15,9 @@
  */
 export interface DocumentBuffer {
   content: string;
+  saveError: string | null;
+  conflicted: boolean;
+  conflictContent: string | null;
   lastSavedContent: string;
   pendingContent: string | null;
   /** Latest user content revision captured in this buffer. */
@@ -35,6 +38,9 @@ export interface DocumentBuffer {
 export function emptyDocumentBuffer(): DocumentBuffer {
   return {
     content: '',
+    saveError: null,
+    conflicted: false,
+    conflictContent: null,
     lastSavedContent: '',
     pendingContent: null,
     editRevision: 0,

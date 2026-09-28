@@ -1,3 +1,4 @@
+import { createLogger } from '@/lib/logger';
 import { Editor, Extension, renderNestedMarkdownContent } from '@tiptap/core';
 import type { JSONContent } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
@@ -57,6 +58,8 @@ interface MarkdownEditorProps {
   editable?: boolean;
   placeholder?: string;
   onChange?: (markdown: string) => void;
+  /** Schedule capture on the owning document clock, without serializing on input. */
+  onDirty?: () => void;
   className?: string;
   onEditorScroll?: (scrollTop: number) => void;
   autoFocus?: boolean;
@@ -78,6 +81,8 @@ interface MarkdownEditorProps {
   header?: ReactNode;
 }
 
+const persistenceLog = createLogger('document:editor');
+
 export interface MarkdownEditorHandle {
   flushPendingChanges: () => string | null;
   getCurrentMarkdown: () => string;
@@ -92,17 +97,6 @@ interface NestedListMarkdownContext {
   meta?: { parentAttrs?: { start?: number } };
 }
 
-/**
- * Tiptap mount 阶段的"静默期" (毫秒) ── 详见 `mountedAtRef` 注释。
- * mount 后此时间窗内的 onUpdate 一律吞掉, 不走 recordDocumentEdit →
- * 不调度 autosave。
- *
- * 取值依据 ── Tiptap mount 阶段连续 onUpdate (parse / 扩展 hook /
- * ProseMirror schema 校验) 经验值在 50~200ms 内集中爆发; 500ms 留
- * 2~3 倍安全余量, 同时远小于 1s 的 autosave debounce, 不会让真实
- * 用户编辑被误吞 ── 打开后 < 500ms 内敲字属于极罕见操作。
- */
-const MOUNT_QUIET_MS = 500;
 const SERIALIZE_DEBOUNCE_MS = 200;
 const SERIALIZE_IDLE_TIMEOUT_MS = 500;
 
@@ -555,6 +549,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   editable = true,
   placeholder,
   onChange,
+  onDirty,
   className,
   onEditorScroll,
   autoFocus = false,
@@ -594,18 +589,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   const pendingSerializeDirtyRef = useRef(false);
   const localEditVersionRef = useRef(0);
   const pendingExternalContentRef = useRef<PendingExternalContent | null>(null);
-  // mount 阶段的"静默期" ── Tiptap 用 `content` prop 初始化 editor 时会
-  // 解析 + 规范化 markdown (行尾 CRLF→LF / 末尾补 \n / frontmatter 重排),
-  // 触发连续多次 onUpdate, 每一次的字节都跟磁盘原文略有差异 ── 跟
-  // recordDocumentEdit 的 byte equality 比对会失败, 把"伪编辑"误判为真
-  // 编辑, 1s 后 scheduleSave → write_document IPC → 后端 emit
-  // `user_edit` ── 用户没编辑的情况下。 旧实现是 `isInitialMountRef` 只
-  // 跳过第一次 onUpdate, 第二次起漏过; 改用时间窗 (MOUNT_QUIET_MS) 拦
-  // 住整个 mount 阶段, 让 recordDocumentEdit 的语义比较 (见
-  // [buffer-equality.ts]) 兜底后续潜在差异 ── 双层防御: 时间窗挡
-  // 快速 normalizations, 语义比较挡慢速 / 漏网 normalization。
-  const mountedAtRef = useRef(0);
   const onChangeRef = useRef(onChange);
+  const onDirtyRef = useRef(onDirty);
+  onDirtyRef.current = onDirty;
   const onSearchPanelOpenChangeRef = useRef(onSearchPanelOpenChange);
   const onEditingFinishedRef = useRef(onEditingFinished);
   const onFocusTitleRef = useRef(onFocusTitle);
@@ -649,7 +635,10 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     clearSerializeTimer();
     pendingSerializeDirtyRef.current = false;
 
+    const serializationStarted = performance.now();
     const markdown = normalizeMarkdownTableEmptyCells(editor.getMarkdown());
+    const serializationMs = performance.now() - serializationStarted;
+    if (serializationMs > 50) persistenceLog.info('slow serialization', { elapsedMs: serializationMs, characters: markdown.length });
     if (markdown === contentRef.current) {
       return null;
     }
@@ -660,6 +649,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   }, [clearSerializeTimer]);
 
   const schedulePendingSerialization = useCallback(() => {
+    if (onDirtyRef.current) { onDirtyRef.current(); return; }
     // Wait for a short quiet period before serializing. The previous
     // implementation started a new full-document serialization every 200ms
     // during continuous typing, even though only the latest content can be
@@ -1050,13 +1040,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       contentType: 'markdown',
       editable,
       autofocus: autoFocus ? 'end' : false,
-      onUpdate: () => {
-        if (isApplyingExternalContentRef.current) return;
-        // mount 静默期 ── 见 mountedAtRef 声明处注释。Tiptap mount 阶段
-        // 会连续触发 onUpdate, 都在时间窗内一律吞掉。 时间窗外放行
-        // onChange, recordDocumentEdit 的语义比较 ([buffer-equality.ts])
-        // 兜底"漏过" 的非实质修改 (Tiptap 慢速归一 / 扩展二次归一等)。
-        if (Date.now() - mountedAtRef.current < MOUNT_QUIET_MS) return;
+      onUpdate: ({ transaction }) => {
+        if (isApplyingExternalContentRef.current || !transaction.docChanged) return;
         localEditVersionRef.current += 1;
         pendingSerializeDirtyRef.current = true;
         schedulePendingSerialization();
@@ -1105,12 +1090,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       });
     };
     editorDom.addEventListener('compositionstart', handleCompositionStart);
-    editorDom.addEventListener('compositionend', handleCompositionEnd);
-    // 标记 mount 时刻 ── 后续 onUpdate 据此判定"是否还在静默期"。
-    // 此时 new Editor 已构造完, 第一次 onUpdate 通常在下一个 microtask
-    // 触发, mountedAtRef 在此赋值后与 Date.now() 的差值会落在 0~几十 ms,
-    // 远小于 MOUNT_QUIET_MS, 第一次 onUpdate 必然被吞。
-    mountedAtRef.current = Date.now();
 
     const detachLinkHoverTooltip = attachLinkHoverTooltip(editor, editorMountRef.current);
 
@@ -1238,7 +1217,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
   useLayoutEffect(() => {
     if (editorRef.current) {
-      editorRef.current.setEditable(editable);
+      editorRef.current.setEditable(editable, false);
       const editorDom = editorRef.current.view.dom;
       if (editable) {
         editorDom.removeAttribute('tabindex');

@@ -1,3 +1,4 @@
+import { findFileDisplayPath, subscribeFileDisplayRelease } from '@/lib/file-display-registry';
 import { recoveryDrafts } from '@platform/tauri/client/recovery';
 import { canonicalPath } from '@/lib/path';
 import { fileLocatorKey } from '@/lib/path';
@@ -9,6 +10,7 @@ import {
 } from './document-identity';
 
 const recoveryOperations = new Map<string, Promise<unknown>>();
+const createdAtByKey = new Map<string, number>();
 const RECOVERY_READ_TIMEOUT_MS = 2_000;
 
 function settleWithin<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
@@ -56,9 +58,14 @@ function enqueueRecoveryOperation<T>(identity: DocumentIdentity, operation: () =
 
 export interface RecoveryDraft {
   schemaVersion: 4;
+  /** Persistent index identity, used only to reject a draft from a replaced file. */
+  memoId?: string | null;
+  title?: { draft: string; filename: string; revision: number };
   identity: DocumentLocator;
   originalPath: string;
   revision: number;
+  /** Separate body revision; older drafts use revision for both. */
+  bodyRevision?: number;
   content: string;
   baseContent: string;
   createdAt: number;
@@ -208,7 +215,7 @@ async function readDraftForIdentity(
   return null;
 }
 
-export async function persistRecoveryDraft(
+async function persistRecoverySnapshot(
   input: Omit<RecoveryDraft, 'schemaVersion' | 'identity' | 'createdAt' | 'updatedAt'> & {
     identity: DocumentIdentity;
   },
@@ -217,17 +224,18 @@ export async function persistRecoveryDraft(
     const now = Date.now();
     const identity = documentLocator(input.identity);
     const key = documentLocatorKey(identity);
-    const previous = await readDraftForIdentity(input.identity);
+    const createdAt = createdAtByKey.get(key) ?? now;
+    createdAtByKey.set(key, createdAt);
+    if (input.revision <= (savedRecoveryRevisions.get(input.identity.displayId) ?? -1)) return true;
     const written = await recoveryDrafts.write(key, {
       ...input,
       identity,
+      memoId: input.identity.memoId,
       schemaVersion: 4,
-      createdAt: previous?.draft.createdAt ?? now,
+      createdAt,
       updatedAt: now,
     });
-    if (written && previous && previous.key !== key) {
-      await recoveryDrafts.clearThrough(previous.key, previous.draft.revision).catch(() => false);
-    }
+
     return written;
   }).catch(() => false);
 }
@@ -238,6 +246,7 @@ export function readRecoveryDraft(identity: DocumentIdentity): Promise<RecoveryD
     const key = documentLocatorKey(recoveryIdentity);
     const stored = await readDraftForIdentity(identity);
     if (!stored) return null;
+    createdAtByKey.set(key, stored.draft.createdAt);
     const migratedDraft = {
       ...stored.draft,
       identity: recoveryIdentity,
@@ -257,10 +266,12 @@ export async function clearRecoveryDraftThrough(
   identity: DocumentIdentity,
   savedRevision: number,
 ): Promise<void> {
+  savedRecoveryRevisions.set(identity.displayId, Math.max(savedRevision, savedRecoveryRevisions.get(identity.displayId) ?? -1));
   await enqueueRecoveryOperation(identity, async () => {
     const locator = documentLocator(identity);
     const key = documentLocatorKey(locator);
     await recoveryDrafts.clearThrough(key, savedRevision);
+    createdAtByKey.delete(key);
     for (const legacyKey of legacyRecoveryKeys(identity)) {
       await recoveryDrafts.clearThrough(legacyKey, savedRevision);
     }
@@ -332,3 +343,41 @@ export function listRecoveryDrafts(): Promise<RecoveryDraft[]> {
     [],
   );
 }
+
+export async function flushRecoveryOperations(): Promise<boolean> {
+  while (recoveryOperations.size || pendingDraftWrites.size) {
+    const results = await Promise.allSettled([...recoveryOperations.values(), ...[...pendingDraftWrites.values()].map(value => value.done)]);
+    if (results.some(result => result.status === 'rejected')) return false;
+  }
+  return true;
+}
+
+const savedRecoveryRevisions = new Map<string, number>();
+type RecoveryInput = Parameters<typeof persistRecoverySnapshot>[0];
+const pendingDraftWrites = new Map<string, { next: RecoveryInput | null; done: Promise<boolean> }>();
+/** Replace queued checkpoints instead of retaining every intermediate document. */
+export function persistRecoveryDraft(input: RecoveryInput): Promise<boolean> {
+  const key = documentLocatorKey(documentLocator(input.identity));
+  const existing = pendingDraftWrites.get(key);
+  if (existing) { existing.next = input; return existing.done; }
+  let finish!: (success: boolean) => void;
+  const done = new Promise<boolean>(resolve => { finish = resolve; });
+  const entry = { next: input as RecoveryInput | null, done };
+  pendingDraftWrites.set(key, entry);
+  void (async () => {
+    let success = true;
+    try {
+      while (entry.next) {
+        const snapshot = entry.next; entry.next = null;
+        const path = findFileDisplayPath(snapshot.identity.displayId) ?? snapshot.identity.path;
+        success = await persistRecoverySnapshot({ ...snapshot, originalPath: path,
+          identity: { ...snapshot.identity, path } }) && success;
+      }
+    } finally { pendingDraftWrites.delete(key); finish(success); }
+  })();
+  return done;
+}
+
+subscribeFileDisplayRelease(displayId => {
+  void flushRecoveryOperations().then(() => savedRecoveryRevisions.delete(displayId));
+});

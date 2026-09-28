@@ -105,7 +105,7 @@ export const useWorkspaceRestoreStore = create<WorkspaceRestoreStore>()(
           : state?.desiredTarget ?? null;
         return {
           ...state,
-          version: 4,
+          version: 4 as const,
           agentConversation: legacyAgent,
           desiredTarget,
           restoreStatus: 'idle' as const,

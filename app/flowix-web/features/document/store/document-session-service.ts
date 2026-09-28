@@ -1,3 +1,8 @@
+import { getDocumentSession, findDocumentSession, listDocumentSessions, releaseDocumentSession, type PersistenceAdapter } from './document-runtime-session';
+import { cancelDocumentCapture, scheduleDocumentCapture, hasDocumentCommit, waitForDocumentCommits, documentCommitDiagnostics } from './document-commit-queue';
+import { getTitleDraft, hasTitleDraft, isTitleProtected, markTitleProtected, flushTitleDraft, subscribeTitleChanges } from './document-title-session';
+import { pinFileDisplayId, findFileDisplayPath } from '@/lib/file-display-registry';
+import { subscribeDocumentBufferChanges } from './buffer-registry';
 import {
   applyLoadedContent,
   discardUnsavedLocalChanges,
@@ -20,18 +25,12 @@ import {
   type DocumentIdentity,
 } from '@features/document/store/document-identity';
 import { canonicalPath } from '@/lib/path';
-import { persistRecoveryDraft } from '@features/document/store/recovery-draft-store';
-import { subscribeFileDisplayRelease } from '@features/workspace/store/file-display-store';
+import { persistRecoveryDraft, clearRecoveryDraftThrough, flushRecoveryOperations } from '@features/document/store/recovery-draft-store';
+import { subscribeFileDisplayRelease } from '@/lib/file-display-registry';
 import { waitForSaveQueue } from '@features/document/store/save-queue';
 
 const RECOVERY_DRAFT_WRITE_TIMEOUT_MS = 3_000;
 
-type DocumentCapture = () => string | null;
-interface RegisteredDocumentCapture {
-  hostId?: string;
-  capture: DocumentCapture;
-}
-const documentCaptures = new Map<string, Set<RegisteredDocumentCapture>>();
 const pendingReleasedDisplays = new Set<string>();
 const releaseChecksInFlight = new Set<string>();
 
@@ -48,9 +47,10 @@ function cleanupReleasedDisplayBuffer(displayId: string): void {
     }
     // A store update can release the identity just before React unmounts its
     // editor. The final capture unregister retries this cleanup afterwards.
-    if (documentCaptures.has(key)) return;
+    if (findDocumentSession(displayId)?.captures.size) return;
     releaseDocumentBuffer(displayId);
     stagedDocumentSnapshots.delete(key);
+    releaseDocumentSession(displayId);
     pendingReleasedDisplays.delete(displayId);
   }).catch(() => {
     pendingReleasedDisplays.delete(displayId);
@@ -64,32 +64,54 @@ subscribeFileDisplayRelease(cleanupReleasedDisplayBuffer);
 /** Register a mounted editor capable of publishing its latest content. */
 export function registerDocumentCapture(
   identity: DocumentIdentity,
-  capture: DocumentCapture,
+  capture: () => string | null,
   hostId?: string,
+  isActive?: () => boolean,
 ): () => void {
-  const key = documentIdentityKey(identity);
-  const registration = { hostId, capture } satisfies RegisteredDocumentCapture;
-  const captures = documentCaptures.get(key) ?? new Set<RegisteredDocumentCapture>();
-  captures.add(registration);
-  documentCaptures.set(key, captures);
+  const session = getDocumentSession(identity);
+  const registration = { hostId, capture, isActive };
+  session.captures.add(registration);
   return () => {
-    captures.delete(registration);
-    if (captures.size === 0) {
-      documentCaptures.delete(key);
-      if (pendingReleasedDisplays.has(identity.displayId)) {
-        cleanupReleasedDisplayBuffer(identity.displayId);
-      }
+    session.captures.delete(registration);
+    if (!session.captures.size && pendingReleasedDisplays.has(identity.displayId)) {
+      cleanupReleasedDisplayBuffer(identity.displayId);
     }
   };
 }
 
-/** Publish all mounted surfaces before the save barrier reads the buffer. */
+/** Only the editing surface may publish deferred full-document snapshots. */
 export function captureLatestDocumentContent(identity: DocumentIdentity, hostId?: string): void {
-  const captures = documentCaptures.get(documentIdentityKey(identity));
-  if (!captures) return;
-  for (const registration of [...captures]) {
-    if (hostId !== undefined && registration.hostId !== hostId) continue;
-    registration.capture();
+  const session = findDocumentSession(identity.displayId);
+  if (!session) return;
+  const wasCapturing = session.capturing; session.capturing = true;
+  try {
+    for (const registration of [...session.captures]) {
+      if (hostId !== undefined ? registration.hostId !== hostId : registration.isActive && !registration.isActive()) continue;
+      registration.capture();
+    }
+  } finally { session.capturing = wasCapturing; }
+}
+
+/** All surfaces feed one session-owned clock and persistence operation. */
+export function scheduleDocumentSessionSave(identity: DocumentIdentity): void {
+  const session = getDocumentSession(identity);
+  if (session.capturing) return;
+  scheduleDocumentCapture(documentIdentityKey(identity), () => commitDocumentSession(session.identity));
+}
+
+export function commitDocumentSession(identity: DocumentIdentity): void {
+  const session = getDocumentSession(identity);
+  cancelDocumentCapture(documentIdentityKey(identity));
+  session.capturing = true;
+  try { captureLatestDocumentContent(identity); }
+  finally { session.capturing = false; }
+  const path = session.identity.path;
+  if (!path) return;
+  void protectDocumentDraft(session.identity, path, 'autosave');
+  if (hasUnsavedLocalChanges(identity)) {
+    void flushDocument(session.identity, path, { scopePath: session.retainedAdapter?.scopePath }).then(saved => {
+      if (!saved) void protectDocumentDraft(session.identity, session.identity.path, 'save-error');
+    });
   }
 }
 
@@ -99,18 +121,24 @@ export async function protectDocumentDraft(
   reason: 'autosave' | 'save-timeout' | 'save-error' | 'shutdown',
 ): Promise<boolean> {
   const buffer = getOrCreateBuffer(identity);
-  if (!hasUnsavedLocalChanges(identity)) return true;
+  const title = getTitleDraft(identity.displayId);
+  if (!hasUnsavedLocalChanges(identity) && !title) return true;
+  const bodyRevision = buffer.capturedRevision;
+  const revision = getDocumentSession(identity).recoveryRevision;
   const protectedByDraft = await waitWithTimeout(persistRecoveryDraft({
-    identity,
+    identity: { ...identity, path: canonicalPath(path) },
     originalPath: canonicalPath(path),
-    revision: buffer.capturedRevision,
+    revision,
+    bodyRevision,
+    title: title ?? undefined,
     content: buffer.content,
     baseContent: buffer.lastSavedContent,
     reason,
   }), RECOVERY_DRAFT_WRITE_TIMEOUT_MS);
   if (protectedByDraft !== true) return false;
-  buffer.durableRevision = Math.max(buffer.durableRevision, buffer.capturedRevision);
-  if (buffer.savedRevision < buffer.capturedRevision) buffer.saveState = 'protected';
+  if (title) markTitleProtected(identity.displayId, title.revision);
+  buffer.durableRevision = Math.max(buffer.durableRevision, bodyRevision);
+  if (!buffer.conflicted && !buffer.saveError && buffer.savedRevision < buffer.capturedRevision) buffer.saveState = 'protected';
   notifyDocumentBufferChanged(identity, 'save_settled');
   return true;
 }
@@ -194,40 +222,14 @@ interface SaveDocumentContentOptions {
   path: string;
   identity: DocumentIdentity;
   content: string;
-  /**
-   * `internal` (内部 memo 文档) 或 `external` (外部文本文件)。后端
-   * 据此分流: 内部走 key 反查 + 派生改名 + memo index 同步, 外部只
-   * 做 fs::write + CAS, 不改名不动 memo index。
-   */
+  /** Both channels write the exact path with CAS; title changes are separate. */
   channel: 'internal' | 'external';
-  /**
-   * 内部 memo 文档的 memoId ── closure 期间稳定, 后端用它反查 memo index
-   * 拿当前 entry.filename, 走新路径写。外部文件可传 null。
-   */
+  /** Optional cache association used only to reject a replaced file. */
   key: string | null;
   /** Authorized file-tree root for external code/text documents. */
   scopePath?: string | null;
   force?: boolean;
   callbacks?: FlushCallbacks;
-}
-
-const selfPathUpdates = new Set<string>();
-
-function selfPathUpdateKey(memoId: string, path: string): string {
-  return `${memoId}:${canonicalPath(path)}`;
-}
-
-export function markSelfDocumentPathUpdate(memoId: string, path: string): void {
-  selfPathUpdates.add(selfPathUpdateKey(memoId, path));
-}
-
-export function consumeSelfDocumentPathUpdate(memoId: string, path: string): boolean {
-  const key = selfPathUpdateKey(memoId, path);
-  const exists = selfPathUpdates.has(key);
-  if (exists) {
-    selfPathUpdates.delete(key);
-  }
-  return exists;
 }
 
 export function getActiveDocumentDraft(): DocumentDraftSnapshot | null {
@@ -251,9 +253,11 @@ export function recordDocumentEdit(identity: DocumentIdentity, content: string):
   if (content === buffer.content) {
     return { changed: !isDocumentContentEqual(identity, content, buffer.lastSavedContent), buffer };
   }
+  retainDocumentDraft(identity);
+  getDocumentSession(identity).recoveryRevision += 1;
   buffer.editRevision += 1;
   buffer.capturedRevision = buffer.editRevision;
-  if (isDocumentContentEqual(identity, content, buffer.lastSavedContent)) {
+  if (buffer.savingRevision === null && !buffer.conflicted && isDocumentContentEqual(identity, content, buffer.lastSavedContent)) {
     buffer.content = content;
     buffer.pendingContent = null;
     buffer.pendingRevision = null;
@@ -266,7 +270,7 @@ export function recordDocumentEdit(identity: DocumentIdentity, content: string):
   buffer.content = content;
   buffer.pendingContent = content;
   buffer.pendingRevision = buffer.capturedRevision;
-  buffer.saveState = 'dirty';
+  buffer.saveState = buffer.conflicted ? 'conflict' : 'dirty';
   notifyDocumentBufferChanged(identity, 'edited');
   return { changed: true, buffer };
 }
@@ -301,51 +305,23 @@ export function flushDocumentPath(
 }
 
 /**
- * Capture the outgoing editor and make its latest revision durable without
- * putting canonical disk/index latency on the navigation critical path.
- * Canonical saves continue in the background; a small recovery draft is the
- * only bounded, non-destructive navigation barrier.
+ * Capture and retain the outgoing session, then save and checkpoint in the
+ * background. Only desktop shutdown waits for durability.
  */
 export async function prepareDocumentLeave(
   identity: DocumentIdentity,
   path: string,
   scopePath: string | null = null,
 ): Promise<boolean> {
+  cancelDocumentCapture(documentIdentityKey(identity));
   captureLatestDocumentContent(identity);
-  const buffer = getOrCreateBuffer(identity);
-  if (!hasUnsavedLocalChanges(identity)) return true;
-
-  const revision = buffer.capturedRevision;
-  const content = buffer.content;
-  const baseContent = buffer.lastSavedContent;
-  const save = flushDocument(identity, path, { scopePath });
-  if (buffer.durableRevision >= revision) {
-    // The revision is already recoverable. Keep the canonical write alive,
-    // but do not make navigation wait for it again.
-    void save;
-    return true;
-  }
-
-  // Preserve the exact captured snapshot immediately. Waiting for the full
-  // memo write here can include filesystem, index and watcher latency and used
-  // to freeze every document switch for up to five seconds.
-  const protectedByDraft = await waitWithTimeout(persistRecoveryDraft({
-    identity,
-    originalPath: canonicalPath(path),
-    revision,
-    content,
-    baseContent,
-    reason: 'autosave',
-  }), RECOVERY_DRAFT_WRITE_TIMEOUT_MS);
-  if (protectedByDraft !== true) return false;
-
-  // The canonical save may have won the race while the draft was being
-  // persisted. Do not regress an already-clean buffer back to `protected`.
-  if (buffer.savedRevision >= revision) return true;
-
-  buffer.durableRevision = Math.max(buffer.durableRevision, revision);
-  buffer.saveState = 'protected';
-  notifyDocumentBufferChanged(identity, 'save_settled');
+  void flushTitleDraft(identity.displayId);
+  if (!hasUnsavedLocalChanges(identity) && !hasTitleDraft(identity.displayId)) return true;
+  retainDocumentDraft(identity);
+  void flushDocument(identity, path, { scopePath });
+  void protectDocumentDraft(identity, findFileDisplayPath(identity.displayId) ?? path, 'autosave');
+  // Navigation keeps the session in memory. Only application shutdown is a
+  // durability barrier; moving focus must never wait for a filesystem lock.
   return true;
 }
 
@@ -376,4 +352,78 @@ export function setActiveDocumentPath(identity: DocumentIdentity | null, path: s
 
 export function rebaseActiveDocumentPath(identity: DocumentIdentity, path: string): void {
   rebaseCurrentDocumentPath(identity, path);
+}
+
+const retainedDrafts = new Map<string, () => void>();
+function retainDocumentDraft(identity: DocumentIdentity): void {
+  const key = documentIdentityKey(identity);
+  if (!retainedDrafts.has(key)) retainedDrafts.set(key, pinFileDisplayId(identity.displayId));
+}
+export function registerDocumentPersistence(identity: DocumentIdentity, adapter: PersistenceAdapter): () => void {
+  const session = getDocumentSession(identity);
+  session.adapters.add(adapter);
+  session.retainedAdapter = adapter;
+  return () => {
+    session.adapters.delete(adapter);
+    session.retainedAdapter = [...session.adapters].slice(-1)[0] ?? adapter;
+    releaseDocumentSession(identity.displayId);
+  };
+}
+subscribeTitleChanges((displayId, edited) => {
+  const session = findDocumentSession(displayId);
+  if (!session) return;
+  const { identity } = session;
+  const buffer = getOrCreateBuffer(identity);
+  if (edited) {
+    retainDocumentDraft(identity);
+    session.recoveryRevision += 1;
+    scheduleDocumentSessionSave(identity);
+  } else if (!hasTitleDraft(displayId) && !hasUnsavedLocalChanges(identity)) {
+    buffer.savedRevision = buffer.capturedRevision;
+    buffer.durableRevision = buffer.capturedRevision;
+    void clearRecoveryDraftThrough({ ...identity, path: findFileDisplayPath(identity.displayId) ?? identity.path }, session.recoveryRevision);
+    notifyDocumentBufferChanged(identity, 'save_settled');
+  }
+});
+subscribeDocumentBufferChanges((identity) => {
+  const buffer = getBuffer(identity);
+  if (!buffer || buffer.durableRevision < buffer.capturedRevision) return;
+  const title = getTitleDraft(identity.displayId);
+  if (title && !isTitleProtected(identity.displayId)) return;
+  const key = documentIdentityKey(identity);
+  const release = retainedDrafts.get(key);
+  retainedDrafts.delete(key);
+  release?.();
+});
+
+/** Called by the desktop close/quit handshake, not fire-and-forget unload. */
+export async function flushAllDocumentSessions(): Promise<boolean> {
+  const registrations = listDocumentSessions().flatMap(session => {
+    const adapter = [...session.adapters].slice(-1)[0] ?? session.retainedAdapter;
+    return adapter ? [{ identity: session.identity, adapter }] : [];
+  });
+  const results = await Promise.all(registrations.map(async ({ identity, adapter }) => {
+    const key = documentIdentityKey(identity);
+    cancelDocumentCapture(key);
+    captureLatestDocumentContent(identity);
+    adapter.capture();
+    const titleSave = flushTitleDraft(identity.displayId);
+    const bodySave = flushDocument(identity, adapter.path(), { scopePath: adapter.scopePath });
+    const protectedDraft = protectDocumentDraft(identity, adapter.path(), 'shutdown');
+    const result = await waitWithTimeout(Promise.all([titleSave, bodySave, waitForDocumentCommits(key)])
+      .then(values => values.every(Boolean)), 5_000);
+    captureLatestDocumentContent(identity);
+    if (result === true && !hasUnsavedLocalChanges(identity) && !hasTitleDraft(identity.displayId)) return true;
+    // A timed-out mutation may have renamed the file. Do not close the process
+    // until its outcome is known, even when a recovery checkpoint exists.
+    if (hasDocumentCommit(key)) return false;
+    if (await waitWithTimeout(protectedDraft, 3_000) !== true) return false;
+    const protectedLatest = await waitWithTimeout(protectDocumentDraft(identity, adapter.path(), 'shutdown'), 3_000);
+    captureLatestDocumentContent(identity);
+    const buffer = getDocumentBuffer(identity);
+    return protectedLatest && buffer.durableRevision >= buffer.capturedRevision
+      && isTitleProtected(identity.displayId) && !hasDocumentCommit(key);
+  }));
+  const recoverySettled = await waitWithTimeout(flushRecoveryOperations(), 3_000);
+  return results.every(Boolean) && recoverySettled === true && documentCommitDiagnostics().active === 0;
 }

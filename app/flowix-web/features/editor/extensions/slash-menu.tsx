@@ -20,6 +20,7 @@ import { useAgentRuntimeStore } from '@features/agent/store/agent-runtime-store'
 import { normalizeAgentRuntimeStatus } from '@features/agent/public/runtime-status-api';
 import { windows } from '@platform/tauri/client';
 import { translate } from '@/lib/i18n';
+import { joinNotebookMemoPath } from '@/lib/path';
 import type { AgentTypeKey } from '@/types/agent';
 import { isAgentTypeComingSoon } from '@/lib/agent-types';
 import { applyListType } from './list-transforms';
@@ -30,11 +31,14 @@ interface SlashMenuState {
   triggerFrom: number;
   deleteFrom: number;
   query: string;
+  cursorPos: number;
 }
 
 interface MenuInstance {
   selectedIndex: number;
   scrollSelectedItem: boolean;
+  hasNavigated: boolean;
+  availableItems: SlashMenuItem[];
   items: SlashMenuItem[];
 }
 
@@ -47,6 +51,7 @@ let menuInstance: MenuInstance | null = null;
 let menuOpenId = 0;
 let unsubscribeRuntimeStatus: (() => void) | null = null;
 let unsubscribeUserSettings: (() => void) | null = null;
+let positionFrame: number | null = null;
 
 function disposeMenuRoot(root: Root, container: HTMLDivElement) {
   window.setTimeout(() => {
@@ -89,9 +94,8 @@ function getAvailableSlashMenuItems(): SlashMenuItem[] {
   });
 }
 
-function filterItems(query: string): SlashMenuItem[] {
+function filterItems(query: string, availableItems = getAvailableSlashMenuItems()): SlashMenuItem[] {
   const normalizedQuery = query.trim().toLowerCase();
-  const availableItems = getAvailableSlashMenuItems();
   if (!normalizedQuery) return availableItems;
 
   const language = getCurrentAppLanguage();
@@ -111,6 +115,10 @@ function filterItems(query: string): SlashMenuItem[] {
 
 function closeMenu() {
   menuOpenId += 1;
+  if (positionFrame !== null) {
+    window.cancelAnimationFrame(positionFrame);
+    positionFrame = null;
+  }
   document.removeEventListener('mousedown', handlePointerDownOutside, true);
   window.removeEventListener('resize', closeMenu);
   window.removeEventListener('scroll', handleScrollOutside, true);
@@ -164,11 +172,16 @@ function handleScrollOutside(event: Event) {
     return;
   }
 
-  try {
-    refreshMenuFromEditor(view);
-  } catch {
-    closeMenu();
-  }
+  if (positionFrame !== null) return;
+  positionFrame = window.requestAnimationFrame(() => {
+    positionFrame = null;
+    if (!isCurrentMenuView(view)) return;
+    try {
+      updatePosition(view);
+    } catch {
+      closeMenu();
+    }
+  });
 }
 
 function getSlashTriggerDeleteFrom(view: EditorView, pos: number): number | null {
@@ -350,7 +363,7 @@ function updatePosition(view: EditorView) {
   menuContainer.style.left = `${left}px`;
 }
 
-function renderMenu(view: EditorView) {
+function renderMenu(view: EditorView, reposition = true) {
   if (!isCurrentMenuView(view)) return;
   const root = menuRoot;
   const instance = menuInstance;
@@ -364,9 +377,14 @@ function renderMenu(view: EditorView) {
       scrollSelectedItem={instance.scrollSelectedItem}
       onHover={(index) => {
         if (!menuInstance) return;
+        if (menuInstance.selectedIndex === index && !menuInstance.scrollSelectedItem) return;
+        menuInstance.hasNavigated = true;
         menuInstance.selectedIndex = index;
         menuInstance.scrollSelectedItem = false;
-        renderMenu(view);
+        renderMenu(view, false);
+      }}
+      onScroll={() => {
+        if (menuInstance) menuInstance.hasNavigated = true;
       }}
       onSelect={handleSelect}
       onAddAgent={handleAddAgentClick}
@@ -374,7 +392,7 @@ function renderMenu(view: EditorView) {
   );
 
   // Position after render so offsetHeight reflects the actual menu size.
-  updatePosition(view);
+  if (reposition) updatePosition(view);
 }
 
 async function handleAddAgentClick(): Promise<void> {
@@ -390,13 +408,16 @@ function openMenu(view: EditorView, editor: Editor, triggerFrom: number, deleteF
   closeMenu();
 
   const openId = menuOpenId;
-  menuState = { triggerFrom, deleteFrom, query: '' };
+  const availableItems = getAvailableSlashMenuItems();
+  menuState = { triggerFrom, deleteFrom, query: '', cursorPos: view.state.selection.from };
   activeEditor = editor;
   activeView = view;
   menuInstance = {
     selectedIndex: 0,
     scrollSelectedItem: true,
-    items: filterItems(''),
+    hasNavigated: false,
+    availableItems,
+    items: availableItems,
   };
 
   menuContainer = document.createElement('div');
@@ -411,25 +432,23 @@ function openMenu(view: EditorView, editor: Editor, triggerFrom: number, deleteF
   window.addEventListener('resize', closeMenu);
   window.addEventListener('scroll', handleScrollOutside, true);
 
-  // The slash extension renders through an imperative React root, so reading
-  // Zustand with getState() does not subscribe it to updates. Keep the open
-  // menu reactive while a cross-window config refresh is in flight: once the
-  // runtime result (or visibility preference) changes, recompute its items.
+  // Runtime detection may finish after the menu opens. Update the idle menu,
+  // then freeze its row order once the user begins navigating it.
   unsubscribeRuntimeStatus = useAgentRuntimeStore.subscribe((state, previous) => {
     if (state.statusByType === previous.statusByType) return;
     if (!isCurrentMenuView(view, openId) || activeEditor !== editor) return;
-    refreshMenuFromEditor(view);
+    if (!menuInstance || menuInstance.hasNavigated) return;
+    menuInstance.availableItems = getAvailableSlashMenuItems();
+    refreshMenuFromEditor(view, true);
   });
   unsubscribeUserSettings = subscribeEditorRuntimePreferences(() => {
     if (!isCurrentMenuView(view, openId) || activeEditor !== editor) return;
-    refreshMenuFromEditor(view);
+    if (menuInstance) menuInstance.availableItems = getAvailableSlashMenuItems();
+    refreshMenuFromEditor(view, true);
   });
 
   renderMenu(view);
-  void useAgentRuntimeStore.getState().refreshIfStale().then(() => {
-    if (!isCurrentMenuView(view, openId) || activeEditor !== editor) return;
-    refreshMenuFromEditor(view);
-  });
+  void useAgentRuntimeStore.getState().refreshIfStale();
 }
 
 function deleteTriggerText(editor: Editor): boolean {
@@ -462,7 +481,7 @@ async function createChildNoteReference(editor: Editor): Promise<void> {
   closeMenu();
 
   try {
-    const memo = await store.createMemo(undefined, notebook.id);
+    const { memo } = await store.createMemo(undefined, notebook.id);
     invalidateMentionNotes();
     editor
       .chain()
@@ -475,7 +494,7 @@ async function createChildNoteReference(editor: Editor): Promise<void> {
           notebookId: notebook.id,
           notebookName: notebook.name,
           title: memoTitleFromFilename(memo.filename),
-          originalPath: null,
+          originalPath: joinNotebookMemoPath(notebook.path, memo.relativePath ?? memo.filename),
           stale: false,
         },
       })
@@ -608,7 +627,7 @@ function handleSelect(item: SlashMenuItem): void {
   });
 }
 
-function refreshMenuFromEditor(view: EditorView) {
+function refreshMenuFromEditor(view: EditorView, force = false) {
   if (!isCurrentMenuView(view)) return;
   const state = menuState;
   const instance = menuInstance;
@@ -620,8 +639,19 @@ function refreshMenuFromEditor(view: EditorView) {
     return;
   }
 
+  if (!force && query === state.query) {
+    // The slash character is inserted after openMenu renders. Its first
+    // editor update keeps the query empty but moves the cursor anchor.
+    if (state.cursorPos !== view.state.selection.from) {
+      state.cursorPos = view.state.selection.from;
+      updatePosition(view);
+    }
+    return;
+  }
+
   state.query = query;
-  instance.items = filterItems(query);
+  state.cursorPos = view.state.selection.from;
+  instance.items = filterItems(query, instance.availableItems);
   instance.selectedIndex = Math.min(
     instance.selectedIndex,
     Math.max(instance.items.length - 1, 0)
@@ -671,21 +701,23 @@ export const SlashMenu = Extension.create({
 
             if (event.key === 'ArrowUp') {
               event.preventDefault();
+              menuInstance.hasNavigated = true;
               menuInstance.selectedIndex = menuInstance.selectedIndex > 0
                 ? menuInstance.selectedIndex - 1
                 : Math.max(menuInstance.items.length - 1, 0);
               menuInstance.scrollSelectedItem = true;
-              renderMenu(view);
+              renderMenu(view, false);
               return true;
             }
 
             if (event.key === 'ArrowDown') {
               event.preventDefault();
+              menuInstance.hasNavigated = true;
               menuInstance.selectedIndex = menuInstance.selectedIndex < menuInstance.items.length - 1
                 ? menuInstance.selectedIndex + 1
                 : 0;
               menuInstance.scrollSelectedItem = true;
-              renderMenu(view);
+              renderMenu(view, false);
               return true;
             }
 
@@ -704,12 +736,13 @@ export const SlashMenu = Extension.create({
 
             if (event.key === 'Tab') {
               event.preventDefault();
+              menuInstance.hasNavigated = true;
               const direction = event.shiftKey ? -1 : 1;
               const count = menuInstance.items.length;
               if (count > 0) {
                 menuInstance.selectedIndex = (menuInstance.selectedIndex + direction + count) % count;
                 menuInstance.scrollSelectedItem = true;
-                renderMenu(view);
+                renderMenu(view, false);
               }
               return true;
             }

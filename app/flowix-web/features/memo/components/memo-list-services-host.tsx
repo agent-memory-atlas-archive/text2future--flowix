@@ -19,13 +19,15 @@ import { useTauriRpc } from '@platform/tauri/use-tauri-rpc';
 import { cloudSyncErrorMessage, isInvalidRefreshTokenError } from '@platform/tauri/errors';
 import { useCreateNotebookFlow } from '@features/memo/hooks/use-create-notebook-flow';
 import { memoRepository, notebookRepository } from '@features/memo/services/memo-repository';
-import { getVisibleCreateFilter, useMemoStore, useTagStore, type MemoItem, type Notebook } from '@features/memo/store';
+import { getVisibleCreateFilter, useMemoStore, useTagStore, type MemoItem, type MemoListItem, type Notebook } from '@features/memo/store';
+import { isPathNoteListItem, memoListItemRelativePath } from '@/types/memo-item';
 import { getNotebookIconOption } from '@features/memo/components/notebook-icon';
 import { openMemoSession } from '@features/memo/use-cases/open-memo-session';
 import { clearWorkspaceDocument } from '@features/workspace/use-cases/workspace-navigation';
 import {
   flushBrowserColumnMemo,
   removeBrowserColumnTabsByMemoId,
+  removeBrowserColumnTabsByPath,
 } from '@features/workspace/use-cases/browser-column-navigation';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -42,6 +44,8 @@ import {
   openBrowserColumnMemoById,
 } from '@features/workspace/use-cases/browser-column-navigation';
 import { openExternalTarget } from '@features/workspace/use-cases/workspace-navigation';
+import { documentIdentityFromFile, flushWorkspaceDocumentPath } from '@features/document/public/workspace-api';
+import { ensureFileDisplayIdentity } from '@/lib/file-display-registry';
 import { setCurrentWorkspaceNotebook } from '@features/memo/public/workspace-api';
 import {
   FLOWIX_EXTERNAL_MARKDOWN_OPEN_EVENT,
@@ -317,7 +321,7 @@ export function MemoListServicesHost({
     })),
   );
 
-  const [deleteMemo, setDeleteMemo] = useState<MemoItem | null>(null);
+  const [deleteMemo, setDeleteMemo] = useState<MemoListItem | null>(null);
   const [deleteMedia, setDeleteMedia] = useState<MediaDeleteRequest | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -488,7 +492,7 @@ export function MemoListServicesHost({
       setEditOpen(true);
     };
     const handleDeleteMemo = (event: Event) => {
-      const memo = (event as CustomEvent<MemoItem>).detail;
+      const memo = (event as CustomEvent<MemoListItem>).detail;
       if (memo) setDeleteMemo(memo);
     };
     const handleDeleteMedia = (event: Event) => {
@@ -515,30 +519,28 @@ export function MemoListServicesHost({
 
   const handleCreateMemo = useCallback(async () => {
     if (!selectedNotebook) return;
-    const previousSelectedMemo = useMemoStore.getState().selectedMemo;
     const createFilter = getVisibleCreateFilter(activeFilter);
     if (createFilter !== activeFilter) {
       setSelectedTagId(null);
       setActiveFilter(createFilter);
     }
     const tagId = createFilter === 'tagged' ? selectedTagId : null;
-    setSelectedMemo(null);
-    let created: MemoItem;
+    let created: { memo: MemoItem; initialContent: string };
     try {
       created = await memoRepository.create(tagId ?? undefined, selectedNotebook.id);
     } catch (error) {
-      setSelectedMemo(previousSelectedMemo);
       toast.error(error instanceof Error ? error.message : String(error));
       return;
     }
-    handleMemoCreated(created, { select: false });
+    handleMemoCreated(created.memo, { select: false });
     const shouldSelectNewMemo =
       createFilter === 'all' ||
       (createFilter === 'tagged' && Boolean(tagId)) ||
       createFilter === 'thisWeek' ||
       createFilter === 'thisMonth';
     if (shouldSelectNewMemo) {
-      void openMemoSession({ ...created, isOpen: true }, selectedNotebook, { initialFocus: 'title' });
+      void openMemoSession({ ...created.memo, isOpen: true }, selectedNotebook,
+        { initialFocus: 'title', initialContent: created.initialContent });
     }
   }, [activeFilter, handleMemoCreated, selectedNotebook, selectedTagId, setActiveFilter, setSelectedMemo, setSelectedTagId]);
 
@@ -553,16 +555,35 @@ export function MemoListServicesHost({
     const memo = deleteMemo;
     setDeleteMemo(null);
     void (async () => {
-      const flushed = await flushBrowserColumnMemo(memo.id);
+      const path = selectedNotebook
+        ? joinNotebookMemoPath(selectedNotebook.path, memoListItemRelativePath(memo))
+        : null;
+      if (!path) return;
+      const flushed = isPathNoteListItem(memo)
+        ? await flushWorkspaceDocumentPath(
+            documentIdentityFromFile(ensureFileDisplayIdentity(path)),
+            path,
+            selectedNotebook?.path ?? null,
+          )
+        : await flushBrowserColumnMemo(memo.id);
       if (flushed === false) {
         toast.error(t('document.save.failed', { message: '当前页签保存失败，未删除笔记' }));
         return;
       }
-      if (!await memoRepository.delete(memo.id)) return;
-      removeBrowserColumnTabsByMemoId(memo.id);
-      if (selectedMemo?.id === memo.id) {
-        setSelectedMemo(null);
-        await clearWorkspaceDocument();
+      if (!await memoRepository.delete(path)) return;
+      if (isPathNoteListItem(memo)) {
+        removeBrowserColumnTabsByPath(path);
+        const selected = useMemoStore.getState().selectedPathNote;
+        if (selected?.notebookId === memo.notebookId && selected.relativePath === memo.relativePath) {
+          useMemoStore.getState().setSelectedPathNote(null);
+          await clearWorkspaceDocument();
+        }
+      } else {
+        removeBrowserColumnTabsByMemoId(memo.id);
+        if (selectedMemo?.id === memo.id) {
+          setSelectedMemo(null);
+          await clearWorkspaceDocument();
+        }
       }
       triggerRefresh();
     })().catch((error) => {
@@ -732,7 +753,7 @@ export function MemoListServicesHost({
           <DialogHeader>
             <DialogTitle>{t('memo.delete.title')}</DialogTitle>
             <DialogDescription>
-              {t('memo.delete.description', { name: displayTitleFromFilename(deleteMemo?.filename) } satisfies I18nParams)}
+              {t('memo.delete.description', { name: deleteMemo && isPathNoteListItem(deleteMemo) ? deleteMemo.title : displayTitleFromFilename(deleteMemo?.filename) } satisfies I18nParams)}
             </DialogDescription>
           </DialogHeader>
           <div className="mt-4 flex justify-end gap-2">

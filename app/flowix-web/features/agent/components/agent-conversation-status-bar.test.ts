@@ -39,4 +39,22 @@ describe('agent conversation status bar entries', () => {
     expect(entries[0]?.run.status).toBe('running');
     expect(entries[1]?.run.status).toBe('completed');
   });
+
+  it('only shows conversations from the selected notebook and excludes removed threads', () => {
+    const current = { ...instance('current', 'thread-current', 10), source: { kind: 'dedicated' as const, notebookId: 'notebook-a' } };
+    const other = { ...instance('other', 'thread-other', 20), source: { kind: 'dedicated' as const, notebookId: 'notebook-b' } };
+    const unscoped = instance('unscoped', 'thread-unscoped', 30);
+    const removed = { ...instance('removed', 'thread-removed', 40), source: { kind: 'dedicated' as const, notebookId: 'notebook-a' } };
+    const entries = conversationStatusEntries(
+      { current, other, unscoped, removed },
+      Object.fromEntries(['current', 'other', 'unscoped', 'removed'].map((name) => [
+        `thread-${name}`, `running\u001frun-${name}\u001f10\u001f-\u001f-\u001f-\u001f0`,
+      ])),
+      new Set(),
+      'notebook-a',
+      { 'thread-removed': true },
+    );
+
+    expect(entries.map(({ instance: item }) => item.instanceId)).toEqual(['current']);
+  });
 });

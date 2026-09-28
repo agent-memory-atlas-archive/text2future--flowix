@@ -53,7 +53,7 @@ impl DocumentMutationCoordinator {
             return Ok(None);
         };
         let store = read_lock(&state.memo_file, "memo_file");
-        let Ok(expected) = store.read_memo_content_revision(memo_id) else {
+        let Ok(expected) = store.read_memo_content_revision_for_notebook(notebook_id, memo_id) else {
             return Ok(None);
         };
         let bytes = match std::fs::read(path) {
@@ -85,7 +85,7 @@ impl DocumentMutationCoordinator {
             return Ok(None);
         };
         let store = read_lock(&state.memo_file, "memo_file");
-        let Ok(expected) = store.read_memo_content_revision(memo_id) else {
+        let Ok(expected) = store.read_memo_content_revision_for_notebook(notebook_id, memo_id) else {
             return Ok(None);
         };
         Self::commit_hash(

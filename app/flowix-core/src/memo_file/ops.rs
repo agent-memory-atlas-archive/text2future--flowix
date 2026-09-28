@@ -1,22 +1,18 @@
-//! Memo CRUD 原语 — memo index 始终是全量索引的真源。
+//! Legacy memo-ID CRUD and reconciliation operations.
 //!
-//! 物理文件: `<notebook>/<filename>.md`, `filename` 即 memo index entry.filename。
-//! 命名规则:
-//! - 文件名由 `sanitize(title)` 派生, 后缀恒为 `.md`。
-//! - 同 title 冲突时自动追加 `-1` / `-2` / ... (不去重 id 段, 6 位 shortid
-//!   仅作为 memo index 的内部 key, 不再出现在文件名)。
-//! - id 仍由 `generate_memo_id` 6 位 nanoid 生成, 字符集 `[0-9a-z]`。
+//! Markdown remains the content source. This module maintains an ID-bearing
+//! cache for older callers; path-based operations and the rebuildable V2 index
+//! also live in `v2_index`. New internal IDs contain eight `[0-9a-z]`
+//! characters; older six-character IDs remain readable. New writes do not
+//! append an ID to filenames or frontmatter.
 //!
-//! 所有写路径 (UI / Agent / 外部工具 / 文件监听器) 都过本模块, 唯一入口。
-//! 跨 IPC 边界的 `Memo` / `MemoIndexEntry` 字段语义: `filename` 存磁盘文件名
-//! (含 `.md`); 前端展示时去后缀; 旧版 `path` 字段删除。
+//! `Memo` / `MemoIndexEntry::filename` stores the disk filename including
+//! `.md`; `relative_path` identifies nested files within the notebook.
 //!
 //! ## 锁模型
 //!
-//! 写路径 (`create` / `rename` / `write` / `delete` / `register_*` / `reconcile`)
-//! 持有 `current_index_io` Mutex, 跨 "rename 物理文件 + 写 memo index" 全过程,
-//! 串行化 memo index RMW, 杜绝 lost update。`std::sync::Mutex` 不可重入,
-//! 内部 _locked 变体跳过自拿锁。
+//! ID-cache mutations use `current_index_io` to serialize their read-modify-
+//! write sequence. Internal `_locked` methods are called while holding it.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,10 +22,9 @@ use rusqlite::OptionalExtension;
 use super::derivation::{apply_derived_memo_fields, extract_title_and_preview};
 pub(super) use super::file_io::{atomic_create_bytes, atomic_write_bytes, rename_file_noclobber};
 use super::frontmatter::{
-    build_md_content, extract_document_metadata,
-    extract_document_metadata_preserving_invalid_tag_paths, is_system_frontmatter_key,
-    merge_frontmatter, replace_frontmatter_tags, replace_frontmatter_tags_preserving_invalid_paths,
-    MergeOverrides, CANONICAL_FRONTMATTER_KEY,
+    extract_document_metadata, extract_document_metadata_preserving_invalid_tag_paths,
+    is_system_frontmatter_key, merge_frontmatter, replace_frontmatter_tags,
+    replace_frontmatter_tags_preserving_invalid_paths, MergeOverrides,
 };
 use super::notebook::sqlite_to_io;
 use super::types::{DeleteTagReport, Memo, MoveTagReport, ReconcileReport};
@@ -76,15 +71,8 @@ pub fn base_filename(title: &str) -> String {
     }
 }
 
-/// 冲突检测: 在 base 目录下, `candidate.md` 是否已存在, 或已被 memo index
-/// 某条 entry 占用。 任意一种情况都视为冲突, 自动追加 `-1` / `-2` / ...。
-///
-/// 关键: 之前只看 `fs::exists` 是不够的 ── 两次并发 `create_memo` 在
-/// `current_index_io` 锁内串行, 但 `resolve_filename_conflict` 不读
-/// memo index, 导致两个不同 id 写到同一个磁盘文件 (前一个 entry 的
-/// filename 跟后一个冲突但磁盘文件已存在 → 仍报 "不冲突", 后一个
-/// 覆盖前一个文件)。 现在加 memo index 维度, 跟 `apply_derived_memo_fields`
-/// / `sync_index_on_write` 走同一真源。
+/// Choose a free Markdown filename using both disk existence and the supplied
+/// occupied names. Append `-1`, `-2`, and so on when either source conflicts.
 pub fn resolve_filename_conflict(
     base: &Path,
     candidate_base: &str,
@@ -242,7 +230,7 @@ fn normalize_for_compare(path: &Path) -> PathBuf {
 }
 
 impl MemoFile {
-    /// 生成一个新的 6 位 memo id (字符集 `[0-9a-z]`)。同 id 已存在时循环重抽。
+    /// Generate an eight-character legacy memo ID, retrying on collision.
     pub fn generate_memo_id(&self) -> String {
         loop {
             let id = nanoid::nanoid!(8, &super::MEMO_ID_ALPHABET);

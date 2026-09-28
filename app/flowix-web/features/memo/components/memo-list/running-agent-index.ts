@@ -206,9 +206,9 @@ export function findRunningAgentForMemo(
 
 export function findRunningAgentTypeForMemo(
   index: RunningAgentTypeIndex,
-  memo: Pick<MemoItem, 'id' | 'agents'>,
+  memo: Pick<MemoItem, 'agents'> & { id?: string },
 ): AgentConversationInstance['agentType'] | null {
-  let match = decodeTypeMatch(index[memoIndexKey(memo.id)]);
+  let match = memo.id ? decodeTypeMatch(index[memoIndexKey(memo.id)]) : null;
 
   for (const agent of memo.agents) {
     const candidate = decodeTypeMatch(index[threadIndexKey(agent.threadId)]);

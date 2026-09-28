@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EditorView } from '@codemirror/view';
 
 import { CodeEditor, type CodeEditorHandle } from '@features/editor/code-editor';
+import { getPlatform } from '@/lib/shortcuts/platform';
 import { ShortcutsProvider } from '@features/shortcuts';
 import '@features/shortcuts/actions';
 
@@ -142,6 +143,13 @@ describe('CodeEditor', () => {
 
     expect(container.querySelector('.cm-content > .cm-source-header [data-testid="source-title"]')?.textContent)
       .toBe('Empty note');
+    expect(container.querySelector('.cm-lineNumbers .cm-source-header-gutter-marker')).not.toBeNull();
+    const gutterElements = Array.from(container.querySelectorAll('.cm-lineNumbers .cm-gutterElement'));
+    const titleGutterIndex = gutterElements.findIndex((element) =>
+      element.querySelector('.cm-source-header-gutter-marker'));
+    const firstLineIndex = gutterElements.findIndex((element) => element.textContent === '1');
+    expect(titleGutterIndex).toBeGreaterThan(-1);
+    expect(firstLineIndex).toBeGreaterThan(titleGutterIndex);
   });
 
   it('keeps the source header when the document content is synchronized', async () => {
@@ -376,7 +384,8 @@ describe('CodeEditor', () => {
       const event = new KeyboardEvent('keydown', {
         key,
         code: key === 'z' ? 'KeyZ' : 'KeyY',
-        metaKey: true,
+        metaKey: getPlatform() === 'mac',
+        ctrlKey: getPlatform() !== 'mac',
         shiftKey,
         bubbles: true,
         cancelable: true,

@@ -32,8 +32,8 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@shared/ui/dropdown-menu';
-import { documentIdentityFromFile } from '@features/document/store/document-identity';
-import { requireFileDisplayIdentity } from '@features/workspace/store/file-display-store';
+import { documentIdentityFromFile } from '@features/document/public/shell-api';
+import { requireFileDisplayIdentity } from '@/lib/file-display-registry';
 
 function isWindowsPlatform(): boolean {
   return typeof navigator !== 'undefined'

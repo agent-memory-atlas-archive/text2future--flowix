@@ -136,3 +136,38 @@ impl MemoFile {
 
 #[cfg(test)]
 mod tests;
+
+/// Ephemeral OS identity for correlating observed rename events, never persisted.
+#[cfg(windows)]
+pub fn filesystem_identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS,
+    };
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .ok()?;
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
+        return None;
+    }
+    Some((
+        info.dwVolumeSerialNumber as u64,
+        ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
+    ))
+}
+
+#[cfg(unix)]
+pub fn filesystem_identity(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = fs::metadata(path).ok()?;
+    Some((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(not(any(windows, unix)))]
+pub fn filesystem_identity(_path: &Path) -> Option<(u64, u64)> {
+    None
+}

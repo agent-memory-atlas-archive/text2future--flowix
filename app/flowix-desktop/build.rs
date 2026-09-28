@@ -3,8 +3,12 @@ use std::path::{Path, PathBuf};
 
 fn collect_template_files(root: &Path, directory: &Path, files: &mut Vec<PathBuf>) {
     println!("cargo:rerun-if-changed={}", directory.display());
-    let entries = fs::read_dir(directory)
-        .unwrap_or_else(|error| panic!("failed to read template directory {}: {error}", directory.display()));
+    let entries = fs::read_dir(directory).unwrap_or_else(|error| {
+        panic!(
+            "failed to read template directory {}: {error}",
+            directory.display()
+        )
+    });
 
     for entry in entries {
         let entry = entry.expect("failed to read template directory entry");
@@ -22,9 +26,8 @@ fn collect_template_files(root: &Path, directory: &Path, files: &mut Vec<PathBuf
 }
 
 fn generate_notebook_template_assets() {
-    let manifest_dir = PathBuf::from(
-        std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set"),
-    );
+    let manifest_dir =
+        PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set"));
     let template_root = manifest_dir.join("../../.flowix/templates/notebook-templates");
     let template_root = template_root
         .canonicalize()
@@ -37,9 +40,7 @@ fn generate_notebook_template_assets() {
 
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is set"));
     let generated_file = out_dir.join("notebook_template_assets.rs");
-    let mut generated = String::from(
-        "pub const NOTEBOOK_TEMPLATE_ASSETS: &[(&str, &[u8])] = &[\n",
-    );
+    let mut generated = String::from("pub const NOTEBOOK_TEMPLATE_ASSETS: &[(&str, &[u8])] = &[\n");
     for relative in files {
         let absolute = template_root.join(&relative);
         generated.push_str(&format!(
@@ -70,7 +71,10 @@ fn main() {
         println!("cargo:rustc-link-arg-bin=flowix-desktop=-sectcreate");
         println!("cargo:rustc-link-arg-bin=flowix-desktop=__TEXT");
         println!("cargo:rustc-link-arg-bin=flowix-desktop=__info_plist");
-        println!("cargo:rustc-link-arg-bin=flowix-desktop={}", info_plist.display());
+        println!(
+            "cargo:rustc-link-arg-bin=flowix-desktop={}",
+            info_plist.display()
+        );
     }
 
     tauri_build::build()

@@ -818,10 +818,10 @@ fn migrate_legacy_outputs(
     notebook: &Path,
     memo_file: &Arc<std::sync::RwLock<flowix_core::memo_file::MemoFile>>,
     app_handle: Option<&tauri::AppHandle>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let output_dir = notebook.join(&plugin.definition.output_directory);
     if !path_is_inside(&output_dir, notebook) || !output_dir.is_dir() {
-        return Ok(());
+        return Ok(true);
     }
 
     let existing_paths = {
@@ -844,6 +844,7 @@ fn migrate_legacy_outputs(
 
     let entries =
         fs::read_dir(&output_dir).map_err(|error| format!("list plugin outputs: {error}"))?;
+    let mut completed = true;
     for entry in entries {
         let path = entry
             .map_err(|error| format!("read plugin output entry: {error}"))?
@@ -868,6 +869,7 @@ fn migrate_legacy_outputs(
             Ok(parsed) => parsed,
             Err(error) => {
                 tracing::warn!(plugin = %plugin.manifest.id, path = %path.display(), "skip legacy plugin output migration: {error}");
+                completed = false;
                 continue;
             }
         };
@@ -905,7 +907,7 @@ fn migrate_legacy_outputs(
             );
         }
     }
-    Ok(())
+    Ok(completed)
 }
 
 fn legacy_output_prefix(plugin_id: &str) -> String {
@@ -994,6 +996,7 @@ pub fn migrate_notebook_data(
     notebook: &Path,
     memo_file: &Arc<std::sync::RwLock<flowix_core::memo_file::MemoFile>>,
     app_handle: Option<&tauri::AppHandle>,
+    force: bool,
 ) -> Result<(), String> {
     static MIGRATION_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     let _migration_guard = MIGRATION_LOCK
@@ -1001,9 +1004,37 @@ pub fn migrate_notebook_data(
         .lock()
         .map_err(|_| "plugin output migration lock poisoned".to_string())?;
 
-    repair_notebook_artifact_pointers(notebook_id, notebook, memo_file)?;
+    const POINTER_REPAIR_KEY: &str = "plugin_pointer_repair_v1";
+    let pointer_repaired = read_lock(memo_file, "memo_file")
+        .notebook_data_migration_version(notebook_id, POINTER_REPAIR_KEY)
+        .map_err(|error| format!("read plugin pointer migration state: {error}"))?
+        .unwrap_or_default()
+        >= 1;
+    if force || !pointer_repaired {
+        repair_notebook_artifact_pointers(notebook_id, notebook, memo_file)?;
+        read_lock(memo_file, "memo_file")
+            .mark_notebook_data_migration(notebook_id, POINTER_REPAIR_KEY, 1)
+            .map_err(|error| format!("record plugin pointer migration: {error}"))?;
+    }
     for plugin in list_plugins()? {
-        migrate_legacy_outputs(&plugin, notebook_id, notebook, memo_file, app_handle)?;
+        let key = format!(
+            "plugin_legacy_outputs_{}_{}",
+            plugin.manifest.id, plugin.manifest.version
+        );
+        if !force
+            && read_lock(memo_file, "memo_file")
+                .notebook_data_migration_version(notebook_id, &key)
+                .map_err(|error| format!("read plugin output migration state: {error}"))?
+                .unwrap_or_default()
+                >= 1
+        {
+            continue;
+        }
+        if migrate_legacy_outputs(&plugin, notebook_id, notebook, memo_file, app_handle)? {
+            read_lock(memo_file, "memo_file")
+                .mark_notebook_data_migration(notebook_id, &key, 1)
+                .map_err(|error| format!("record plugin output migration: {error}"))?;
+        }
     }
     Ok(())
 }

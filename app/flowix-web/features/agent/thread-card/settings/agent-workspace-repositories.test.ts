@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import type { AgentAccessConfig, AgentAccessEntry, NotebookAgentConfig } from "@/lib/types/agent-access";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -16,8 +18,8 @@ const {
     config: { version: 1, entries: [], defaults: {} },
     notebookConfigs: {},
   } as {
-    config: { version: number; entries: any[]; defaults: Record<string, unknown> };
-    notebookConfigs: Record<string, { version: 1; revision: number; addDirs: any[] }>;
+    config: AgentAccessConfig;
+    notebookConfigs: Record<string, NotebookAgentConfig>;
   },
 }));
 
@@ -73,7 +75,7 @@ vi.mock("@features/agent/store/dsh-model-config-store", () => ({
 
 import { ExternalAgentSettingsController } from "./external-agent-settings-controller";
 
-function folderEntry(path: string, name: string, missing = false) {
+function folderEntry(path: string, name: string, missing = false): AgentAccessEntry {
   return {
     id: `fld_${name}`,
     kind: "folder",
@@ -86,7 +88,7 @@ function folderEntry(path: string, name: string, missing = false) {
   };
 }
 
-function setupAccess(entries: any[], addDirs: Array<{ path: string; label: string }>) {
+function setupAccess(entries: AgentAccessEntry[], addDirs: Array<{ path: string; label: string }>) {
   accessState.config = { version: 1, entries, defaults: {} };
   accessState.notebookConfigs = {
     "notebook-1": {
@@ -147,9 +149,9 @@ describe("agent workspace popover repositories page", () => {
 
   /** 直接驱动「可访问」弹窗, 绕过 composer 控件。 */
   function openAccessPopover() {
-    controller.setSettingsPopoverOpen(true, null, null);
-    // kind 为 null 时 renderPopover 会早退, 所以显式走 workspace 分支。
-    (controller as any).toggleWorkspacePopover(document.createElement("button"));
+    const button = controller.createComposerWorkspaceButton();
+    document.body.append(button!);
+    button!.click();
   }
 
   function pageTitles(): string[] {

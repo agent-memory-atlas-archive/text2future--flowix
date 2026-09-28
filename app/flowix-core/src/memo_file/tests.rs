@@ -1,4 +1,4 @@
-﻿//! v3 单测 — 围绕 `ops` 原语 + memo index 真源语义。
+//! v3 单测 — 围绕 `ops` 原语 + memo index 真源语义。
 //!
 //! 覆盖:
 //! - helpers: `sanitize_filename_component` / `base_filename` / `resolve_filename_conflict` /
@@ -74,10 +74,7 @@ fn create_memo_generates_eight_char_id() {
         .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase()));
 
     let content = fs::read_to_string(mf.get_memo_base().join(&memo.filename)).unwrap();
-    assert_eq!(
-        super::frontmatter::extract_frontmatter_key(&content),
-        Some(memo.id)
-    );
+    assert_eq!(super::frontmatter::extract_frontmatter_key(&content), None);
 }
 
 /// 读 memo index 原始 JSON 字符串 (不反序列化, 用于 schema 断言)。
@@ -564,7 +561,7 @@ fn importing_a_copy_with_a_cross_notebook_key_rekeys_the_file() {
     assert_ne!(imported.id, original.id);
     assert_eq!(
         crate::memo_file::extract_frontmatter_key(&fs::read_to_string(&imported_path).unwrap()),
-        Some(imported.id.clone())
+        None
     );
     assert!(mf
         .read_memo_for_notebook_id("nb_test", &original.id)
@@ -600,7 +597,7 @@ fn startup_reconcile_treats_a_copy_as_new_memo_when_original_still_exists() {
         crate::memo_file::extract_frontmatter_key(
             &fs::read_to_string(base.join("Copied from original.md")).unwrap()
         ),
-        Some(copied.id.clone())
+        None
     );
     assert!(base.join(&original.filename).exists());
 }
@@ -778,7 +775,7 @@ fn pasted_file_with_key_from_other_notebook_gets_new_id_in_current_notebook() {
     assert!(mf.read_memo_global(&other_memo.id).is_some());
     assert_eq!(
         super::frontmatter::extract_frontmatter_key(&copied_content),
-        Some(copied.id)
+        Some(other_memo.id)
     );
 }
 
@@ -961,7 +958,7 @@ fn resolve_filename_conflict_picks_first_free() {
 #[test]
 fn build_md_content_writes_frontmatter_then_body() {
     let content = build_md_content("abc123", "world\n");
-    assert_eq!(content, "---\nflowix_key: abc123\n---\nworld\n");
+    assert_eq!(content, "world\n");
 }
 
 // =====================================================================
@@ -989,7 +986,7 @@ fn create_memo_writes_file_and_entry() {
 }
 
 #[test]
-fn create_memo_merges_key_into_existing_frontmatter() {
+fn create_memo_preserves_authored_frontmatter_without_identity() {
     let (mf, _base) = fresh_memo_file();
     let body = concat!(
         "---\n",
@@ -1001,7 +998,7 @@ fn create_memo_merges_key_into_existing_frontmatter() {
     let memo = mf.create_memo("Imported", body, None).expect("create ok");
     let content = fs::read_to_string(memo.filename_full_path(&mf)).unwrap();
 
-    assert!(content.starts_with("---\nflowix_key: "));
+    assert!(!content.contains("flowix_key:"));
     assert!(content.contains("\nname: guizang-ppt-skill\n"));
     assert!(content.contains("\ndescription: deck generator\n"));
     assert_eq!(
@@ -1009,10 +1006,7 @@ fn create_memo_merges_key_into_existing_frontmatter() {
         1,
         "content must have one closing frontmatter fence: {content}"
     );
-    assert_eq!(
-        super::frontmatter::extract_frontmatter_key(&content),
-        Some(memo.id)
-    );
+    assert_eq!(super::frontmatter::extract_frontmatter_key(&content), None);
 }
 
 #[test]
@@ -1059,9 +1053,7 @@ fn template_note_with_existing_flowix_key_creates_after_prior_nested_notes() {
             "nb_test",
             "人物",
             "当前人物状态",
-            &format!(
-                "---\nflowix_key: {template_key}\n---\n# 当前人物状态\n\n- 状态快照\n"
-            ),
+            &format!("---\nflowix_key: {template_key}\n---\n# 当前人物状态\n\n- 状态快照\n"),
             None,
         )
         .expect("create next template note");
@@ -1069,10 +1061,7 @@ fn template_note_with_existing_flowix_key_creates_after_prior_nested_notes() {
 
     assert_ne!(memo.id, template_key);
     assert_eq!(memo.relative_path, "人物/当前人物状态.md");
-    assert_eq!(
-        super::frontmatter::extract_frontmatter_key(&content),
-        Some(memo.id)
-    );
+    assert_eq!(super::frontmatter::extract_frontmatter_key(&content), None);
 }
 
 #[test]
@@ -1089,7 +1078,7 @@ fn create_memo_persists_frontmatter_properties_to_index_db() {
     let memo = mf.create_memo("Imported", body, None).expect("create ok");
 
     let from_index = mf.read_memo(&memo.id).expect("memo in index");
-    assert_eq!(from_index.properties["flowix_key"], memo.id);
+    assert!(from_index.properties.get("flowix_key").is_none());
     assert_eq!(from_index.properties["name"], "guizang-ppt-skill");
     assert_eq!(from_index.properties["status"], "draft");
     assert_eq!(from_index.properties["tags"][0], "ppt");
@@ -1150,6 +1139,48 @@ fn create_memo_handles_title_conflict() {
     assert_ne!(a.id, b.id);
     assert!(base.join("Hello.md").exists());
     assert!(base.join("Hello-1.md").exists());
+}
+
+#[test]
+fn occupied_names_and_cache_follow_only_the_target_directory() {
+    let (mf, base) = fresh_memo_file();
+    fs::create_dir_all(base.join("folder")).unwrap();
+    let root = mf
+        .create_memo_for_notebook_id("nb_test", "Same", "root", None)
+        .unwrap();
+    let nested = mf
+        .create_memo_for_notebook_id_in_directory("nb_test", "folder", "Same", "nested", None)
+        .unwrap();
+    let conflict = mf
+        .create_memo_for_notebook_id_in_directory("nb_test", "folder", "Same", "next", None)
+        .unwrap();
+    assert_eq!(root.filename, "Same.md");
+    assert_eq!(nested.filename, "Same.md");
+    assert_eq!(conflict.filename, "Same-1.md");
+    let names = mf
+        .occupied_filenames_in_directory("nb_test", Some("folder"))
+        .unwrap();
+    assert_eq!(names.len(), 2);
+    let index = mf
+        .read_index_for_notebook_id(Some("nb_test"))
+        .unwrap()
+        .unwrap();
+    assert!(index.memos.iter().any(|entry| entry.id == conflict.id));
+}
+
+#[test]
+fn delayed_remove_cannot_unregister_a_path_that_reappeared() {
+    let (mf, base) = fresh_memo_file();
+    let memo = mf.create_memo("Restored", "body", None).unwrap();
+    let path = base.join(&memo.filename);
+
+    // A queued Remove may be delivered after a template writes this path.
+    assert!(!mf.unregister_memo_by_path_for_notebook_id("nb_test", &path));
+    assert!(mf.read_memo_for_notebook_id("nb_test", &memo.id).is_some());
+
+    fs::remove_file(&path).unwrap();
+    assert!(mf.unregister_memo_by_path_for_notebook_id("nb_test", &path));
+    assert!(mf.read_memo_for_notebook_id("nb_test", &memo.id).is_none());
 }
 
 #[test]
@@ -1242,13 +1273,9 @@ fn rename_memo_renames_disk_file_and_keeps_key_in_frontmatter() {
     // frontmatter 块内 `key` 保持与 memo index id 一致, 不再有 `filename` 字段。
     let (mf, _base) = fresh_memo_file();
     let memo = mf.create_memo("First", "body\n", None).unwrap();
-    let original_id = memo.id.clone();
     let _ = mf.rename_memo(&memo.id, "Second").unwrap();
     let content = fs::read_to_string(_base.join("Second.md")).unwrap();
-    assert!(
-        content.contains(&format!("flowix_key: {}", original_id)),
-        "frontmatter key must equal memo id after rename: {content}"
-    );
+    assert!(!content.contains("flowix_key:"));
     assert!(
         !content.contains("filename:"),
         "frontmatter should no longer carry filename field: {content}"
@@ -1288,19 +1315,12 @@ fn write_memo_updates_body_and_keeps_filename() {
 }
 
 #[test]
-fn write_memo_preserves_key_in_frontmatter() {
-    // 新 frontmatter 语义: write_memo 走 merge_frontmatter, 注入 key=id,
-    // body 透传 caller 内容, 不再有 `filename` 字段。
+fn write_memo_does_not_inject_identity() {
     let (mf, base) = fresh_memo_file();
     let memo = mf.create_memo("Stable", "body\n", None).unwrap();
-    let original_id = memo.id.clone();
     let _ = mf.write_memo(&memo.id, "more\n").unwrap();
-    // filename 不冲突时保持不变, 直接读 Stable.md
     let content = fs::read_to_string(base.join("Stable.md")).unwrap();
-    assert!(
-        content.contains(&format!("flowix_key: {}", original_id)),
-        "frontmatter key must equal memo id after write: {content}"
-    );
+    assert!(!content.contains("flowix_key:"));
     assert!(
         content.contains("more"),
         "body must reflect caller content: {content}"
@@ -1446,19 +1466,14 @@ fn write_rename_handles_conflict_with_dash_suffix() {
 }
 
 #[test]
-fn write_rename_keeps_key_in_frontmatter() {
-    // rename 后磁盘 frontmatter 的 key 仍 == memo id, 跟前方案契约一致。
+fn write_rename_does_not_inject_identity() {
     let (mf, base) = fresh_memo_file();
     let memo = mf.create_memo("Start", "Start\n", None).unwrap();
-    let original_id = memo.id.clone();
     let _ = mf
         .write_memo_renaming_on_title_change(&memo.id, "End\nnew body\n")
         .expect("write+rename ok");
     let content = fs::read_to_string(base.join("End.md")).unwrap();
-    assert!(
-        content.contains(&format!("flowix_key: {}", original_id)),
-        "frontmatter key must equal memo id: {content}"
-    );
+    assert!(!content.contains("flowix_key:"));
     assert!(!content.contains("filename:"));
 }
 
@@ -1612,9 +1627,7 @@ fn scoped_delete_does_not_remove_same_id_from_another_notebook() {
 // =====================================================================
 
 #[test]
-fn register_existing_file_injects_key_and_preserves_body() {
-    // 新 frontmatter 语义: 外部 .md 被注册时, 后端走 merge_frontmatter
-    // 在文件头注入 frontmatter 块 (`key: <新id>`), 原 body 字节级保留。
+fn registration_never_rewrites_markdown() {
     let (mf, base) = fresh_memo_file();
     let abs = base.join("PreExisting.md");
     fs::write(&abs, "user original content").unwrap();
@@ -1622,17 +1635,12 @@ fn register_existing_file_injects_key_and_preserves_body() {
     let memo = mf.register_existing_file(&abs).expect("register ok");
     assert_eq!(memo.filename, "PreExisting.md");
     assert!(!memo.id.is_empty());
-    // 磁盘文件被改写: frontmatter 块注入 + 原 body 保留
     let content = fs::read_to_string(&abs).unwrap();
-    assert!(
-        content.contains(&format!("flowix_key: {}", memo.id)),
-        "frontmatter must contain injected key: {content}"
-    );
+    assert!(!content.contains("flowix_key:"));
     assert!(
         content.contains("user original content"),
         "original body must be preserved: {content}"
     );
-    // memo index 已注册
     let queried = mf.find_memo_by_filename("PreExisting.md").expect("in list");
     assert_eq!(queried.id, memo.id);
 }
@@ -1767,7 +1775,7 @@ fn reconcile_indexes_root_agents_but_skips_hidden_paths_and_generated_directorie
 }
 
 #[test]
-fn directory_reconcile_preserves_ids_after_nested_folder_rename() {
+fn unobserved_directory_move_rebuilds_paths_without_guessing_identity() {
     let (mf, base) = fresh_memo_file();
     fs::create_dir_all(base.join("docs/guide")).unwrap();
     fs::write(base.join("docs/guide/One.md"), "# One\n").unwrap();
@@ -1784,10 +1792,10 @@ fn directory_reconcile_preserves_ids_after_nested_folder_rename() {
         .reconcile_notebook_with_disk_bidirectional("nb_test")
         .unwrap();
     assert_eq!(report.added, 2);
-    assert_eq!(report.removed, 0);
+    assert_eq!(report.removed, 2);
     for memo in mf.read_all_memos() {
         assert!(memo.relative_path.starts_with("docs/manual/"));
-        assert_eq!(ids.get(&memo.filename), Some(&memo.id));
+        assert_ne!(ids.get(&memo.filename), Some(&memo.id));
     }
 }
 
@@ -1882,41 +1890,24 @@ fn reconcile_bidirectional_empty_dir_clears_all_entries() {
 }
 
 #[test]
-fn reconcile_bidirectional_preserves_id_on_inode_rename() {
-    // inode-tracker 漏命中场景: 磁盘文件 frontmatter key 命中 memo index 已有 id,
-    // 但 filename 不同 (说明 inode 改了名, memo index 还没跟上)。
-    // 期望: 走 rename_memo_file 路径保留 id, 把 entry.filename 改为新值;
-    // 然后 prune 阶段不会把它当幽灵删掉 (因为新 filename 已在 disk_filenames)。
+fn unobserved_move_is_delete_and_create() {
     let (mf, base) = fresh_memo_file();
-
-    // 1. register 原始文件, 记下 id
     let old_path = base.join("Original.md");
     fs::write(&old_path, "# Hello\nbody\n").unwrap();
     let initial = mf.register_existing_file(&old_path).expect("register");
     let original_id = initial.id.clone();
     assert_eq!(initial.filename, "Original.md");
-
-    // 2. 物理 rename (外部 mv), memo index 还没更新
     let new_path = base.join("Renamed.md");
     fs::rename(&old_path, &new_path).unwrap();
-
-    // 3. sweep 双向:
-    //    - disk_filenames = {"Renamed.md"}
-    //    - list_filenames = {"Original.md"}
-    //    - to_register = {"Renamed.md"}
-    //    - to_remove = [original_id] (因为 Original.md 不在盘上)
-    //    注册阶段: frontmatter key=original_id 命中 memo index 已有 entry,
-    //              走 rename_memo_file → entry.filename 改为 "Renamed.md"
-    //    prune 阶段: 新 entry 的 filename = "Renamed.md" ∈ disk_filenames,
-    //                所以不被删
     let report = mf.reconcile_with_disk_bidirectional().unwrap();
     assert_eq!(report.added, 1, "Renamed.md 被注册");
-    assert_eq!(report.removed, 0, "rename 路径保留的 entry 不应被 prune");
-
-    // 关键断言: id 保留, 只有一条 entry, filename 已是新值
+    assert_eq!(report.removed, 1, "rename 路径保留的 entry 不应被 prune");
     let list = mf.read_index().expect("list");
     assert_eq!(list.memos.len(), 1, "exactly one entry");
-    assert_eq!(list.memos[0].id, original_id, "id preserved");
+    assert_ne!(
+        list.memos[0].id, original_id,
+        "unobserved move gets a new cache association"
+    );
     assert_eq!(list.memos[0].filename, "Renamed.md", "filename updated");
 }
 
@@ -1967,7 +1958,7 @@ fn reconcile_bidirectional_as_new_rekeys_existing_markdown() {
     let imported_content = fs::read_to_string(imported_path).unwrap();
     assert_eq!(
         super::frontmatter::extract_frontmatter_key(&imported_content),
-        Some(imported.id)
+        None
     );
 }
 
@@ -2336,7 +2327,7 @@ fn independent_instances_create_without_lost_rows_or_file_overwrites() {
         let content = fs::read_to_string(base.join(&memo.filename)).expect("memo file exists");
         assert_eq!(
             super::frontmatter::extract_frontmatter_key(&content).as_deref(),
-            Some(memo.id.as_str())
+            None
         );
     }
 }
@@ -2508,56 +2499,26 @@ fn rename_memo_file_rejects_when_new_filename_occupied() {
 // abc123 还在但 filename 还是 "Hello.md" (指向不存在的文件)。
 
 #[test]
-fn register_existing_file_should_preserve_id_from_frontmatter_key() {
-    // 模拟场景: memo index 里有一条 entry (id=abc123, filename="Hello.md"),
-    // 但 disk 上的 "Hello.md" 已经被外部 mv 到 "Hello-renamed.md"。
-    // memo index 现在跟磁盘不一致 — 这是 rename 后的 race window。
-    //
-    // 1. 先 register "Hello.md" 建立 memo index entry
-    // 2. 物理 rename 磁盘文件
-    // 3. 用 frontmatter 里的 key 字段反查 memo index, 找到 id=abc123
-    //    那条 entry, 改它的 filename 到 "Hello-renamed.md"
+fn explicit_path_rename_preserves_cache_association() {
     let (mf, _tmp) = fresh_memo_file();
-
-    // 1. register 原始文件
     let old_path = mf.get_memo_base().join("Hello.md");
     fs::write(&old_path, "# Hello\nworld\n").unwrap();
     let initial = mf.register_existing_file(&old_path).expect("register ok");
     let original_id = initial.id.clone();
     assert_eq!(initial.filename, "Hello.md");
-
-    // 模拟 inode tracker 漏命中 — 外部 mv 后 memo index 还没更新。
-    // 我们手工把 memo index 的 entry.filename 改成 "Hello-renamed.md"
-    // (模拟 rename_memo_file 已经走过) — 不, 实际场景是 inode tracker
-    // 漏命中, rename_memo_file 没被调, memo index 里仍是 "Hello.md"。
-    // 但磁盘上已经没 "Hello.md" 了。
-    //
-    // 重新设计: 模拟 inode tracker 漏命中意味着 processor 把这个事件
-    // 当 Create 走。 此时 memo index 里还是旧 filename "Hello.md",
-    // 但磁盘上是 "Hello-renamed.md"。
-    // 走 register_existing_file("Hello-renamed.md") 时:
-    //   - find_memo_by_filename("Hello-renamed.md") → None (memo index 还没改)
-    //   - 生成新 id, 用新 id 覆盖磁盘 frontmatter key
-    //   - 写 memo index, 出现 entry { id=new_id, filename="Hello-renamed.md" }
-    //   - 旧 entry { id=original_id, filename="Hello.md" } 仍残留, 指向不存在的文件
     let new_path = mf.get_memo_base().join("Hello-renamed.md");
     fs::rename(&old_path, &new_path).unwrap();
-    let rereg = mf.register_existing_file(&new_path).expect("register ok");
-
-    // v2 修复: id 必须保留, 不生成新 id。
-    // 修复前 register_existing_file 走 "filename 不在 memo index → 生成新 id" 路径,
-    // 物理 rename 后旧 entry 残留, 新 entry 出现, 同一份磁盘内容被注册成两条 memo。
+    let rereg = mf
+        .rename_memo_file(&old_path, &new_path)
+        .expect("explicit rename pair");
     assert_eq!(
         rereg.id, original_id,
-        "register_existing_file must preserve id from disk frontmatter key"
+        "explicit rename must preserve the cache association"
     );
     assert_eq!(rereg.filename, "Hello-renamed.md");
-
-    // 关键: memo index 里**只剩一条** entry, 没有 id 漂移
     let list = mf.read_index().expect("memo index");
     let with_id = list.memos.iter().filter(|e| e.id == original_id).count();
     assert_eq!(with_id, 1, "exactly one entry with original id");
-    // 且这条 entry 的 filename 已经是新值
     let entry = list.memos.iter().find(|e| e.id == original_id).unwrap();
     assert_eq!(entry.filename, "Hello-renamed.md");
 }
@@ -2576,7 +2537,7 @@ fn physical_rename_does_not_change_frontmatter_key_on_disk() {
     let key_after_register = read_key_from_disk(&old_path);
     assert_eq!(
         key_after_register.as_deref(),
-        Some(original_id.as_str()),
+        None,
         "after register, key on disk should match id"
     );
 
@@ -2586,7 +2547,7 @@ fn physical_rename_does_not_change_frontmatter_key_on_disk() {
     let key_after_rename = read_key_from_disk(&new_path);
     assert_eq!(
         key_after_rename.as_deref(),
-        Some(original_id.as_str()),
+        None,
         "after physical rename, key on disk should still be the original id"
     );
 
@@ -2601,7 +2562,7 @@ fn physical_rename_does_not_change_frontmatter_key_on_disk() {
     // 这个断言**会失败**如果 rename_memo_file 把 disk key 改了
     assert_eq!(
         key_after_rename_memo_file.as_deref(),
-        Some(original_id.as_str()),
+        None,
         "rename_memo_file must NOT change frontmatter key on disk (it's id-bound)"
     );
 }
@@ -2654,11 +2615,7 @@ fn rename_via_remove_create_pair_preserves_id() {
 }
 
 #[test]
-fn rename_via_remove_create_pair_id_preserved_even_if_remove_already_called() {
-    // 兜底测试: 即便 Remove 事件**已经**调了 unregister (tracker 漏命中
-    // 或 Windows), Create 事件的 register_existing_file 走 frontmatter
-    // key 反查 → rename_memo_file 重建 memo index (保留 id)。
-
+fn unpaired_remove_create_cannot_resurrect_old_identity() {
     let (mf, _tmp) = fresh_memo_file();
     let old_path = mf.get_memo_base().join("Hello.md");
     fs::write(&old_path, "# Hello\nworld\n").unwrap();
@@ -2667,26 +2624,22 @@ fn rename_via_remove_create_pair_id_preserved_even_if_remove_already_called() {
 
     let new_path = mf.get_memo_base().join("Hello-renamed.md");
     fs::rename(&old_path, &new_path).unwrap();
-
-    // 模拟 Remove 事件先到, 已经把 memo index 的 entry 删了
     let removed = mf.unregister_memo_by_path(&old_path);
     assert!(removed, "should remove the entry");
     let list = mf.read_index().expect("list");
     assert_eq!(list.memos.len(), 0, "list is empty after remove");
-
-    // 模拟 Create 事件到, register_existing_file 走 frontmatter key 反查
     let rereg = mf
         .register_existing_file(&new_path)
         .expect("register should succeed via frontmatter key fallback");
-    assert_eq!(
+    assert_ne!(
         rereg.id, original_id,
-        "id must be preserved via frontmatter key"
+        "unpaired events must not infer an old cache association"
     );
     assert_eq!(rereg.filename, "Hello-renamed.md");
 
     let list = mf.read_index().expect("list");
     assert_eq!(list.memos.len(), 1, "exactly one entry restored");
-    assert_eq!(list.memos[0].id, original_id);
+    assert_eq!(list.memos[0].id, rereg.id);
     assert_eq!(list.memos[0].filename, "Hello-renamed.md");
 }
 
@@ -3085,11 +3038,7 @@ fn delete_tag_ignores_unrelated_invalid_legacy_frontmatter_path() {
     let memo = mf.create_memo("Legacy", "Body #1", None).unwrap();
     let path = base.join(&memo.filename);
     let content = std::fs::read_to_string(&path).unwrap();
-    let content = content.replacen(
-        &format!("flowix_key: {}\n", memo.id),
-        &format!("flowix_key: {}\ntags:\n  - \"legacy tag\"\n", memo.id),
-        1,
-    );
+    let content = format!("---\ntags:\n  - \"legacy tag\"\n---\n{content}");
     std::fs::write(&path, content).unwrap();
 
     let report = mf.delete_memo_tag_locked(Some("nb_test"), "1").unwrap();
@@ -3180,7 +3129,7 @@ fn move_tag_preserves_frontmatter_key() {
     let memo = mf
         .create_memo("FM", "正文 #旅行/曼谷", Some("旅行/曼谷"))
         .unwrap();
-    let original_key = memo.id.clone();
+    assert!(!memo.id.is_empty());
 
     mf.move_memo_tag_locked(Some("nb_test"), "旅行/曼谷", "中国/曼谷")
         .unwrap();
@@ -3188,11 +3137,7 @@ fn move_tag_preserves_frontmatter_key() {
     let body = read_body(&mf, &memo.filename);
     // frontmatter key 必须保留 (跟原 memo id 一致)
     let key = super::frontmatter::extract_frontmatter_key(&body);
-    assert_eq!(
-        key,
-        Some(original_key),
-        "frontmatter key 必须在改写后保留: body = {body}"
-    );
+    assert_eq!(key, None, "frontmatter key 必须在改写后保留: body = {body}");
 }
 
 #[test]

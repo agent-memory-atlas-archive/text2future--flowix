@@ -8,6 +8,7 @@
 
 use serde::Serialize;
 use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,10 +29,12 @@ pub struct StartupStatus {
 
 struct StartupState {
     status: StartupStatus,
+    interactive: bool,
 }
 
 /// Process-local startup barrier shared by native commands and the WebView.
 pub struct StartupCoordinator {
+    started_at: Instant,
     state: Mutex<StartupState>,
     changed: Condvar,
 }
@@ -45,12 +48,14 @@ impl Default for StartupCoordinator {
 impl StartupCoordinator {
     pub fn new() -> Self {
         Self {
+            started_at: Instant::now(),
             state: Mutex::new(StartupState {
                 status: StartupStatus {
                     phase: StartupPhase::Pending,
                     step: "initializing".to_string(),
                     error: None,
                 },
+                interactive: false,
             }),
             changed: Condvar::new(),
         }
@@ -62,6 +67,10 @@ impl StartupCoordinator {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .status
             .clone()
+    }
+
+    pub fn elapsed_ms(&self) -> u128 {
+        self.started_at.elapsed().as_millis()
     }
 
     pub fn mark_running(&self, step: impl Into<String>) {
@@ -113,6 +122,35 @@ impl StartupCoordinator {
         }
     }
 
+    pub fn mark_interactive(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.interactive = true;
+        self.changed.notify_all();
+    }
+
+    pub fn wait_until_interactive(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while !state.interactive {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            state = self
+                .changed
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .0;
+        }
+        true
+    }
+
     fn update(&self, status: StartupStatus) {
         let mut state = self
             .state
@@ -128,6 +166,7 @@ mod tests {
     use super::{StartupCoordinator, StartupPhase};
     use std::sync::Arc;
     use std::thread;
+    use std::time::Duration;
 
     #[test]
     fn waiters_are_released_when_startup_is_ready() {
@@ -151,5 +190,15 @@ mod tests {
             coordinator.wait_until_ready(),
             Err("disk unavailable".to_string())
         );
+    }
+
+    #[test]
+    fn maintenance_waits_for_the_first_interactive_workspace() {
+        let coordinator = Arc::new(StartupCoordinator::new());
+        let waiter = coordinator.clone();
+        let handle = thread::spawn(move || waiter.wait_until_interactive(Duration::from_secs(1)));
+        coordinator.mark_ready();
+        coordinator.mark_interactive();
+        assert!(handle.join().unwrap());
     }
 }

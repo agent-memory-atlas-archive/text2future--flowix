@@ -17,10 +17,9 @@ import {
   type BrowserColumnTarget,
 } from '@features/workspace/store/browser-column-store';
 import type { WorkColumnTarget } from '@features/workspace/store/work-column-target';
-import { documentIdentityFromFile } from '@features/document/store/document-identity';
-import { ensureFileDisplayIdentity } from '@features/workspace/store/file-display-store';
-import { documentIdentityKey } from '@features/document/store/document-identity';
-import { waitForSaveQueue } from '@features/document/store/save-queue';
+import { documentIdentityFromFile } from '@features/document/public/workspace-api';
+import { ensureFileDisplayIdentity } from '@/lib/file-display-registry';
+import { waitForWorkspaceDocumentSaves } from '@features/document/public/workspace-api';
 import {
   activateExistingWorkspaceContent,
   activateExistingWorkspaceContentAsync,
@@ -42,6 +41,8 @@ import {
   replaceActiveMemoPath,
 } from './workspace-navigation';
 import { useWorkspaceFocusStore } from '@features/workspace/store/workspace-focus-store';
+import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
+import type { ContentIdentity } from '@features/workspace/store/workspace-content-identity';
 
 export type BrowserColumnOpenResult =
   | { host: 'main-third'; alreadyOpen: true }
@@ -149,9 +150,9 @@ export function openBrowserColumnTarget(
         } else if (target.kind === 'memo' && existingTab?.target.kind === 'file-browser') {
           // A Memo open intent enriches an existing same-path external tab
           // with Memo identity while retaining its tab slot.
-          if (!await waitForSaveQueue(documentIdentityKey(
+          if (!await waitForWorkspaceDocumentSaves(
             documentIdentityFromFile(ensureFileDisplayIdentity(target.filePath), target.memoId),
-          ))) return null;
+          )) return null;
           store.openTab({
             ...existingTab,
             title: targetTabTitle(target),
@@ -170,9 +171,9 @@ export function openBrowserColumnTarget(
       const existing = store.tabs.find((tab) => contentIdentityKey(browserColumnTargetIdentity(tab.target)) === key);
       if (existing) {
         if (target.kind === 'memo' && existing.target.kind === 'file-browser') {
-          if (!await waitForSaveQueue(documentIdentityKey(
+          if (!await waitForWorkspaceDocumentSaves(
             documentIdentityFromFile(ensureFileDisplayIdentity(target.filePath), target.memoId),
-          ))) return null;
+          )) return null;
           store.openTab({
             ...existing,
             title: targetTabTitle(target),
@@ -266,7 +267,7 @@ export async function openBrowserColumnMemoById(
         memoId: session.memo.id,
         notebookId: session.notebookId,
         notebookPath: session.notebookPath,
-        filePath: session.fileIdentity.path,
+        filePath: session.path,
       }, disposition);
   if (!opened) throw new Error(`Memo tab activation was cancelled: ${memoId}`);
   return opened;
@@ -513,6 +514,22 @@ export function replaceBrowserColumnMemoPath(memoId: string, path: string): void
 /** Remove both a memo tab and any artifact tab pointing at that memo. */
 export function removeBrowserColumnTabsByMemoId(memoId: string): string[] {
   return useBrowserColumnStore.getState().removeTabsByMemoId(memoId);
+}
+
+/** Remove path-owned Markdown tabs after their document buffers were flushed. */
+export function removeBrowserColumnTabsByPath(path: string): string[] {
+  const wanted = canonicalPath(path);
+  const state = useBrowserColumnStore.getState();
+  const matching = state.tabs.filter((tab) => {
+    const tabPath = tab.target.kind === 'memo'
+      ? tab.target.filePath
+      : tab.target.kind === 'file-browser'
+        ? tab.target.activeFilePath
+        : null;
+    return !!tabPath && canonicalPath(tabPath) === wanted;
+  });
+  for (const tab of matching) useBrowserColumnStore.getState().closeTab(tab.id);
+  return matching.map((tab) => tab.id);
 }
 
 /** Flush only when the memo being deleted owns the active BrowserColumn tab. */

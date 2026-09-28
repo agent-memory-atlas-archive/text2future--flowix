@@ -1,25 +1,6 @@
-//! 笔�?�?��文件监听 —包�? `notify::RecommendedWatcher` 监听全部已配�?notebook
-//! �?��, 把�?部编辑器 / 其他 AI 的�?盘变更转�?`MemoEvent::Updated` �?//! `MemoEvent::Deleted` emit 给前�?�?//!
-//! ## 鑷啓鎶戝埗 (self-write suppression)
-//!
-//! 后�?�?��写入 (用户 UI / Agent / import �?��) �?*写盘之前**调用
-//! `MemoWatcher::mark_self_write(path)` 鎶婅矾寰勫鍏ユ姂鍒堕泦鍚堛€倃atcher 鍥炶皟
-//! 看到同路径事�? 命中即吞。这一顺序很关�?—写盘�?mark 才能关掉
-//! "notify 事件先于 mark 到达"�?race window, 否则 IPC 命令刚把文件落盘
-//! 还没来得及�?抑制�? watcher 就先看到 Create 事件, 触发 reload/re-register
-//! 二�? emit�?//!
-//! 设�?: 后�? emit �?��步的, 先于 notify 回调到达前�?; UI 永远先看到自�?//! "Created" / "Updated" 事件, 不会�?��。watcher 150ms 内的回响�?��, 杜绝
-//! "外部看起来改了两�?�?//!
-//! ## Rename 妫€娴嬶細frontmatter-key-first
-//!
-//! 旧版�?`inode_tracker`（Unix ino / Windows NTFS MFT file_index + vol_serial�?//! 配�? From + To 事件识别 rename。重构后**完全不需�?inode / file_index**�?//! processor 读�?�?frontmatter �?`key` 字�?直接作为 id 真源。fs::rename
-//! 拆出�?From + To 两条事件�? To 事件读到�?frontmatter key 跟旧 entry �?//! id 一�?�?`rename_memo_file` �?��保留 id �?entry.filename�?//!
-//! 跨平台�?为统一 —�?NTFS / FAT32 / exFAT / 网络�?/ symlink / 跨卷 �?//! 行为一�? 不再�?Plan A 那�? Windows-only `windows-sys` 依赖�?//!
-//! ## 跨平�?//!
-//! `notify::RecommendedWatcher` 鑷姩閫?macOS FSEvents / Linux inotify /
-//! Windows ReadDirectoryChangesW, 宸茬敱 `notify` 6.0 鐨勪緷璧栧浘鑷寘鍚€?//!
-//! �?��比较两侧 (`mark_self_write` 入参 / watcher 收到�?`event.paths`) �?//! �?[`normalize_for_compare`] 归一: macOS �?`/var` �?`/private/var` symlink
-//! 折叠, Windows �?`\\?\C:\...` 前缀去掉。否�?HashMap 精�匹配�?miss�?
+//! Observe notebook paths and dispatch serial file updates.
+//! Exact revisions suppress self-writes; explicit OS rename pairs rebase paths.
+//! Split rename events use runtime filesystem identities, never frontmatter.
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -40,11 +21,9 @@ use flowix_core::memo_file::{
 
 const REMOVE_TOMBSTONE_DELAY: Duration = Duration::from_millis(450);
 
-/// 绗旇鏈洰褰曠殑鏂囦欢鐩戝惉鍣ㄣ€?///
-/// 瀛楁璇箟:
-/// - `_watcher`: 持有 `RecommendedWatcher` 期间持续监听。Drop 时自动停�?�?/// - `watched_roots`: 当前绑定�?notebook 根目录集合�?/// - `recent_self_writes`: �?��抑制�? `(normalized path, 标�?时间)`�?///   回调查表, 命中即吞; 表项通过 TTL 清理, 保证 macOS FSEvents 一次写�?///   产生多条事件时能全部抑制。键都走 [`normalize_for_compare`] 归一�?/// - `last_emit`: �?��防抖�? `(normalized path, 上�? emit 时间)`�?50ms
-///   内同�?��事件吞掉, 处理编辑器保存时的重�?notify�?/// - `remove_coalescer`: 外部 rename �?��先到 Remove(old), 这里�?��保留
-///   tombstone, 等待随后 Create/Modify(new) 通过 frontmatter key 合并�?/// - `whitelist`: 运�?时可�?��新的 watcher �?黑名单配�?�?
+/// Watches configured notebook roots and sends filtered events to a serial worker.
+/// A delayed remove can be canceled by a confirmed rename pair. The watcher
+/// never matches a replacement file using its Markdown content or frontmatter.
 pub struct MemoWatcher {
     _watcher: Option<RecommendedWatcher>,
     watched_roots: Arc<std::sync::RwLock<Vec<NotebookWatchContext>>>,
@@ -63,6 +42,54 @@ pub struct MemoWatcher {
 }
 
 impl MemoWatcher {
+    /// Update only one root when template writes temporarily suspend it. Keep
+    /// the shared watcher, event queue and every unrelated notebook alive.
+    pub fn refresh_notebook_root(&mut self, config: &NotebookConfig) -> bool {
+        let Some(watcher) = self._watcher.as_mut() else {
+            return false;
+        };
+        if self.suspended_notebook_ids.contains_key(&config.id) {
+            if let Some(coalescer) = &self.remove_coalescer {
+                coalescer.cancel_notebook(&config.id);
+            }
+        }
+        let Ok(roots) = self.watched_roots.read() else {
+            return false;
+        };
+        let previous: Vec<PathBuf> = roots
+            .iter()
+            .filter(|context| context.notebook_id == config.id)
+            .map(|context| context.root.clone())
+            .collect();
+        drop(roots);
+        for root in previous {
+            if watcher.unwatch(&root).is_err() {
+                return false;
+            }
+        }
+        if let Ok(mut roots) = self.watched_roots.write() {
+            roots.retain(|context| context.notebook_id != config.id);
+        } else {
+            return false;
+        }
+        if self.suspended_notebook_ids.contains_key(&config.id) {
+            return true;
+        }
+        let root = PathBuf::from(&config.path);
+        if !root.is_dir() || watcher.watch(&root, RecursiveMode::Recursive).is_err() {
+            return false;
+        }
+        if let Ok(mut roots) = self.watched_roots.write() {
+            roots.push(NotebookWatchContext {
+                notebook_id: config.id.clone(),
+                root,
+            });
+            true
+        } else {
+            false
+        }
+    }
+
     /// Add one newly registered notebook without restarting every existing watch.
     /// Return false when the watcher has not started, so the caller can bind all roots.
     pub fn add_notebook_root(&mut self, config: &NotebookConfig) -> bool {
@@ -112,7 +139,10 @@ impl MemoWatcher {
 
     pub fn set_notebook_suspended(&mut self, notebook_id: &str, suspended: bool) {
         if suspended {
-            *self.suspended_notebook_ids.entry(notebook_id.to_string()).or_default() += 1;
+            *self
+                .suspended_notebook_ids
+                .entry(notebook_id.to_string())
+                .or_default() += 1;
         } else if let Some(count) = self.suspended_notebook_ids.get_mut(notebook_id) {
             if *count == 1 {
                 self.suspended_notebook_ids.remove(notebook_id);
@@ -173,11 +203,13 @@ impl MemoWatcher {
             std::sync::mpsc::channel::<(RawFsEvent, NotebookWatchContext)>();
         let worker_tx_for_callback = worker_tx.clone();
 
+        let mut rename_tracker = super::rename_tracker::RenameTracker::seed(&roots);
         let mut watcher: RecommendedWatcher =
             match notify::recommended_watcher(move |res: notify::Result<Event>| {
                 let Ok(event) = res else {
                     return;
                 };
+                let event = rename_tracker.correlate(event);
                 handle_notify_event(
                     &memo_file,
                     &remove_coalescer_for_callback,
@@ -296,6 +328,49 @@ fn handle_notify_event(
     let path_filter = PathFilter {
         whitelist: whitelist.clone(),
     };
+    // Preserve explicit rename pairs; never infer identity from Markdown bytes.
+    if matches!(
+        event.kind,
+        notify::EventKind::Modify(notify::event::ModifyKind::Name(
+            notify::event::RenameMode::Both
+        ))
+    ) && event.paths.len() == 2
+    {
+        let old = &event.paths[0];
+        let new = &event.paths[1];
+        if let (Some(old_ctx), Some(ctx)) = (
+            context_for_path(watched_roots, old),
+            context_for_path(watched_roots, new),
+        ) {
+            if old_ctx.notebook_id == ctx.notebook_id {
+                let allowed = new
+                    .strip_prefix(&ctx.root)
+                    .ok()
+                    .is_some_and(|p| !is_ignored_notebook_relative_path(p));
+                if allowed {
+                    remove_coalescer.cancel_path(old);
+                    let mut raw = RawFsEvent::new(
+                        if new.is_dir() {
+                            FsEventKind::DirectoryChange
+                        } else {
+                            FsEventKind::Modify
+                        },
+                        new.clone(),
+                    );
+                    raw.rename_from = Some(old.clone());
+                    if new.is_dir()
+                        || matches!(
+                            crate::watcher::filter::run_pipeline(&raw, &path_filter),
+                            crate::watcher::event::FilterDecision::Pass
+                        )
+                    {
+                        let _ = worker_tx.send((raw, ctx));
+                        return;
+                    }
+                }
+            }
+        }
+    }
     for path in event.paths {
         let Some(ctx) = context_for_path(watched_roots, &path) else {
             tracing::debug!("[MemoWatcher] no notebook root for {}", path.display());
@@ -333,7 +408,18 @@ fn handle_notify_event(
             // The new path may itself be marked as a self-write after the internal
             // save resolves, so cancel the old-path tombstone before the filter
             // pipeline has a chance to drop this event.
-            remove_coalescer.cancel_by_disk_key(&path);
+            remove_coalescer.cancel_path(&path);
+        }
+        // Split directory From/To events must be paired before reconciliation
+        // can prune the old subtree. An unmatched From still reconciles later.
+        if matches!(event.kind, notify::EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::From)))
+            && matches!(fs_kind, FsEventKind::DirectoryChange) {
+            let tx = worker_tx.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(REMOVE_TOMBSTONE_DELAY);
+                let _ = tx.send((RawFsEvent::new(FsEventKind::DirectoryChange, path), ctx));
+            });
+            continue;
         }
         let raw = RawFsEvent::new(fs_kind, path.clone());
         match if matches!(fs_kind, FsEventKind::DirectoryChange) {
@@ -353,8 +439,8 @@ fn handle_notify_event(
             }
         }
 
-        // manager �?��采集 + 过滤, 业务分流交给 MemoEventProcessor�?        // processor �?��读�?盘抽 frontmatter key �?rename / reload /
-        // register 分流, 这里不需�?stat 任何 metadata�?
+        // The manager filters paths and delays removals. The processor updates
+        // the path index and emits note events for accepted file changes.
         match fs_kind {
             FsEventKind::Remove => {
                 if schedule_pending_remove(remove_coalescer, memo_file, ctx.clone(), &path) {
@@ -376,6 +462,9 @@ fn should_process_stable_event(
     recent_self_writes: &Arc<Mutex<SelfWriteMap>>,
     processed_revisions: &mut HashMap<PathBuf, FileRevision>,
 ) -> bool {
+    if event.rename_from.is_some() {
+        return true;
+    }
     let key = normalize_for_compare(&event.path);
     match event.kind {
         FsEventKind::Create | FsEventKind::Modify => {
@@ -462,6 +551,49 @@ fn schedule_pending_remove(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn template_suspension_only_rebinds_its_own_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let memo_file = Arc::new(std::sync::RwLock::new(MemoFile::new(
+            directory.path().join("config"),
+        )));
+        let mut manager = MemoWatcher::new(memo_file);
+        manager._watcher =
+            Some(notify::recommended_watcher(|_: notify::Result<Event>| {}).unwrap());
+        let configs: Vec<_> = (0..2)
+            .map(|index| {
+                let path = directory.path().join(format!("book-{index}"));
+                std::fs::create_dir_all(&path).unwrap();
+                NotebookConfig {
+                    id: format!("nb_{index}"),
+                    name: format!("Book {index}"),
+                    path: path.to_string_lossy().into_owned(),
+                    icon: None,
+                    is_default: false,
+                    sort: 0,
+                    created_at: 1,
+                    updated_at: 1,
+                }
+            })
+            .collect();
+        assert!(manager.add_notebook_root(&configs[0]));
+        assert!(manager.add_notebook_root(&configs[1]));
+        for _ in 0..2 {
+            manager.set_notebook_suspended(&configs[1].id, true);
+            assert!(manager.refresh_notebook_root(&configs[1]));
+            let roots = manager.watched_roots.read().unwrap();
+            assert_eq!(roots.len(), 1);
+            assert_eq!(roots[0].notebook_id, configs[0].id);
+        }
+        manager.set_notebook_suspended(&configs[1].id, false);
+        assert!(manager.refresh_notebook_root(&configs[1]));
+        assert_eq!(manager.watched_roots.read().unwrap().len(), 1);
+        manager.set_notebook_suspended(&configs[1].id, false);
+        assert!(manager.refresh_notebook_root(&configs[1]));
+        assert!(manager.refresh_notebook_root(&configs[1]));
+        assert_eq!(manager.watched_roots.read().unwrap().len(), 2);
+    }
 
     fn marked_revision(path: &Path) -> Arc<Mutex<SelfWriteMap>> {
         let writes = Arc::new(Mutex::new(SelfWriteMap::new()));

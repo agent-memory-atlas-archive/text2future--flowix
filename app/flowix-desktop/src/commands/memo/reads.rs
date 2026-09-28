@@ -1,16 +1,17 @@
 // ==================== Reads ====================
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use tauri::{AppHandle, Manager, State};
 
 use crate::lock_utils::read_lock;
-use crate::watcher::path::normalize_for_compare;
+use crate::memo_events::{MemoChangeSource, MemoDerivedChanged};
 use flowix_core::memo_file::{
-    normalize_markdown_encoding_boundaries, notebook_path_from_relative, notebook_relative_path,
-    Memo, MemoFile, MemoTodoEntry,
+    normalize_markdown_encoding_boundaries, notebook_path_from_relative, Memo, MemoFile,
+    MemoTodoEntry, V2NoteEntry,
 };
+use flowix_core::service::PathNoteSaveOutcome;
 use flowix_core::{FlowixError, MemoPage, MemoService};
 
 use crate::app::search_index::rebuild_index_in_background;
@@ -76,6 +77,62 @@ pub async fn get_memos(
     })
     .await
     .map_err(|error| format!("memo list task failed: {error}"))?
+}
+
+/// List the notebook's rebuildable note projection by relative path. This is
+/// the ID-free list boundary for callers migrating off the legacy memo table.
+#[tauri::command]
+pub async fn list_notes_by_path(
+    notebook_id: String,
+    app: AppHandle,
+) -> Result<Vec<V2NoteEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let memo_file = read_lock(&state.memo_file, "memo_file");
+        MemoService::new(&memo_file)
+            .list_notes_by_path(&notebook_id)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("path-based note list task failed: {error}"))?
+}
+
+/// Return one page from the V2 path index without consulting legacy memo IDs.
+#[tauri::command]
+#[allow(non_snake_case)]
+pub async fn get_path_notes(
+    notebook_id: String,
+    filter: Option<String>,
+    sort: Option<String>,
+    tag_id: Option<String>,
+    color: Option<String>,
+    cursor: Option<String>,
+    limit: Option<usize>,
+    app: AppHandle,
+) -> Result<GetPathNotesResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let memo_file = read_lock(&state.memo_file, "memo_file");
+        let mut service = MemoService::new(&memo_file);
+        let page = service
+            .list_notes_by_path_page(
+                &notebook_id,
+                filter.as_deref().unwrap_or("all"),
+                sort.as_deref().unwrap_or("createdAt"),
+                tag_id.as_deref(),
+                color.as_deref(),
+                cursor.as_deref(),
+                limit,
+            )
+            .map_err(|error: FlowixError| error.to_string())?;
+        Ok(GetPathNotesResponse {
+            notes: page.notes,
+            next_cursor: page.next_cursor,
+            has_more: page.has_more,
+        })
+    })
+    .await
+    .map_err(|error| format!("path note list task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -310,78 +367,48 @@ pub fn open_memo_session(id: String, state: State<AppState>) -> Option<OpenMemoS
 }
 
 #[tauri::command]
-pub fn read_document(
+pub async fn read_document(
     window: tauri::WebviewWindow,
     file_path: String,
-    state: State<AppState>,
+    app: AppHandle,
 ) -> Option<String> {
-    if !crate::commands::helpers::can_access_document_path(
-        Path::new(&file_path),
-        window.label(),
-        &state,
-    ) {
-        eprintln!("[read_document] refused out-of-scope path: {}", file_path);
-        return None;
-    }
-    let io_path = resolve_document_path_for_io(&file_path, state.inner());
-    start_security_bookmark_access(&state, &io_path);
-    fs::read_to_string(&io_path)
-        .ok()
-        .map(|content| normalize_markdown_encoding_boundaries(&content).into_owned())
-}
-
-/// Resolve a document path for disk I/O, with a constrained stale-path fallback.
-fn resolve_document_path_for_io(file_path: &str, state: &AppState) -> std::path::PathBuf {
-    let requested_path = std::path::PathBuf::from(file_path);
-    if requested_path.exists() {
-        return requested_path;
-    }
-    // If the requested stale path is missing, resolve by the notebook implied by that path.
-    if let Some(file_name) = requested_path.file_name().and_then(|n| n.to_str()) {
-        if let Some(entry_path) =
-            resolve_missing_document_path_from_notebook_index(&requested_path, file_name, state)
-        {
-            return entry_path;
+    crate::document_io::run("read", move || {
+        let state = app.state::<AppState>();
+        if !crate::commands::helpers::can_access_document_path(
+            Path::new(&file_path),
+            window.label(),
+            &state,
+        ) {
+            eprintln!("[read_document] refused out-of-scope path: {}", file_path);
+            return None;
         }
-    }
-    requested_path
-}
-
-fn resolve_missing_document_path_from_notebook_index(
-    requested_path: &Path,
-    _file_name: &str,
-    state: &AppState,
-) -> Option<PathBuf> {
-    let requested_norm = normalize_for_compare(requested_path);
-    let memo_file = read_lock(&state.memo_file, "memo_file");
-    let mut service = MemoService::new(&memo_file);
-    let configs = service.list_notebooks().ok()?;
-
-    let mut candidates = configs
-        .into_iter()
-        .filter_map(|cfg| {
-            let base_norm = normalize_for_compare(Path::new(&cfg.path));
-            requested_norm
-                .starts_with(&base_norm)
-                .then_some((base_norm.to_string_lossy().len(), cfg))
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by(|a, b| b.0.cmp(&a.0));
-
-    for (_, cfg) in candidates {
-        if let Ok(relative_path) = notebook_relative_path(Path::new(&cfg.path), requested_path) {
-            if let Some(entry) = service
-                .list_memos(&cfg.id)
-                .unwrap_or_default()
-                .into_iter()
-                .find(|entry| entry.relative_path == relative_path)
-            {
-                return notebook_path_from_relative(Path::new(&cfg.path), &entry.relative_path)
-                    .ok();
+        let requested_path = Path::new(&file_path);
+        start_security_bookmark_access(&state, requested_path);
+        let memo_file = read_lock(&state.memo_file, "memo_file");
+        match notebook_note_address(&memo_file, requested_path) {
+            Ok(Some((notebook_id, relative_path))) => {
+                let mut service = MemoService::new(&memo_file);
+                if let Err(error) = service.get_note_by_path(&notebook_id, &relative_path) {
+                    tracing::debug!(
+                        notebook_id = %notebook_id,
+                        relative_path = %relative_path,
+                        "note read is falling back to Markdown after path-index failure: {error}"
+                    );
+                }
             }
+            Err(error) => {
+                tracing::warn!(path = %requested_path.display(), "refusing note path: {error}");
+                return None;
+            }
+            Ok(None) => {}
         }
-    }
-    None
+        fs::read_to_string(requested_path)
+            .ok()
+            .map(|content| normalize_markdown_encoding_boundaries(&content).into_owned())
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 #[derive(serde::Serialize)]
@@ -393,72 +420,133 @@ pub struct WriteDocumentResult {
     pub commit: Option<crate::document_mutation::DocumentCommit>,
 }
 
-/// Write an indexed memo. Standalone Markdown files use the independent
+/// Save a notebook note by path. Standalone documents use the independent
 /// `write_external_document` command and never enter this path.
 #[tauri::command]
 #[allow(non_snake_case)]
-pub fn write_document(
-    key: Option<String>,
+pub async fn write_document(
+    operation_id: Option<String>,
+    filePath: String,
     content: String,
     expectedContent: Option<String>,
-    state: State<AppState>,
     app: AppHandle,
     window: tauri::WebviewWindow,
-) -> Option<WriteDocumentResult> {
-    write_document_internal(
-        key.as_deref(),
-        &content,
-        expectedContent.as_deref(),
-        &state,
-        &app,
-        window.label(),
+) -> Result<Option<WriteDocumentResult>, String> {
+    crate::commands::document_operations::run(
+        "save",
+        operation_id,
+        window.label().to_owned(),
+        move || {
+            let state = app.state::<AppState>();
+            write_document_internal(
+                &filePath,
+                &content,
+                expectedContent.as_deref(),
+                &state,
+                &app,
+                window.label(),
+            )
+        },
     )
+    .await
 }
 
-/// Write a memo by global key and return the final path/content after rename.
+/// Save the existing file at an exact absolute path with content validation.
 fn write_document_internal(
-    key: Option<&str>,
+    file_path: &str,
     content: &str,
     expected_content: Option<&str>,
     state: &State<AppState>,
     app: &AppHandle,
     origin_window_label: &str,
-) -> Option<WriteDocumentResult> {
-    let key = key?;
-    let before = read_memo_or_none(state.inner(), key);
-    if before.is_none() {
-        eprintln!("[write_document_internal] memo not found: key={key}");
-        return None;
+) -> Result<Option<WriteDocumentResult>, String> {
+    if !Path::new(file_path).is_absolute() {
+        return Err("absolute document path required".into());
+    }
+    start_security_bookmark_access(state.inner(), Path::new(file_path));
+    let requested_path = Path::new(file_path);
+    let (notebook_id, relative_path) =
+        notebook_note_address(&read_lock(&state.memo_file, "memo_file"), requested_path)?
+            .ok_or_else(|| {
+                "document is not a Markdown note inside a registered notebook".to_string()
+            })?;
+
+    let current_content = fs::read_to_string(requested_path).map_err(|error| error.to_string())?;
+    if expected_content
+        .is_some_and(|expected| !cas_content_matches(&current_content, expected, content))
+    {
+        return Ok(None);
     }
 
-    // Mark the target before writing so the watcher can suppress our own change.
-    if let Ok(resolved) =
-        MemoService::new(&read_lock(&state.memo_file, "memo_file")).resolve_memo(key)
-    {
-        let path = resolved.path;
-        start_security_bookmark_access(state.inner(), &path);
-        mark_self_write_for(app, &path);
-    }
-    let result = MemoService::new(&read_lock(&state.memo_file, "memo_file"))
-        .save_memo_with_receipt(key, content, true, |resolved, current| {
-            if expected_content
-                .is_some_and(|expected| !cas_content_matches(current, expected, content))
-            {
-                return Err(FlowixError::Conflict(format!("memo {key} changed on disk")));
+    let (saved_path, saved_content) = {
+        let memo_file = read_lock(&state.memo_file, "memo_file");
+        let mut service = MemoService::new(&memo_file);
+        mark_self_write_for(app, requested_path);
+        match service.save_note_by_path(
+            &notebook_id,
+            &relative_path,
+            content,
+            Some(&current_content),
+        ) {
+            Ok(PathNoteSaveOutcome::Saved(document)) => (document.path, document.body),
+            Ok(PathNoteSaveOutcome::Conflict { .. }) => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        }
+    };
+
+    mark_self_write_for(app, &saved_path);
+
+    // Keep the old ID-based consumers synchronized during the migration. The
+    // path write above has already succeeded and remains authoritative if this
+    // optional compatibility projection is unavailable.
+    let compatibility_memo = {
+        let memo_file = read_lock(&state.memo_file, "memo_file");
+        let before =
+            memo_file.find_memo_by_relative_path_for_notebook_id(&notebook_id, &relative_path);
+        let refreshed = if before.is_some() {
+            memo_file
+                .reload_memo_from_disk_by_filename_for_notebook_id(&notebook_id, &relative_path)
+        } else {
+            memo_file.register_existing_file_for_notebook_id(&notebook_id, &saved_path)
+        };
+        refreshed.ok().map(|memo| (before, memo))
+    };
+
+    let commit = if let Some((before, memo)) = compatibility_memo {
+        let derived_changed = MemoDerivedChanged::from_memos(before.as_ref(), &memo);
+        let event = if before.is_some() {
+            crate::memo_events::MemoEvent::Updated {
+                id: memo.id.clone(),
+                path: saved_path.display().to_string(),
+                notebook_id: notebook_id.clone(),
+                memo: memo.clone(),
+                derived_changed,
+                source: MemoChangeSource::UserEdit,
             }
-            mark_self_write_for(app, &resolved.path);
-            Ok(())
-        });
-    match result {
-        Ok(receipt) => {
-            start_security_bookmark_access(state.inner(), &receipt.edited.path);
-            emit_saved_memo_receipt(state.inner(), app, receipt, before, origin_window_label)
-        }
-        Err(e) => {
-            eprintln!("[write_document_internal] write_memo failed for {key}: {e}");
-            None
-        }
-    }
+        } else {
+            crate::memo_events::MemoEvent::Created {
+                notebook_id: notebook_id.clone(),
+                derived_changed,
+                memo: memo.clone(),
+                source: MemoChangeSource::ExternalTool,
+            }
+        };
+        crate::document_derived::schedule(app, &memo.id, Some(&saved_content));
+        crate::memo_events::emit_with_commit_from_window(app, event, Some(origin_window_label))
+    } else {
+        tracing::warn!(
+            notebook_id = %notebook_id,
+            relative_path = %relative_path,
+            "path-based note save succeeded; legacy memo projection could not be refreshed"
+        );
+        None
+    };
+
+    Ok(Some(WriteDocumentResult {
+        path: saved_path.display().to_string(),
+        content: saved_content,
+        commit,
+    }))
 }
 
 #[tauri::command]

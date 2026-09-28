@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::Manager;
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,7 @@ use flowix_core::memo_file::{media_kind_for_path, notebook_path_from_relative, M
 use super::helpers::{
     can_access_document_path, can_access_scoped_file, is_agent_access_folder,
     is_internal_notebook_path, is_registered_notebook_path, is_registered_notebook_root,
-    start_security_bookmark_access,
+    refresh_notebook_note_index, start_security_bookmark_access,
 };
 use crate::app::state::AppState;
 
@@ -565,9 +566,13 @@ pub fn write_file(
         return false;
     }
     start_security_bookmark_access(&state, Path::new(&file_path));
-    read_lock(&state.memo_file, "memo_file")
-        .write_file(Path::new(&file_path), content.as_bytes())
-        .is_ok()
+    let memo_file = read_lock(&state.memo_file, "memo_file");
+    let path = Path::new(&file_path);
+    let saved = memo_file.write_file(path, content.as_bytes()).is_ok();
+    if saved {
+        refresh_notebook_note_index(&memo_file, path);
+    }
+    saved
 }
 
 #[tauri::command]
@@ -577,9 +582,13 @@ pub fn delete_file(file_path: String, space_path: Option<String>, state: State<A
         return false;
     }
     start_security_bookmark_access(&state, Path::new(&file_path));
-    read_lock(&state.memo_file, "memo_file")
-        .delete_file(Path::new(&file_path))
-        .is_ok()
+    let memo_file = read_lock(&state.memo_file, "memo_file");
+    let path = Path::new(&file_path);
+    let deleted = memo_file.delete_file(path).is_ok();
+    if deleted {
+        refresh_notebook_note_index(&memo_file, path);
+    }
+    deleted
 }
 
 #[tauri::command]
@@ -601,7 +610,26 @@ pub fn delete_folder(folder_path: String, space_path: String, state: State<AppSt
         return false;
     }
     start_security_bookmark_access(&state, folder);
-    fs::remove_dir_all(folder).is_ok()
+    let deleted = fs::remove_dir_all(folder).is_ok();
+    if deleted {
+        let memo_file = read_lock(&state.memo_file, "memo_file");
+        let canonical_scope = dunce::canonicalize(scope).unwrap_or_else(|_| scope.to_path_buf());
+        if let Some(notebook) = memo_file
+            .read_notebook_configs()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|config| {
+                dunce::canonicalize(&config.path)
+                    .unwrap_or_else(|_| Path::new(&config.path).to_path_buf())
+                    == canonical_scope
+            })
+        {
+            if let Err(error) = memo_file.reconcile_v2_note_index(&notebook.id) {
+                tracing::warn!(notebook_id = %notebook.id, "V2 index refresh after folder deletion failed: {error}");
+            }
+        }
+    }
+    deleted
 }
 
 fn file_mutation_error(error: std::io::Error) -> String {
@@ -632,33 +660,92 @@ fn validate_file_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn rename_path_and_notify(
+    source: &Path,
+    target: &Path,
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Result<(), String> {
+    let mf = read_lock(&state.memo_file, "memo_file");
+    let changes = mf
+        .rename_indexed_path(source, target)
+        .map_err(file_mutation_error)?;
+    if target.is_dir() {
+        let configs = mf.read_notebook_configs().unwrap_or_default();
+        if let Some(config) = configs.into_iter().find(|config| {
+            dunce::canonicalize(&config.path).ok().is_some_and(|root| {
+                dunce::canonicalize(target)
+                    .ok()
+                    .is_some_and(|path| path.starts_with(root))
+            })
+        }) {
+            if let Err(error) = mf.reconcile_v2_note_index(&config.id) {
+                tracing::warn!(notebook_id = %config.id, "V2 index refresh after folder move failed: {error}");
+            }
+        }
+    } else {
+        refresh_notebook_note_index(&mf, source);
+        refresh_notebook_note_index(&mf, target);
+    }
+    for (notebook_id, before, memo) in changes {
+        let Some(config) = mf.get_notebook_config_by_id(&notebook_id) else {
+            continue;
+        };
+        let path = notebook_path_from_relative(Path::new(&config.path), &memo.relative_path)?;
+        crate::memo_events::emit(
+            app,
+            crate::memo_events::MemoEvent::Updated {
+                id: memo.id.clone(),
+                path: path.to_string_lossy().into_owned(),
+                notebook_id,
+                derived_changed: crate::memo_events::MemoDerivedChanged::from_memos(
+                    Some(&before),
+                    &memo,
+                ),
+                memo,
+                source: crate::memo_events::MemoChangeSource::UserEdit,
+            },
+        );
+    }
+    Ok(())
+}
+
 #[tauri::command]
-pub fn rename_file(
+pub async fn rename_file(
+    operation_id: Option<String>,
+    window: tauri::WebviewWindow,
     file_path: String,
     name: String,
     space_path: String,
-    state: State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
-    validate_file_name(&name)?;
-    let source = Path::new(&file_path);
-    let parent = source.parent().ok_or("INVALID_FILE_PATH")?;
-    let target = parent.join(name);
-    if !can_access_scoped_file(source, Some(&space_path), &state)
-        || !can_access_scoped_file(&target, Some(&space_path), &state)
-    {
-        return Err("FILE_PERMISSION_DENIED".to_string());
-    }
-    start_security_bookmark_access(&state, source);
-    if !fs::symlink_metadata(source)
-        .map_err(file_mutation_error)?
-        .is_file()
-    {
-        return Err("SOURCE_NOT_REGULAR_FILE".to_string());
-    }
-    read_lock(&state.memo_file, "memo_file")
-        .rename_file(source, &target)
-        .map_err(file_mutation_error)?;
-    Ok(target.to_string_lossy().into_owned())
+    crate::commands::document_operations::run(
+        "rename_external",
+        operation_id,
+        window.label().to_owned(),
+        move || {
+            let state = app.state::<AppState>();
+            validate_file_name(&name)?;
+            let source = Path::new(&file_path);
+            let parent = source.parent().ok_or("INVALID_FILE_PATH")?;
+            let target = parent.join(name);
+            if !can_access_scoped_file(source, Some(&space_path), &state)
+                || !can_access_scoped_file(&target, Some(&space_path), &state)
+            {
+                return Err("FILE_PERMISSION_DENIED".to_string());
+            }
+            start_security_bookmark_access(&state, source);
+            if !fs::symlink_metadata(source)
+                .map_err(file_mutation_error)?
+                .is_file()
+            {
+                return Err("SOURCE_NOT_REGULAR_FILE".to_string());
+            }
+            rename_path_and_notify(source, &target, state.inner(), &app)?;
+            Ok(target.to_string_lossy().into_owned())
+        },
+    )
+    .await
 }
 
 /// Move a regular file within the caller's notebook/access-folder scope.
@@ -670,6 +757,7 @@ pub fn move_file(
     target_directory_path: String,
     space_path: String,
     state: State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
     let source = Path::new(&file_path);
     let target_directory = Path::new(&target_directory_path);
@@ -708,9 +796,7 @@ pub fn move_file(
             "target already exists",
         )));
     }
-    read_lock(&state.memo_file, "memo_file")
-        .rename_file(source, &target)
-        .map_err(file_mutation_error)?;
+    rename_path_and_notify(source, &target, state.inner(), &app)?;
     Ok(target.to_string_lossy().into_owned())
 }
 
@@ -721,6 +807,7 @@ pub fn move_folder(
     target_directory_path: String,
     space_path: String,
     state: State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
     let source = Path::new(&folder_path);
     let target_directory = Path::new(&target_directory_path);
@@ -765,7 +852,7 @@ pub fn move_folder(
             "target already exists",
         )));
     }
-    fs::rename(source, &target).map_err(file_mutation_error)?;
+    rename_path_and_notify(source, &target, state.inner(), &app)?;
     Ok(target.to_string_lossy().into_owned())
 }
 
@@ -864,6 +951,7 @@ pub fn rename_folder(
     name: String,
     space_path: String,
     state: State<AppState>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
     validate_file_name(&name)?;
     let source = Path::new(&folder_path);
@@ -896,7 +984,7 @@ pub fn rename_folder(
             "target already exists",
         )));
     }
-    fs::rename(source, &target).map_err(file_mutation_error)?;
+    rename_path_and_notify(source, &target, state.inner(), &app)?;
     Ok(target.to_string_lossy().into_owned())
 }
 

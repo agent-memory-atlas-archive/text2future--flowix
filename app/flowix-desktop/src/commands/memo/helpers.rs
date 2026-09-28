@@ -1,10 +1,8 @@
-﻿// ==================== Helpers ====================
+// ==================== Helpers ====================
 //
 // Helpers shared by every other section in this module. Marked
 // `pub(super)` so the sibling sections (`reads`, `creates`, `versions`,
 // `deletes`) can call them directly without leaking them outside `memo`.
-
-use std::path::Path;
 
 use tauri::AppHandle;
 
@@ -14,9 +12,8 @@ use crate::memo_events::{self, MemoChangeSource, MemoDerivedChanged, MemoEvent};
 use flowix_core::memo_file::{extract_body_content, is_system_frontmatter_key, Memo};
 use flowix_core::MemoService;
 
-use crate::app::search_index::try_index_upsert;
 use crate::app::state::AppState;
-use crate::commands::helpers::synthesize_minimal_memo;
+pub(super) use crate::commands::helpers::notebook_note_address;
 use crate::watcher::runtime::mark_self_write_for;
 
 pub(super) fn read_memo_or_none(state: &AppState, id: &str) -> Option<Memo> {
@@ -41,18 +38,7 @@ pub(super) fn notebook_id_for_memo(state: &AppState, id: &str) -> String {
     resolved_notebook_id.unwrap_or_else(|| current_notebook_id(state))
 }
 
-/// Resolve the physical file path for an event payload.
-pub(super) fn abs_path_for(state: &AppState, id: &str) -> String {
-    let memo_file = read_lock(&state.memo_file, "memo_file");
-    MemoService::new(&memo_file)
-        .resolve_memo(id)
-        .ok()
-        .map(|resolved| resolved.path.display().to_string())
-        .unwrap_or_default()
-}
-
 pub(super) fn emit_updated_memo_event(
-    state: &AppState,
     app: &AppHandle,
     id: &str,
     path: String,
@@ -62,7 +48,7 @@ pub(super) fn emit_updated_memo_event(
     source: MemoChangeSource,
     origin_window_label: Option<&str>,
 ) -> Option<DocumentCommit> {
-    try_index_upsert(state, id);
+    crate::document_derived::schedule(app, id, None);
     memo_events::emit_with_commit_from_window(
         app,
         MemoEvent::Updated {
@@ -78,7 +64,6 @@ pub(super) fn emit_updated_memo_event(
 }
 
 pub(super) fn emit_saved_memo_receipt(
-    state: &AppState,
     app: &AppHandle,
     receipt: flowix_core::service::MemoSaveReceipt,
     before: Option<Memo>,
@@ -88,7 +73,7 @@ pub(super) fn emit_saved_memo_receipt(
     let id = receipt.edited.id;
     let path = receipt.edited.path.to_string_lossy().into_owned();
     mark_self_write_for(app, &receipt.edited.path);
-    try_index_upsert(state, &id);
+    crate::document_derived::schedule(app, &memo.id, Some(&receipt.content));
     let derived_changed = MemoDerivedChanged::from_memos(before.as_ref(), &memo);
     let commit = receipt.commit.map(|commit| DocumentCommit {
         content_hash: commit.content_hash,
@@ -113,34 +98,6 @@ pub(super) fn emit_saved_memo_receipt(
         content: receipt.content,
         commit,
     })
-}
-
-/// Mark the written file, refresh the search index, and notify the UI.
-pub(crate) fn emit_updated_after_write(
-    state: &AppState,
-    app: &AppHandle,
-    id: &str,
-    before: Option<Memo>,
-    origin_window_label: Option<&str>,
-) -> Option<DocumentCommit> {
-    let path = abs_path_for(state, id);
-    if !path.is_empty() {
-        mark_self_write_for(app, Path::new(&path));
-    }
-    let memo = read_memo_or_none(state, id).unwrap_or_else(|| synthesize_minimal_memo(id));
-    let notebook_id = notebook_id_for_memo(state, id);
-    let derived_changed = MemoDerivedChanged::from_memos(before.as_ref(), &memo);
-    emit_updated_memo_event(
-        state,
-        app,
-        id,
-        path,
-        memo,
-        notebook_id,
-        derived_changed,
-        MemoChangeSource::UserEdit,
-        origin_window_label,
-    )
 }
 
 /// Lightweight CAS fallback normalization.

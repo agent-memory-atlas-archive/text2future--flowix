@@ -12,6 +12,13 @@ export {
 } from '@features/memo/use-cases/initialize-memo-library';
 export { restorePersistedMemoSession } from '@features/memo/use-cases/open-memo-session';
 
+export function markMemoLibraryStartupError(error: unknown): void {
+  useMemoStore.getState().setStartupPhase(
+    'error',
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
 export function getAppSelectedNotebookId(): string | null {
   return useMemoStore.getState().selectedNotebook?.id ?? null;
 }

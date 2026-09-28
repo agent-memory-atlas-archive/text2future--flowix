@@ -23,7 +23,7 @@ import { Node, nodeInputRule, nodePasteRule, type InputRuleMatch, type JSONConte
 import { NodeSelection, Plugin, PluginKey, type EditorState } from '@tiptap/pm/state';
 
 import { readMarkdownLinkDestination } from '@features/editor/extensions/shared/markdown-link-destination';
-import { openNoteByMemoId, openNoteByPhysicalPath, resolveMemoById, resolveMemoByObsidianTarget, resolveMemoByPath } from '@features/editor/extensions/note-link/memo-resolver';
+import { noteLinkForIndexedPath, openNoteByMemoId, openNoteByPhysicalPath, resolveMemoById, resolveMemoByObsidianTarget, resolveMemoByPath } from '@features/editor/extensions/note-link/memo-resolver';
 import { escapeHtml, parseBooleanAttr, pickAttr, splitDisplay, stripMdSuffix, unescapeHtml } from '@features/editor/extensions/note-link/markdown';
 import { translate, type I18nKey } from '@/lib/i18n';
 import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
@@ -47,7 +47,7 @@ export interface NoteReferenceAttrs {
   stale: boolean;
 }
 
-const FLOWIX_MEMO_URL_RE = /^flowix:\/\/memo\//i;
+const FLOWIX_MEMO_URL_RE = /^flowix:\/\/(?:memo\/|open\?)/i;
 const FLOWIX_MEMO_HREF_RE = /^flowix:\/\/memo\/([^?\s)]*)(?:\?[^)\s]*)?$/;
 const STRICT_FLOWIX_MEMO_HREF_RE = /^flowix:\/\/memo\/([0-9a-z]{6}|[0-9a-z]{8})(?:\?[^)\s]*)?$/;
 const VALID_MEMO_ID_RE = /^([0-9a-z]{6}|[0-9a-z]{8})$/;
@@ -194,6 +194,7 @@ function findWikiNotePasteMatches(text: string): PasteRuleMatch[] {
 }
 
 function parseFlowixMemoHrefForAttrs(href: string): { memoId: string | null; stale: boolean } {
+  if (/^flowix:\/\/open\?/i.test(href)) return { memoId: null, stale: false };
   if (!FLOWIX_MEMO_URL_RE.test(href)) return { memoId: null, stale: true };
   const strict = href.match(STRICT_FLOWIX_MEMO_HREF_RE);
   if (strict) return { memoId: strict[1], stale: false };
@@ -252,7 +253,7 @@ function attrsFromMarkdownNoteLink(titleText: string, href: string): NoteReferen
     title: unescapeMarkdownLinkText(titleText).trim(),
     originalPath: null,
     linkStyle: 'flowix',
-    linkTarget: null,
+    linkTarget: /^flowix:\/\/open\?/i.test(href) ? href : null,
     heading: null,
     stale: parsed.stale,
   };
@@ -366,7 +367,7 @@ class NoteReferenceView implements ProseMirrorNodeView {
     //     同步拿到 id) → **不**先 stale, mount 时 refreshMemoAttrs 会
     //     用 originalPath 异步反查 memoId 并写回. 这样避免"刚粘贴的有效
     //     链接一出生就是灰卡"的问题.
-    const effectiveStale = stale || (!memoId && !originalPath);
+    const effectiveStale = stale || (!memoId && !originalPath && !this.node.attrs.linkTarget);
 
     // 外层 wrapper: 与 .editor-file-attachment 同结构 (display:inline),
     // 内部 __card 是真正的"卡片" — 拿 hover/selected 高亮
@@ -472,7 +473,7 @@ class NoteReferenceView implements ProseMirrorNodeView {
     // 是 noteReference 卡片的第一公民 ── 必须保存, 缺失即视为无效链接.
     if (!attrs.memoId) {
       const resolved = attrs.linkTarget
-        ? await resolveMemoByObsidianTarget(attrs.linkTarget)
+        ? /^flowix:\/\/open\?/i.test(attrs.linkTarget) ? await resolveMemoByPath(attrs.linkTarget) : await resolveMemoByObsidianTarget(attrs.linkTarget)
         : attrs.originalPath
           ? await resolveMemoByPath(attrs.originalPath)
           : null;
@@ -499,7 +500,9 @@ class NoteReferenceView implements ProseMirrorNodeView {
     // 只有 memoId 反查失败时, 才回退到 originalPath 兜底 (粘贴进来的卡片
     // 历史数据里 memoId 已被解析过, originalPath 通常有效).
     try {
-      const opened = await openNoteByMemoId(memoId);
+      const opened = attrs.linkTarget?.startsWith('flowix://open?')
+        ? (await openNoteByPhysicalPath(attrs.linkTarget), true)
+        : await openNoteByMemoId(memoId);
       if (!opened) {
         // memoId 反查失败 → 尝试用 originalPath 再开一次 (兜底)
         if (attrs.originalPath) {
@@ -605,7 +608,9 @@ class NoteReferenceView implements ProseMirrorNodeView {
           ? await resolveMemoById(initialAttrs.memoId)
           : initialAttrs.originalPath
             ? await resolveMemoByPath(initialAttrs.originalPath)
-            : await resolveMemoByObsidianTarget(initialAttrs.linkTarget!);
+            : /^flowix:\/\/open\?/i.test(initialAttrs.linkTarget!)
+              ? await resolveMemoByPath(initialAttrs.linkTarget!)
+              : await resolveMemoByObsidianTarget(initialAttrs.linkTarget!);
         // refresh 跑完前, 节点可能已经被销毁 / 替换; 用当前 this.node 取最新 attrs.
         const current = this.node.attrs as NoteReferenceAttrs;
         if (!resolved) {
@@ -753,7 +758,8 @@ export const NoteReference = Node.create({
     level: 'inline' as const,
     start(src: string) {
       const noteIndex = src.indexOf('<note ');
-      const linkHrefIndex = src.indexOf('(flowix://memo/');
+      const linkHrefIndex = [src.indexOf('(flowix://memo/'), src.indexOf('(flowix://open?')]
+        .filter(index => index >= 0).sort((a, b) => a - b)[0] ?? -1;
       const wikiIndex = src.indexOf('[[');
       const indexes = [noteIndex, linkHrefIndex < 0 ? -1 : Math.max(0, src.lastIndexOf('[', linkHrefIndex)), wikiIndex]
         .filter(index => index >= 0);
@@ -828,6 +834,17 @@ export const NoteReference = Node.create({
     if (a.linkStyle === 'markdown' && a.linkTarget) {
       const target = `${a.linkTarget}${a.heading ? `#${a.heading}` : ''}`.replace(/ /g, '%20');
       return `[${escapeMarkdownLinkText(a.title || stripMdSuffix(a.linkTarget))}](${target})`;
+    }
+    if (a.linkTarget?.startsWith('flowix://open?') && !a.originalPath) {
+      return `[${escapeMarkdownLinkText(stripMdSuffix(a.title || ''))}](${a.linkTarget})`;
+    }
+    const pathLink = a.originalPath ? noteLinkForIndexedPath(a.originalPath) : null;
+    if (pathLink) {
+      return `[${escapeMarkdownLinkText(stripMdSuffix(a.title || ''))}](${pathLink})`;
+    }
+    if (a.originalPath) {
+      const fallback = `flowix://open?path=${encodeURIComponent(a.originalPath)}`;
+      return `[${escapeMarkdownLinkText(stripMdSuffix(a.title || ''))}](${fallback})`;
     }
     if (!a.memoId) {
       // 物理路径粘贴刚生成、尚未异步反查出 memoId 时保留旧格式兜底,

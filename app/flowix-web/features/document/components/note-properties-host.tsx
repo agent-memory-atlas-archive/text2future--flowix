@@ -17,9 +17,12 @@ import {
 } from '@features/document/store/document-session-service';
 import { documentIdentityFromFile } from '@features/document/store/document-identity';
 import type { DocumentIdentity } from '@features/document/store/document-identity';
+import { ensureFileDisplayIdentity } from '@/lib/file-display-registry';
 
 interface NotePropertiesTarget {
-  memoId: string;
+  memoId: string | null;
+  path: string;
+  scopePath: string | null;
   identity: DocumentIdentity;
   content: string;
   /** The content against which the global save performs its CAS check. */
@@ -46,22 +49,33 @@ export function NotePropertiesHost() {
   }, []);
 
   const handleOpen = useCallback((event: Event) => {
-    const memoId = (event as CustomEvent<{ memoId?: string }>).detail?.memoId?.trim();
-    if (!memoId) return;
+    const detail = (event as CustomEvent<{ memoId?: string; path?: string; scopePath?: string | null }>).detail;
+    const memoId = detail?.memoId?.trim() || null;
+    const path = detail?.path?.trim() || null;
+    if (!memoId && !path) return;
 
     const sequence = ++requestSequence.current;
     setTarget(null);
 
     void (async () => {
       try {
-        const session = await memos.openMemoSession(memoId);
+        const session = memoId ? await memos.openMemoSession(memoId) : null;
         if (sequence !== requestSequence.current) return;
-        if (!session) {
+        if (memoId && !session) {
           toast.error(t('document.load.failed'));
           return;
         }
-
-        const identity = documentIdentityFromFile(session.fileIdentity);
+        const targetPath = path ?? session?.path;
+        if (!targetPath) return;
+        const content = session?.content ?? await memos.readDocument(targetPath);
+        if (content === null) {
+          toast.error(t('document.load.failed'));
+          return;
+        }
+        const identity = documentIdentityFromFile(
+          ensureFileDisplayIdentity(targetPath),
+          memoId,
+        );
         // Resolve the memo's current path first, then publish any live editor
         // bytes through the same path-based identity used by its surfaces.
         captureLatestDocumentContent(identity);
@@ -71,8 +85,10 @@ export function NotePropertiesHost() {
         setTarget({
           memoId,
           identity,
-          content: buffer?.content ?? session.content,
-          expectedContent: buffer?.lastSavedContent ?? session.content,
+          content: buffer?.content ?? content,
+          expectedContent: buffer?.lastSavedContent ?? content,
+          path: targetPath,
+          scopePath: detail?.scopePath ?? session?.notebookPath ?? null,
         });
       } catch (error) {
         if (sequence !== requestSequence.current) return;
@@ -92,10 +108,11 @@ export function NotePropertiesHost() {
 
     let result: Awaited<ReturnType<typeof memoDocumentOperations.write>>;
     try {
-      // Write by memo id rather than by the currently selected notebook/path.
-      // The backend resolves the current path and performs the CAS check.
+      // Persist through the document's notebook path and expected-content CAS.
       result = await memoDocumentOperations.write({
         memoId: target.memoId,
+        path: target.path,
+        scopePath: target.scopePath,
         content: nextContent,
         expectedContent: target.expectedContent,
       });

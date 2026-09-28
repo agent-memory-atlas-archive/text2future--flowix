@@ -248,7 +248,10 @@ fn build_app_menu_for_language(
                 VIEW_SUBMENU_ID,
                 labels.view,
                 true,
-                &[&PredefinedMenuItem::fullscreen(app, Some(labels.fullscreen))?],
+                &[&PredefinedMenuItem::fullscreen(
+                    app,
+                    Some(labels.fullscreen),
+                )?],
             )?,
             &window_menu,
             &help_menu,

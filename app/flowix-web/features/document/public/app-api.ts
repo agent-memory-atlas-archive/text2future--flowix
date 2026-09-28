@@ -1,3 +1,4 @@
+export { DocumentSaveNotifications } from '../components/document-save-status';
 import { useDocumentStore } from '@features/document/store/document-store';
 
 export function subscribeAppActiveAgentConversation(

@@ -6,6 +6,7 @@ pub mod filter;
 pub mod manager;
 pub mod path;
 pub mod processor;
+mod rename_tracker;
 pub mod runtime;
 pub mod tombstone;
 pub mod whitelist;

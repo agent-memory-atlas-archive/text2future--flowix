@@ -34,19 +34,14 @@ impl FsEventKind {
     }
 }
 
-/// 单条文件系统事件 —watcher �?filter pipeline 的标准输入�?///
-/// `time` 预留�?filter 之后�?metrics / �?��防涪�?monotonic clock 记号
-/// (当前�?���? 允�? dead_code 避免重�?添加�?�?///
-/// **rename 检测不再依�?inode_tracker** (Plan A �?Win32 file_index �?NTFS,
-/// 仅在 NTFS 上有�? FAT32 / exFAT / 网络盘退�?。重构成
-/// **frontmatter-key-first**: processor 读�?�?frontmatter �?`key` 字�?
-/// 直接作为 id 真源, fs::rename 拆出�?From + To 两条事件�?To 事件读到�?/// key 跟旧 entry �?id 一�?�?rename_memo_file �?��保留 id �?entry.filename�?///
-/// 跨平台�?为统一 —不再需�?inode / file_index / volume_serial 这些 OS
-/// 层元数据, �?NTFS / FAT32 / exFAT / 网络�?/ symlink / 跨卷 上�?为一致�?
+/// A filtered filesystem event delivered to the note watcher.
+/// `rename_from` is set only for a confirmed filesystem rename pair; document
+/// frontmatter is never used to match the old and new paths.
 #[derive(Debug, Clone)]
 pub struct RawFsEvent {
     pub kind: FsEventKind,
     pub path: PathBuf,
+    pub rename_from: Option<PathBuf>,
     #[allow(dead_code)]
     pub time: Instant,
 }
@@ -57,6 +52,7 @@ impl RawFsEvent {
         Self {
             kind,
             path,
+            rename_from: None,
             time: Instant::now(),
         }
     }

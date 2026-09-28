@@ -263,6 +263,7 @@
 .memo-date-line {
   padding: 4px 0;
   color: var(--muted-foreground);
+  font-family: var(--app-font-family, var(--font-sans));
   font-size: 0.75rem;
   line-height: 1.4;
   text-align: center;
@@ -346,10 +347,6 @@
 
 .memo-title-editor::placeholder {
   color: var(--muted-foreground);
-}
-
-.memo-title-editor[data-saving="true"] {
-  opacity: 0.72;
 }
 
 .memo-title-editor--document-selection:empty::before {

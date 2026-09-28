@@ -1,3 +1,4 @@
+import { invokeDocumentMutation } from './document-mutation';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import type { ThemeId } from '@/lib/theme';
 import type { MemoColor } from '@/types/memo-item';
@@ -75,7 +76,7 @@ export const files = {
   deleteFolder: (folderPath: string, spacePath: string) =>
     invoke<boolean>('delete_folder', { folderPath, spacePath }),
   rename: (filePath: string, name: string, spacePath: string) =>
-    invoke<string>('rename_file', { filePath, name, spacePath }),
+    invokeDocumentMutation<string>('rename_file', { filePath, name, spacePath }),
   move: (filePath: string, targetDirectoryPath: string, spacePath: string) =>
     invoke<string>('move_file', { filePath, targetDirectoryPath, spacePath }),
   moveFolder: (folderPath: string, targetDirectoryPath: string, spacePath: string) =>

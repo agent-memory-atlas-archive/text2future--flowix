@@ -110,7 +110,7 @@ describe('calculateHeadingOutlinePopoverPosition', () => {
     )
 
     expect(position.left).toBe(339)
-    expect(position.top).toBe(250)
+    expect(position.top).toBe(96)
     expect(position.maxWidth).toBe(253)
     expect(position.maxHeight).toBe(720)
   })
@@ -125,7 +125,7 @@ describe('calculateHeadingOutlinePopoverPosition', () => {
     )
 
     expect(position.left).toBe(739)
-    expect(position.top).toBe(250)
+    expect(position.top).toBe(96)
     expect(position.maxWidth).toBe(253)
   })
 })

@@ -36,3 +36,44 @@ export interface MemoItem {
   properties: Record<string, unknown>;
   isOpen?: boolean;
 }
+
+/** Main-list projection from the rebuildable V2 index. Its identity is the
+ * notebook-relative path; it intentionally has no memo ID field. */
+export interface PathNoteListItem {
+  kind: 'path-note';
+  notebookId: string;
+  relativePath: string;
+  filename: string;
+  title: string;
+  preview: string;
+  thumbnail: string | null;
+  tags: string[];
+  todos: { id: string; content: string; status: string }[];
+  agents: AgentThreadItem[];
+  createdAt: number;
+  updatedAt: number;
+  favorited: boolean;
+  icon: string | null;
+  colors: MemoColor[];
+  properties: Record<string, unknown>;
+}
+
+export type MemoListItem = MemoItem | PathNoteListItem;
+
+export function isPathNoteListItem(item: MemoListItem): item is PathNoteListItem {
+  return 'kind' in item && item.kind === 'path-note';
+}
+
+export function memoListItemKey(item: MemoListItem): string {
+  return isPathNoteListItem(item)
+    ? `path:${item.notebookId}:${item.relativePath}`
+    : `memo:${item.id}`;
+}
+
+export function memoListItemRelativePath(item: MemoListItem): string {
+  return item.relativePath?.trim() || item.filename;
+}
+
+export function memoListItemTitle(item: MemoListItem): string {
+  return isPathNoteListItem(item) ? item.title : item.filename;
+}

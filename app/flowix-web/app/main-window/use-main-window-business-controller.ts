@@ -40,6 +40,7 @@ export function useMainWindowBusinessController(): MainWindowBusinessController 
   const { t } = useI18n();
   const {
     selectedNotebook,
+    startupPhase,
     setActiveFilter,
     setActivePluginId,
     triggerRefresh,
@@ -52,7 +53,7 @@ export function useMainWindowBusinessController(): MainWindowBusinessController 
   const syncedNotebookIdRef = useRef<string | null | undefined>(undefined);
 
   useEffect(() => {
-    if (navigationPhase === 'loading') return;
+    if (navigationPhase === 'loading' || startupPhase !== 'ready') return;
     const notebookId = selectedNotebook?.id ?? null;
     if (syncedNotebookIdRef.current === notebookId) return;
     if (getLastPersistedWorkspaceNotebookId() === notebookId) {
@@ -64,7 +65,7 @@ export function useMainWindowBusinessController(): MainWindowBusinessController 
       logger.warn('sync current notebook failed', { error });
       syncedNotebookIdRef.current = undefined;
     });
-  }, [navigationPhase, selectedNotebook?.id]);
+  }, [navigationPhase, selectedNotebook?.id, startupPhase]);
 
   useEffect(() => {
     const handleRequest = (event: Event) => {

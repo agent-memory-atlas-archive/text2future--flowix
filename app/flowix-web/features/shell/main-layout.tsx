@@ -1,5 +1,8 @@
 'use client';
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('main-layout');
+
 import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
 import {
   DocumentTitlebarWin,
@@ -13,7 +16,6 @@ import {
   setDocumentEditorMode,
   useDocumentEditorMode,
   type DocumentHistoryEntry,
-  localDocumentOperations,
 } from '@features/document/public/shell-api';
 import {
   MemoList,
@@ -37,7 +39,6 @@ import {
 import { WindowsTitlebarControls } from '@shared/window-titlebar-controls';
 import { NotebookDeleteDialog } from '@features/shell/components/notebook-delete-dialog';
 import { MarkdownFileDropOverlay } from '@features/shell/components/drag-overlay/markdown-file-drop-overlay';
-import { ensureFileDisplayTrackingStarted } from '@features/workspace/use-cases/file-display-tracking';
 import { useMainMiddleColumnController } from '@features/shell/hooks/use-main-middle-column-controller';
 import { useMainPanelController } from '@features/shell/hooks/use-main-panel-controller';
 import { ListColumn } from '@features/shell/components/list-column';
@@ -65,26 +66,11 @@ import { CenteredLoadingSpinner } from '@shared/ui/centered-loading-spinner';
 import { MainPromptHost } from '@features/shell/components/main-prompt-host';
 import type { Editor } from '@tiptap/core';
 import { OnboardingScreen } from '@features/onboarding';
-import {
-  discardDocumentDraft,
-  flushDocumentPath,
-  hasDocumentUnsavedChanges,
-} from '@features/document/store/document-session-service';
-import { documentIdentityKey } from '@features/document/store/document-identity';
-import { waitForSaveQueue } from '@features/document/store/save-queue';
-import { expectExternalDocumentDelete } from '@features/document/store/external-document-operation';
-import {
-  clearWorkspaceDocument,
-  historyEntryFromWorkColumnTarget,
-} from '@features/workspace/use-cases/workspace-navigation';
-import { documentHistoryEntryKey } from '@features/document/store/document-history-store';
-import { useBrowserColumnStore } from '@features/workspace/store/browser-column-store';
-import { useDocumentStore } from '@features/document/store/document-store';
+import { documentHistoryEntryKey } from '@features/document/public/shell-api';
+import { deleteMainExternalDocument, historyEntryFromWorkColumnTarget } from '@features/workspace/public/shell-api';
 
 const DOCUMENT_PANEL_MIN_WIDTH = BROWSER_COLUMN_MIN_WIDTH;
 
-// File identities must exist before resolving the first persisted/open surface.
-if (typeof window !== 'undefined') ensureFileDisplayTrackingStarted();
 
 const BrowserColumn = lazy(() =>
   import('@features/shell/components/browser-column').then((module) => ({
@@ -174,12 +160,13 @@ export function MainLayout({
     notebooks,
     selectedMemo,
     selectedNotebook,
+    startupPhase: memoStartupPhase,
     middleColumnView,
     activeFilter,
     activePluginId,
     activeSort,
     setActiveFilter,
-    loadMemos,
+    loadPathNotes,
     triggerRefresh,
     updateMemoMeta,
     setMemoColors,
@@ -188,7 +175,6 @@ export function MainLayout({
   const {
     currentDocumentPath,
     currentDocumentSource,
-    activeAgentConversationId,
     activeMemoSession,
     activeExternalSession,
     isDocumentTransitioning,
@@ -374,53 +360,27 @@ export function MainLayout({
   });
 
   const handleDeleteExternalFile = useCallback(async () => {
-    const session = activeExternalSession;
-    if (!session) return;
-    const filePath = session.fileIdentity.path;
-    const identity = {
-      kind: 'md' as const,
-      memoId: null,
-      ...session.fileIdentity,
-    };
-
-    captureLatestDocumentContent(identity);
-    const flushed = await flushDocumentPath(identity, filePath, session.scopePath);
-    const queueSettled = await waitForSaveQueue(documentIdentityKey(identity));
-    if (!flushed || !queueSettled || hasDocumentUnsavedChanges(identity)) {
-      toast.error(t('document.external.deleteFileUnsaved'));
-      return;
-    }
-
-    const cancelExpectedDelete = expectExternalDocumentDelete(filePath);
     try {
-      await localDocumentOperations.delete({ path: filePath, scopePath: session.scopePath });
-      discardDocumentDraft(identity);
-      useBrowserColumnStore.getState().clearExternalPath(filePath);
-      const currentSession = useDocumentStore.getState().activeExternalSession;
-      if (currentSession?.fileIdentity.displayId === session.fileIdentity.displayId) {
-        await clearWorkspaceDocument();
+      if (await deleteMainExternalDocument() === 'unsaved') {
+        toast.error(t('document.external.deleteFileUnsaved'));
       }
     } catch (error) {
-      cancelExpectedDelete();
-      console.warn('[MainLayout] Failed to delete external file:', error);
+      logger.warn('[MainLayout] Failed to delete external file:', { error: error });
       toast.error(t('document.external.deleteFileFailed'));
     }
-  }, [activeExternalSession, t]);
+  }, [t]);
 
-  // The DocumentContainer owns the import hook (it needs the editor's
-  // contentRef + saveDoc) but the titlebar renders the file path and the
-  // "保存为笔记" button. We bridge them: container publishes its api upward
-  // via onExternalImportApiChange, we hold it here, and feed it to the
-  // titlebar. The setter is memoized so the container's effect doesn't
-  // re-fire on every parent render.
+  // The DocumentContainer owns the import hook because it needs the editor's contentRef and saveDoc.
+  // The titlebar renders the path, so it receives the container API through this bridge.
+  // Keep the setter memoized so the container effect does not rerun on each parent render.
   useEffect(() => {
     currentDocumentContentRef.current = '';
     currentDocumentEditorRef.current = null;
     setRecentExportPath(null);
   }, [currentDocumentInstanceKey]);
 
-  // 切换 memo 时关闭搜索面板 — 搜索/替换的 matches 是基于当前 editor state,
-  // 切到新 memo 后旧结果毫无意义, 应当随切换重置。
+  // Reset search when switching memos because results belong to the current editor state.
+  // Results from the previous memo are no longer relevant after the switch.
   useEffect(() => {
     setIsSearchPanelOpen(false);
   }, [currentDocumentInstanceKey]);
@@ -429,12 +389,12 @@ export function MainLayout({
     const nextFilter = activeFilter === 'todos' ? 'all' : 'todos';
     setMemoListVisible(true);
     setActiveFilter(nextFilter);
-    await loadMemos({
+    await loadPathNotes({
       notebookId: selectedNotebook?.id,
       filter: nextFilter,
       sort: activeSort,
     });
-  }, [activeFilter, activeSort, loadMemos, selectedNotebook?.id, setActiveFilter, setMemoListVisible]);
+  }, [activeFilter, activeSort, loadPathNotes, selectedNotebook?.id, setActiveFilter, setMemoListVisible]);
 
   const handleNavigateBack = useCallback(() => {
     void navigateDocumentHistory('back');
@@ -444,9 +404,8 @@ export function MainLayout({
     void navigateDocumentHistory('forward');
   }, []);
 
-  // Document titlebar's more → delete menu: hand off to the application-level
-  // MemoListServicesHost through a custom event. MainLayout stays independent
-  // from the dialog state and MemoList remains a visual list only.
+  // Forward the titlebar delete action to MemoListServicesHost through a custom event.
+  // MainLayout remains independent from the dialog state.
   const handleRequestDeleteMemo = useCallback(() => {
     if (!currentMemo) return;
     window.dispatchEvent(
@@ -473,7 +432,7 @@ export function MainLayout({
       }
       toast.success(t('document.command.copySuccess'));
     } catch (error) {
-      console.warn('[MainLayout] Failed to copy media link:', error);
+      logger.warn('[MainLayout] Failed to copy media link:', { error: error });
       toast.error(t('document.command.copyFailed'));
     }
   }, [mediaTarget, t]);
@@ -481,7 +440,7 @@ export function MainLayout({
   const handleRevealMedia = useCallback(() => {
     if (!mediaTarget) return;
     void product.revealInFileManager(mediaTarget.filePath).catch((error) => {
-      console.warn('[MainLayout] Failed to reveal media in file manager:', error);
+      logger.warn('[MainLayout] Failed to reveal media in file manager:', { error: error });
       toast.error(t('memo.fileTree.openFailed'));
     });
   }, [mediaTarget, t]);
@@ -671,7 +630,7 @@ export function MainLayout({
       <MarkdownFileDropOverlay />
       <div className="flex flex-1 overflow-hidden">
         <div className="flex flex-col flex-1 overflow-hidden">
-          <div className="relative flex flex-1 h-full overflow-hidden rounded-b-[18px] border-b border-[var(--divider)]">
+          <div className={`relative flex flex-1 h-full overflow-hidden ${isWindowsPlatform() ? 'rounded-b-[12px]' : 'rounded-b-[18px]'} border-b border-[var(--divider)]`}>
           <NoteNavigationDrawer
             phase={noteNavigationPhase}
             notebooks={notebooks}
@@ -909,11 +868,19 @@ export function MainLayout({
         onDshInstalled={handleDshInstalled}
       />
 
-      {startupStatus.phase !== 'ready' && (
+      {(startupStatus.phase !== 'ready'
+        || memoStartupPhase === 'idle'
+        || memoStartupPhase === 'loading'
+        || (memoStartupPhase === 'error' && (!showMemoListSurface || isMemoListHidden))) && (
         <div className="absolute inset-0 z-[100] flex items-center justify-center bg-[var(--frame-bg)]">
           {startupStatus.phase === 'failed' ? (
             <div className="max-w-md px-6 text-center text-sm text-[var(--muted-foreground)]" role="alert">
               {t('memo.navigation.startupMigrationFailed')}
+            </div>
+          ) : memoStartupPhase === 'error' ? (
+            <div className="flex max-w-md flex-col items-center gap-3 px-6 text-center" role="alert">
+              <span className="text-sm text-[var(--muted-foreground)]">{t('memo.list.loadFailed')}</span>
+              <Button size="sm" onClick={() => window.location.reload()}>{t('error.retry')}</Button>
             </div>
           ) : (
             <CenteredLoadingSpinner label={t('memo.navigation.preparingWorkspace')} />
@@ -929,7 +896,7 @@ export function MainLayout({
             if (startImport) {
               await startNotebookImportWithMonitoring(notebook.id, (status) => {
                 if (status.status === 'failed') {
-                  toast.error(status.message ?? '笔记本导入失败，请重试');
+                  toast.error(status.message ?? '笔记本导入失败，请重试。');
                 }
               });
             }

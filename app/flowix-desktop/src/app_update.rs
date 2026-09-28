@@ -276,9 +276,13 @@ fn matching_cli_processes(target: &Path) -> Result<Vec<u32>, String> {
                         windows::core::PWSTR(buffer.as_mut_ptr()),
                         &mut length,
                     )
-                        .is_ok()
-                } && normalize_path(Path::new(&String::from_utf16_lossy(&buffer[..length as usize]))) == target;
-                unsafe { let _ = CloseHandle(process); }
+                    .is_ok()
+                } && normalize_path(Path::new(&String::from_utf16_lossy(
+                    &buffer[..length as usize],
+                ))) == target;
+                unsafe {
+                    let _ = CloseHandle(process);
+                }
                 if matches {
                     result.push(pid);
                 }
@@ -286,7 +290,9 @@ fn matching_cli_processes(target: &Path) -> Result<Vec<u32>, String> {
         }
         has_entry = unsafe { Process32NextW(snapshot, &mut entry).is_ok() };
     }
-    unsafe { let _ = CloseHandle(snapshot); }
+    unsafe {
+        let _ = CloseHandle(snapshot);
+    }
     Ok(result)
 }
 
@@ -294,8 +300,8 @@ fn matching_cli_processes(target: &Path) -> Result<Vec<u32>, String> {
 fn terminate_process(pid: u32) -> Result<(), String> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Threading::{
-        OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
-        PROCESS_SYNCHRONIZE, WaitForSingleObject,
+        OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
+        PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
     };
 
     let access = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | PROCESS_SYNCHRONIZE;
@@ -303,11 +309,15 @@ fn terminate_process(pid: u32) -> Result<(), String> {
         .map_err(|error| format!("failed to open flowix-cli process {pid}: {error}"))?;
     let terminated = unsafe { TerminateProcess(process, 1).is_ok() };
     if !terminated {
-        unsafe { let _ = CloseHandle(process); }
+        unsafe {
+            let _ = CloseHandle(process);
+        }
         return Err(format!("failed to terminate flowix-cli process {pid}"));
     }
     unsafe { WaitForSingleObject(process, 5_000) };
-    unsafe { let _ = CloseHandle(process); }
+    unsafe {
+        let _ = CloseHandle(process);
+    }
     Ok(())
 }
 

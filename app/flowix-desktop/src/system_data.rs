@@ -374,7 +374,9 @@ mod tests {
         );
         let file = SystemFile {
             tag: TagSystemData { notebooks },
-            featured_notes: FeaturedNotesSystemData { notebooks: featured },
+            featured_notes: FeaturedNotesSystemData {
+                notebooks: featured,
+            },
         };
         SystemData::write_notebook(&root, &file).unwrap();
 
@@ -396,7 +398,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("notebook");
         fs::create_dir_all(root.join(".flowix")).unwrap();
-        fs::write(root.join(".flowix/system.json"), r#"{"tag":{"notebooks":{}}}"#).unwrap();
+        fs::write(
+            root.join(".flowix/system.json"),
+            r#"{"tag":{"notebooks":{}}}"#,
+        )
+        .unwrap();
 
         let loaded = SystemData::read_notebook(&root).unwrap().unwrap();
         assert!(loaded.featured_notes.notebooks.is_empty());

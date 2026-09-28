@@ -1,3 +1,4 @@
+import { captureLatestDocumentContent } from '../../store/document-session-service';
 import { useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@platform/tauri/window';
 
@@ -70,6 +71,7 @@ export function useExternalDocumentChangeWatch({
             payload.kind,
             payload.revision,
           )) return;
+          captureLatestDocumentContent(identity);
           if (hasDocumentUnsavedChanges(identity)) {
             maybeWarnAboutConflict();
             return;

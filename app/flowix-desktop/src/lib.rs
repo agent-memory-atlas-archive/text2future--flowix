@@ -17,6 +17,8 @@ pub mod config;
 mod connection_probe;
 mod device_registration;
 mod document_mutation;
+mod document_io;
+mod document_derived;
 mod dsh;
 mod events;
 mod lock_utils;

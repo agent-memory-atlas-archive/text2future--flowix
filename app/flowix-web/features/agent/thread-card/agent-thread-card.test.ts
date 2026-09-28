@@ -275,6 +275,11 @@ async function seedRenderableMessages(
   }));
 }
 
+// Load the integration graph during module collection, outside interaction budgets.
+await import("@features/agent/thread-card");
+await import("@features/editor/extensions/block-drag");
+await import("@tiptap/markdown");
+
 describe("AgentThreadCard NodeView streaming", () => {
   let editor: Editor | null = null;
 

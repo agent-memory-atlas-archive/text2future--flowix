@@ -148,6 +148,7 @@ export interface CodexSettingsItemOptions {
   layout?: CodexSettingsItemLayout;
   readOnly?: boolean;
   selectedLabel?: string;
+  notebookLabel?: boolean;
   icon?: SVGSVGElement | null;
 }
 
@@ -204,6 +205,12 @@ export function createCodexSettingsItem(
     } else {
       item.append(createCheckIcon());
     }
+  }
+  if (options?.notebookLabel) {
+    const notebookLabel = document.createElement("span");
+    notebookLabel.className = "agent-thread-card__codex-settings-item-selected-label";
+    notebookLabel.textContent = "笔记本";
+    item.append(notebookLabel);
   }
   return item;
 }

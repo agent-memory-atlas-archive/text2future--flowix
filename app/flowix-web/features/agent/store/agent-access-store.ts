@@ -1,3 +1,5 @@
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('agent-access-store');
 /**
  * Agent 可访问目录 store ── zustand 镜像后端
  * `~/.flowix/agent-access.json` 的整份 config。 与 `user-settings-store`
@@ -89,7 +91,7 @@ export const useAgentAccessStore = create<AgentAccessState>((set, get) => ({
       // 静默失败 ── 与 `user-settings-store.loadInitial` 同形, 把
       // 错误信息留给后续用户操作触发。 UI 在 config.entries 为空时
       // 会渲染空状态, 不会卡死。
-      console.error("agentAccess.loadInitial failed:", e);
+      logger.error("agentAccess.loadInitial failed:", { error: e });
       set({ isLoading: false });
     }
   },  addFolder: async (path: string, name?: string) => {
@@ -113,7 +115,7 @@ export const useAgentAccessStore = create<AgentAccessState>((set, get) => ({
         set({ config: prev });
         return { ok: false, code: "already-tracked" };
       }
-      console.error("agentAccess.addFolder failed, rolling back:", e);
+      logger.error("agentAccess.addFolder failed, rolling back:", { error: e });
       await get().loadInitial();
       return { ok: false, code: "save-failed" };
     }
@@ -133,7 +135,7 @@ export const useAgentAccessStore = create<AgentAccessState>((set, get) => ({
         await get().loadInitial();
         return { ok: false, code: "already-tracked" };
       }
-      console.error("agentAccess.addFolderFromPicker failed:", e);
+      logger.error("agentAccess.addFolderFromPicker failed:", { error: e });
       await get().loadInitial();
       return { ok: false, code: "save-failed" };
     }
@@ -157,7 +159,7 @@ export const useAgentAccessStore = create<AgentAccessState>((set, get) => ({
     try {
       await agentAccess.set(optimistic);
     } catch (e) {
-      console.error("agentAccess.setDefaultRuntime failed, rolling back:", e);
+      logger.error("agentAccess.setDefaultRuntime failed, rolling back:", { error: e });
       await get().loadInitial();
     }
   },
@@ -166,7 +168,7 @@ export const useAgentAccessStore = create<AgentAccessState>((set, get) => ({
     if (!notebookId) {
       // Notebook scope is mandatory. Keep the old config read-only for
       // migration, but never write new folder defaults to the global file.
-      console.warn("agentAccess.setDefaultFiles ignored without notebookId");
+      logger.warn("agentAccess.setDefaultFiles ignored without notebookId");
       return false;
     }
     const prevNotebookConfig = get().notebookConfigs[notebookId] ?? {
@@ -205,7 +207,7 @@ export const useAgentAccessStore = create<AgentAccessState>((set, get) => ({
         }));
         return true;
       } catch (e) {
-        console.error("agentAccess.setDefaultFiles failed:", e);
+        logger.error("agentAccess.setDefaultFiles failed:", { error: e });
         await get().loadInitial();
         return false;
       }

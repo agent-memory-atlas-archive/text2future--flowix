@@ -38,7 +38,6 @@ import {
   type ExternalDropPosition,
   type ExternalFileDropDetail,
 } from '@features/document/components/use-markdown-file-drop';
-import { resolveMemoByPath } from '@features/memo/use-cases/open-by-target';
 import { localDocumentOperations, memoDocumentOperations } from '@features/document/public/file-operations-api';
 import folderIcon from '@/assets/folder-outline.svg?raw';
 import {
@@ -124,7 +123,6 @@ export interface NotebookMoveResult {
 
 export interface NotebookMoveSource {
   path: string;
-  memoId?: string;
   resourceKind?: DocTreeResourceKind | null;
   isFolder?: boolean;
 }
@@ -433,14 +431,6 @@ export function NotebookFileTree({
       .map(({ item }) => item.fullPath),
     [visibleTreeItems],
   );
-  const memoIdByPath = useMemo(
-    () => new Map(
-      loadedTreeItems
-        .filter((item) => item.memoMeta?.id)
-        .map((item) => [canonicalPath(item.fullPath), item.memoMeta!.id] as const),
-    ),
-    [loadedTreeItems],
-  );
   const treeItemByPath = useMemo(() => {
     return new Map(loadedTreeItems.map((item) => [canonicalPath(item.fullPath), item] as const));
   }, [loadedTreeItems]);
@@ -697,20 +687,22 @@ export function NotebookFileTree({
       if (item.type === 'folder') {
         await files.renameFolder(item.fullPath, trimmed, notebookPath);
       } else {
-        const memoId = isNote
-          ? item.memoMeta?.id ?? (await resolveMemoByPath(item.fullPath))?.memoId
-          : null;
-        if (memoId) {
-          // Indexed notes use the memo path so the index and active editor
-          // keep the same identity after the rename. Unindexed Markdown files
-          // still use the generic file rename API.
+        if (isNote) {
+          const expectedContent = await memoDocumentOperations.read({
+            path: item.fullPath,
+            scopePath: notebookPath,
+          });
+          if (expectedContent === null) throw new Error('note is no longer available');
           const result = await memoDocumentOperations.renameTitle({
-            memoId,
+            path: item.fullPath,
             title: trimmed,
             expectedFilename: item.name,
+            expectedContent,
           });
-          useMemoStore.getState().handleMemoUpdated(result.memo);
-          replaceActiveMemoPath(result.memo.id, result.path);
+          if (result.memo) {
+            useMemoStore.getState().handleMemoUpdated(result.memo);
+            replaceActiveMemoPath(result.memo.id, result.path);
+          }
         } else {
           const extension = isNote ? item.name.match(/\.(md|markdown)$/i)?.[0] ?? '' : '';
           await localDocumentOperations.rename({
@@ -782,13 +774,10 @@ export function NotebookFileTree({
     const sourcePaths = isSelected ? currentPaths : [item.fullPath];
     const sourceItems = sourcePaths.map((path) => {
       const sourceItem = path === item.fullPath ? item : treeItemByPath.get(canonicalPath(path));
-      const memoId = memoIdByPath.get(canonicalPath(path));
       const resourceMetadata = sourceItem?.resourceKind
         ? { resourceKind: sourceItem.resourceKind }
         : {};
-      return memoId
-        ? { path, memoId, ...resourceMetadata }
-        : { path, ...resourceMetadata };
+      return { path, ...resourceMetadata };
     });
     // Capture on the row that started the gesture. Capturing on the tree root
     // retargets the browser's follow-up click to the root. Selection stays a
@@ -811,7 +800,7 @@ export function NotebookFileTree({
       active: false,
       targetDirectoryPath: null,
     };
-  }, [memoIdByPath, treeItemByPath]);
+  }, [treeItemByPath]);
 
   const renderDraft = (draftState: NotebookTreeDraftState, depth: number) => (
     <NotebookTreeDraft
@@ -1308,6 +1297,11 @@ export function NotebookFileTree({
               setDragPreview(null);
             }}
           >
+            {!hasVisibleItems && tree.loading && (
+              <div className="px-4 py-6 text-center text-xs text-[var(--muted-foreground)]" role="status">
+                {t('memo.fileTree.loading')}
+              </div>
+            )}
             {!hasVisibleItems && !tree.loading && !draft && (
               <div className="px-4 py-6 text-center text-xs text-[var(--muted-foreground)]">
                 {tree.error ? t('memo.fileTree.unreadableHint') : t('memo.fileTree.empty')}

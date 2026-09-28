@@ -1751,10 +1751,20 @@
 }
 
 .agent-thread-card__codex-settings-item-selected-label {
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
+  padding: 2px 3px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
   color: var(--muted-foreground);
   font-size: 0.75rem;
   line-height: 1.2;
+}
+
+.agent-thread-card__codex-settings-item-selected-label
+  + .agent-thread-card__codex-settings-item-selected-label {
+  margin-left: -4px;
 }
 
 .agent-thread-card__codex-settings-item-content {

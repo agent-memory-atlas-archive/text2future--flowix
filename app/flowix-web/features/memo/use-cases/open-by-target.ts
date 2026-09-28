@@ -26,6 +26,8 @@ import { resolveAbsolutePath } from '@platform/open-target/path-helper';
 import type { ResolvedOpenTarget } from '@platform/open-target/types';
 import { canonicalDirectoryPath, canonicalPath } from '@/lib/path';
 import { openExternalTarget, openMemoTarget } from '@features/workspace/use-cases/workspace-navigation';
+import GithubSlugger from 'github-slugger';
+import { navigateToHeadingAnchor } from '@features/editor/components/heading-anchor-navigation';
 
 function hasHiddenNotebookDirectory(path: string, notebookPath: string): boolean {
   const absolutePath = canonicalPath(path);
@@ -103,6 +105,18 @@ export async function openNoteByTarget(
     history: options?.history,
     destination: options?.destination,
   });
+  if (resolved.heading) {
+    const slug = new GithubSlugger().slug(resolved.heading);
+    let retries = 0;
+    const scrollToHeading = () => {
+      const editor = document.querySelector<HTMLElement>('.tiptap');
+      if (!editor || !navigateToHeadingAnchor(editor, `#${slug}`)) {
+        if (++retries >= 12) return;
+        window.setTimeout(scrollToHeading, 50);
+      }
+    };
+    window.setTimeout(scrollToHeading, 0);
+  }
 }
 
 /**

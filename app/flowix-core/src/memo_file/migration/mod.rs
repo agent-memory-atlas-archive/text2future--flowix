@@ -68,11 +68,6 @@ impl MemoFile {
                 internal.warnings.join("; ")
             )));
         }
-        // Reconcile media rows after the internal directory migration so files
-        // copied into the notebook are available to the media surface without
-        // being opened first. Existing media properties remain in the local
-        // database and are preserved by this reconciliation.
-        self.reconcile_media_resources(notebook_id)?;
         Ok(internal.moved_files)
     }
 
@@ -95,6 +90,24 @@ impl MemoFile {
 
     /// Run every unfinished structural migration in version order.
     pub fn run_pending_data_migrations(&self) -> io::Result<DataMigrationReport> {
+        // The common startup path only reads the version. Acquire the cross-
+        // process write lock when a migration is actually pending.
+        if let Ok(conn) = self.open_index_db() {
+            if let Ok(version) = conn.query_row(
+                "SELECT version FROM data_migration_state WHERE id = 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            ) {
+                let version = version.max(0) as u32;
+                if version >= LATEST_DATA_MIGRATION_VERSION {
+                    return Ok(DataMigrationReport {
+                        from_version: version,
+                        to_version: version,
+                        applied: 0,
+                    });
+                }
+            }
+        }
         let _process_guard = self.acquire_cross_process_write_lock()?;
         let conn = self.open_index_db()?;
         conn.execute_batch(

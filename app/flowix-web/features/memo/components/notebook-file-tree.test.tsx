@@ -259,7 +259,7 @@ describe('NotebookFileTree pointer dragging', () => {
     await act(async () => root.unmount());
   });
 
-  it('passes indexed memo ids with drag sources', async () => {
+  it('does not pass memo ids with drag sources', async () => {
     const onMoveNote = vi.fn<TestMoveNote>(successfulMove);
     const note = {
       ...item('/notes/a.md', 'document'),
@@ -280,7 +280,7 @@ describe('NotebookFileTree pointer dragging', () => {
     await act(async () => noteRow.dispatchEvent(pointerEvent('pointerup', 20, 10)));
 
     await vi.waitFor(() => expect(onMoveNote).toHaveBeenCalledWith(
-      [{ path: '/notes/a.md', memoId: 'memo-1' }],
+      [{ path: '/notes/a.md' }],
       '/notes/projects',
     ));
     expect(resolveMemoByPath).not.toHaveBeenCalled();

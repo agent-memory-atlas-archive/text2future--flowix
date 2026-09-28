@@ -67,6 +67,18 @@ impl MemoFile {
             return Ok(report);
         }
 
+        if self
+            .notebook_data_migration_version(notebook_id, NOTEBOOK_INTERNAL_MIGRATION_KEY)?
+            .unwrap_or_default()
+            >= NOTEBOOK_INTERNAL_MIGRATION_VERSION
+            && is_missing_or_empty(&base.join(".metadata").join("versions"))
+            && is_missing_or_empty(&base.join(".plugin-output"))
+            && is_missing_or_empty(&flowix.join("artifacts"))
+        {
+            report.completed = true;
+            return Ok(report);
+        }
+
         migrate_tree(
             &base.join(".metadata").join("versions"),
             &flowix.join("versions"),

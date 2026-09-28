@@ -14,8 +14,6 @@ export {
 export {
   getActiveDocumentDraft,
   getDocumentDraft,
-  consumeSelfDocumentPathUpdate,
-  markSelfDocumentPathUpdate,
   recordDocumentEdit,
   registerDocumentCapture,
   captureLatestDocumentContent,

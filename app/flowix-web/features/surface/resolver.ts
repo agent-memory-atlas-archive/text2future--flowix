@@ -11,7 +11,7 @@ import type {
   WorkColumnSurface,
 } from './types';
 import type { WorkColumnTarget } from '@features/workspace/store/work-column-target';
-import { requireFileDisplayIdentity } from '@features/workspace/store/file-display-store';
+import { requireFileDisplayIdentity } from '@/lib/file-display-registry';
 
 function assertNever(value: never): never {
   throw new Error(`Unsupported plugin artifact renderer: ${String(value)}`);

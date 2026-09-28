@@ -22,6 +22,12 @@ use thiserror::Error;
     rename_all_fields = "snake_case"
 )]
 pub enum OpenTarget {
+    /// Path within a named notebook. This is the canonical new link format.
+    NotebookPath {
+        book: String,
+        file: String,
+        heading: Option<String>,
+    },
     /// 物理�?�� —�?memo index �?���?notebook 找匹配的 .md�?
     PhysicalPath {
         path: String,
@@ -46,6 +52,8 @@ pub enum OpenTargetError {
     UnknownRoute(String),
     #[error("missing path query parameter")]
     MissingPath,
+    #[error("missing or ambiguous book/file query parameter")]
+    InvalidNotebookPath,
 }
 
 /// memo id: �?6 字�?或当�?MEMO_ID_LENGTH 字�?, 字�?�?`[0-9a-z]`�?
@@ -109,7 +117,10 @@ fn split_path_query(rest: &str) -> (String, Vec<(String, String)>) {
                     let mut parts = kv.splitn(2, '=');
                     let k = parts.next()?.to_string();
                     let v = parts.next().unwrap_or("").to_string();
-                    Some((percent_decode(&k), percent_decode(&v)))
+                    Some((
+                        percent_decode(&k.replace('+', " ")),
+                        percent_decode(&v.replace('+', " ")),
+                    ))
                 })
                 .collect();
             (path, pairs)
@@ -173,6 +184,63 @@ fn parse_deep_link(rest: &str, full: &str) -> Result<OpenTarget, OpenTargetError
             })
         }
         ["open"] => {
+            if get_query(&query, "book").is_some() || get_query(&query, "file").is_some() {
+                if get_query(&query, "path").is_some() {
+                    return Err(OpenTargetError::InvalidNotebookPath);
+                }
+                if rest.split_once('?').is_some_and(|(_, raw_query)| {
+                    raw_query.split('&').any(|entry| {
+                        let value = entry.split_once('=').map(|(_, value)| value).unwrap_or("");
+                        percent_decode_strict(value).is_none()
+                    })
+                }) {
+                    return Err(OpenTargetError::InvalidNotebookPath);
+                }
+                let unique = |name: &str| {
+                    query
+                        .iter()
+                        .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+                        .count()
+                        == 1
+                };
+                if !unique("book")
+                    || !unique("file")
+                    || query
+                        .iter()
+                        .filter(|(key, _)| key.eq_ignore_ascii_case("heading"))
+                        .count()
+                        > 1
+                {
+                    return Err(OpenTargetError::InvalidNotebookPath);
+                }
+                let book = get_query(&query, "book").unwrap().trim();
+                let raw_file = get_query(&query, "file").unwrap();
+                if book.is_empty() || raw_file.is_empty() {
+                    return Err(OpenTargetError::InvalidNotebookPath);
+                }
+                let explicit_heading = get_query(&query, "heading");
+                let (file, heading) = if let Some(heading) = explicit_heading {
+                    (
+                        raw_file.to_string(),
+                        (!heading.is_empty()).then(|| heading.to_string()),
+                    )
+                } else if let Some((file, heading)) = raw_file.split_once('#') {
+                    (
+                        file.to_string(),
+                        (!heading.is_empty()).then(|| heading.to_string()),
+                    )
+                } else {
+                    (raw_file.to_string(), None)
+                };
+                if file.is_empty() {
+                    return Err(OpenTargetError::InvalidNotebookPath);
+                }
+                return Ok(OpenTarget::NotebookPath {
+                    book: book.to_string(),
+                    file,
+                    heading,
+                });
+            }
             let path_arg = get_query(&query, "path")
                 .ok_or(OpenTargetError::MissingPath)?
                 .to_string();
@@ -261,6 +329,38 @@ mod tests {
             }
             _ => panic!("expected DeepLink"),
         }
+    }
+
+    #[test]
+    fn parses_notebook_path_and_encoded_heading() {
+        let target =
+            parse_open_target("flowix://open?book=MyVault&file=Projects%2FPlan%23Goals").unwrap();
+        assert_eq!(
+            target,
+            OpenTarget::NotebookPath {
+                book: "MyVault".into(),
+                file: "Projects/Plan".into(),
+                heading: Some("Goals".into()),
+            }
+        );
+        let literal_hash =
+            parse_open_target("flowix://open?book=My+Vault&file=Plan%23Goals.md&heading=").unwrap();
+        assert_eq!(
+            literal_hash,
+            OpenTarget::NotebookPath {
+                book: "My Vault".into(),
+                file: "Plan#Goals.md".into(),
+                heading: None,
+            }
+        );
+        assert!(matches!(
+            parse_open_target("flowix://open?book=a&book=b&file=x.md"),
+            Err(OpenTargetError::InvalidNotebookPath)
+        ));
+        assert!(matches!(
+            parse_open_target("flowix://open?book=a&file=bad%XX.md"),
+            Err(OpenTargetError::InvalidNotebookPath)
+        ));
     }
 
     #[test]

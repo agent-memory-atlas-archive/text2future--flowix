@@ -18,6 +18,8 @@ export {
   type DocumentEditorMode,
 } from '@features/document/store';
 export { navigateDocumentHistory } from '@features/document/use-cases/document-navigation';
+export { documentIdentityFromFile } from '@features/document/store/document-identity';
+export { documentHistoryEntryKey } from '@features/document/store/document-history-store';
 export { localDocumentOperations } from '@features/document/use-cases/local-document-operations';
 export {
   type DocumentHistoryEntry,

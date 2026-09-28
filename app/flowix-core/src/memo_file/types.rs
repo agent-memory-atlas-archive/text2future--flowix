@@ -19,11 +19,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// 文档颜色标签 — 写在 memo index 里的可选装饰字段, 单文档可挂多个色。
+/// 文档颜色标签 — 持久值写在 Markdown frontmatter 中, 单文档可挂多个色。
 ///
 /// 取值集固定为 红/橙/黄/绿/青/蓝/灰 7 种, 序列化小写英文 (`"red"` /
-/// `"orange"` / ...), 数组形式存, 空数组即"无颜色"。不持久化在 .md
-/// frontmatter — memo index 是唯一真源, 跟 `icon` 字段同形。
+/// `"orange"` / ...), 数组形式存, 空数组即"无颜色"。
+/// 索引只缓存从 Markdown 解析出的值, 与 `icon` 字段同形。
 ///
 /// 旧版用单值 `Option<MemoColor>`, 现在切到 `Vec<MemoColor>`。memo index
 /// 老数据若含 `"color": "red"` / `"color": null` 会反序列化失败, 但本字段
@@ -43,11 +43,11 @@ pub enum MemoColor {
 /// 跨 IPC 边界返回的 memo 完整形态 (前端 TS `MemoItem` 镜像)。
 ///
 /// 字段语义:
-/// - `id`: 6 位 shortid, memo index 的内部 key / 深链 / noteReference 节点 id。
+/// - `id`: 旧版兼容标识, 仍供深链及 noteReference 使用；路径是笔记索引主键。
 /// - `filename`: 磁盘文件名, 含 `.md` 后缀 (如 `Hello.md` / `Hello-1.md`)。
 ///   列表展示前端去掉 `.md`; 编辑器内展示用 `MemoItem.filename` 直接可。
 /// - `preview` / `tags` / `todos` / `agents`: 从 body 派生的 memo index 缓存字段。
-/// - `favorited` / `icon` / `colors`: 装饰字段, 仅 memo index 持久化。
+/// - `favorited` / `icon` / `colors`: 从 Markdown frontmatter 读取的持久属性。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Memo {
     pub id: String,

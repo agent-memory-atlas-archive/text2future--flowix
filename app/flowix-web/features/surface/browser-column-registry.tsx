@@ -28,7 +28,7 @@ import {
   type BrowserColumnWebRuntime,
 } from '@features/workspace/store/browser-column-store';
 import { canonicalUrl } from '@features/workspace/store/workspace-content-identity';
-import { requireFileDisplayIdentity, type FileDisplayIdentity } from '@features/workspace/store/file-display-store';
+import { requireFileDisplayIdentity, type FileDisplayIdentity } from '@/lib/file-display-registry';
 import { openUrl } from '@platform/tauri/opener';
 
 export type BrowserColumnSurfaceCapability =
@@ -491,7 +491,7 @@ export function resolveBrowserColumnSurface(
       };
     case 'file-browser': {
       const target = tab.target;
-      const surface = {
+      const surface: SurfaceBase & FileBrowserViewSurface & Pick<BrowserFileBrowserSurface, 'documentProps'> = {
         ...base,
         ...target,
         documentProps: {

@@ -1,5 +1,5 @@
 import { canonicalPath, fileLocatorKey } from '@/lib/path';
-import type { FileDisplayIdentity } from '@features/workspace/store/file-display-store';
+import type { FileDisplayIdentity } from '@/lib/file-display-registry';
 
 /** Durable Markdown address used by history and recovery data. */
 export interface DocumentLocator {

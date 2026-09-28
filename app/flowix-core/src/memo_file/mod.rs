@@ -1,41 +1,27 @@
-//! 笔记 / 笔记本存储层 — 后端 memo index / todo metadata / .md 磁盘 IO 的总入口。
+//! Notebook storage and Markdown file operations.
 //!
-//! ## v3 模块拆分 (2026/06 重构)
+//! Markdown files own note content. The rebuildable V2 projection in each
+//! notebook's `.flowix/notebook.db` addresses notes by relative path. Legacy
+//! memo-ID records and APIs remain for callers that have not migrated yet;
+//! new writes do not stamp those IDs into Markdown frontmatter or filenames.
 //!
-//! - [`mod@types`]       — 公开 DTO (Memo / Notebook / TodoItem / MemoTag /
-//!   NotebookConfig / MemoIndexFile / MemoIndexEntry / MemoTodoEntry /
-//!   MemoMetadataFile)
-//! - [`mod@frontmatter`] — YAML frontmatter 解析 (`extract_body_content`)
-//! - [`mod@derivation`]  — 派生字段 (preview / tags / todos) 提取
-//! - [`mod@time`]        — 列表过滤 (thisWeek / thisMonth) 用的时间边界
-//! - [`mod@notebook`]    — notebook registry SQLite IO
-//! - [`mod@index_store`]  — `memo index` / `todo metadata` IO + sync 维护
-//! - [`mod@content`]     — .md 文件读取 + 列表过滤 (只读 API)
-//! - [`mod@ops`]         — Memo CRUD 原语 (`create_memo` / `rename_memo` /
-//!   `write_memo` / `delete_memo` / `register_*` /
-//!   `reconcile_with_disk` / `reconcile_with_disk_bidirectional` /
-//!   `reload_memo_from_disk`)
-//! - [`mod@registration`] — 占位, 实现全部在 [`mod@ops`]
+//! - `frontmatter` parses and edits authored YAML metadata.
+//! - `v2_index` maintains the path-keyed projection and path operations.
+//! - `index_store` maintains legacy memo-ID records and related metadata.
+//! - `ops` contains legacy CRUD and reconciliation operations.
+//! - `versions` stores history currently keyed by internal memo ID.
 //!
-//! ## v3 — `filename` 作为磁盘文件名
-//!
-//! 物理文件: `<notebook>/<filename>.md` (`filename` 即 memo index entry.filename,
-//! 含 `.md` 后缀)。
-//!
-//! - id 仍由 6 位 nanoid (`MEMO_ID_ALPHABET` 字符集) 生成, 存 memo index 内部
-//!   key / 深链 / noteReference 节点, **不再出现在物理文件名**。
-//! - 同 title 冲突时自动追加 `-1` / `-2` / ... 后缀。
-//! - memo index 始终是全量索引的真源, 任何写路径最终都过 [`mod@ops`] 的原语。
-//! - `Memo` / `MemoIndexEntry` 都无 `path` 字段; 物理路径运行时拼
-//!   `get_memo_base() + filename`。
+//! `MemoIndexEntry::filename` contains the disk filename, including `.md`.
+//! Nested notes also carry a notebook-relative path; resolve that path against
+//! the notebook root when accessing the file.
 
 use std::path::PathBuf;
 use std::{fs::OpenOptions, io};
 
 /// memo id 随机段使用的字符集 — `[0-9a-z]` 36 个字符 (小写字母 + 数字)。
 ///
-/// 字符集约束: nanoid 默认 `SAFE` 含 `_` `-` 两种特殊字符, 显式锁定为
-/// 纯字母+数字。36 字符 × 6 位 ≈ 21.7 亿种, 碰撞余量仍够。
+/// nanoid's default alphabet includes `_` and `-`; legacy memo IDs use only
+/// lowercase letters and digits. New IDs contain [`MEMO_ID_LENGTH`] characters.
 pub const MEMO_ID_ALPHABET: [char; 36] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
     'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
@@ -54,9 +40,15 @@ mod notebook;
 mod onboarding;
 mod ops;
 mod registration;
-mod time;
+pub(crate) mod time;
 pub mod types;
+mod v2_index;
 mod versions;
+
+pub use v2_index::{
+    V2IndexReconcileReport, V2NoteEntry, V2NotePropertyMigrationReport, V2PathWriteOutcome,
+    V2TodoMigrationReport,
+};
 
 // 公开 API re-export — 跟旧 `memo_file.rs` 的 pub use 边界一致。
 pub use derivation::{
@@ -65,7 +57,8 @@ pub use derivation::{
     normalize_tag_path, tag_path_matches_filter,
 };
 pub use file_io::{
-    atomic_create_bytes, atomic_write_bytes, rename_file_noclobber, FileWriteOutcome,
+    atomic_create_bytes, atomic_write_bytes, filesystem_identity, rename_file_noclobber,
+    FileWriteOutcome,
 };
 pub use frontmatter::{
     build_md_content, extract_body_content, extract_document_metadata, extract_frontmatter_key,
@@ -171,7 +164,12 @@ impl MemoFile {
         loop {
             match fs2::FileExt::try_lock_exclusive(&file) {
                 Ok(()) => break,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                // Windows reports ERROR_LOCK_VIOLATION rather than WouldBlock.
+                // Compare fs2's platform-specific contention code before failing.
+                Err(error)
+                    if error.kind() == io::ErrorKind::WouldBlock
+                        || error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+                {
                     if started.elapsed() >= LOCK_TIMEOUT {
                         return Err(io::Error::new(
                             io::ErrorKind::TimedOut,

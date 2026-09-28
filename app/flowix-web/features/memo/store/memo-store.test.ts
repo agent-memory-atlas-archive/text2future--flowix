@@ -2,12 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   list: vi.fn(),
+  listByPath: vi.fn(),
   setSelectedTagId: vi.fn(),
 }));
 
 vi.mock('@features/memo/services', () => ({
   memoRepository: {
     list: mocks.list,
+    listByPath: mocks.listByPath,
+    listPluginNotes: vi.fn(),
   },
   notebookRepository: {},
 }));
@@ -48,6 +51,7 @@ function memo(id: string): MemoItem {
 describe('memo store list loading', () => {
   beforeEach(() => {
     mocks.list.mockReset();
+    mocks.listByPath.mockReset();
     mocks.setSelectedTagId.mockReset();
     useMemoStore.setState({
       memos: [],
@@ -70,6 +74,88 @@ describe('memo store list loading', () => {
 
     expect(useMemoStore.getState().memos).toEqual([filteredMemo]);
     expect(useMemoStore.getState().selectedMemo?.id).toBe('current');
+  });
+
+  it('loads the primary note list from path records without memo IDs', async () => {
+    mocks.listByPath.mockResolvedValue({
+      notes: [{
+        relativePath: 'folder/Path note.md',
+        title: 'Path note',
+        preview: 'preview',
+        thumbnail: null,
+        tags: [],
+        todos: [],
+        agents: [],
+        createdAt: 1,
+        updatedAt: 2,
+        favorited: false,
+        icon: null,
+        colors: [],
+        properties: {},
+      }],
+      nextCursor: null,
+      hasMore: false,
+    });
+    useMemoStore.setState({
+      selectedNotebook: {
+        id: 'notebook-1',
+        name: 'Notebook',
+        path: '/tmp/notebook',
+        createdAt: 1,
+        updatedAt: 1,
+        isDefault: true,
+      },
+    });
+
+    await useMemoStore.getState().loadPathNotes({ notebookId: 'notebook-1', filter: 'all' });
+
+    expect(mocks.listByPath).toHaveBeenCalledWith(expect.objectContaining({
+      notebookId: 'notebook-1',
+      limit: 50,
+    }));
+    expect(mocks.list).not.toHaveBeenCalled();
+    expect(useMemoStore.getState().pathNotes[0]).toMatchObject({
+      kind: 'path-note',
+      notebookId: 'notebook-1',
+      relativePath: 'folder/Path note.md',
+      filename: 'Path note.md',
+      title: 'Path note',
+    });
+    expect('id' in useMemoStore.getState().pathNotes[0]).toBe(false);
+  });
+
+  it('appends path pages by notebook and relative path without duplicates', async () => {
+    const alpha = {
+      relativePath: 'Alpha.md', title: 'Alpha', preview: '', thumbnail: null,
+      tags: [], todos: [], agents: [], createdAt: 1, updatedAt: 1,
+      favorited: false, icon: null, colors: [], properties: {},
+    };
+    const beta = { ...alpha, relativePath: 'Beta.md', title: 'Beta' };
+    mocks.listByPath
+      .mockResolvedValueOnce({ notes: [alpha], nextCursor: 'path-cursor', hasMore: true })
+      .mockResolvedValueOnce({ notes: [alpha, beta], nextCursor: null, hasMore: false });
+    useMemoStore.setState({
+      selectedNotebook: {
+        id: 'notebook-1', name: 'Notebook', path: '/tmp/notebook',
+        createdAt: 1, updatedAt: 1, isDefault: true,
+      },
+      activeFilter: 'all',
+      activeSort: 'createdAt',
+      activePluginId: null,
+    });
+
+    await useMemoStore.getState().loadPathNotes({ notebookId: 'notebook-1', filter: 'all' });
+    await useMemoStore.getState().loadMoreMemos();
+
+    expect(mocks.listByPath).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      notebookId: 'notebook-1',
+      cursor: 'path-cursor',
+      limit: 50,
+    }));
+    expect(useMemoStore.getState().pathNotes.map((note) => note.relativePath)).toEqual([
+      'Alpha.md', 'Beta.md',
+    ]);
+    expect(useMemoStore.getState().memoListHasMore).toBe(false);
   });
 
   it('ignores a stale response after a newer local list update', async () => {
@@ -142,6 +228,21 @@ describe('memo store list loading', () => {
     expect(persisted.state.activeFilter).toBe('all');
     expect(useMemoStore.getState().middleColumnView).toBe('notes');
 
+  });
+
+  it('persists path selection without an ID selection', () => {
+    useMemoStore.getState().setSelectedPathNote({
+      notebookId: 'notebook-1',
+      relativePath: 'folder/note.md',
+    });
+
+    const persisted = JSON.parse(localStorage.getItem('test-memo-store') ?? '{}');
+    expect(useMemoStore.getState().selectedMemoId).toBeNull();
+    expect(persisted.state.selectedMemoId).toBeNull();
+    expect(persisted.state.selectedPathNote).toEqual({
+      notebookId: 'notebook-1',
+      relativePath: 'folder/note.md',
+    });
   });
 
   it('exits a plugin view when notes is already the active filter', () => {

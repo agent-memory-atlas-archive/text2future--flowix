@@ -96,7 +96,9 @@ export async function createNotebookRegistration({
   if (!trimmedName) throw new Error('INVALID_NAME');
 
   const requestedPath = path?.trim();
-  const pathForCreate = requestedPath || await notebookRepository.ensureDefaultPath(trimmedName);
+  // The create command already resolves and creates the default directory.
+  // Keep the ordinary path to one IPC instead of a separate ensure call.
+  const pathForCreate = requestedPath || undefined;
 
   try {
     const notebook = await notebookRepository.create(trimmedName, pathForCreate, icon, false);
@@ -105,7 +107,8 @@ export async function createNotebookRegistration({
     // A second onboarding attempt can race with another registration. Resolve
     // the backend duplicate response to the already registered notebook.
     if (reuseExisting && String(error).includes('PATH_ALREADY_REGISTERED')) {
-      const registered = await findNotebookByPath(pathForCreate);
+      const existingPath = pathForCreate ?? await notebookRepository.getDefaultPath(trimmedName);
+      const registered = await findNotebookByPath(existingPath);
       if (registered) {
         return {
           notebook: registered,

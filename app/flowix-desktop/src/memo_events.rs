@@ -326,10 +326,16 @@ fn commit_for_event(app: &AppHandle, event: &MemoEvent) -> Result<Option<Documen
             memo, notebook_id, ..
         } => {
             let state = app.try_state::<crate::app::state::AppState>().ok_or(())?;
-            let resolved = flowix_core::MemoService::new(&read_lock(&state.memo_file, "memo_file"))
-                .resolve_memo(&memo.id)
-                .map_err(|_| ())?;
-            (memo.id.as_str(), notebook_id.as_str(), resolved.path)
+            // Created events carry the authoritative notebook and relative path.
+            // Resolving the ID globally reopens every preceding notebook DB.
+            let notebook = read_lock(&state.memo_file, "memo_file")
+                .get_notebook_config_by_id(notebook_id)
+                .ok_or(())?;
+            let path = flowix_core::memo_file::notebook_path_from_relative(
+                std::path::Path::new(&notebook.path),
+                &memo.relative_path,
+            ).map_err(|_| ())?;
+            (memo.id.as_str(), notebook_id.as_str(), path)
         }
         MemoEvent::Updated {
             id,

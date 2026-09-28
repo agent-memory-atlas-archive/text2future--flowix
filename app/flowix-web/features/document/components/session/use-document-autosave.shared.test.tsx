@@ -4,11 +4,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useDocumentAutosave } from './use-document-autosave';
 import { applyLoadedDocumentContent, recordDocumentEdit } from '../../store/document-session-service';
 import { subscribeDocumentBufferChanges, getBuffer } from '../../store/buffer-registry';
+import { enqueueDocumentCommit } from '../../store/document-commit-queue';
+import { ensureFileDisplayIdentity, rebaseFileDisplayPath, reconcileFileDisplays } from '@/lib/file-display-registry';
 
-const save = vi.hoisted(() => vi.fn().mockResolvedValue(true));
-vi.mock('@features/document/store/document-session-service', async (importOriginal) => ({
-  ...await importOriginal<Record<string, unknown>>(),
-  saveDocumentContent: save,
+const save = vi.hoisted(() => vi.fn().mockImplementation(async request => ({ status: 'saved', path: request.path, content: request.content })));
+vi.mock('../../use-cases/document-operations', () => ({ documentContentOperations: () => ({ write: save }) }));
+vi.mock('../../store/recovery-draft-store', () => ({
+  persistRecoveryDraft: vi.fn().mockResolvedValue(true),
+  clearRecoveryDraftThrough: vi.fn().mockResolvedValue(undefined),
+  flushRecoveryOperations: vi.fn().mockResolvedValue(true),
 }));
 
 describe('shared document autosave', () => {
@@ -39,6 +43,53 @@ describe('shared document autosave', () => {
       await act(async () => vi.advanceTimersByTimeAsync(1000));
       expect(save).toHaveBeenCalledWith(expect.objectContaining({ content: '# Newer right edit' }));
     } finally {
+      await act(async () => root.unmount());
+      environment.IS_REACT_ACT_ENVIRONMENT = false;
+    }
+  });
+
+  it.each([false, true])('waits for a title rename and saves %s document edits at the new path', async (isExternalDocument) => {
+    vi.useFakeTimers();
+    const originalPath = '/notes/old-' + isExternalDocument + '.md';
+    const identity = { kind: 'md' as const, memoId: isExternalDocument ? null : 'memo-rename', ...ensureFileDisplayIdentity(originalPath) };
+    reconcileFileDisplays([identity]);
+    applyLoadedDocumentContent(identity, '/notes/old.md', 'Base');
+    let currentPath = originalPath;
+    let onChange: ((content: string) => void) | undefined;
+    function Surface() {
+      onChange = useDocumentAutosave({
+        identity, filePath: '/notes/old.md', getCurrentFilePath: () => currentPath,
+        memoId: identity.memoId, isExternalDocument, externalScopePath: isExternalDocument ? '/notes' : null,
+        setState: vi.fn(), reloadDocument: vi.fn().mockResolvedValue(undefined),
+      }).handleChange;
+      return null;
+    }
+    const element = document.createElement('div');
+    const root = createRoot(element);
+    const environment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    environment.IS_REACT_ACT_ENVIRONMENT = true;
+    let finishRename: (() => void) | null = null;
+    try {
+      await act(async () => root.render(<Surface />));
+      const gate = new Promise<void>(resolve => { finishRename = resolve; });
+      const rename = enqueueDocumentCommit('md:' + identity.displayId, 'title', async () => {
+        await gate;
+        rebaseFileDisplayPath(originalPath, '/notes/new.md', identity.displayId);
+        return true;
+      });
+      onChange?.('Edited during rename');
+      await act(async () => vi.advanceTimersByTimeAsync(1000));
+      expect(save).not.toHaveBeenCalled();
+
+      currentPath = '/notes/new.md';
+      finishRename!();
+      finishRename = null;
+      await act(async () => { await rename; });
+      expect(save).toHaveBeenCalledWith(expect.objectContaining({
+        path: '/notes/new.md', content: 'Edited during rename',
+      }));
+    } finally {
+      (finishRename as (() => void) | null)?.();
       await act(async () => root.unmount());
       environment.IS_REACT_ACT_ENVIRONMENT = false;
     }

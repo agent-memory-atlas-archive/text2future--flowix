@@ -1,3 +1,4 @@
+import { setDocumentProperties } from '@features/document/public/path-properties';
 import {
   memos,
   notebooks,
@@ -5,6 +6,7 @@ import {
   type FilterType,
   type MemoColorFilter,
   type MemoListPage,
+  type PathNoteListPage,
   type NotebookSortEntry,
   type SortType,
 } from '@platform/tauri/client';
@@ -24,15 +26,24 @@ export const memoRepository = {
     cursor?: string;
     limit?: number;
   }): Promise<MemoListPage> => memos.getMemos(params),
+  listByPath: (params: {
+    notebookId: string;
+    filter?: FilterType;
+    sort?: SortType;
+    tagId?: string;
+    color?: MemoColorFilter;
+    cursor?: string;
+    limit?: number;
+  }): Promise<PathNoteListPage> => memos.getPathNotes(params),
   listPluginNotes: (pluginId: string, notebookId: string) => plugins.listNotes(pluginId, notebookId),
-  create: (tag?: string, notebookId?: string, parentRelativePath?: string) =>
-    memos.addDocument(tag, notebookId, parentRelativePath),
+  create: (tag?: string, notebookId?: string, parentRelativePath?: string, title?: string) =>
+    memos.addDocument(tag, notebookId, parentRelativePath, title),
   createWithContent: (title: string, content: string, notebookId: string, parentRelativePath?: string) =>
     memos.createWithContent({ title, content, notebookId, parentRelativePath }),
-  delete: (id: string) => memos.deleteMemo(id),
-  favorite: (id: string) => memos.favoriteMemo(id),
-  unfavorite: (id: string) => memos.unfavoriteMemo(id),
-  setColors: (id: string, colors: MemoColor[]) => memos.setMemoColors(id, colors),
+  delete: (path: string) => memos.deleteMemo(path),
+  favorite: (path: string, expectedCacheId?: string) => setDocumentProperties(path, { flowix_favorited: true }, expectedCacheId),
+  unfavorite: (path: string, expectedCacheId?: string) => setDocumentProperties(path, { flowix_favorited: false }, expectedCacheId),
+  setColors: (path: string, colors: MemoColor[], expectedCacheId?: string) => setDocumentProperties(path, { flowix_colors: colors }, expectedCacheId),
 };
 
 export const notebookRepository = {

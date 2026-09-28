@@ -58,27 +58,39 @@ pub fn create_memo_version(
 #[allow(non_snake_case)]
 pub fn restore_memo_version(
     id: String,
+    file_path: String,
     version_id: String,
     expectedContent: Option<String>,
     state: State<AppState>,
     app: AppHandle,
     window: tauri::WebviewWindow,
 ) -> Option<WriteDocumentResult> {
+    if !std::path::Path::new(&file_path).is_absolute() {
+        return None;
+    }
+    let resolved = MemoService::new(&read_lock(&state.memo_file, "memo_file"))
+        .resolve_memo(&file_path)
+        .ok()?;
+    if resolved.id != id {
+        return None;
+    }
     let target_content = MemoService::new(&read_lock(&state.memo_file, "memo_file"))
         .read_memo_version(&id, &version_id)?;
     let before = read_memo_or_none(state.inner(), &id);
-    let current_path = MemoService::new(&read_lock(&state.memo_file, "memo_file"))
-        .resolve_memo(&id)
-        .ok()?
-        .path;
+    let current_path = resolved.path;
     start_security_bookmark_access(&state, &current_path);
     let result = {
         let memo_file = read_lock(&state.memo_file, "memo_file");
         MemoService::new(&memo_file).save_memo_with_receipt(
-            &id,
+            &file_path,
             &target_content,
             false,
             |resolved, current| {
+                if resolved.id != id {
+                    return Err(flowix_core::FlowixError::Conflict(
+                        "document at path was replaced".into(),
+                    ));
+                }
                 if expectedContent.as_deref().is_some_and(|expected| {
                     !cas_content_matches(current, expected, &target_content)
                 }) {
@@ -95,7 +107,7 @@ pub fn restore_memo_version(
     match result {
         Ok(receipt) => {
             start_security_bookmark_access(&state, &receipt.edited.path);
-            emit_saved_memo_receipt(state.inner(), &app, receipt, before, window.label())
+            emit_saved_memo_receipt(&app, receipt, before, window.label())
         }
         Err(e) => {
             eprintln!("[restore_memo_version] restore failed for {id}: {e}");

@@ -1,27 +1,26 @@
 import { memos } from '@platform/tauri/client';
 import type { DocumentPathRequest, DocumentWriteOutcome, DocumentWriteRequest, EditableDocumentOperations } from './editable-document-operations';
 
-/** File editing through the indexed Memo backend. The ID is required only by
- * operations that must update the Memo index or follow a renamed file. */
+/** Resolve notebook-relative note addresses from file paths for Markdown CRUD. */
 export const memoDocumentOperations = {
   read: ({ path }: DocumentPathRequest) => memos.readDocument(path),
   write: async ({
-    memoId,
+    path,
     content,
     expectedContent,
   }: DocumentWriteRequest): Promise<DocumentWriteOutcome> => {
-    if (!memoId) throw new Error('Memo ID is required to save an indexed document');
-    const result = await memos.writeDocument({ key: memoId, content, expectedContent });
+    const result = await memos.writeDocument({ filePath: path, content, expectedContent });
     return result
       ? { status: 'saved', ...result }
       : { status: 'refused' };
   },
-  renameTitle: (request: { memoId: string; title: string; expectedFilename: string }) =>
+  renameTitle: (request: { path: string; title: string; expectedFilename: string; expectedContent: string }) =>
     memos.renameMemoTitle({
-      id: request.memoId,
+      filePath: request.path,
       title: request.title,
       expectedFilename: request.expectedFilename,
+      expectedContent: request.expectedContent,
     }),
 } satisfies Pick<EditableDocumentOperations, 'read' | 'write'> & {
-  renameTitle: (request: { memoId: string; title: string; expectedFilename: string }) => ReturnType<typeof memos.renameMemoTitle>;
+  renameTitle: (request: { path: string; title: string; expectedFilename: string; expectedContent: string }) => ReturnType<typeof memos.renameMemoTitle>;
 };

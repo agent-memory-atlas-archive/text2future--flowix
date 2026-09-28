@@ -54,7 +54,6 @@ export function HtmlResourceView({
         >
           <DocumentContainer
             {...documentProps}
-            filePath={filePath}
             isExternalDocument
             externalScopePath={scopePath}
             readOnly

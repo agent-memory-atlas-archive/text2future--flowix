@@ -1213,4 +1213,27 @@ describe('frontmatter property helpers', () => {
     editor.destroy();
     host.remove();
   });
+
+  it('creates frontmatter when the title action adds the first property', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const editor = new Editor({
+      element: host,
+      extensions: [StarterKit, Markdown, Frontmatter.configure({ propertyTargetId: 'file:empty-document' })],
+      content: 'Body without properties',
+      contentType: 'markdown',
+    });
+
+    window.dispatchEvent(new CustomEvent('flowix:add-property', {
+      detail: { propertyTargetId: 'file:empty-document' },
+    }));
+
+    expect(editor.state.doc.firstChild?.type.name).toBe('frontmatter');
+    expect(editor.state.doc.firstChild?.attrs.yamlContent).toBe('key1: ""');
+    expect(parseVisibleFrontmatter(String(editor.state.doc.firstChild?.attrs.yamlContent ?? '')).userData.key1).toBe('');
+    expect(host.querySelector('[data-property-key="key1"]')).not.toBeNull();
+
+    editor.destroy();
+    host.remove();
+  });
 });

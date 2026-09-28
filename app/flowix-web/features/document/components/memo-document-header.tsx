@@ -18,6 +18,7 @@ interface MemoDocumentHeaderProps {
   updatedAt: Date | null;
   editable: boolean;
   autoFocus?: boolean;
+  sourceMode?: boolean;
   useDocumentSelection?: boolean;
   showPropertiesToggle?: boolean;
   allowReadOnlyBoundaryNavigation?: boolean;
@@ -59,6 +60,7 @@ export function MemoDocumentHeader({
   updatedAt,
   editable,
   autoFocus = false,
+  sourceMode = false,
   useDocumentSelection = false,
   showPropertiesToggle = true,
   allowReadOnlyBoundaryNavigation = true,
@@ -69,29 +71,44 @@ export function MemoDocumentHeader({
   titleRef,
 }: MemoDocumentHeaderProps) {
   const language = useAppLanguage();
+  const dateLine = updatedAt ? (
+    <div className="memo-date-line">
+      {formatDocumentDateTime(updatedAt, language)}
+    </div>
+  ) : null;
+  const titleEditor = (
+    <MemoTitleEditor
+      ref={titleRef}
+      displayId={displayId}
+      filename={filename}
+      renameTitle={renameTitle}
+      editable={editable}
+      autoFocus={autoFocus}
+      useDocumentSelection={useDocumentSelection}
+      showPropertiesToggle={showPropertiesToggle}
+      allowReadOnlyBoundaryNavigation={allowReadOnlyBoundaryNavigation}
+      onMoveToBody={onMoveToBody}
+      onPasteToBody={onPasteToBody}
+      editorMode={editorMode}
+      onToggleEditorMode={onToggleEditorMode}
+    />
+  );
+
+  if (sourceMode) {
+    return (
+      <>
+        {dateLine && <div className="source-document-date-row">{dateLine}</div>}
+        <div className="source-document-title-row">
+          <div className="memo-document-header">{titleEditor}</div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <div className="memo-document-header">
-      {updatedAt && (
-        <div className="memo-date-line">
-          {formatDocumentDateTime(updatedAt, language)}
-        </div>
-      )}
-      <MemoTitleEditor
-        ref={titleRef}
-        displayId={displayId}
-        filename={filename}
-        renameTitle={renameTitle}
-        editable={editable}
-        autoFocus={autoFocus}
-        useDocumentSelection={useDocumentSelection}
-        showPropertiesToggle={showPropertiesToggle}
-        allowReadOnlyBoundaryNavigation={allowReadOnlyBoundaryNavigation}
-        onMoveToBody={onMoveToBody}
-        onPasteToBody={onPasteToBody}
-        editorMode={editorMode}
-        onToggleEditorMode={onToggleEditorMode}
-      />
+      {dateLine}
+      {titleEditor}
     </div>
   );
 }

@@ -313,10 +313,8 @@ impl MemoFile {
                 }
             }
 
-            // 写回 .md: 走 merge_frontmatter 保留 key, atomic_write_bytes
-            let overrides: MergeOverrides =
-                [("key".to_string(), memo_id.clone())].into_iter().collect();
-            let merged = merge_frontmatter(&content_with_tags, &overrides);
+            // 将修改后的标签写回 Markdown，不改动其它正文内容。
+            let merged = content_with_tags;
 
             // 写盘前通知调用方 mark_self_write ── 抑制 watcher 把这次自写
             // 误判为外部修改 (否则 N 个 memo 触发 N 次 reload + 事件轰击)。
@@ -535,9 +533,7 @@ impl MemoFile {
                 content_with_body
             };
 
-            let overrides: MergeOverrides =
-                [("key".to_string(), memo_id.clone())].into_iter().collect();
-            let merged = merge_frontmatter(&content_with_tags, &overrides);
+            let merged = content_with_tags;
 
             // notify caller to mark_self_write -- otherwise the watcher
             // would mistake this for an external edit and emit a wave of

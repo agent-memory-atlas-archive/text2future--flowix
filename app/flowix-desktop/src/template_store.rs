@@ -45,9 +45,10 @@ fn seed_notebook_templates_if_needed(target_dir: &Path) -> Result<(), String> {
         .filter(|(relative, _)| *relative != "index.json")
     {
         let relative_path = Path::new(relative);
-        if relative_path.components().any(|component| {
-            !matches!(component, Component::Normal(_))
-        }) {
+        if relative_path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        {
             return Err(format!("invalid bundled template path: {relative}"));
         }
 

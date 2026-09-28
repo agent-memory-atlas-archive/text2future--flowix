@@ -1,6 +1,10 @@
 import { lazy, Suspense } from 'react';
 import { useMainWindowBusinessController } from './use-main-window-business-controller';
 import { useMainWindowSystemController } from './use-main-window-system-controller';
+import { ensureFileDisplayTrackingStarted } from '@features/workspace/public/app-api';
+
+// Initialize before the first persisted surface is rendered.
+if (typeof window !== 'undefined') ensureFileDisplayTrackingStarted();
 
 const MainLayout = lazy(() =>
   import('@features/shell').then((module) => ({ default: module.MainLayout })),

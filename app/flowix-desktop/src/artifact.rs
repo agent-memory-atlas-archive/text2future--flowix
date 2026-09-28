@@ -160,15 +160,23 @@ fn artifact_body(raw: &str) -> String {
 /// is only probed to report availability; it is never required to read the
 /// durable artifact file.
 pub fn resolve(
-    memo_id: &str,
+    id_or_path: &str,
     memo_file: &Arc<RwLock<flowix_core::memo_file::MemoFile>>,
 ) -> Result<ArtifactSession, String> {
     let memo_file_guard = read_lock(memo_file, "memo_file");
+    let memo_id = if Path::new(id_or_path).is_absolute() {
+        flowix_core::MemoService::new(&memo_file_guard)
+            .resolve_memo(id_or_path)
+            .map_err(|error| format!("artifact pointer not found: {error}"))?
+            .id
+    } else {
+        id_or_path.to_string()
+    };
     let (entry, raw_note) = memo_file_guard
-        .read_memo_with_body_global(memo_id)
+        .read_memo_with_body_global(&memo_id)
         .ok_or_else(|| format!("artifact pointer not found: {memo_id}"))?;
     let notebook = memo_file_guard
-        .resolve_memo_location(memo_id)
+        .resolve_memo_location(&memo_id)
         .map_err(|error| format!("resolve artifact pointer: {error}"))?
         .map(|location| PathBuf::from(location.notebook.path))
         .ok_or_else(|| format!("artifact pointer not found: {memo_id}"))?;
@@ -285,7 +293,6 @@ pub fn remove_path(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{artifact_body, artifact_candidates, artifact_hash_matches, sha256_hex};
-    use std::path::Path;
 
     #[test]
     fn strips_host_frontmatter_without_losing_artifact_content() {
@@ -301,7 +308,8 @@ mod tests {
 
     #[test]
     fn accepts_only_plugin_output_paths() {
-        let notebook = Path::new("/tmp/notebook");
+        let notebook_dir = std::env::temp_dir().join("flowix-artifact-test-notebook");
+        let notebook = notebook_dir.as_path();
         assert!(
             artifact_candidates(notebook, "mindmap", ".flowix/plugin/mindmap/output.md").is_ok()
         );

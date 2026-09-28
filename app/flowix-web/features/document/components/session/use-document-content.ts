@@ -1,9 +1,13 @@
+import { getBuffer, notifyDocumentBufferChanged } from '../../store/buffer-registry';
+import { getDocumentSession } from '../../store/document-runtime-session';
+import { restoreTitleDraft } from '@features/document/store/document-title-session';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { memos as memosClient } from '@platform/tauri/client';
 import { documentContentOperations } from '@features/document/use-cases/document-operations';
 import { useMemoStore } from '@features/memo/store/memo-store';
 import {
+  captureLatestDocumentContent,
   setActiveDocumentPath,
   applyLoadedDocumentContent,
   consumeStagedDocumentSnapshot,
@@ -14,7 +18,7 @@ import { useDocumentStore } from '@features/document/store/document-store';
 import type { DocumentIdentity } from '@features/document/store/document-identity';
 import { translate } from '@/lib/i18n';
 import { replaceActiveMemoPath } from '@features/workspace/use-cases/workspace-navigation';
-import { isFileDisplayIdLive } from '@features/workspace/store/file-display-store';
+import { isFileDisplayIdLive } from '@/lib/file-display-registry';
 import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
 import { formatDateTime } from '@/lib/utils';
 import { markDocumentOpenTrace } from '@/lib/document-open-perf';
@@ -90,6 +94,17 @@ export function useDocumentContent({
   // reads compare against this and abort.
   const counter = useRef(0);
 
+  const readOpeningRecovery = useCallback(() => {
+    const session = getDocumentSession(identity);
+    if (session.openingRecovery) return session.openingRecovery;
+    const pending = readRecoveryDraft(identity).catch(() => null);
+    session.openingRecovery = pending;
+    void pending.finally(() => {
+      if (session.openingRecovery === pending) session.openingRecovery = undefined;
+    });
+    return pending;
+  }, [identity]);
+
   useEffect(() => () => {
     // Prevent an IPC read from recreating a buffer after its last surface has
     // unmounted and the runtime display identity has been reclaimed.
@@ -112,16 +127,30 @@ export function useDocumentContent({
         preservePending: options?.preservePending ?? true,
         setAsCurrent: !isolatedSession,
       });
-      const recovery = options?.recovery ?? null;
+      const memo = isExternalDocument ? null : getMemoSnapshot(memoId);
+      // A new note may reuse a deleted note's path. Its old recovery draft
+      // belongs to the previous file and must not replace the new content.
+      const recovery = options?.recovery && (
+        (options.recovery.memoId && options.recovery.memoId !== memoId)
+        || (memo?.createdAt && options.recovery.createdAt < memo.createdAt)
+      ) ? null : options?.recovery ?? null;
+      if (recovery && recovery.originalPath === path) {
+        const session = getDocumentSession(identity);
+        session.recoveryRevision = Math.max(session.recoveryRevision, recovery.revision);
+      }
+      if (recovery?.title && recovery.originalPath === path) restoreTitleDraft(identity.displayId, recovery.title);
       if (
         recovery
         && recovery.originalPath === path
-        && recovery.baseContent === fullContent
-        && recovery.content !== fullContent
       ) {
-        applyRecoveryDraftContent(identity, recovery.content, recovery.revision);
+        applyRecoveryDraftContent(identity, recovery.content, recovery.bodyRevision ?? recovery.revision);
+        if (recovery.content !== fullContent && recovery.baseContent !== fullContent) {
+          buf.conflicted = true;
+          buf.conflictContent = fullContent;
+          buf.lastSavedContent = recovery.baseContent;
+          buf.saveState = 'conflict';
+        }
       }
-      const memo = isExternalDocument ? null : getMemoSnapshot(memoId);
       const createdAt = memo?.createdAt ? formatDateTime(memo.createdAt, getCurrentAppLanguage()) : '';
       const updatedAt = memo?.updatedAt ? formatDateTime(memo.updatedAt, getCurrentAppLanguage()) : '';
       const updatedAtDate = memo?.updatedAt ? new Date(memo.updatedAt) : null;
@@ -132,7 +161,6 @@ export function useDocumentContent({
       const isNew = false;
       const initialContent = recovery
         && recovery.originalPath === path
-        && recovery.baseContent === fullContent
         ? recovery.content
         : buf.content;
       const initialBody = extractBodyContent(initialContent);
@@ -178,6 +206,8 @@ export function useDocumentContent({
       // the previous document that resolve after this point still
       // target the right buffer.
       if (!isolatedSession) setActiveDocumentPath(identity, path);
+      captureLatestDocumentContent(identity);
+      const startRevision = getBuffer(identity)?.capturedRevision ?? 0;
       const currentLoadId = ++counter.current;
       if (skipContentLoad) {
         setState((prev) => ({
@@ -195,20 +225,22 @@ export function useDocumentContent({
         }
         return;
       }
+      const session = getDocumentSession(identity);
+      if ((options?.showLoading ?? true) && session.loaded && session.buffer) {
+        applyLoadedContent(identity.path, session.buffer.lastSavedContent, { preservePending: true });
+        if (!isolatedSession && transitionId !== null) useDocumentStore.getState().finishDocumentTransition(transitionId);
+        return;
+      }
       const stagedContent = consumeStagedDocumentSnapshot(identity, path);
       if (stagedContent !== null) {
-        markDocumentOpenTrace(transitionId, 'recovery:read-start', {
-          memoId,
-          source: 'staged',
-        });
-        const recovery = await readRecoveryDraft(identity).catch(() => null);
-        markDocumentOpenTrace(transitionId, 'recovery:read-end', {
-          memoId,
-          source: 'staged',
-          found: recovery !== null,
-        });
+        // The just-committed create result is already authoritative. There
+        // cannot be a recovery draft from this new note before its first edit.
         if (currentLoadId !== counter.current || !isFileDisplayIdLive(identity.displayId)) return;
-        applyLoadedContent(path, stagedContent, { preservePending: true, recovery });
+        if (session.loaded && session.buffer) {
+          applyLoadedContent(session.identity.path, session.buffer.lastSavedContent, { preservePending: true });
+          return;
+        }
+        applyLoadedContent(path, stagedContent, { preservePending: true });
         logOpenDocPerf('reloadDocument:staged', startedAt, {
           memoId,
           transitionId,
@@ -243,9 +275,17 @@ export function useDocumentContent({
           isExternalDocument,
         });
         let readPath = path;
-        let fullContent = await documentContentOperations(isExternalDocument ? 'external' : 'internal').read({
+        const read = () => documentContentOperations(isExternalDocument ? 'external' : 'internal').read({
           path: readPath, scopePath: externalScopePath, memoId,
         });
+        const opening = options?.showLoading ?? true;
+        const operation = opening && session.openingRead?.path === readPath
+          ? session.openingRead.promise : read();
+        if (opening) session.openingRead = { path: readPath, promise: operation };
+        let fullContent: string | null;
+        try { fullContent = await operation; }
+        finally { if (session.openingRead?.promise === operation) session.openingRead = undefined; }
+
         if (
           (fullContent === null || fullContent === undefined) &&
           !isExternalDocument
@@ -296,13 +336,35 @@ export function useDocumentContent({
         }
 
         if (currentLoadId !== counter.current || !isFileDisplayIdLive(identity.displayId)) return;
+        if ((options?.showLoading ?? true) && session.loaded && session.buffer) {
+          applyLoadedContent(session.identity.path, session.buffer.lastSavedContent, { preservePending: true });
+          return;
+        }
         markDocumentOpenTrace(transitionId, 'recovery:read-start', { memoId });
-        const recovery = await readRecoveryDraft(identity).catch(() => null);
+        const recovery = (options?.showLoading ?? true)
+          ? await readOpeningRecovery() : await readRecoveryDraft(identity).catch(() => null);
         markDocumentOpenTrace(transitionId, 'recovery:read-end', {
           memoId,
           found: recovery !== null,
         });
         if (currentLoadId !== counter.current || !isFileDisplayIdLive(identity.displayId)) return;
+        captureLatestDocumentContent(identity);
+        const liveBuffer = getBuffer(identity);
+        if (options?.showLoading === false && liveBuffer
+          && (liveBuffer.capturedRevision !== startRevision || liveBuffer.pendingContent !== null)) {
+          if (fullContent !== liveBuffer.lastSavedContent) {
+            liveBuffer.conflicted = true; liveBuffer.conflictContent = fullContent;
+            liveBuffer.saveState = 'conflict';
+            notifyDocumentBufferChanged(identity, 'save_settled');
+          }
+          return;
+        }
+        // Another view may have finished the same opening and accepted input
+        // while this view was still reading recovery. Adopt that live buffer.
+        if ((options?.showLoading ?? true) && session.loaded && session.buffer) {
+          applyLoadedContent(session.identity.path, session.buffer.lastSavedContent, { preservePending: true });
+          return;
+        }
         applyLoadedContent(readPath, fullContent, {
           preservePending: options?.preservePending,
           recovery,
@@ -329,7 +391,7 @@ export function useDocumentContent({
         }
       }
     },
-    [applyLoadedContent, identity, isolatedSession, isExternalDocument, externalScopePath, memoId, notebookPath, skipContentLoad, transitionId],
+    [applyLoadedContent, identity, isolatedSession, isExternalDocument, externalScopePath, memoId, notebookPath, readOpeningRecovery, skipContentLoad, transitionId],
   );
 
   return {

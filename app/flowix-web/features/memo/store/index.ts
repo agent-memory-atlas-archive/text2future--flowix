@@ -9,7 +9,7 @@ export {
   type ExtendedFilterType,
   type MemoLibraryStartupPhase,
 } from '@features/memo/store/memo-store';
-export { type MemoItem, type MemoColor } from '@/types/memo-item';
+export { type MemoItem, type MemoListItem, type PathNoteListItem, type MemoColor } from '@/types/memo-item';
 export { useTagStore, type MemoTagItem } from '@features/memo/store/tag-store';
 export { useTodoCountStore } from '@features/memo/store/todo-count-store';
 export {

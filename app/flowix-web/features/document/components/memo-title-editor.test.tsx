@@ -1,4 +1,4 @@
-import { act, createElement } from 'react';
+import { act, createElement, createRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -19,7 +19,7 @@ vi.mock('./memo-title-session', () => ({
   useMemoTitleSession: () => titleSession,
 }));
 
-import { MemoTitleEditor, type MemoTitleBodyNavigation } from './memo-title-editor';
+import { MemoTitleEditor, type MemoTitleBodyNavigation, type MemoTitleEditorHandle } from './memo-title-editor';
 
 function setTextareaValue(element: HTMLTextAreaElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(
@@ -67,6 +67,7 @@ describe('MemoTitleEditor IME handling', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    titleSession.commit.mockImplementation(() => Promise.resolve());
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -152,6 +153,42 @@ describe('MemoTitleEditor IME handling', () => {
       trailingContent: ' tail',
       insertEmptyLine: true,
     });
+  });
+
+  it('moves to the body before the title rename finishes', () => {
+    titleSession.commit.mockImplementation(() => new Promise(() => {}));
+    setTextareaValue(textarea, 'Title tail');
+    textarea.setSelectionRange(5, 5);
+
+    act(() => dispatchKey(textarea, 'Enter', 13));
+
+    expect(titleSession.commit).toHaveBeenCalledTimes(1);
+    expect(onMoveToBody).toHaveBeenCalledWith({
+      trailingContent: ' tail',
+      insertEmptyLine: true,
+    });
+  });
+
+  it('accepts a body-to-title merge before the title rename finishes', () => {
+    titleSession.commit.mockImplementation(() => new Promise(() => {}));
+    const editorRef = createRef<MemoTitleEditorHandle>();
+    act(() => {
+      root.render(createElement(MemoTitleEditor, {
+        ref: editorRef,
+        displayId: 'display:title-test',
+        filename: 'Original.md',
+        renameTitle,
+        editable: true,
+        onMoveToBody,
+      }));
+    });
+
+    let accepted = false;
+    act(() => { accepted = editorRef.current?.appendBodyLine('First line') ?? false; });
+
+    expect(accepted).toBe(true);
+    expect(titleSession.setDraft).toHaveBeenCalledWith('OriginalFirst line');
+    expect(titleSession.commit).toHaveBeenCalledTimes(1);
   });
 
   it('keeps title-to-body navigation available when read-only', async () => {

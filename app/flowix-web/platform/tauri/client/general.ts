@@ -20,6 +20,10 @@ export const boot = {
   setIntroDisplayed: () => invoke<void>('set_boot_intro_displayed'),
   setOnboardingCompleted: () => invoke<void>('set_boot_onboarding_completed'),
   getStartupStatus: () => invoke<StartupStatus>('get_startup_status'),
+  getStartupNotebookId: () => invoke<string | null>('get_startup_notebook_id'),
+  notifyStartupInteractive: () => invoke<void>('notify_startup_interactive'),
+  recordStartupStage: (stage: string, frontendElapsedMs: number, startupAttemptId: string) =>
+    invoke<void>('record_startup_stage', { stage, frontendElapsedMs, startupAttemptId }),
   waitForStartupReady: () => invoke<void>('wait_for_startup_ready'),
 };
 

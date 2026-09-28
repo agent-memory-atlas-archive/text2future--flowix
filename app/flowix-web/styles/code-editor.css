@@ -65,6 +65,9 @@
 
 .code-editor.code-editor--with-scroll-header .cm-source-header {
 	display: block;
+	position: relative;
+	z-index: 300;
+	overflow: visible;
 	width: 100%;
 	min-width: 0;
 	box-sizing: border-box;
@@ -79,26 +82,25 @@
 	box-sizing: border-box;
 	width: 100%;
 	min-width: 0;
-	--source-memo-title-font-size: 16px;
-	/* Keep the former separator-height footprint while reducing the space
-	 * below the title to a fixed rem-based spacing. */
-	padding-bottom: calc(0.1rem + 0.0625rem);
 }
 
-/* The source title is a separate editing host inside the CodeMirror widget.
- * Put the active surface on the widget's full-width header rather than on the
- * text-sized title row. This keeps the title aligned with a full `.cm-line`
- * background while leaving the actual text selection on the title to the
- * shared brand-colored `::selection` rule. */
-.code-editor[data-source-header-focused] .cm-source-header {
+/* Keep focus highlighting on the title row; the date has its own row above. */
+.code-editor[data-source-header-focused] .source-document-title-row {
 	background-color: var(--code-editor-active-surface-bg);
 	border-radius: 4px;
 }
 
-/* The editor's normal top padding supplies the space above the title widget,
- * so the title and source lines remain in one measured CodeMirror surface. */
+.code-editor .source-document-date-row {
+	width: 100%;
+	max-width: var(--app-document-width, 680px);
+	box-sizing: border-box;
+	margin: 0 auto;
+	padding: 0;
+}
+
+/* Keep the shared title/date header at the same top edge as rich text. */
 .code-editor.code-editor--with-scroll-header .cm-content {
-	padding-top: var(--code-editor-content-padding-top, 14px) !important;
+	padding-top: 0 !important;
 }
 
 .code-editor .source-document-title-row .memo-title-shell {
@@ -106,20 +108,27 @@
 }
 
 .code-editor .source-document-title-row .memo-document-header {
-	max-width: none;
+	/* Keep a centered content column while the outer CodeMirror header stays
+	 * full-width for its active surface. */
+	max-width: var(--app-document-width, 680px);
 	padding: 0;
+}
+
+.code-editor .source-document-title-row .memo-title-properties-toggle {
+	/* The button extends into CodeMirror's line-number gutter; keep it above
+	 * the gutter layer after the title header loses its horizontal inset. */
+	z-index: 2;
 }
 
 .code-editor .source-document-title-row .memo-title-editor {
 	box-sizing: border-box;
-	min-height: calc(var(--source-memo-title-font-size, 16px) * var(--code-editor-line-height, 1.65));
-	padding: 0 var(--code-editor-line-padding-right, 20px) 0 var(--code-editor-line-padding-left, 10px);
+	padding: 0;
 	user-select: text;
 	-webkit-user-select: text;
 	font-family: inherit;
-	font-size: var(--source-memo-title-font-size, 16px);
+	font-size: calc(1.9rem * (var(--app-font-size, 15px) / 16px));
 	font-weight: 600;
-	line-height: inherit;
+	line-height: 1.32;
 	white-space: pre-wrap;
 	word-break: break-word;
 	overflow-wrap: anywhere;

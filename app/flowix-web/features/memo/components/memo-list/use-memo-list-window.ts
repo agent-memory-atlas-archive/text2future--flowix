@@ -9,14 +9,14 @@ import {
 } from 'react';
 
 import type { ColorFilterValue } from '@features/memo/store/memo-store';
-import type { MemoItem } from '@/types/memo-item';
+import { memoListItemKey, type MemoListItem } from '@/types/memo-item';
 
 const INITIAL_RENDER_COUNT = 120;
 const RENDER_BATCH_SIZE = 80;
 const LOAD_MORE_THRESHOLD_PX = 720;
 
 interface MemoListWindowOptions {
-  memos: MemoItem[];
+  memos: MemoListItem[];
   activeFilter: string;
   colorFilter: ColorFilterValue;
   selectedMemoId?: string;
@@ -65,7 +65,7 @@ export function useMemoListWindow({
   const selectedIndex = useMemo(
     () =>
       selectedMemoId
-        ? filteredMemos.findIndex((memo) => memo.id === selectedMemoId)
+        ? filteredMemos.findIndex((memo) => memoListItemKey(memo) === selectedMemoId)
         : -1,
     [filteredMemos, selectedMemoId],
   );

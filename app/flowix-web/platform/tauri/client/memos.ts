@@ -1,3 +1,4 @@
+import { invokeDocumentMutation } from './document-mutation';
 import { invoke } from '@tauri-apps/api/core';
 import type { MemoColor, MemoItem } from '@/types/memo-item';
 import type { MemoContentCommit } from '@/types/memo';
@@ -11,6 +12,28 @@ export type MemoColorFilter = 'any' | 'none' | MemoColor;
 
 export interface MemoListPage {
   memos: MemoItem[];
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+export interface PathNoteEntry {
+  relativePath: string;
+  title: string;
+  preview: string;
+  thumbnail: string | null;
+  tags: string[];
+  todos: { id: string; content: string; status: string }[];
+  agents: { threadId: string; title: string; agentType: string }[];
+  createdAt: number;
+  updatedAt: number;
+  favorited: boolean;
+  icon: string | null;
+  colors: MemoColor[];
+  properties: Record<string, unknown>;
+}
+
+export interface PathNoteListPage {
+  notes: PathNoteEntry[];
   nextCursor: string | null;
   hasMore: boolean;
 }
@@ -89,6 +112,25 @@ export const memos = {
     cursor: params?.cursor,
     limit: params?.limit,
   }),
+  listNotesByPath: (notebookId: string) =>
+    invoke<PathNoteEntry[]>('list_notes_by_path', { notebookId }),
+  getPathNotes: (params: {
+    notebookId: string;
+    filter?: FilterType;
+    sort?: SortType;
+    tagId?: string;
+    color?: MemoColorFilter;
+    cursor?: string;
+    limit?: number;
+  }) => invoke<PathNoteListPage>('get_path_notes', {
+    notebookId: params.notebookId,
+    filter: params.filter || 'all',
+    sort: params.sort || 'createdAt',
+    tagId: params.tagId,
+    color: params.color,
+    cursor: params.cursor,
+    limit: params.limit,
+  }),
   searchMentionNotes: (query?: string, limit?: number) =>
     invoke<MentionNoteSearchItem[]>('search_mention_notes', {
       query,
@@ -110,26 +152,19 @@ export const memos = {
   openMemoSession: (id: string) =>
     invoke<OpenMemoSession | null>('open_memo_session', { id }),
   readDocument: (filePath: string) => invoke<string | null>('read_document', { filePath }),
-  // 鍐欑洏 IPC銆傝繑鍥炲€间负 null = 鍐欑洏澶辫触 (璺緞闈炴硶 / CAS refuse / fs error),
-  // 鍚﹀垯杩斿洖 { path, content } 鈹€鈹€ `path` 鏄鐩樹笂鏈€缁堢墿鐞嗚矾寰?  // (rename 鍚庡彲鑳借窡 caller 浼犵殑 filePath 涓嶅悓, 鍓嶇闇€瑕佹嵁姝ゅ垏 buf),
-  // `content` 鏄鐩樻渶缁堝唴瀹?(鍚?frontmatter), 鐢ㄤ簬 `lastSavedContent` 瀵归綈銆?  //
-  // `channel`:
-  // - 'internal' 鈹€鈹€ 鍐呴儴 memo 鏂囨。, 鐢?`key` (memoId) 鍙嶆煡 memo index
-  //   鎷垮綋鍓?entry.filename, 娲剧敓棣栬鍙樺寲瑙﹀彂鐗╃悊 rename + memo index 鍚屾銆?
-  // - 'external' 鈹€鈹€ 澶栭儴 .md 鏂囦欢, 璧?`filePath` 瀵诲潃 + CAS, 涓嶆敼鍚?
-  //   涓嶅姩 memo index銆?
+  // Save by notebook path with content CAS. Memo IDs are not part of note writes.
   writeDocument: (params: {
-    key: string;
+    filePath: string;
     content: string;
     expectedContent?: string;
-  }) => invoke<({ path: string; content: string } & MemoContentCommit) | null>('write_document', {
-    key: params.key,
+  }) => invokeDocumentMutation<({ path: string; content: string } & MemoContentCommit) | null>('write_document', {
+    filePath: params.filePath,
     content: params.content,
     expectedContent: params.expectedContent,
   }),
   getLaunchOpenFiles: () => invoke<string[]>('get_launch_open_files'),
-  addDocument: (tag?: string, notebookId?: string, parentRelativePath?: string) =>
-    invoke<MemoItem>('add_document', { tag, notebookId, parentRelativePath }),
+  addDocument: (tag?: string, notebookId?: string, parentRelativePath?: string, title?: string) =>
+    invoke<{ memo: MemoItem; initialContent: string }>('add_document', { tag, notebookId, parentRelativePath, title }),
   createWithContent: (params: {
     title: string;
     content: string;
@@ -141,17 +176,16 @@ export const memos = {
     notebookId: params.notebookId,
     parentRelativePath: params.parentRelativePath,
   }),
-  moveMemoToDirectory: (id: string, notebookId: string, parentRelativePath: string) =>
+  moveMemoToDirectory: (filePath: string, notebookId: string, parentRelativePath: string) =>
     invoke<{
-      memo: MemoItem;
-      oldPath: string;
       path: string;
-    }>('move_memo_to_directory', { id, notebookId, parentRelativePath }),
-  renameMemoTitle: (params: { id: string; title: string; expectedFilename?: string }) =>
-    invoke<{ memo: MemoItem; oldPath: string; path: string }>('rename_memo_title', {
-      id: params.id,
+    }>('move_memo_to_directory', { filePath, notebookId, parentRelativePath }),
+  renameMemoTitle: (params: { filePath: string; title: string; expectedFilename?: string; expectedContent: string }) =>
+    invokeDocumentMutation<{ memo: MemoItem | null; path: string; filename: string }>('rename_memo_title', {
+      filePath: params.filePath,
       title: params.title,
       expectedFilename: params.expectedFilename,
+      expectedContent: params.expectedContent,
     }),
   listTemplates: () => invoke<MemoTemplate[]>('list_memo_templates'),
   saveTemplate: (title: string, content: string) =>
@@ -162,17 +196,14 @@ export const memos = {
     invoke<MemoItem>('create_memo_from_template', { templateId, notebookId }),
   importExternalDocumentToMemo: (filePath: string, content: string, notebookId?: string) =>
     invoke<MemoItem | null>('import_external_document_to_memo', { filePath, content, notebookId }),
-  deleteMemo: (id: string) => invoke<boolean>('delete_memo', { id }),
+  deleteMemo: (filePath: string) => invoke<boolean>('delete_memo', { filePath }),
   clearMemos: (notebookId?: string) => invoke<boolean>('clear_memos', { notebookId }),
-  favoriteMemo: (id: string) => invoke<boolean>('favorite_memo', { id }),
-  unfavoriteMemo: (id: string) => invoke<boolean>('unfavorite_memo', { id }),
-  setMemoColors: (id: string, colors: MemoColor[]) =>
-    invoke<boolean>('set_memo_colors', { id, colors }),
   listVersions: (id: string) =>
     invoke<MemoVersionMeta[]>('list_memo_versions', { id }),
-  restoreVersion: (id: string, versionId: string, expectedContent?: string) =>
+  restoreVersion: (id: string, filePath: string, versionId: string, expectedContent?: string) =>
     invoke<({ path: string; content: string } & MemoContentCommit) | null>('restore_memo_version', {
       id,
+      filePath,
       versionId,
       expectedContent,
     }),
@@ -208,7 +239,7 @@ export const externalDocuments = {
     content: string;
     expectedContent?: string;
     scopePath?: string | null;
-  }) => invoke<ExternalDocumentWriteOutcome>('write_external_document', {
+  }) => invokeDocumentMutation<ExternalDocumentWriteOutcome>('write_external_document', {
     filePath: params.filePath,
     content: params.content,
     expectedContent: params.expectedContent,

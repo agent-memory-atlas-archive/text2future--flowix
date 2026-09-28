@@ -1,9 +1,5 @@
-﻿//! 覆盖 `dispatch_modify_event` �?��数的两�?分流�?���?    //!
-//! 不依�?Tauri AppHandle / MemoWatcher / inode tracker ── �?MemoFile
-//! 直接调纯函数, �?�� emit 出来的事�?kind/path/memo 字�?�?    //!
-//! setup pattern �?flowix-core �?`fresh_memo_file` 一�? tempdir +
-//! seed notebook registry + MemoFile::new銆?
 use super::*;
+use flowix_core::memo_file::extract_frontmatter_key;
 use flowix_core::memo_file::MemoFile;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -68,6 +64,11 @@ fn memo_processing_registers_markdown_in_nested_directories() {
         mf.read_all_memos()[0].relative_path,
         "docs/guide/Reference.md"
     );
+    let v2_entry = mf
+        .read_v2_note_entry_by_path("nb_test", "docs/guide/Reference.md")
+        .unwrap()
+        .unwrap();
+    assert_eq!(v2_entry.title, "Reference");
 }
 
 /// 写一�?.md �?notebook 根目�? �?register_existing_file 把它登�?
@@ -117,7 +118,7 @@ fn dispatch_modify_event_emits_updated_for_registered_file() {
                 .join(&memo.filename)
                 .display()
                 .to_string();
-            assert_eq!(ep, expected_path, "path should equal base+filename");
+            assert_eq!(crate::watcher::path::normalize_for_compare(Path::new(&ep)), crate::watcher::path::normalize_for_compare(Path::new(&expected_path)), "path should equal base+filename");
             assert_eq!(memo.filename, filename);
             // preview 来自�?body 的派�?
             assert!(
@@ -195,19 +196,8 @@ fn dispatch_modify_event_with_mark_marks_before_register_write_only() {
             std::mem::discriminant(other)
         ),
     }
-    assert_eq!(
-        marked.borrow().len(),
-        1,
-        "mark must fire exactly once before the register write"
-    );
-    assert_eq!(
-        marked.borrow()[0],
-        path,
-        "mark must be called with the event path (the file about to be stamped)"
-    );
+    assert!(marked.borrow().is_empty(), "registration is read-only");
 
-    // (2) 同一文件已注册 (有 key, 已索引) -> reload 分支只读不写盘: mark 不应被调用,
-    // 否则会在 2s TTL 内误吞合法的外部连续编辑。
     marked.borrow_mut().clear();
     let outcome = dispatch_modify_event_with_mark(
         &mf,
@@ -364,15 +354,10 @@ fn physical_delete_for_unregistered_file_is_noop() {
     assert!(!removed, "unregister must return false for unknown file");
 }
 
-// ====== Frontmatter-key-first 鍒嗘祦锛歳ename via disk key ======
-//
-// 复现 GUI 标�?编辑的代码路径：fs::rename(OLD �?NEW) �?
-// SELF_WRITE_SUPPRESSOR 吞了 From 事件, To 事件进入 dispatch_modify_event�?    // 关键�?��: 磁盘 frontmatter key (�?rename 保留) �?命中 OLD entry �?    // rename_memo_file �?entry.filename, id 不变, created_at 不变�?    //
-// 这个测试不依�?Tauri AppHandle / notify / SelfWriteSuppressor —直接
-// 喂一�?Create 事件形态的 path �?dispatch_modify_event, 模拟 GUI �?��
-// 走到 processor 时的入参�?
+// A confirmed rename pair updates the old path association without reading
+// an identity field from Markdown.
 #[test]
-fn dispatch_modify_event_detects_rename_via_frontmatter_key() {
+fn explicit_rename_pair_updates_path_without_identity_field() {
     let (mf, base) = fresh_memo_file();
     let (filename, old_path) = seed_registered_md(&mf, &base, "Original");
 
@@ -384,20 +369,21 @@ fn dispatch_modify_event_detects_rename_via_frontmatter_key() {
     let original_created = original.created_at;
     let original_updated = original.updated_at;
 
-    // 物理 rename ── �?GUI write_memo_renaming_on_title_change 一�?
-    // frontmatter key 跟着文件�?(fs::rename �?metadata-only 操作,
-    // 鏂囦欢鍐呭涓嶅彉, frontmatter 鍧楃殑 key 瀛楁淇濈暀)
+    // Rename the file without changing its contents.
     let new_filename = "Renamed.md".to_string();
     let new_path = base.join(&new_filename);
     std::fs::rename(&old_path, &new_path).expect("physical rename must succeed");
 
-    // �?To 事件形�? dispatch_modify_event 读�?�?�?�?key �?反查 entry
-    let outcome = dispatch_modify_event(&mf, &watch_ctx(&base), &new_path, FsEventKind::Create)
+    // The watcher supplies both paths to the rename dispatcher.
+    let outcome = dispatch_path_rename(&mf, &watch_ctx(&base), &old_path, &new_path)
+        .into_iter()
+        .next()
+        .expect("rename pair")
         .expect("dispatch ok");
     let event = match outcome {
         DispatchOutcome::Updated(e) => e,
         DispatchOutcome::Created { .. } => {
-            panic!("expected Updated (rename via key), got Created")
+            panic!("expected Updated for confirmed path rename, got Created")
         }
     };
 
@@ -412,7 +398,7 @@ fn dispatch_modify_event_detects_rename_via_frontmatter_key() {
             // 关键不变�?── id �?rename 保留
             assert_eq!(
                 id, original_id,
-                "id must be preserved across rename detected via frontmatter key"
+                "id must be preserved across confirmed path rename"
             );
             assert_eq!(
                 memo.id, original_id,
@@ -496,16 +482,17 @@ fn dispatch_modify_event_rekeys_pasted_duplicate_when_original_still_exists() {
         "original memo entry must not be moved"
     );
     let pasted_content = std::fs::read_to_string(&pasted_path).unwrap();
-    assert_eq!(extract_frontmatter_key(&pasted_content), Some(memo.id));
+    assert_eq!(
+        pasted_content,
+        std::fs::read_to_string(&original_path).unwrap()
+    );
 }
 
-// ====== Frontmatter-key-first 分流�?c) case ======
-//
-// 模拟"memo index 已经�?��序事件清�? 磁盘 key 还在" ── 比�?外部
-// rename �?From + To 两条事件, From 进了 unregister_and_emit 删了
-// entry, To �?dispatch_modify_event 此时 read_memo(key) 返回 None�?    // 当前粘贴�?��: �?key 的陌生文件也按新文档注册, 并把磁盘 key 刷新成新 id�?
+// A pasted file may retain an old `flowix_key` in its authored content.
+// Registering its path creates a fresh internal cache ID and leaves the file
+// unchanged; the old YAML field is not used as the new identity.
 #[test]
-fn dispatch_modify_event_rekeys_orphan_disk_key_as_new_document() {
+fn dispatch_modify_event_registers_orphan_with_new_cache_id() {
     let (mf, base) = fresh_memo_file();
 
     // 直接造一�?.md �?frontmatter key �?memo index 里没记录�?孤儿"
@@ -545,27 +532,15 @@ fn dispatch_modify_event_rekeys_orphan_disk_key_as_new_document() {
         .expect("fresh id should now be in memo index");
     assert_eq!(entry.id, memo.id);
     let stamped = std::fs::read_to_string(&orphan_path).unwrap();
-    assert_eq!(extract_frontmatter_key(&stamped), Some(memo.id));
+    assert_eq!(
+        extract_frontmatter_key(&stamped),
+        Some(orphan_id.to_string())
+    );
 }
 
-// ====== GUI 鏍囬缂栬緫鍏ㄩ摼璺細SelfWriteSuppressor + dispatch 鍗忎綔 ======
-//
-// 妯℃嫙 write_memo_renaming_on_title_change 娴佺▼:
-//   1. mark_self_write(OLD) ── �?OLD �?��塞抑制表
-//   2. fs::rename(OLD �?NEW) ── 触发 notify From(OLD) + To(NEW)
-//   3. notify 回调 �?filter pipeline:
-//      - From(OLD) �?SelfWriteSuppressor 命中 �?吞掉 �?    //      - To(NEW)   �?SelfWriteSuppressor miss �?�?processor
-//   4. processor �?frontmatter-key-first 分流:
-//      - 读�?�?�?�?key = id (frontmatter 跟着 fs::rename �?
-//      - read_memo(id) �?Some (entry 沤?�? From �?���?
-//      - existing.filename != current filename �?(a) 分支
-//      - rename_memo_file(OLD, NEW) �?entry.filename �? id 保留
-//
-// 关键 invariant: id �?rename 保留, created_at 不变, updated_at 刷新�?    // 这是用户报告�?bug 的核�?── 之前 Windows 上因 inode_tracker 留空,
-// dispatch_modify_event �?filename-based �?��, �?entry �?新文�?
-// 重新注册, id 漂移 / createdAt 重置�?    //
-// 这个测试**不依�?Tauri AppHandle / 真实 notify** ── 直接�?    // SelfWriteSuppressor + dispatch_modify_event, 验证两条事件流入
-// processor �? dispatch 的输出是正��?rename_memo_file 调用�?
+// Simulate a title rename: the old and new paths pass the event filter, then
+// the confirmed rename pair updates the existing index association. The
+// cache ID and creation time stay with the note without a Markdown ID field.
 #[test]
 fn gui_title_edit_full_pipeline_preserves_id_and_timestamps() {
     use crate::watcher::filter::{run_pipeline, PathFilter};
@@ -607,13 +582,16 @@ fn gui_title_edit_full_pipeline_preserves_id_and_timestamps() {
         "To(NEW) must pass through filter pipeline (NEW was not marked)"
     );
 
-    // ====== Step 3: processor dispatch_modify_event(NEW) ── �?(a) 分支 ======
-    let outcome = dispatch_modify_event(&mf, &watch_ctx(&base), &new_path, FsEventKind::Create)
+    // Apply the confirmed old-path/new-path pair.
+    let outcome = dispatch_path_rename(&mf, &watch_ctx(&base), &old_path, &new_path)
+        .into_iter()
+        .next()
+        .expect("rename pair")
         .expect("dispatch ok");
     let event = match outcome {
         DispatchOutcome::Updated(e) => e,
         DispatchOutcome::Created { .. } => {
-            panic!("GUI rename must emit Updated (rename detected via disk key), not Created")
+            panic!("GUI rename must emit Updated for confirmed path rename")
         }
     };
 

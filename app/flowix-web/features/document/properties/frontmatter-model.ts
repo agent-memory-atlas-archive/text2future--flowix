@@ -346,6 +346,9 @@ export function updateVisibleFrontmatterProperty(
 
   const document = parseDocument(yamlContent);
   const map = document.contents as unknown as YAMLMap;
+  // An empty source is parsed from '{}' above, which creates a flow-style map.
+  // Newly added properties should use regular block-style frontmatter.
+  if (!yamlContent.trim()) map.flow = false;
   const targetPair = previousKey
     ? map.items.find((pair) => nodeKeyToString(pair.key) === previousKey)
     : undefined;

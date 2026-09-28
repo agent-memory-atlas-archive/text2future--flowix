@@ -9,10 +9,15 @@ import type { I18nKey, I18nParams } from '@/lib/i18n';
  */
 
 export function tauriErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+    return error.message;
+  }
   return String(error ?? '');
 }
 
 export function hasTauriErrorCode(error: unknown, code: string): boolean {
+  if (error && typeof error === 'object' && 'code' in error) return error.code === code;
   return tauriErrorMessage(error).includes(code);
 }
 

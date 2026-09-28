@@ -1373,11 +1373,13 @@ fn runtime_target_key() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{archive::safe_archive_path, dsh_version_is_at_least, validate_manifest_version};
+    use super::{
+        archive::safe_archive_path, dsh_version_is_at_least, validate_manifest_version, DshArtifact,
+    };
     use std::path::Path;
 
     #[cfg(unix)]
-    use super::{DshArtifact, DshManifest};
+    use super::DshManifest;
     #[cfg(unix)]
     use std::collections::HashMap;
 

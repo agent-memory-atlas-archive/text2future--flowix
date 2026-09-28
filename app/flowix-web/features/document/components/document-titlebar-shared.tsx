@@ -886,6 +886,10 @@ export function MemoActions({
       const activeMemoSession = useDocumentStore.getState().activeMemoSession;
       const activeSession = activeMemoSession?.memoId === memo.id ? activeMemoSession : null;
       const activePath = activeSession?.fileIdentity.path ?? null;
+      if (!activePath) {
+        toast.error(t("document.version.restoreFailed"));
+        return;
+      }
       const identity: DocumentIdentity | null = activeSession ? {
         kind: 'md',
         memoId: memo.id,
@@ -903,7 +907,7 @@ export function MemoActions({
       const expectedContent = identity && activePath
         ? getDocumentBuffer(identity).lastSavedContent
         : undefined;
-      const restored = await memosClient.restoreVersion(memo.id, version.id, expectedContent);
+      const restored = await memosClient.restoreVersion(memo.id, activePath, version.id, expectedContent);
 
       if (!restored) {
         toast.error(t("document.version.restoreFailed"));

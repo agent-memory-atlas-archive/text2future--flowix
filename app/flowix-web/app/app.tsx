@@ -16,6 +16,9 @@ import { syncUserConfigChange } from "./user-config-sync";
 import { invalidateDshModelConfigs } from "@features/agent/public/app-api";
 import { createLogger } from "@/lib/logger";
 
+const DocumentSaveNotifications = lazy(() => import('@features/document/public/app-api')
+  .then(module => ({ default: module.DocumentSaveNotifications })));
+
 const logger = createLogger("app");
 
 const MainWindow = lazy(() =>
@@ -44,12 +47,15 @@ const AgentWindowEffects = lazy(() =>
 
 function AppToaster() {
   return (
+    <>
+    <Suspense fallback={null}><DocumentSaveNotifications /></Suspense>
     <Toaster
       className="flowix-toaster"
       position="top-center"
       richColors={false}
       closeButton={false}
     />
+    </>
   );
 }
 

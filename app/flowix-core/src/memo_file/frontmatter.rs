@@ -1,12 +1,14 @@
 //! Markdown frontmatter 解析与编辑。
 //!
-//! 唯一身份字段: `flowix_key` (= memo id, 字符集 `[0-9a-z]`；当前 8 位, 兼容旧 6 位)。
-//! 旧 `key` 仅作为保留字段，不再参与身份识别。
+//! Notes are addressed by notebook-relative path. New Markdown files do not
+//! receive `flowix_key`. Existing identity fields remain reserved, and the
+//! merge helper can read them for legacy frontmatter compatibility. File
+//! registration never derives a note identity from those fields.
 //!
 //! ## 工具
 //!
 //! - [`extract_body_content`] — 切掉 `---\n...\n---` 块, 返回 body 切片。
-//! - [`build_md_content`] — 整段生成 frontmatter + body, 第一次创建 .md 时使用。
+//! - [`build_md_content`] — 新建时剔除模板遗留的身份字段。
 //! - [`merge_frontmatter`] — 就地编辑 frontmatter 块, 见下文。
 //!
 //! ## `merge_frontmatter` 行为
@@ -16,16 +18,13 @@
 //!    - 命中顶层 `key: value` 单行 (`FM_LINE_RE` 匹配) 且 key 名在 `overrides` 里 →
 //!      **就地替换** value;
 //!    - 其它行 (注释 / 空行 / 列表 / 多行值起点 / 其它 map) → **字节级保留**。
-//! 3. `overrides` 里有但 frontmatter 找不到对应行的新 key:
-//!    - key 名 == `"flowix_key"` → **头部**追加 (紧邻 `---` 闭行后第一行);
-//!    - 其它字段名 → **末尾**追加。
-//! 4. 无 frontmatter 块 → 在文件头插入完整块, `flowix_key` 字段头部追加。
-//! 5. body 字节级不动。
+//! 3. `overrides` 里有但 frontmatter 找不到对应行的新字段:
+//!    - 显式传入的旧 `flowix_key` 字段 → **头部**追加;
+//!    - 其它字段 → **末尾**追加。
+//! 4. 无 frontmatter 块 → 在文件头插入包含 `overrides` 的完整块。
+//! 5. 规范化文件边界的 UTF-8 BOM; 其它 body 内容保持原样。
 //!
-//! 引号策略: 替换 / 追加时按 YAML 标准不加引号 (`flowix_key` 字符集 `[0-9a-z]`,
-//! 无 `:` `#` `&` `*` `!` `|` `>` `"` `%` `@` `` ` `` 歧义字符, 无
-//! 引号合法且无可读性损失)。body 字符串本身走 caller 传入的形态, merge
-//! 工具不动。
+//! 替换值由调用方提供。
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -82,11 +81,8 @@ static FM_LINE_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^(\s*)([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*?)\s*$").unwrap());
 pub const CANONICAL_FRONTMATTER_KEY: &str = "flowix_key";
 pub const LEGACY_FRONTMATTER_KEY: &str = "key";
-/// Identity fields owned by Flowix rather than user-defined properties.
-///
-/// Keep the legacy name here while old files are still being migrated.  Code
-/// that compares or presents user properties should use this shared set so a
-/// `key`/`flowix_key` transition cannot leak into normal document semantics.
+/// Reserved legacy identity fields. They are not note identities in the path
+/// index and must not appear as user-defined properties.
 pub const SYSTEM_FRONTMATTER_KEYS: [&str; 2] = [CANONICAL_FRONTMATTER_KEY, LEGACY_FRONTMATTER_KEY];
 
 pub fn is_system_frontmatter_key(key: &str) -> bool {
@@ -119,9 +115,9 @@ pub enum FrontmatterMetadataError {
 
 /// 注入指令集: key → 新 value。**就地替换**语义。
 ///
-/// 当前 caller 仍可能传 `("key", id)`；`merge_frontmatter` 会将其兼容为
-/// `flowix_key`。工具本身对任意字段名生效。
-/// 头部 / 末尾追加策略由 key 名 == `"flowix_key"` 决定。
+/// The merge helper accepts an old `key` override for compatibility and maps
+/// it to `flowix_key`. Current note creation and indexing do not supply an
+/// identity override. Other field names are merged as provided.
 pub type MergeOverrides = BTreeMap<String, String>;
 
 /// 切掉 YAML frontmatter 块, 返回剩余 body。
@@ -143,11 +139,8 @@ pub fn extract_body_content(content: &str) -> &str {
     }
 }
 
-/// 从 frontmatter 块里提取 `flowix_key` 字段值, 找不到返回 None。
-///
-/// 用于 `register_existing_file` 走"按磁盘 key 反查 memo index entry"路径,
-/// 避免 inode rename 漏命中时 (Windows / tracker 还没扫到) 把物理 rename
-/// 当成 create 重复生成 id。
+/// Read a legacy `flowix_key` value for frontmatter compatibility. File
+/// registration resolves existing notes by path and does not call this parser.
 ///
 /// 行为:
 /// - 无 frontmatter 块 → None
@@ -444,21 +437,72 @@ pub(crate) fn replace_frontmatter_tags_preserving_invalid_paths(
     Ok(format!("---\n{}\n---\n{}", lines.join("\n"), body))
 }
 
-/// `create_memo` 第一次创建 .md 时使用。
-///
-/// `key` 字符集 `[0-9a-z]`, YAML 标准下无引号合法。
-pub fn build_md_content(key: &str, body: &str) -> String {
-    format!("---\n{}: {}\n---\n{}", CANONICAL_FRONTMATTER_KEY, key, body)
+/// Legacy creation helper. The key argument is retained for API compatibility;
+/// newly created Markdown does not contain a memo identity field.
+pub fn build_md_content(_key: &str, body: &str) -> String {
+    without_flowix_key(body)
+}
+
+/// Creation from a template must not copy the template's obsolete identity.
+/// Ordinary reads/import indexing leave existing user files byte-for-byte intact.
+pub fn without_flowix_key(content: &str) -> String {
+    let Some(caps) = FRONTMATTER_RE.captures(content) else {
+        return content.to_string();
+    };
+    let inner = caps.get(1).unwrap().as_str();
+    let body = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+    // Parse first: a key can also be quoted, indented, or written in a flow
+    // mapping. Removing one line from a block scalar would corrupt the YAML.
+    let Ok(serde_yaml::Value::Mapping(mut mapping)) =
+        serde_yaml::from_str::<serde_yaml::Value>(inner)
+    else {
+        return content.to_string();
+    };
+    if mapping
+        .remove(serde_yaml::Value::String(CANONICAL_FRONTMATTER_KEY.into()))
+        .is_none()
+    {
+        return content.to_string();
+    }
+    let identity_line = Regex::new(r#"^(?:flowix_key|'flowix_key'|"flowix_key")\s*:"#).unwrap();
+    let simple_line = inner
+        .lines()
+        .filter(|line| identity_line.is_match(line))
+        .count()
+        == 1
+        && inner.lines().all(|line| {
+            !identity_line.is_match(line)
+                || line.split_once(':').is_some_and(|(_, value)| {
+                    let value = value.trim();
+                    !value.is_empty() && !value.starts_with('|') && !value.starts_with('>')
+                })
+        });
+    if !simple_line {
+        if mapping.is_empty() {
+            return body.to_string();
+        }
+        let yaml = serde_yaml::to_string(&mapping).unwrap_or_default();
+        return format!("---\n{}---\n{}", yaml, body);
+    }
+    let kept: Vec<&str> = inner
+        .lines()
+        .filter(|line| !identity_line.is_match(line))
+        .collect();
+    if kept.len() == inner.lines().count() {
+        return content.to_string();
+    }
+    if kept.iter().all(|line| line.trim().is_empty()) {
+        return body.to_string();
+    }
+    format!("---\n{}\n---\n{}", kept.join("\n"), body)
 }
 
 /// 就地编辑 frontmatter 块, 见模块 doc 详述行为契约。
 pub fn merge_frontmatter(content: &str, overrides: &MergeOverrides) -> String {
     let mut canonical_overrides = overrides.clone();
     if let Some(legacy_value) = canonical_overrides.remove(LEGACY_FRONTMATTER_KEY) {
-        // A legacy override is compatibility input, not an instruction to
-        // replace a valid canonical identity.  Explicit canonical overrides
-        // remain authoritative for copy/import flows that intentionally give
-        // a document a new id.
+        // A legacy override must not replace an existing canonical field.
+        // Explicit canonical overrides remain available to compatibility callers.
         if extract_frontmatter_key(content).is_none() {
             // Existing legacy-only notes migrate by copying their stored
             // legacy value. The override is only a fallback when no legacy
@@ -472,9 +516,8 @@ pub fn merge_frontmatter(content: &str, overrides: &MergeOverrides) -> String {
     let overrides = &canonical_overrides;
 
     if overrides.is_empty() {
-        // A legacy override must not rewrite an already valid canonical id.
-        // It can still be the compatibility signal for collapsing the old
-        // adjacent system-only frontmatter block into the user's block.
+        // Preserve an existing legacy field when collapsing an adjacent
+        // system-only frontmatter block into the user's block.
         if let Some(canonical_key) = extract_frontmatter_key(content) {
             let mut structural_overrides = MergeOverrides::new();
             structural_overrides.insert(CANONICAL_FRONTMATTER_KEY.to_string(), canonical_key);
@@ -519,7 +562,7 @@ pub fn merge_frontmatter(content: &str, overrides: &MergeOverrides) -> String {
             }
         }
         None => {
-            // 无 frontmatter 块 → 插入完整块, 注入 key 走头部追加路径
+            // 无 frontmatter 块 → 从显式传入的 overrides 创建完整块。
             let mut block_lines: Vec<String> = Vec::new();
             let mut tail_lines: Vec<String> = Vec::new();
             for (k, v) in overrides {
@@ -587,9 +630,9 @@ fn frontmatter_contains_only_override_fields(inner: &str, overrides: &MergeOverr
 ///   其它 map 字段)。
 /// - 对 `key: value` 单行, 命中 overrides 内的 key 时**就地替换** value;
 ///   **不**命中时**保留原行** (含其原引号风格 / 缩进)。
-/// - overrides 内出现但 frontmatter 找不到对应行的 key:
-///   - `key` → 准备头部追加 (插入到首行位置);
-///   - 其它 → 准备末尾追加。
+/// - overrides 内出现但 frontmatter 找不到对应行的字段:
+///   - 显式传入的 `flowix_key` → 准备头部追加;
+///   - 其它字段 → 准备末尾追加。
 fn merge_inner(inner: &str, overrides: &MergeOverrides) -> String {
     // 1. 行级扫描, 拆出 (key 名, 替换后 value 或 None) 与保留行
     let mut preserved_lines: Vec<String> = Vec::new();
@@ -617,7 +660,7 @@ fn merge_inner(inner: &str, overrides: &MergeOverrides) -> String {
         }
     }
 
-    // 2. 头部追加 (仅 key) + 末尾追加 (其它)
+    // 2. 显式旧身份字段在头部追加，其它字段在末尾追加。
     let mut head_lines: Vec<String> = Vec::new();
     let mut tail_lines: Vec<String> = Vec::new();
     for (k, v) in &pending {
@@ -731,19 +774,30 @@ mod tests {
     // ============== build_md_content ==============
 
     #[test]
+    fn template_identity_cleanup_handles_flow_mapping_and_block_value() {
+        let inline = without_flowix_key("---\n{flowix_key: old123, color: blue}\n---\n# Body\n");
+        assert!(!inline.contains("flowix_key"));
+        assert!(inline.contains("color: blue"));
+        assert!(inline.ends_with("# Body\n"));
+
+        let block = without_flowix_key("---\nflowix_key: |\n  old123\ncolor: blue\n---\n# Body\n");
+        assert!(!block.contains("flowix_key"));
+        assert!(!block.contains("old123"));
+        assert!(block.contains("color: blue"));
+        assert!(block.ends_with("# Body\n"));
+    }
+
+    #[test]
     fn build_with_key_and_body() {
         assert_eq!(
             build_md_content("abc123", "# Title\nbody\n"),
-            "---\nflowix_key: abc123\n---\n# Title\nbody\n"
+            "# Title\nbody\n"
         );
     }
 
     #[test]
     fn build_with_empty_body() {
-        assert_eq!(
-            build_md_content("abc123", ""),
-            "---\nflowix_key: abc123\n---\n"
-        );
+        assert_eq!(build_md_content("abc123", ""), "");
     }
 
     // ============== merge_frontmatter: no frontmatter ==============

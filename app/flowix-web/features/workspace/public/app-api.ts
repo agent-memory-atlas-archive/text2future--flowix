@@ -1,4 +1,5 @@
 import { useWorkspaceRestoreStore } from '@features/workspace/store/workspace-restore-store';
+export { ensureFileDisplayTrackingStarted } from '@features/workspace/use-cases/file-display-tracking';
 export {
   replaceActiveMemoPath,
 } from '@features/workspace/use-cases/workspace-navigation';

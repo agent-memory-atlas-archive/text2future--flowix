@@ -1,16 +1,20 @@
 import {
   initializeMemoLibrary,
+  markMemoLibraryStartupError,
   restorePersistedMemoSession,
 } from '@features/memo/public/app-api';
+import { waitForInitialDocumentLoad } from '@features/document/public/startup-api';
 import {
   captureWorkspaceRestoreTarget,
   restoreAgentConversationWorkspace,
   restoreExternalDocumentWorkspace,
   restoreMediaWorkspace,
+  setWorkspaceRestoreStatus,
   type PersistedWorkspaceTarget,
 } from '@features/workspace/public/startup-api';
-import { useWorkspaceRestoreStore } from '@features/workspace/store/workspace-restore-store';
 import { boot } from '@platform/tauri/client';
+
+let startupAttemptSequence = 0;
 
 /**
  * Run the main-window startup stages in one failure-aware transaction.
@@ -21,19 +25,55 @@ import { boot } from '@platform/tauri/client';
  * notebook state.
  */
 export async function initializeMainWindowStartup(): Promise<void> {
-  if (isTauriRuntime()) await boot.waitForStartupReady();
-  await initializeMemoLibrary();
-  const desiredTarget = captureWorkspaceRestoreTarget();
-  const restoreStore = useWorkspaceRestoreStore.getState();
-  restoreStore.setRestoreStatus('restoring');
+  const startedAt = performance.now();
+  const nativeRuntime = isTauriRuntime();
+  const startupAttemptId = `${Date.now()}-${++startupAttemptSequence}`;
+  const logStage = (stage: string) => {
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    console.info('[perf:startup]', stage, { elapsedMs });
+    if (nativeRuntime) void boot.recordStartupStage(stage, elapsedMs, startupAttemptId).catch(() => undefined);
+  };
+  let startupNotebookId: string | null = null;
+  if (nativeRuntime) {
+    await boot.waitForStartupReady();
+    logStage('native-ready');
+  }
   try {
-    await restoreDesiredTarget(desiredTarget);
-    useWorkspaceRestoreStore.getState().setRestoreStatus('restored');
-  } catch (error) {
-    // Keep desiredTarget unchanged. Temporary permission, mount, or IPC
-    // failures can then be retried on the next launch.
-    useWorkspaceRestoreStore.getState().setRestoreStatus('unavailable');
-    throw error;
+    if (nativeRuntime) {
+      try {
+        startupNotebookId = await boot.getStartupNotebookId();
+        logStage('notebook-selected');
+      } catch (error) {
+        markMemoLibraryStartupError(error);
+        throw error;
+      }
+    }
+    await initializeMemoLibrary(startupNotebookId);
+    logStage('first-memo-query-ready');
+    const desiredTarget = captureWorkspaceRestoreTarget();
+    setWorkspaceRestoreStatus('restoring');
+    try {
+      await restoreDesiredTarget(desiredTarget);
+      logStage('workspace-restored');
+      setWorkspaceRestoreStatus('restored');
+      const outcome = await waitForInitialDocumentLoad();
+      logStage(`initial-document-${outcome}`);
+    } catch (error) {
+      // Keep desiredTarget unchanged. Temporary permission, mount, or IPC
+      // failures can then be retried on the next launch.
+      setWorkspaceRestoreStatus('unavailable');
+      throw error;
+    }
+  } finally {
+    if (nativeRuntime) {
+      // The first callback runs before paint; the second frame confirms that
+      // the restored content had a chance to appear before disk scans begin.
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => resolve());
+      }));
+      logStage('first-workspace-paint');
+      await boot.notifyStartupInteractive().catch(() => undefined);
+    }
   }
 }
 

@@ -3,7 +3,7 @@
 import type { ComponentProps } from 'react';
 import { DocumentContainer } from '@features/document/components/document-container';
 import { FileBrowserView, type FileBrowserViewSurface } from './file-browser-view';
-import type { FileDisplayIdentity } from '@features/workspace/store/file-display-store';
+import type { FileDisplayIdentity } from '@/lib/file-display-registry';
 
 type DocumentProps = Omit<ComponentProps<typeof DocumentContainer>, 'fileIdentity'> & {
   fileIdentity?: FileDisplayIdentity;

@@ -39,11 +39,10 @@ import { DateValueInput } from '@features/document/components/note-properties/da
 import {
   getCurrentAppLanguage,
   getPropertyFieldPreferences,
-  subscribeAppLanguage,
-  subscribePropertyFieldPreferences,
 } from '@features/preferences/public/runtime-api';
 import { canonicalizePropertyKey } from '@features/document/properties/property-key';
 import { isImeKeyboardEvent } from '@/lib/input-method';
+import { observeFrontmatterView } from './frontmatter-view-lifecycle';
 import { useSettingsStore } from '@/lib/store/settings-store';
 
 function createElement<K extends keyof HTMLElementTagNameMap>(
@@ -342,7 +341,7 @@ export class FrontmatterPropertyNodeView implements NodeView {
   private suppressPropertyIconClickTimer: number | null = null;
   private propertyDragPreview: HTMLElement | null = null;
   private propertyPointerDrag: PropertyPointerDrag | null = null;
-  private readonly unsubscribeSettings: () => void;
+  private readonly disposeSubscriptions: () => void;
   private readonly handleDocumentPointerDown = (event: Event) => {
     const target = event.target;
     const targetElement = target instanceof Element ? target : null;
@@ -383,46 +382,16 @@ export class FrontmatterPropertyNodeView implements NodeView {
     this.propertyTargetId = propertyTargetId;
     this.dom = createElement('div', 'frontmatter-property-node');
     this.dom.contentEditable = 'false';
-    const unsubscribeLanguage = subscribeAppLanguage(() => this.render());
-    const unsubscribeProperties = useSettingsStore.subscribe((state, previous) => {
-      if (state.propertiesVisible !== previous.propertiesVisible) this.render();
+    this.disposeSubscriptions = observeFrontmatterView(this.dom.ownerDocument, {
+      render: () => this.render(),
+      pointerDown: this.handleDocumentPointerDown,
+      selectStart: this.handleDocumentSelectStart,
+      addProperty: this.handleAddPropertyRequest,
+      pointerMove: this.handlePropertyPointerMove,
+      pointerUp: this.handlePropertyPointerUp,
+      pointerCancel: this.handlePropertyPointerCancel,
+      blur: this.handlePropertyWindowBlur,
     });
-    const unsubscribePropertyPresets = subscribePropertyFieldPreferences(() => this.render());
-    this.unsubscribeSettings = () => {
-      unsubscribeLanguage();
-      unsubscribeProperties();
-      unsubscribePropertyPresets();
-    };
-    this.dom.ownerDocument.addEventListener(
-      'pointerdown',
-      this.handleDocumentPointerDown,
-      true,
-    );
-    this.dom.ownerDocument.addEventListener(
-      'selectstart',
-      this.handleDocumentSelectStart,
-      true,
-    );
-    this.dom.ownerDocument.defaultView?.addEventListener(
-      'flowix:add-property',
-      this.handleAddPropertyRequest,
-    );
-    this.dom.ownerDocument.defaultView?.addEventListener(
-      'pointermove',
-      this.handlePropertyPointerMove,
-    );
-    this.dom.ownerDocument.defaultView?.addEventListener(
-      'pointerup',
-      this.handlePropertyPointerUp,
-    );
-    this.dom.ownerDocument.defaultView?.addEventListener(
-      'pointercancel',
-      this.handlePropertyPointerCancel,
-    );
-    this.dom.ownerDocument.defaultView?.addEventListener(
-      'blur',
-      this.handlePropertyWindowBlur,
-    );
     this.render();
   }
 
@@ -2251,36 +2220,6 @@ export class FrontmatterPropertyNodeView implements NodeView {
     }
     this.closePropertyMenu();
     this.closePropertyEditor();
-    this.dom.ownerDocument.removeEventListener(
-      'pointerdown',
-      this.handleDocumentPointerDown,
-      true,
-    );
-    this.dom.ownerDocument.removeEventListener(
-      'selectstart',
-      this.handleDocumentSelectStart,
-      true,
-    );
-    this.dom.ownerDocument.defaultView?.removeEventListener(
-      'flowix:add-property',
-      this.handleAddPropertyRequest,
-    );
-    this.dom.ownerDocument.defaultView?.removeEventListener(
-      'pointermove',
-      this.handlePropertyPointerMove,
-    );
-    this.dom.ownerDocument.defaultView?.removeEventListener(
-      'pointerup',
-      this.handlePropertyPointerUp,
-    );
-    this.dom.ownerDocument.defaultView?.removeEventListener(
-      'pointercancel',
-      this.handlePropertyPointerCancel,
-    );
-    this.dom.ownerDocument.defaultView?.removeEventListener(
-      'blur',
-      this.handlePropertyWindowBlur,
-    );
-    this.unsubscribeSettings();
+    this.disposeSubscriptions();
   }
 }

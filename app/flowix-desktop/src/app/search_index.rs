@@ -124,13 +124,37 @@ fn schedule_rebuild(state: &AppState, app: &AppHandle, force: bool) {
     });
 }
 
+// Serialize refresh/removal ordering, without holding the search lock over I/O.
+static INDEX_REFRESH: Mutex<()> = Mutex::new(());
+
 pub(crate) fn try_index_upsert(state: &AppState, id: &str) {
-    let mf = read_lock(&state.memo_file, "memo_file");
+    let _refresh = INDEX_REFRESH.lock().unwrap_or_else(|e| e.into_inner());
+    let snapshot = {
+        let mf = read_lock(&state.memo_file, "memo_file");
+        mf.resolve_memo_location(id)
+            .ok()
+            .flatten()
+            .and_then(|location| {
+                let path = flowix_core::memo_file::notebook_path_from_relative(
+                    std::path::Path::new(&location.notebook.path),
+                    &location.memo.relative_path,
+                )
+                .ok()?;
+                let body = std::fs::read_to_string(path).ok()?;
+                Some((location.notebook.id, location.memo, body))
+            })
+    };
+    let Some((notebook_id, memo, body)) = snapshot else {
+        return;
+    };
     let mut idx = write_lock(&state.search, "search");
-    let _ = flowix_core::search::upsert_index_from_store(&mut idx, &mf, id);
+    if idx.is_loaded() && idx.current_notebook() == Some(notebook_id.as_str()) {
+        idx.upsert(memo, &body);
+    }
 }
 
 pub(crate) fn try_index_remove(state: &AppState, id: &str) {
+    let _refresh = INDEX_REFRESH.lock().unwrap_or_else(|e| e.into_inner());
     let mut idx = write_lock(&state.search, "search");
     let _ = flowix_core::search::remove_from_index(&mut idx, id);
 }

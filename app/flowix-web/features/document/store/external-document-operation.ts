@@ -1,5 +1,5 @@
 import { canonicalPath } from '@/lib/path';
-import { pinFileDisplayId } from '@features/workspace/store/file-display-store';
+import { pinFileDisplayId } from '@/lib/file-display-registry';
 
 type ExpectedExternalDocumentEventKind = 'modified' | 'deleted';
 

@@ -1,7 +1,7 @@
-import { reconcileFileDisplays } from '@features/workspace/store/file-display-store';
+import { reconcileFileDisplays } from '@/lib/file-display-registry';
 import { useBrowserColumnStore } from '@features/workspace/store/browser-column-store';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
-import { useDocumentStore } from '@features/document/store/document-store';
+import { getWorkspaceDocumentPaths, subscribeWorkspaceDocumentPaths } from '@features/document/public/workspace-api';
 
 /** Keep one runtime identity while an open document session or surface owns a local file. */
 function startFileDisplayTracking(): () => void {
@@ -26,15 +26,13 @@ function startFileDisplayTracking(): () => void {
         addFile(tab.target.activeFilePath);
       }
     }
-    const document = useDocumentStore.getState();
-    if (document.activeMemoSession) addFile(document.activeMemoSession.fileIdentity.path);
-    if (document.activeExternalSession) addFile(document.activeExternalSession.fileIdentity.path);
+    for (const path of getWorkspaceDocumentPaths()) addFile(path);
     reconcileFileDisplays(files.values());
   };
 
   const unsubscribeWorkColumn = useWorkColumnStore.subscribe(synchronize);
   const unsubscribeBrowserColumn = useBrowserColumnStore.subscribe(synchronize);
-  const unsubscribeDocument = useDocumentStore.subscribe(synchronize);
+  const unsubscribeDocument = subscribeWorkspaceDocumentPaths(synchronize);
   synchronize();
 
   return () => {

@@ -18,7 +18,7 @@ describe('memo dispatcher window isolation', () => {
   });
 
   it('keeps derived-only notifications away from document subscribers and releases handlers', async () => {
-    const { memoDispatcher, registerMemoDerivedRefreshHandler } = await import('./memo-dispatcher');
+    const { memoDispatcher, registerMemoDerivedRefreshHandler } = await import('@/lib/memo-dispatcher');
     const documentHandler = vi.fn();
     const refresh = vi.fn();
     const releaseDocument = memoDispatcher.subscribe(documentHandler);
@@ -38,7 +38,7 @@ describe('memo dispatcher window isolation', () => {
   });
 
   it('does not connect to Tauri while importing the dispatcher', async () => {
-    const { memoDispatcher } = await import('./memo-dispatcher');
+    const { memoDispatcher } = await import('@/lib/memo-dispatcher');
 
     expect(subscribeMock).not.toHaveBeenCalled();
     expect(memoDispatcher.size()).toBe(0);
@@ -47,7 +47,7 @@ describe('memo dispatcher window isolation', () => {
   it('shares one Tauri listener and releases it after the final acquire', async () => {
     const unlisten = vi.fn();
     subscribeMock.mockReturnValue(unlisten);
-    const { acquireMemoEventBridge } = await import('./memo-dispatcher');
+    const { acquireMemoEventBridge } = await import('@/lib/memo-dispatcher');
 
     const releaseFirst = acquireMemoEventBridge();
     const releaseSecond = acquireMemoEventBridge();
@@ -80,7 +80,7 @@ describe('memo dispatcher window isolation', () => {
         liveHandlers.delete(typedHandler);
       };
     });
-    const { acquireMemoEventBridge, memoDispatcher } = await import('./memo-dispatcher');
+    const { acquireMemoEventBridge, memoDispatcher } = await import('@/lib/memo-dispatcher');
     const dispatched = vi.fn();
     const unsubscribe = memoDispatcher.subscribe(dispatched);
 
@@ -118,7 +118,7 @@ describe('memo dispatcher window isolation', () => {
       bridge = handler as (event: MemoEvent) => void;
       return unlisten;
     });
-    const { memoDispatcher, acquireMemoEventBridge } = await import('./memo-dispatcher');
+    const { memoDispatcher, acquireMemoEventBridge } = await import('@/lib/memo-dispatcher');
     const releaseBridge = acquireMemoEventBridge();
     const openMemoInBrowserColumn = vi.fn().mockResolvedValue(undefined);
     const unsubscribe = memoDispatcher.subscribe((event) => {

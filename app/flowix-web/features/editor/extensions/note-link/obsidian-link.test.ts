@@ -11,6 +11,19 @@ import {
 import { MarkdownLink } from '../markdown-link';
 
 describe('Obsidian note links', () => {
+  it('keeps a Flowix notebook path link as a note reference', () => {
+    const link = 'flowix://open?book=MyVault&file=Projects%2FPlan.md';
+    const editor = new Editor({
+      extensions: [StarterKit, Markdown, NoteReference, MarkdownLink],
+      content: `[Plan](${link})`,
+      contentType: 'markdown',
+    });
+    const node = editor.state.doc.firstChild?.firstChild;
+    expect(node?.type.name).toBe('noteReference');
+    expect(node?.attrs.linkTarget).toBe(link);
+    expect(node?.attrs.memoId).toBeNull();
+    editor.destroy();
+  });
   it('keeps ordinary relative Markdown links lightweight', () => {
     const editor = new Editor({
       extensions: [StarterKit, Markdown, NoteReference, MarkdownLink],

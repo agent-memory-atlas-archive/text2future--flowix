@@ -22,7 +22,7 @@ export interface MemoListDataLoaderProps {
   activeCustomFilterId?: string | null;
   refreshTrigger: number;
   loadedMemoListQueryKey: string | null;
-  loadMemos: MemoStore['loadMemos'];
+  loadPathNotes: MemoStore['loadPathNotes'];
   setLoadedMemoListQueryKey: (queryKey: string | null) => void;
   setIsMemoListLoading: (loading: boolean) => void;
   onLoadError: (error: unknown) => void;
@@ -47,7 +47,7 @@ export function MemoListDataLoader({
   activeCustomFilterId,
   refreshTrigger,
   loadedMemoListQueryKey,
-  loadMemos,
+  loadPathNotes,
   setLoadedMemoListQueryKey,
   setIsMemoListLoading,
   onLoadError,
@@ -97,7 +97,7 @@ export function MemoListDataLoader({
         setIsMemoListLoading(true);
       }
       try {
-        const applied = await loadMemos({
+        const applied = await loadPathNotes({
           notebookId: selectedNotebookId,
           filter: activeFilter,
           sort: activeSort,
@@ -128,7 +128,7 @@ export function MemoListDataLoader({
     colorFilter,
     dataLoadingEnabled,
     initialMemoQueryKey,
-    loadMemos,
+    loadPathNotes,
     memoListQueryKey,
     onLoadError,
     refreshTrigger,

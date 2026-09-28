@@ -1,6 +1,7 @@
 import { act, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
+import { ensureFileDisplayIdentity } from '@/lib/file-display-registry';
 import { BrowserColumnHeader } from './browser-column-header';
 import type { BrowserColumnTab } from '@features/workspace/public/browser-column-api';
 
@@ -11,7 +12,8 @@ vi.mock('@/lib/i18n', async (importOriginal) => ({
   useI18n: () => ({ t: (key: string) => key }),
 }));
 vi.mock('./work-column-titlebar-shell', () => ({ WORK_COLUMN_TITLEBAR_GRADIENT: 'none' }));
-vi.mock('@features/document/public/shell-api', () => ({
+vi.mock('@features/document/public/shell-api', async () => ({
+  documentIdentityFromFile: (await import('@features/document/store/document-identity')).documentIdentityFromFile,
   AgentThreadCardFullscreenExitButton: () => null,
   useDocumentEditorMode: useDocumentEditorModeMock,
   useFullscreenAgentThreadCardInfo: () => null,
@@ -86,6 +88,7 @@ async function withHeader(
     id, title: id, icon: null, target: { kind: 'web', url: `https://${id}.example` },
   }));
   const tabs = options.tabs ?? defaultTabs;
+  for (const tab of tabs) if (tab.target.kind === 'memo') ensureFileDisplayIdentity(tab.target.filePath);
   try {
     await act(async () => root.render(<BrowserColumnHeader tabs={tabs} activeTabId="one" activeSurfaceChrome="document" onSelectTab={onSelectTab}
       onCloseTab={vi.fn()} onCloseOtherTabs={vi.fn()} onCloseTabsToRight={vi.fn()}

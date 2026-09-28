@@ -1,5 +1,5 @@
 import type { Editor } from '@tiptap/core';
-import type { FileDisplayIdentity } from '@features/workspace/store/file-display-store';
+import type { FileDisplayIdentity } from '@/lib/file-display-registry';
 
 export interface LoadContentOptions {
   preservePending?: boolean;

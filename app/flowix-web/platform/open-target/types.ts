@@ -24,6 +24,7 @@ export interface ResolvedOpenTarget {
   absolutePath: string;
   /** memo filename (用于显示 / stale check) */
   memoTitle: string;
+  heading?: string | null;
 }
 
 /** Tauri event 名 — 跟后端 `handler.rs` 的 emit("flowix:open-target", ...) 同步 */

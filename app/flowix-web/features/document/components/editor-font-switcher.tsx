@@ -88,7 +88,7 @@ export function EditorFontSwitcher({
 
   return (
     <div className="mb-1">
-      <div className="flex justify-center gap-1" role="group" aria-label={t('document.font.label')}>
+      <div className="flex justify-center gap-0.5" role="group" aria-label={t('document.font.label')}>
         {FONT_CHOICES.map(({ mode, icon }) => {
           const active = selectedMode === mode;
           const isLoading = downloadingMode === mode;

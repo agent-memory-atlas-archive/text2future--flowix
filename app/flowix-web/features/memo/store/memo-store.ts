@@ -1,11 +1,13 @@
+import { joinNotebookMemoPath } from '@/lib/path';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { memoRepository, notebookRepository, type FilterType, type SortType } from '@features/memo/services';
+import { getMemoQueryKey } from '@features/memo/services/memo-query-key';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { useTagStore } from '@features/memo/store/tag-store';
 import { memoMatchesCustomFilter, useCustomFilterStore, type CustomFilter } from '@features/memo/store/custom-filter-store';
 
-import type { MemoColor, MemoItem } from '@/types/memo-item';
+import type { MemoColor, MemoItem, PathNoteListItem } from '@/types/memo-item';
 export { MEMO_COLORS } from '@/types/memo-item';
 
 // 颜色筛选二级选项。'any' = 任意带色 (memo.colors.length > 0),
@@ -30,6 +32,11 @@ interface MemoListPageQuery {
   color?: ColorFilterValue;
   pluginId: string | null;
   customFilterId: string | null;
+}
+
+export interface SelectedPathNoteIdentity {
+  notebookId: string;
+  relativePath: string;
 }
 
 // 文档颜色标签 — 跟后端 `MemoColor` 镜像 (`#[serde(rename_all = "lowercase")]`),
@@ -156,6 +163,8 @@ function upsertSortedMemo(
 export interface MemoStore {
   // List data
   memos: MemoItem[];
+  /** ID-free primary list data, keyed by notebook-relative path. */
+  pathNotes: PathNoteListItem[];
   notebooks: Notebook[];
   /** Whether the backend notebook collection has completed its first load. */
   notebooksInitialized: boolean;
@@ -168,6 +177,7 @@ export interface MemoStore {
   selectedMemo: MemoItem | null;
   /** Stable persisted identity; the full entity is hydrated from backend data. */
   selectedMemoId: string | null;
+  selectedPathNote: SelectedPathNoteIdentity | null;
   selectedNotebook: Notebook | null;
   /** Stable persisted identity; the full entity is hydrated from backend data. */
   selectedNotebookId: string | null;
@@ -185,6 +195,7 @@ export interface MemoStore {
   /** Cursor state for the currently loaded memo query. Not persisted. */
   memoListQueryKey: string | null;
   memoListQuery: MemoListPageQuery | null;
+  memoListSource: 'legacy' | 'path' | null;
   memoListNextCursor: string | null;
   memoListHasMore: boolean;
   memoListLoadingMore: boolean;
@@ -200,6 +211,7 @@ export interface MemoStore {
   setStartupPhase: (phase: MemoLibraryStartupPhase, error?: string | null) => void;
   setStartupReady: (initialMemoQueryKey: string) => void;
   setSelectedMemo: (memo: MemoItem | null) => void;
+  setSelectedPathNote: (identity: SelectedPathNoteIdentity | null) => void;
   setSelectedNotebook: (notebook: Notebook | null) => void;
   /**
    * Persist a new notebook display order. `nextOrderIds` is the desired
@@ -221,9 +233,10 @@ export interface MemoStore {
   updateMemoMeta: (id: string, meta: Partial<Pick<MemoItem, 'updatedAt' | 'preview' | 'thumbnail' | 'favorited' | 'filename'>>) => void;
   // Data loading
   loadMemos: (params?: { notebookId?: string; filter?: ExtendedFilterType; sort?: SortType; tagId?: string }) => Promise<boolean>;
+  loadPathNotes: (params?: { notebookId?: string; filter?: ExtendedFilterType; sort?: SortType; tagId?: string }) => Promise<boolean>;
   loadMoreMemos: () => Promise<boolean>;
   loadNotebooks: () => Promise<void>;
-  createMemo: (tag?: string, notebookId?: string) => Promise<MemoItem>;
+  createMemo: (tag?: string, notebookId?: string) => Promise<{ memo: MemoItem; initialContent: string }>;
   deleteMemo: (id: string) => Promise<boolean>;
   favoriteMemo: (id: string) => Promise<boolean>;
   unfavoriteMemo: (id: string) => Promise<boolean>;
@@ -249,6 +262,22 @@ function omitUndefined<T extends object>(value: T): Partial<T> {
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>).filter(([, fieldValue]) => fieldValue !== undefined)
   ) as Partial<T>;
+}
+
+function toPathNoteListItem(
+  note: Awaited<ReturnType<typeof memoRepository.listByPath>>['notes'][number],
+  notebookId: string,
+): PathNoteListItem {
+  const relativePath = note.relativePath.replace(/\\/g, '/');
+  return {
+    ...note,
+    kind: 'path-note',
+    notebookId,
+    relativePath,
+    filename: relativePath.split('/').pop() || relativePath,
+    thumbnail: note.thumbnail,
+    properties: note.properties as Record<string, unknown>,
+  };
 }
 
 export function getVisibleCreateFilter(filter: ExtendedFilterType): ExtendedFilterType {
@@ -277,6 +306,7 @@ export const useMemoStore = create<MemoStore>()(
   persist(
     (set, get) => ({
       memos: [],
+      pathNotes: [],
       notebooks: [],
       notebooksInitialized: false,
       startupPhase: 'idle',
@@ -284,6 +314,7 @@ export const useMemoStore = create<MemoStore>()(
       initialMemoQueryKey: null,
       selectedMemo: null,
       selectedMemoId: null,
+      selectedPathNote: null,
       selectedNotebook: null,
       selectedNotebookId: null,
       middleColumnView: 'notes',
@@ -295,6 +326,7 @@ export const useMemoStore = create<MemoStore>()(
       refreshTrigger: 0,
       memoListQueryKey: null,
       memoListQuery: null,
+      memoListSource: null,
       memoListNextCursor: null,
       memoListHasMore: false,
       memoListLoadingMore: false,
@@ -305,6 +337,7 @@ export const useMemoStore = create<MemoStore>()(
           memos,
           memoListQueryKey: null,
           memoListQuery: null,
+          memoListSource: null,
           memoListNextCursor: null,
           memoListHasMore: false,
           memoListLoadingMore: false,
@@ -324,6 +357,11 @@ export const useMemoStore = create<MemoStore>()(
           notebooks,
           selectedNotebook,
           selectedNotebookId: selectedNotebook?.id ?? null,
+          selectedPathNote: state.selectedPathNote
+            && state.selectedPathNote.notebookId === selectedNotebook?.id
+            && notebooks.some((notebook) => notebook.id === state.selectedPathNote?.notebookId)
+            ? state.selectedPathNote
+            : null,
           notebooksInitialized: true,
         };
       }),
@@ -340,6 +378,11 @@ export const useMemoStore = create<MemoStore>()(
       setSelectedMemo: (memo) => set({
         selectedMemo: memo,
         selectedMemoId: memo?.id ?? null,
+        ...(memo ? { selectedPathNote: null } : {}),
+      }),
+      setSelectedPathNote: (identity) => set({
+        selectedPathNote: identity,
+        ...(identity ? { selectedMemo: null, selectedMemoId: null } : {}),
       }),
       setSelectedNotebook: (notebook) => {
         const currentNotebookId = get().selectedNotebookId
@@ -351,6 +394,8 @@ export const useMemoStore = create<MemoStore>()(
           set({
             selectedNotebook: notebook,
             selectedNotebookId: nextNotebookId,
+            selectedPathNote: null,
+            pathNotes: [],
             middleColumnView: 'notes',
             activeFilter: 'all',
             activePluginId: null,
@@ -452,7 +497,8 @@ export const useMemoStore = create<MemoStore>()(
         const pluginId = state.activePluginId;
         const customFilterId = filter === 'custom' ? state.activeCustomFilterId : null;
         const sort = params?.sort || state.activeSort;
-        const tagId = params?.tagId;
+        const tagId = params?.tagId
+          ?? (filter === 'tagged' ? useTagStore.getState().selectedTagId ?? undefined : undefined);
         const color = filter === 'color' ? state.colorFilter : undefined;
         const queryKey = JSON.stringify({
           notebookId: notebookId ?? null,
@@ -501,6 +547,7 @@ export const useMemoStore = create<MemoStore>()(
         set({
           memos: nextMemos,
           memoListQueryKey: queryKey,
+          memoListSource: 'legacy',
           memoListQuery: {
             notebookId,
             filter,
@@ -525,6 +572,74 @@ export const useMemoStore = create<MemoStore>()(
         return true;
       },
 
+      loadPathNotes: async (params) => {
+        const requestSeq = ++loadMemosRequestSeq;
+        const state = get();
+        const notebookId = params?.notebookId || state.selectedNotebook?.id;
+        if (!notebookId) return false;
+        const filter = params?.filter || state.activeFilter;
+        const pluginId = state.activePluginId;
+        const customFilterId = filter === 'custom' ? state.activeCustomFilterId : null;
+        const sort = params?.sort || state.activeSort;
+        const tagId = params?.tagId
+          ?? (filter === 'tagged' ? useTagStore.getState().selectedTagId ?? undefined : undefined);
+        const color = filter === 'color' ? state.colorFilter : undefined;
+        const queryKey = getMemoQueryKey(
+          notebookId,
+          filter,
+          sort,
+          tagId ?? null,
+          color ?? state.colorFilter,
+          pluginId,
+          customFilterId,
+        );
+        if (pluginId) {
+          const legacyNotes = await memoRepository.listPluginNotes(pluginId, notebookId);
+          if (requestSeq !== loadMemosRequestSeq) return false;
+          set({
+            memos: legacyNotes,
+            pathNotes: [],
+            memoListQueryKey: queryKey,
+            memoListQuery: {
+              notebookId, filter, sort, tagId, color, pluginId, customFilterId,
+            },
+            memoListSource: 'legacy',
+            memoListNextCursor: null,
+            memoListHasMore: false,
+            memoListLoadingMore: false,
+          });
+          return true;
+        }
+
+        const customFilter = customFilterId
+          ? useCustomFilterStore.getState().filters.find((item) => item.id === customFilterId)
+          : null;
+        const response = await memoRepository.listByPath({
+          notebookId,
+          filter: toBackendFilter(filter),
+          sort,
+          tagId,
+          color,
+          limit: 50,
+        });
+        if (requestSeq !== loadMemosRequestSeq) return false;
+        const pathNotes = response.notes
+          .map((note) => toPathNoteListItem(note, notebookId))
+          .filter((note) => customFilter ? memoMatchesCustomFilter(note, customFilter) : true);
+        set({
+          pathNotes,
+          memoListQueryKey: queryKey,
+          memoListQuery: {
+            notebookId, filter, sort, tagId, color, pluginId: null, customFilterId,
+          },
+          memoListSource: 'path',
+          memoListNextCursor: response.nextCursor,
+          memoListHasMore: response.hasMore,
+          memoListLoadingMore: false,
+        });
+        return true;
+      },
+
       loadMoreMemos: async () => {
         const state = get();
         const query = state.memoListQuery;
@@ -535,51 +650,98 @@ export const useMemoStore = create<MemoStore>()(
           || !state.memoListQueryKey
           || !query?.notebookId
           || query.pluginId
-          || query.filter === 'custom'
+          || (state.memoListSource === 'legacy' && query.filter === 'custom')
         ) {
           return false;
         }
 
         // Do not let a scroll event from the previous query append into a new
         // notebook/filter while its first page is still in flight.
-        const currentQueryKey = JSON.stringify({
-          notebookId: state.selectedNotebook?.id ?? null,
-          filter: state.activeFilter,
-          sort: state.activeSort,
-          tagId: state.activeFilter === 'tagged'
-            ? useTagStore.getState().selectedTagId ?? null
-            : null,
-          color: state.activeFilter === 'color' ? state.colorFilter : null,
-          pluginId: state.activePluginId ?? null,
-          customFilterId: state.activeFilter === 'custom' ? state.activeCustomFilterId : null,
-        });
+        const currentQueryKey = state.memoListSource === 'path'
+          ? getMemoQueryKey(
+              state.selectedNotebook?.id,
+              state.activeFilter,
+              state.activeSort,
+              state.activeFilter === 'tagged'
+                ? useTagStore.getState().selectedTagId
+                : null,
+              state.colorFilter,
+              state.activePluginId,
+              state.activeFilter === 'custom' ? state.activeCustomFilterId : null,
+            )
+          : JSON.stringify({
+              notebookId: state.selectedNotebook?.id ?? null,
+              filter: state.activeFilter,
+              sort: state.activeSort,
+              tagId: state.activeFilter === 'tagged'
+                ? useTagStore.getState().selectedTagId ?? null
+                : null,
+              color: state.activeFilter === 'color' ? state.colorFilter : null,
+              pluginId: state.activePluginId ?? null,
+              customFilterId: state.activeFilter === 'custom' ? state.activeCustomFilterId : null,
+            });
         if (currentQueryKey !== state.memoListQueryKey) return false;
 
         const requestSeq = ++loadMemosRequestSeq;
         const cursor = state.memoListNextCursor;
         set({ memoListLoadingMore: true });
         try {
-          const response = await memoRepository.list({
-            notebookId: query.notebookId,
-            filter: toBackendFilter(query.filter),
-            sort: query.sort,
-            tagId: query.tagId,
-            color: query.color,
-            cursor,
-            limit: 50,
-          });
+          const response = state.memoListSource === 'path'
+            ? await memoRepository.listByPath({
+                notebookId: query.notebookId,
+                filter: toBackendFilter(query.filter),
+                sort: query.sort,
+                tagId: query.tagId,
+                color: query.color,
+                cursor,
+                limit: 50,
+              })
+            : await memoRepository.list({
+                notebookId: query.notebookId,
+                filter: toBackendFilter(query.filter),
+                sort: query.sort,
+                tagId: query.tagId,
+                color: query.color,
+                cursor,
+                limit: 50,
+              });
           if (requestSeq !== loadMemosRequestSeq) return false;
 
-          set((current) => {
-            const byId = new Map(current.memos.map((memo) => [memo.id, memo]));
-            for (const memo of response.memos) byId.set(memo.id, memo);
-            return {
-              memos: [...byId.values()],
-              memoListNextCursor: response.nextCursor ?? null,
-              memoListHasMore: response.hasMore ?? Boolean(response.nextCursor),
-              memoListLoadingMore: false,
-            };
-          });
+          if (state.memoListSource === 'path') {
+            const customFilter = query.customFilterId
+              ? useCustomFilterStore.getState().filters.find((item) => item.id === query.customFilterId)
+              : null;
+            const notes = (response as Awaited<ReturnType<typeof memoRepository.listByPath>>).notes
+              .map((note) => toPathNoteListItem(note, query.notebookId!))
+              .filter((note) => customFilter ? memoMatchesCustomFilter(note, customFilter) : true);
+            set((current) => {
+              const byPath = new Map(current.pathNotes.map((note) => [
+                `${note.notebookId}\u0000${note.relativePath}`,
+                note,
+              ]));
+              for (const note of notes) {
+                byPath.set(`${note.notebookId}\u0000${note.relativePath}`, note);
+              }
+              return {
+                pathNotes: [...byPath.values()],
+                memoListNextCursor: response.nextCursor ?? null,
+                memoListHasMore: response.hasMore ?? Boolean(response.nextCursor),
+                memoListLoadingMore: false,
+              };
+            });
+          } else {
+            const legacyResponse = response as Awaited<ReturnType<typeof memoRepository.list>>;
+            set((current) => {
+              const byId = new Map(current.memos.map((memo) => [memo.id, memo]));
+              for (const memo of legacyResponse.memos) byId.set(memo.id, memo);
+              return {
+                memos: [...byId.values()],
+                memoListNextCursor: legacyResponse.nextCursor ?? null,
+                memoListHasMore: legacyResponse.hasMore ?? Boolean(legacyResponse.nextCursor),
+                memoListLoadingMore: false,
+              };
+            });
+          }
           return true;
         } finally {
           if (requestSeq === loadMemosRequestSeq) {
@@ -629,7 +791,8 @@ export const useMemoStore = create<MemoStore>()(
           set({ activeFilter: createFilter });
         }
         const createTag = tag ?? (createFilter === 'tagged' ? selectedTagId ?? undefined : undefined);
-        const memo = await memoRepository.create(createTag, notebookId);
+        const result = await memoRepository.create(createTag, notebookId);
+        const memo = result.memo;
         invalidatePendingMemoLoads();
         set({
           memos: upsertSortedMemo(
@@ -646,11 +809,15 @@ export const useMemoStore = create<MemoStore>()(
         // 让侧栏标签树立即出现新节点 / 更新计数。后端 SelfWriteSuppressor 会
         // 掐掉 desktop 自写的 memo-event, 不会自动触发 refresh, 必须手动调。
         useTagStore.getState().triggerMetadataRefresh();
-        return memo as MemoItem;
+        return result;
       },
 
       deleteMemo: async (id) => {
-        const success = await memoRepository.delete(id);
+        const current = get();
+        const memo = current.memos.find(m => m.id === id) ?? (current.selectedMemo?.id === id ? current.selectedMemo : null);
+        const notebook = current.selectedNotebook;
+        const path = memo && notebook ? joinNotebookMemoPath(notebook.path, memo.relativePath ?? memo.filename) : null;
+        const success = path ? await memoRepository.delete(path) : false;
         if (success) {
           invalidatePendingMemoLoads();
           const state = get();
@@ -665,26 +832,27 @@ export const useMemoStore = create<MemoStore>()(
 
       favoriteMemo: async (id) => {
         invalidatePendingMemoLoads();
-        return await memoRepository.favorite(id);
+        const current = get();
+        const memo = current.memos.find(m => m.id === id) ?? (current.selectedMemo?.id === id ? current.selectedMemo : null);
+        const path = current.selectedNotebook && memo ? joinNotebookMemoPath(current.selectedNotebook.path, memo.relativePath ?? memo.filename) : null;
+        return path ? await memoRepository.favorite(path, id) : false;
       },
 
       unfavoriteMemo: async (id) => {
         invalidatePendingMemoLoads();
-        return await memoRepository.unfavorite(id);
+        const current = get();
+        const memo = current.memos.find(m => m.id === id) ?? (current.selectedMemo?.id === id ? current.selectedMemo : null);
+        const path = current.selectedNotebook && memo ? joinNotebookMemoPath(current.selectedNotebook.path, memo.relativePath ?? memo.filename) : null;
+        return path ? await memoRepository.unfavorite(path, id) : false;
       },
 
-      // 设置 / 清除文档颜色标签 (多选)。 乐观更新: 本地先改 `colors`,
-      // 后端 `set_memo_colors` 写 memo index + emit `Updated` 事件,
-      // 后续 `useMemoEvents` 收到后调 `readMemo` 把权威值回灌, 自然收敛。
+      // Update YAML colors by the current path through the document save queue.
       setMemoColors: async (id, colors) => {
         invalidatePendingMemoLoads();
-        const state = get();
-        const next = state.memos.map((m) => m.id === id ? { ...m, colors } : m);
-        const nextSelected = state.selectedMemo?.id === id
-          ? { ...state.selectedMemo, colors }
-          : state.selectedMemo;
-        set({ memos: next, selectedMemo: nextSelected });
-        return await memoRepository.setColors(id, colors);
+        const current = get();
+        const memo = current.memos.find(m => m.id === id) ?? (current.selectedMemo?.id === id ? current.selectedMemo : null);
+        const path = current.selectedNotebook && memo ? joinNotebookMemoPath(current.selectedNotebook.path, memo.relativePath ?? memo.filename) : null;
+        return path ? await memoRepository.setColors(path, colors, id) : false;
       },
 
       // ===== memo-event 推送入口 =====
@@ -720,7 +888,7 @@ export const useMemoStore = create<MemoStore>()(
                 ? { ...memo, isOpen: state.selectedMemo.isOpen }
                 : state.selectedMemo,
         }));
-        if (get().activeFilter === 'tagged') {
+        if (get().activeFilter === 'tagged' || get().memoListSource === 'path') {
           get().triggerRefresh();
         }
       },
@@ -747,6 +915,7 @@ export const useMemoStore = create<MemoStore>()(
             : state.selectedMemo;
           return { memos: nextMemos, selectedMemo: nextSelected };
         });
+        if (get().memoListSource === 'path') get().triggerRefresh();
       },
 
       handleMemoDeleted: (id) => {
@@ -757,6 +926,7 @@ export const useMemoStore = create<MemoStore>()(
             state.selectedMemo?.id === id ? null : state.selectedMemo,
           selectedMemoId: state.selectedMemoId === id ? null : state.selectedMemoId,
         }));
+        if (get().memoListSource === 'path') get().triggerRefresh();
         // Deleted 不 bump refreshTrigger — 列表已经同步, 没有需要重拉的派生字段
       },
     }),
@@ -767,6 +937,7 @@ export const useMemoStore = create<MemoStore>()(
         // and may be renamed, deleted, or updated while the app is closed.
         selectedNotebookId: state.selectedNotebookId ?? state.selectedNotebook?.id ?? null,
         selectedMemoId: state.selectedMemoId ?? state.selectedMemo?.id ?? null,
+        selectedPathNote: state.selectedPathNote,
         // 侧边栏入口要和中间列一起恢复。中间列的颜色 / 时间筛选不属于
         // 侧边栏导航，因此恢复时归位到“全部”。
         middleColumnView: state.middleColumnView,
@@ -797,6 +968,7 @@ export const useMemoStore = create<MemoStore>()(
           selectedMemoId: legacy.selectedMemoId
             ?? legacy.selectedMemo?.id
             ?? null,
+          selectedPathNote: legacy.selectedPathNote ?? null,
           activeCustomFilterId: legacy.activeFilter === 'custom'
             ? legacy.activeCustomFilterId ?? null
             : null,

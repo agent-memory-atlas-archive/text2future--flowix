@@ -9,7 +9,7 @@ import {
   startDocumentOpenTrace,
 } from '@/lib/document-open-perf';
 import { documentIdentityFromFile, type DocumentIdentity } from '@features/document/store/document-identity';
-import { ensureFileDisplayIdentity, type FileDisplayIdentity } from '@features/workspace/store/file-display-store';
+import { ensureFileDisplayIdentity, type FileDisplayIdentity } from '@/lib/file-display-registry';
 
 
 export type DocumentSource = 'memo' | 'external';
