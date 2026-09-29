@@ -1,15 +1,60 @@
 import type { FileBrowserContext } from './file-browser-target';
 import type { PluginDescriptor } from '@platform/tauri/client';
+import { canonicalPath } from '@/lib/path';
+
+export type DocumentListScope = {
+  kind: 'folder';
+  path: string;
+  notebookPath: string;
+  notebookId: string | null;
+};
+
+export type DocumentListFilters = {
+  resourceKinds?: string[];
+  tags?: string[];
+  customFilterId?: string;
+};
+
+export type DocumentListTarget = {
+  kind: 'document-list';
+  displayId: string;
+  scope: DocumentListScope;
+  filters: DocumentListFilters;
+};
+
+/** Stable identity for a folder list and its active filter set. */
+export function createDocumentListTarget(
+  scope: DocumentListScope,
+  filters: DocumentListFilters,
+): DocumentListTarget {
+  const normalizedScope = {
+    ...scope,
+    path: canonicalPath(scope.path),
+    notebookPath: canonicalPath(scope.notebookPath),
+  };
+  const normalizedFilters: DocumentListFilters = {
+    ...(filters.resourceKinds ? { resourceKinds: [...new Set(filters.resourceKinds)].sort() } : {}),
+    ...(filters.tags ? { tags: [...new Set(filters.tags)].sort() } : {}),
+    ...(filters.customFilterId ? { customFilterId: filters.customFilterId } : {}),
+  };
+  const displayId = `document-list:${JSON.stringify([
+    normalizedScope.path,
+    normalizedScope.notebookPath,
+    normalizedScope.notebookId,
+    normalizedFilters,
+  ])}`;
+  return { kind: 'document-list', displayId, scope: normalizedScope, filters: normalizedFilters };
+}
 
 /**
  * The stable target currently owned by the workColumn.
  *
- * Notebook and list selection are deliberately not part of this state. A
- * target can remain open while the surrounding library context changes.
+ * The selected notebook remains in MemoStore; folder-list destinations are
+ * explicit targets so they can be restored independently of that selection.
  */
 export type WorkColumnTarget =
   | { kind: 'empty' }
-  | { kind: 'document-list'; scope: { kind: 'folder'; path: string; notebookPath: string; notebookId: string | null }; filters: { resourceKinds?: string[]; tags?: string[]; customFilterId?: string } }
+  | DocumentListTarget
   | {
       kind: 'external';
       fileBrowser?: FileBrowserContext;

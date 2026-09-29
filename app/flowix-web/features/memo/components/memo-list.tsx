@@ -21,6 +21,7 @@ import {
 } from '@features/memo/store/memo-store';
 import { useMemoLibraryMetadataStore } from '@features/memo/store/memo-library-metadata-store';
 import { useCustomFilterStore } from '@features/memo/store/custom-filter-store';
+import { setDocumentProperties } from '@features/document/public/path-properties';
 import { useTagStore } from '@features/memo/store/tag-store';
 import {
   memoListItemKey,
@@ -409,13 +410,32 @@ export function MemoList({
       ? hiddenListFolders.filter((path) => canonicalPath(path) !== relative)
       : [...hiddenListFolders, relative];
     try {
-      await fileApi.setNotebookViewPreferences(selectedNotebook.path, { hiddenListFolders: next });
+      const preferences = await fileApi.getNotebookViewPreferences(selectedNotebook.path);
+      await fileApi.setNotebookViewPreferences(selectedNotebook.path, { ...preferences, hiddenListFolders: next });
       setHiddenListFolders(next);
     } catch (error) {
       logger.warn('save notebook view preferences failed', { error, notebookId: selectedNotebook.id });
       toast.error(t('memo.fileTree.preferenceSaveFailed'));
     }
   }, [hiddenListFolderSet, hiddenListFolders, selectedNotebook, t]);
+  const handleSetDefaultCreateFolder = useCallback(async (folderPath: string) => {
+    if (!selectedNotebook) return;
+    const root = canonicalDirectoryPath(selectedNotebook.path);
+    const folder = canonicalDirectoryPath(folderPath);
+    if (folder !== root && !folder.startsWith(`${root}/`)) return;
+    const relative = folder === root ? null : folder.slice(root.length + 1);
+    try {
+      const preferences = await fileApi.getNotebookViewPreferences(selectedNotebook.path);
+      await fileApi.setNotebookViewPreferences(selectedNotebook.path, {
+        ...preferences,
+        defaultCreateFolder: relative,
+      });
+      toast.success(t('memo.fileTree.defaultCreateFolderSet'));
+    } catch (error) {
+      logger.warn('set notebook default create folder failed', { error, folderPath });
+      toast.error(t('memo.fileTree.preferenceSaveFailed'));
+    }
+  }, [selectedNotebook, t]);
   const memoVirtualizationEnabled =
     listFilteredMemosCount > MEMO_VIRTUALIZATION_THRESHOLD;
   // ResizeObserver is required for dynamic rows. Older/non-browser test
@@ -642,7 +662,15 @@ export function MemoList({
     if (!selectedNotebook) return;
     setIsCreatingMemo(true);
     try {
-    const createFilter = getVisibleCreateFilter(activeFilter);
+    let customFilterForCreation = activeCustomFilter;
+    if (activeFilter === 'custom' && activeCustomFilterId && !customFilterForCreation) {
+      await loadNotebookFilters(selectedNotebook.id);
+      customFilterForCreation = useCustomFilterStore.getState().filtersByNotebook[selectedNotebook.id]
+        ?.find((filter) => filter.id === activeCustomFilterId) ?? null;
+    }
+    const shouldCreateIntoCustomFilter = activeFilter === 'custom'
+      && customFilterForCreation?.documentType === 'note';
+    const createFilter = shouldCreateIntoCustomFilter ? 'custom' : getVisibleCreateFilter(activeFilter);
     if (createFilter !== activeFilter) {
       setSelectedTagId(null);
       setActiveFilter(createFilter);
@@ -653,18 +681,25 @@ export function MemoList({
         selectedNotebook.id,
         selectedNotebook.path,
       )
-      : undefined);
+      : (await fileApi.getNotebookViewPreferences(selectedNotebook.path)).defaultCreateFolder ?? undefined);
     const result = await memoRepository.create(
       activeTagId ?? undefined,
       selectedNotebook.id,
       parentRelativePath,
       titleOverride?.trim() || undefined,
     );
+    if (shouldCreateIntoCustomFilter && customFilterForCreation) {
+      const saved = await setDocumentProperties(result.path, {
+        [customFilterForCreation.key]: customFilterForCreation.value,
+      });
+      if (!saved) throw new Error('Failed to apply the active custom view to the new note');
+    }
     const shouldSelectNewMemo =
       createFilter === 'all' ||
       (createFilter === 'tagged' && Boolean(activeTagId)) ||
       createFilter === 'thisWeek' ||
-      createFilter === 'thisMonth';
+      createFilter === 'thisMonth' ||
+      (createFilter === 'custom' && shouldCreateIntoCustomFilter);
 
     // Synchronously capture pre-render positions BEFORE the store update that
     // adds the new memo. The animation itself runs in the useLayoutEffect below,
@@ -683,6 +718,9 @@ export function MemoList({
   }, [
     activeFilter,
     activeTagId,
+    activeCustomFilter,
+    activeCustomFilterId,
+    loadNotebookFilters,
     loadPathNotes,
     prepareForInsert,
     memoListView,
@@ -1024,6 +1062,7 @@ export function MemoList({
               sort={activeSort}
               hiddenListFolders={hiddenListFolders}
               onToggleListFolderVisibility={(folderPath) => { void handleToggleListFolderVisibility(folderPath); }}
+              onSetDefaultCreateFolder={(folderPath) => { void handleSetDefaultCreateFolder(folderPath); }}
               isActive={isActive && dataLoadingEnabled}
               onCreateNote={handleCreateNoteInFolder}
             />

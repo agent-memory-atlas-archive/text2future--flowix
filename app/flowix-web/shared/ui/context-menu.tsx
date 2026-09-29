@@ -231,7 +231,7 @@ interface ContextMenuItemProps {
 	"aria-describedby"?: string;
 	children: React.ReactNode;
 	className?: string;
-	onClick?: () => void;
+	onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void;
 	onSelect?: () => void;
 	disabled?: boolean;
 	inset?: boolean;
@@ -251,7 +251,7 @@ function ContextMenuItem({
 	const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
 		e.stopPropagation();
 		if (disabled) return;
-		onClick?.();
+		onClick?.(e);
 		onSelect?.();
 		setOpen(false);
 	};

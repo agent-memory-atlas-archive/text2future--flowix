@@ -35,6 +35,10 @@ export function useShellMemoViewModel() {
   })));
 }
 
+export function showAgentConversationsView(): void {
+  useMemoStore.getState().setActiveFilter('agents');
+}
+
 export function useShellDocumentListTitle(input: {
   notebookId: string | null;
   folderPath: string;

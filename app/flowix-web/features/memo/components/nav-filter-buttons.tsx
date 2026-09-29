@@ -8,7 +8,9 @@ import { useMemoStore } from '@features/memo/store/memo-store';
 import { useI18n } from '@/lib/i18n';
 import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@shared/ui/dialog';
+import { DialogHeader, DialogTitle } from '@shared/ui/dialog';
+import { Popover, PopoverContent } from '@shared/ui/popover';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shared/ui/select';
 import {
   EMPTY_CUSTOM_FILTERS,
   useCustomFilterStore,
@@ -201,6 +203,8 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
   const [value, setValue] = useState('');
   const [documentType, setDocumentType] = useState<CustomViewDocumentType>('note');
   const [dialogNotebookId, setDialogNotebookId] = useState<string | null>(null);
+  const [anchorElement, setAnchorElement] = useState<HTMLElement | null>(null);
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
   const selectedNotebook = useMemoStore((s) => s.selectedNotebook);
   const notebookId = selectedNotebook?.id ?? null;
   const filters = useCustomFilterStore((s) => notebookId ? s.filtersByNotebook[notebookId] ?? EMPTY_CUSTOM_FILTERS : EMPTY_CUSTOM_FILTERS);
@@ -228,11 +232,14 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
 
   useEffect(() => {
     const handleCreateRequest = (event: Event) => {
-      const targetNotebookId = (event as CustomEvent<{ notebookId?: string }>).detail?.notebookId ?? notebookId;
+      const detail = (event as CustomEvent<{ notebookId?: string; anchorElement?: HTMLElement; anchorRect?: DOMRect }>).detail;
+      const targetNotebookId = detail?.notebookId ?? notebookId;
       if (!targetNotebookId) return;
       void loadNotebookFilters(targetNotebookId).then(() => {
         reset();
         setDialogNotebookId(targetNotebookId);
+        setAnchorElement(detail?.anchorElement ?? null);
+        setAnchorRect(detail?.anchorRect ?? null);
         setOpen(true);
       });
     };
@@ -240,7 +247,7 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
     return () => window.removeEventListener('flowix:open-custom-filter-create', handleCreateRequest);
   }, [loadNotebookFilters, notebookId, reset]);
 
-  const openEditDialog = useCallback((filter: CustomFilter, targetNotebookId = notebookId) => {
+  const openEditDialog = useCallback((filter: CustomFilter, targetNotebookId = notebookId, anchor?: HTMLElement | null) => {
     setEditingFilter(filter);
     setDialogNotebookId(targetNotebookId);
     setName(filter.name);
@@ -248,18 +255,20 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
     setOperator(filter.operator);
     setValue(filter.value);
     setDocumentType(filter.documentType ?? 'note');
+    setAnchorElement(anchor ?? null);
+    setAnchorRect(null);
     setOpen(true);
   }, [notebookId]);
 
   useEffect(() => {
     const handleEditRequest = (event: Event) => {
-      const detail = (event as CustomEvent<{ filterId?: string; notebookId?: string }>).detail;
+      const detail = (event as CustomEvent<{ filterId?: string; notebookId?: string; anchorElement?: HTMLElement }>).detail;
       const targetNotebookId = detail?.notebookId ?? notebookId;
       if (!targetNotebookId) return;
       void loadNotebookFilters(targetNotebookId).then(() => {
         const filter = useCustomFilterStore.getState().filtersByNotebook[targetNotebookId]
           ?.find((item) => item.id === detail?.filterId);
-        if (filter) openEditDialog(filter, targetNotebookId);
+        if (filter) openEditDialog(filter, targetNotebookId, detail?.anchorElement);
       });
     };
     window.addEventListener('flowix:open-custom-filter-edit', handleEditRequest);
@@ -328,51 +337,60 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
           </div>
         </div>
       )}
-      <Dialog open={open} onOpenChange={(nextOpen) => { setOpen(nextOpen); if (!nextOpen) reset(); }}>
-        <DialogContent rightSide>
+      <Popover open={open} onOpenChange={(nextOpen) => { setOpen(nextOpen); if (!nextOpen) reset(); }} anchorElement={anchorElement} anchorRect={anchorRect}>
+        <PopoverContent side="right" align="start" sideOffset={8} className="w-[300px] max-w-[calc(100vw-16px)] rounded-2xl p-2.5 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
           <DialogHeader>
             <DialogTitle>{t(editingFilter ? 'memo.customFilter.editTitle' : 'memo.customFilter.title')}</DialogTitle>
-            <DialogDescription>{t('memo.customFilter.description')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <label className="block space-y-1 text-sm">
-              <span className="text-sm font-semibold text-[var(--foreground)]">{t('memo.customFilter.name')}</span>
+              <span className="text-sm text-[var(--foreground)]">{t('memo.customFilter.name')}</span>
               <Input value={name} onChange={(event) => setName(event.target.value)} placeholder={t('memo.customFilter.namePlaceholder')} autoFocus />
             </label>
             <label className="block space-y-1 text-sm">
-              <span className="text-sm font-semibold text-[var(--foreground)]">{t('memo.customFilter.documentType')}</span>
-              <select value={documentType} onChange={(event) => setDocumentType(event.target.value as CustomViewDocumentType)} className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm outline-none focus:border-[var(--primary)]">
-                <option value="note">{t('memo.customFilter.typeNote')}</option>
-                <option value="image">{t('memo.customFilter.typeImage')}</option>
-                <option value="video">{t('memo.customFilter.typeVideo')}</option>
-              </select>
+              <span className="text-sm text-[var(--foreground)]">{t('memo.customFilter.documentType')}</span>
+              <Select value={documentType} onValueChange={(nextValue) => setDocumentType(nextValue as CustomViewDocumentType)}>
+                <SelectTrigger className="h-9 w-full bg-[var(--background)]">
+                  <SelectValue>{documentType === 'note' ? t('memo.customFilter.typeNote') : documentType === 'image' ? t('memo.customFilter.typeImage') : t('memo.customFilter.typeVideo')}</SelectValue>
+                </SelectTrigger>
+                <SelectContent align="start" fitViewport className="flowix-preferences-select-content max-w-[calc(100vw-1rem)]">
+                  <SelectItem value="note">{t('memo.customFilter.typeNote')}</SelectItem>
+                  <SelectItem value="image">{t('memo.customFilter.typeImage')}</SelectItem>
+                  <SelectItem value="video">{t('memo.customFilter.typeVideo')}</SelectItem>
+                </SelectContent>
+              </Select>
             </label>
             {documentType === 'note' && <>
               <label className="block space-y-1 text-sm">
-                <span className="text-sm font-semibold text-[var(--foreground)]">{t('memo.customFilter.key')}</span>
+                <span className="text-sm text-[var(--foreground)]">{t('memo.customFilter.key')}</span>
                 <Input value={key} onChange={(event) => setKey(event.target.value)} placeholder={t('memo.customFilter.keyPlaceholder')} />
               </label>
               <div className="grid grid-cols-[1fr_1.4fr] gap-2">
                 <label className="space-y-1 text-sm">
-                  <span className="text-sm font-semibold text-[var(--foreground)]">{t('memo.customFilter.condition')}</span>
-                  <select value={operator} onChange={(event) => setOperator(event.target.value as CustomFilterOperator)} className="h-8 w-full rounded-lg border border-input bg-background px-2 text-sm outline-none focus:border-[var(--primary)]">
-                    <option value="contains">{t('memo.customFilter.contains')}</option>
-                    <option value="equals">{t('memo.customFilter.equals')}</option>
-                  </select>
+                  <span className="text-sm text-[var(--foreground)]">{t('memo.customFilter.condition')}</span>
+                  <Select value={operator} onValueChange={(nextValue) => setOperator(nextValue as CustomFilterOperator)}>
+                    <SelectTrigger className="h-8 w-full bg-[var(--background)]">
+                      <SelectValue>{operator === 'contains' ? t('memo.customFilter.contains') : t('memo.customFilter.equals')}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent align="start" fitViewport className="flowix-preferences-select-content max-w-[calc(100vw-1rem)]">
+                      <SelectItem value="contains">{t('memo.customFilter.contains')}</SelectItem>
+                      <SelectItem value="equals">{t('memo.customFilter.equals')}</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </label>
                 <label className="space-y-1 text-sm">
-                  <span className="text-sm font-semibold text-[var(--foreground)]">{t('memo.customFilter.value')}</span>
+                  <span className="text-sm text-[var(--foreground)]">{t('memo.customFilter.value')}</span>
                   <Input value={value} onChange={(event) => setValue(event.target.value)} placeholder={t('memo.customFilter.valuePlaceholder')} />
                 </label>
               </div>
             </>}
-            <div className="flex justify-end gap-2 border-t border-[var(--border)] pt-4">
+            <div className="flex justify-end gap-2 pt-2">
               <Button type="button" variant="ghost" onClick={() => setOpen(false)}>{t('memo.customFilter.cancel')}</Button>
               <Button type="button" onClick={handleSubmit} disabled={!name.trim() || (documentType === 'note' && (!key.trim() || !value.trim()))}>{t(editingFilter ? 'memo.customFilter.save' : 'memo.customFilter.create')}</Button>
             </div>
           </div>
-        </DialogContent>
-      </Dialog>
+        </PopoverContent>
+      </Popover>
     </>
   );
 }
@@ -386,7 +404,7 @@ export function CustomFilterFooter() {
         type="button"
         variant="outline"
         className="w-full justify-center gap-2 bg-white px-3 text-sm hover:bg-white [[data-theme='dark']_&]:bg-[var(--card)] [[data-theme='dark']_&]:hover:bg-[var(--hover-bg)]"
-        onClick={() => window.dispatchEvent(new CustomEvent('flowix:open-custom-filter-create'))}
+        onClick={(event) => window.dispatchEvent(new CustomEvent('flowix:open-custom-filter-create', { detail: { anchorElement: event.currentTarget } }))}
       >
         <Filter className="size-3.5" />
         <span>{t('memo.customFilter.button')}</span>

@@ -13,7 +13,7 @@ function fileIdentity(path: string) {
 function surface(kind: WorkColumnSurfaceKind): WorkColumnSurface {
   switch (kind) {
     case 'document-list':
-      return { kind, instanceKey: 'folder:/notebook', folderPath: '/notebook', notebookPath: '/notebook', notebookId: 'notebook-1', filters: {} };
+      return { kind, displayId: 'document-list:/notebook', instanceKey: 'document-list:/notebook', folderPath: '/notebook', notebookPath: '/notebook', notebookId: 'notebook-1', filters: {} };
     case 'md':
       return { kind, instanceKey: 'md:1', fileIdentity: fileIdentity('/workspace/readme.md'), props: { isExternalDocument: true } };
     case 'code':

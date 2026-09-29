@@ -791,7 +791,7 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
                           'flex h-4 w-4 shrink-0 items-center justify-center rounded-full',
                           running && 'agent-conversation-list__icon--running',
                         )}>
-                          <AgentIcon typeKey={agent.key} alt="" className="h-3.5 w-3.5 object-contain" />
+                          <AgentIcon typeKey={agent.key} alt="" className="h-4 w-4 object-contain" />
                         </span>
                         {running ? (
                           // 绿色: agent 正在运行

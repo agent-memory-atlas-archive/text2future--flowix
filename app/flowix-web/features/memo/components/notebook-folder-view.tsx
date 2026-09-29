@@ -27,9 +27,10 @@ import {
 import {
   openExternalTarget,
   openMediaTarget,
+  openDocumentListTarget,
 } from '@features/workspace/use-cases/workspace-navigation';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
-import { workColumnTargetFilePath } from '@features/workspace/store/work-column-target';
+import { createDocumentListTarget, workColumnTargetFilePath } from '@features/workspace/store/work-column-target';
 import {
   files,
   mediaResources,
@@ -100,6 +101,7 @@ export function NotebookFolderView({
   onCreateNote,
   hiddenListFolders = [],
   onToggleListFolderVisibility,
+  onSetDefaultCreateFolder,
   isActive = true,
 }: {
   notebook: Notebook;
@@ -110,6 +112,7 @@ export function NotebookFolderView({
   onCreateNote?: (parentPath: string, title: string) => Promise<void> | void;
   hiddenListFolders?: string[];
   onToggleListFolderVisibility?: (folderPath: string) => void;
+  onSetDefaultCreateFolder?: (folderPath: string) => void;
   isActive?: boolean;
 }) {
   const { t } = useI18n();
@@ -344,14 +347,17 @@ export function NotebookFolderView({
       tree={noteTree}
       hiddenListFolders={hiddenListFolders}
       onToggleListFolderVisibility={onToggleListFolderVisibility}
+      onSetDefaultCreateFolder={onSetDefaultCreateFolder}
       createFolderRequest={createFolderRequest}
       createNoteRequest={createNoteRequest}
       onCreateFolder={onCreateFolder}
       onNoteSelect={(filePath) => { void openFile(filePath); }}
       onFolderSelect={(folderPath) => {
-        const target = { kind: 'document-list' as const, scope: { kind: 'folder' as const, path: folderPath, notebookPath: notebook.path, notebookId: notebook.id }, filters: {} };
-        const store = useWorkColumnStore.getState();
-        store.commitNavigation(store.beginNavigation(target, null, false, false), target);
+        const target = createDocumentListTarget(
+          { kind: 'folder', path: folderPath, notebookPath: notebook.path, notebookId: notebook.id },
+          {},
+        );
+        openDocumentListTarget(target);
       }}
       onNoteOpenInNewTab={(filePath) => { void openFileInNewTab(filePath); }}
       onCreateNote={(parentPath, title) => onCreateNote?.(parentPath, title)}

@@ -10,6 +10,7 @@ import type { AgentConversationInstance } from '@features/agent/store/agent-conv
 import { normalizeBackendInstance } from '@features/agent/store/conversation-slice';
 import { selectAndOpenAgentConversation } from '@features/workspace/use-cases/agent-conversation-navigation';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
+import { showAgentConversationsView } from '@features/memo/public/shell-api';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
@@ -99,7 +100,7 @@ export function AgentTasksSection({
       .filter((instance) => !isSyntheticOpenCodeHistoryInstance(instance))
       .sort((left, right) => right.updatedAt - left.updatedAt);
     const todays = conversations.filter((instance) => instance.updatedAt >= todayStart);
-    return todays.length > 0 ? todays : conversations.slice(0, 2);
+    return todays.length > 0 ? todays.slice(0, 3) : conversations.slice(0, 2);
   }, [liveInstances, notebookId, storedConversations, todayStart]);
 
   useLayoutEffect(() => {
@@ -139,7 +140,7 @@ export function AgentTasksSection({
       style={{ order }}
     >
       <div
-        className="group mb-0.5 flex h-7 items-center rounded-lg px-1.5 transition-colors hover:bg-[var(--muted)]"
+        className="notebook-file-tree__section-header group mb-0.5 flex h-7 items-center rounded-lg px-1.5 transition-colors hover:bg-[var(--muted)]"
         style={{ marginLeft: edgeGutter, width }}
       >
         <button
@@ -170,13 +171,23 @@ export function AgentTasksSection({
               )}
               style={{ marginLeft: edgeGutter, width }}
             >
-              <AgentIcon typeKey={instance.agentType} alt="" className="h-[18px] w-[18px] shrink-0 object-contain" />
+              <AgentIcon typeKey={instance.agentType} alt="" className="h-4 w-4 shrink-0 object-contain" />
               <span className="min-w-0 flex-1 truncate text-[var(--foreground)]">
                 {instance.title?.trim() || t('common.untitled')}
               </span>
             </button>
           ))}
         </div>
+      )}
+      {!collapsed && (
+        <button
+          type="button"
+          onClick={showAgentConversationsView}
+          className="flex h-7 items-center rounded-lg px-1.5 text-left text-xs text-[color-mix(in_oklch,var(--muted-foreground)_67%,var(--background))] transition-colors hover:text-[var(--foreground)]"
+          style={{ marginLeft: edgeGutter, width }}
+        >
+          {t('memo.fileTree.moreAgents')}
+        </button>
       )}
     </section>
   );

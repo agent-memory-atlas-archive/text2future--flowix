@@ -1,11 +1,20 @@
 import { create } from 'zustand';
 import { canonicalPath, fileLocatorKey } from '@/lib/path';
 import { canonicalUrl } from '@/lib/url';
+import type { DocumentListFilters, DocumentListScope } from '@features/workspace/store/work-column-target';
 
 type ExternalHistoryEntry = {
   kind: 'external';
   path: string;
   scopePath: string | null;
+  openedAt: number;
+};
+
+export type DocumentListHistoryEntry = {
+  kind: 'document-list';
+  displayId: string;
+  scope: DocumentListScope;
+  filters: DocumentListFilters;
   openedAt: number;
 };
 
@@ -31,6 +40,7 @@ export type MediaHistoryEntry = {
 };
 
 export type DocumentHistoryEntry =
+  | DocumentListHistoryEntry
   | ExternalHistoryEntry
   | AgentConversationHistoryEntry
   | WebHistoryEntry
@@ -55,6 +65,7 @@ const MAX_HISTORY_ENTRIES = 30;
 
 export function documentHistoryEntryKey(entry: DocumentHistoryEntry | null): string | null {
   if (!entry) return null;
+  if (entry.kind === 'document-list') return entry.displayId;
   if (entry.kind === 'agent-conversation') return `agent-conversation:${entry.instanceId}`;
   if (entry.kind === 'web') {
     const url = canonicalUrl(entry.url);

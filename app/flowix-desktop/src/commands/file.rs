@@ -349,6 +349,8 @@ fn read_dir_single_level(
 pub struct NotebookViewPreferences {
     #[serde(default)]
     pub hidden_list_folders: Vec<String>,
+    #[serde(default)]
+    pub default_create_folder: Option<String>,
 }
 
 fn notebook_preferences_path(root: &Path) -> Result<std::path::PathBuf, String> {
@@ -436,11 +438,33 @@ pub fn set_notebook_view_preferences(
         .map_err(|error| format!("create notebook config directory failed: {error}"))?;
     let preferences = NotebookViewPreferences {
         hidden_list_folders: normalize_hidden_list_folders(preferences.hidden_list_folders)?,
+        default_create_folder: normalize_default_create_folder(preferences.default_create_folder)?,
     };
     let bytes = serde_json::to_vec_pretty(&preferences)
         .map_err(|error| format!("serialize notebook preferences failed: {error}"))?;
     flowix_core::memo_file::atomic_write_bytes(&path, &bytes)
         .map_err(|error| format!("write notebook preferences failed: {error}"))
+}
+
+fn normalize_default_create_folder(folder: Option<String>) -> Result<Option<String>, String> {
+    let Some(folder) = folder else {
+        return Ok(None);
+    };
+    let trimmed = folder.trim_matches('/');
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.contains('\\') || trimmed.contains('\0') {
+        return Err("INVALID_NOTEBOOK_FOLDER_PREFERENCE".to_string());
+    }
+    let path = Path::new(trimmed);
+    if path
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err("INVALID_NOTEBOOK_FOLDER_PREFERENCE".to_string());
+    }
+    Ok(Some(path.to_string_lossy().replace('\\', "/")))
 }
 
 // ==================== IPC ====================

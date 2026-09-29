@@ -109,7 +109,7 @@ function resolveWorkColumnTarget(
     case 'empty':
       return emptyContent(input.emptyMessage, 'no-target');
     case 'document-list':
-      return surfaceContent({ kind: 'document-list', instanceKey: `folder:${canonicalPath(target.scope.path)}:view:${target.filters.customFilterId ?? ''}`, folderPath: target.scope.path, notebookPath: target.scope.notebookPath, notebookId: target.scope.notebookId, filters: target.filters });
+      return surfaceContent({ kind: 'document-list', displayId: target.displayId, instanceKey: target.displayId, folderPath: target.scope.path, notebookPath: target.scope.notebookPath, notebookId: target.scope.notebookId, filters: target.filters });
     case 'web':
       return surfaceContent({ kind: 'web', instanceKey: target.url, url: target.url });
     case 'agent-conversation':

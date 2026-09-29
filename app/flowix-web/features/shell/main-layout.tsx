@@ -55,6 +55,7 @@ import {
   type DocumentSurfaceContext,
 } from '@features/surface/public/shell-api';
 import type { PluginDescriptor } from '@platform/tauri/client';
+import { DOCUMENT_LIST_CREATE_REQUEST_EVENT } from '@features/surface/document-list-events';
 import {
   useShellWorkspaceViewModel,
   selectNotebook as selectNotebookInWorkspace,
@@ -493,6 +494,11 @@ export function MainLayout({
         }
       : null,
   );
+  const documentListSurface = workColumnPresentation.content.status === 'surface'
+    && workColumnPresentation.content.surface.kind === 'document-list'
+    ? workColumnPresentation.content.surface
+    : null;
+  const documentListCustomFilterId = documentListSurface?.filters.customFilterId ?? null;
   const isAgentConversationDetail = workColumnPresentation.header.kind === 'agent';
   const workColumnLoadingTone = navigationState.phase === 'loading'
     ? navigationState.pendingTarget?.kind === 'agent-conversation'
@@ -523,6 +529,20 @@ export function MainLayout({
       onNavigateBack: handleNavigateBack,
       onNavigateForward: handleNavigateForward,
       title: documentListTitle,
+      documentListActions: documentListSurface ? {
+        onCreate: () => window.dispatchEvent(new CustomEvent(DOCUMENT_LIST_CREATE_REQUEST_EVENT, {
+          detail: { displayId: documentListSurface.displayId },
+        })),
+        ...(documentListSurface.notebookId && documentListCustomFilterId ? {
+          onEditFilter: (anchorElement: HTMLButtonElement) => window.dispatchEvent(new CustomEvent('flowix:open-custom-filter-edit', {
+            detail: {
+              filterId: documentListCustomFilterId,
+              notebookId: documentListSurface.notebookId,
+              anchorElement,
+            },
+          })),
+        } : {}),
+      } : undefined,
     },
     contentCapabilities: {
       copyFullText: workColumnPresentation.capabilities.includes('copy-content'),

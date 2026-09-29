@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FileText } from 'lucide-react';
+import { Inbox, FileText } from 'lucide-react';
 import { files, type DocTreeItem } from '@platform/tauri/client';
 import { externalFileViewKind, resourceKindFromPath } from '@features/editor/public/code-file';
 import { toast } from '@/lib/toast';
 import { canonicalPath, joinNotebookMemoPath } from '@/lib/path';
 import { memoMatchesCustomFilter, useCustomFilterStore } from '@features/memo/store/custom-filter-store';
 import { memoRepository } from '@features/memo/services/memo-repository';
+import { setDocumentProperties } from '@features/document/public/path-properties';
 import { Dialog, DialogContent, DialogTitle } from '@shared/ui/dialog';
 import { Button } from '@shared/ui/button';
 import type { DocumentListSurface } from './types';
+import { DOCUMENT_LIST_CREATE_REQUEST_EVENT, type DocumentListCreateRequestDetail } from './document-list-events';
 
 async function collectDocuments(folderPath: string): Promise<DocTreeItem[]> {
   const children = await files.getDirChildren(folderPath);
@@ -81,6 +83,14 @@ export function DocumentListView({ surface }: { surface: DocumentListSurface }) 
   const [newTitle, setNewTitle] = useState('');
   const [creating, setCreating] = useState(false);
   useEffect(() => {
+    const handleCreateRequest = (event: Event) => {
+      const detail = (event as CustomEvent<DocumentListCreateRequestDetail>).detail;
+      if (detail?.displayId === surface.displayId) setCreateOpen(true);
+    };
+    window.addEventListener(DOCUMENT_LIST_CREATE_REQUEST_EVENT, handleCreateRequest);
+    return () => window.removeEventListener(DOCUMENT_LIST_CREATE_REQUEST_EVENT, handleCreateRequest);
+  }, [surface.displayId]);
+  useEffect(() => {
     void loadNotebookFilters(surface.notebookId);
   }, [loadNotebookFilters, surface.notebookId]);
   useEffect(() => {
@@ -126,6 +136,12 @@ export function DocumentListView({ surface }: { surface: DocumentListSurface }) 
     if (!title || creating) return;
     setCreating(true);
     try {
+      let customFilterForCreation = customFilter;
+      if (surface.notebookId && surface.filters.customFilterId && !customFilterForCreation) {
+        await loadNotebookFilters(surface.notebookId);
+        customFilterForCreation = useCustomFilterStore.getState().filtersByNotebook[surface.notebookId]
+          ?.find((filter) => filter.id === surface.filters.customFilterId) ?? null;
+      }
       let path: string;
       if (surface.notebookId) {
         const { memoRepository } = await import('@features/memo/services/memo-repository');
@@ -134,6 +150,12 @@ export function DocumentListView({ surface }: { surface: DocumentListSurface }) 
         const relative = folder === root ? '' : folder.slice(root.length + 1);
         const created = await memoRepository.create(undefined, surface.notebookId, relative, title);
         path = created.path;
+        if (customFilterForCreation?.documentType === 'note') {
+          const saved = await setDocumentProperties(path, {
+            [customFilterForCreation.key]: customFilterForCreation.value,
+          });
+          if (!saved) throw new Error('Failed to apply the active custom view to the new note');
+        }
       } else {
         const created = await files.createDocument(surface.folderPath, title.endsWith('.md') ? title : `${title}.md`);
         path = created.fullPath;
@@ -148,7 +170,7 @@ export function DocumentListView({ surface }: { surface: DocumentListSurface }) 
     } finally {
       setCreating(false);
     }
-  }, [creating, newTitle, surface.folderPath, surface.notebookId, surface.notebookPath]);
+  }, [creating, customFilter, loadNotebookFilters, newTitle, surface.filters.customFilterId, surface.folderPath, surface.notebookId, surface.notebookPath]);
   const openItem = useCallback(async (item: DocTreeItem) => {
     try {
       const { openExternalTarget, openMediaTarget } = await import('@features/workspace/use-cases/workspace-navigation');
@@ -163,35 +185,17 @@ export function DocumentListView({ surface }: { surface: DocumentListSurface }) 
     }
   }, [surface.notebookId, surface.notebookPath]);
   return <section className="flex h-full min-h-0 flex-col bg-transparent text-[var(--foreground)]">
-    <header className="shrink-0 px-10 pt-2">
-      <div className="flex h-10 items-center justify-end gap-3">
-        <span className="flex items-center gap-2">
-          {customFilter && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="bg-white hover:bg-white [[data-theme='dark']_&]:bg-[var(--card)] [[data-theme='dark']_&]:hover:bg-[var(--hover-bg)]"
-              style={{ borderRadius: 10 }}
-              onClick={() => window.dispatchEvent(new CustomEvent('flowix:open-custom-filter-edit', {
-                detail: { filterId: customFilter.id, notebookId: surface.notebookId },
-              }))}
-            >
-              编辑
-            </Button>
-          )}
-          <Button type="button" size="sm" style={{ borderRadius: 10 }} onClick={() => setCreateOpen(true)}>新建</Button>
-        </span>
-      </div>
-    </header>
-    <div className="min-h-0 flex-1 overflow-auto px-10 pb-4 pt-2">
+    <div className="min-h-0 flex-1 overflow-auto px-5 pb-4 pt-2">
       {error ? <p className="text-sm text-[var(--muted-foreground)]">无法读取文件夹。请检查文件夹后重试。</p>
         : !loading && visibleItems.length === 0
-          ? <div className="flex h-full min-h-[160px] items-center justify-center text-sm text-[var(--muted-foreground)]">
-              列表内容为空
+        ? <div className="flex h-full min-h-[160px] items-center justify-center text-sm text-[var(--muted-foreground)]">
+              <div className="flex flex-col items-center text-center">
+                <Inbox className="mb-3 h-10 w-10 opacity-50" strokeWidth={1.25} aria-hidden="true" />
+                <span>列表内容为空</span>
+              </div>
             </div>
           : <div className="grid w-full grid-cols-[repeat(auto-fill,minmax(min(100%,200px),1fr))] items-stretch gap-3.5">{visibleItems.map((item) => <DocumentCard key={item.fullPath} item={item} notebookPath={surface.notebookPath} onOpen={() => openItem(item)} />)}</div>}
     </div>
-    <Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent className="max-w-sm"><DialogTitle>新建笔记</DialogTitle><form className="mt-4 space-y-4" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input autoFocus value={newTitle} onChange={(event) => setNewTitle(event.target.value)} placeholder="笔记标题" className="h-9 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 text-sm outline-none focus:border-[var(--brand)]" /><div className="flex justify-end gap-2"><Button type="button" variant="outline" size="sm" onClick={() => setCreateOpen(false)}>取消</Button><Button type="submit" size="sm" disabled={!newTitle.trim() || creating}>创建</Button></div></form></DialogContent></Dialog>
+    <Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent className="max-w-sm"><DialogTitle>新建笔记</DialogTitle><form className="mt-4 space-y-4" onSubmit={(event) => { event.preventDefault(); void createNote(); }}><input autoFocus value={newTitle} onChange={(event) => setNewTitle(event.target.value)} placeholder="笔记标题" className="h-9 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 text-sm outline-none focus:border-[var(--brand)]" /><div className="flex justify-end gap-2"><Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={() => setCreateOpen(false)}>取消</Button><Button type="submit" size="sm" className="rounded-lg" disabled={!newTitle.trim() || creating}>创建</Button></div></form></DialogContent></Dialog>
   </section>;
 }

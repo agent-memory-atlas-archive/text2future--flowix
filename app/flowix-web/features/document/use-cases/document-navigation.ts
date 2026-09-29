@@ -9,6 +9,7 @@ import {
   openExternalTarget,
   openMediaTarget,
   openWebTarget,
+  openDocumentListTarget,
   historyEntryFromWorkColumnTarget,
 } from '@features/workspace/use-cases/workspace-navigation';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
@@ -40,6 +41,15 @@ function currentHistoryEntry(): DocumentHistoryEntry | null {
 }
 
 async function openHistoryEntry(entry: DocumentHistoryEntry): Promise<DocumentHistoryEntry> {
+  if (entry.kind === 'document-list') {
+    openDocumentListTarget({
+      kind: 'document-list',
+      displayId: entry.displayId,
+      scope: entry.scope,
+      filters: entry.filters,
+    }, { history: 'skip' });
+    return entry;
+  }
   if (entry.kind === 'agent-conversation') {
     await selectAndOpenAgentConversation(entry.instanceId, {
       history: 'skip',

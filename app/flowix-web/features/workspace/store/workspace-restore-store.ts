@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 import { STORAGE_KEYS } from '@/lib/constants';
+import type { DocumentListTarget } from './work-column-target';
 
 interface AgentConversationRestoreState {
   selectedInstanceId: string | null;
@@ -9,6 +10,7 @@ interface AgentConversationRestoreState {
 }
 
 export type PersistedWorkspaceTarget =
+  | DocumentListTarget
   | { kind: 'external'; path: string; scopePath: string | null }
   | {
       kind: 'media';
@@ -22,7 +24,7 @@ export type PersistedWorkspaceTarget =
 export type WorkspaceRestoreStatus = 'idle' | 'restoring' | 'restored' | 'unavailable';
 
 interface WorkspaceRestoreStore {
-  version: 5;
+  version: 6;
   agentConversation: AgentConversationRestoreState;
   desiredTarget: PersistedWorkspaceTarget | null;
   restoreStatus: WorkspaceRestoreStatus;
@@ -41,7 +43,7 @@ const EMPTY_AGENT_CONVERSATION_RESTORE: AgentConversationRestoreState = {
 export const useWorkspaceRestoreStore = create<WorkspaceRestoreStore>()(
   persist(
     (set) => ({
-      version: 5,
+      version: 6,
       agentConversation: EMPTY_AGENT_CONVERSATION_RESTORE,
       desiredTarget: null,
       restoreStatus: 'idle',
@@ -85,17 +87,18 @@ export const useWorkspaceRestoreStore = create<WorkspaceRestoreStore>()(
         agentConversation: state.agentConversation,
         desiredTarget: state.desiredTarget,
       }),
-      version: 5,
+      version: 6,
       migrate: (persisted) => {
         const state = persisted as Partial<WorkspaceRestoreStore> | undefined;
         const desiredTarget = state?.desiredTarget;
         return {
           ...state,
-          version: 5 as const,
+          version: 6 as const,
           agentConversation: state?.agentConversation ?? EMPTY_AGENT_CONVERSATION_RESTORE,
           desiredTarget: desiredTarget?.kind === 'external'
             || desiredTarget?.kind === 'media'
             || desiredTarget?.kind === 'agent-conversation'
+            || desiredTarget?.kind === 'document-list'
               ? desiredTarget : null,
           restoreStatus: 'idle' as const,
         };

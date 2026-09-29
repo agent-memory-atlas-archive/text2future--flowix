@@ -24,7 +24,7 @@ import {
 } from '@features/memo/public/workspace-api';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
 import { EMPTY_WORK_COLUMN_TARGET } from '@features/workspace/store/work-column-target';
-import type { WorkColumnTarget } from '@features/workspace/store/work-column-target';
+import type { DocumentListTarget, WorkColumnTarget } from '@features/workspace/store/work-column-target';
 import {
   useWorkspaceFocusStore,
   type WorkspaceHostId,
@@ -155,7 +155,9 @@ function commitNavigation(
         historyEntryFromWorkColumnTarget(target),
       );
     }
-    const desiredTarget: PersistedWorkspaceTarget | null = target.kind === 'external' && target.path
+    const desiredTarget: PersistedWorkspaceTarget | null = target.kind === 'document-list'
+      ? target
+      : target.kind === 'external' && target.path
         ? { kind: 'external', path: canonicalPath(target.path), scopePath: target.scopePath }
         : target.kind === 'media'
           ? {
@@ -165,12 +167,21 @@ function commitNavigation(
               notebookPath: target.notebookPath ? canonicalPath(target.notebookPath) : null,
               resourceKind: target.resourceKind,
             }
-        : target.kind === 'agent-conversation'
-          ? { kind: 'agent-conversation', instanceId: target.instanceId }
-          : null;
+          : target.kind === 'agent-conversation'
+            ? { kind: 'agent-conversation', instanceId: target.instanceId }
+            : null;
     useWorkspaceRestoreStore.getState().setDesiredTarget(desiredTarget);
   }
   return committed;
+}
+
+/** Open a folder/filter list as a first-class work-column history destination. */
+export function openDocumentListTarget(
+  target: DocumentListTarget,
+  options?: { history?: 'push' | 'skip' },
+): void {
+  const requestId = beginNavigation(target, null, false, false);
+  commitNavigation(requestId, target, options?.history ?? 'push');
 }
 
 export function captureWorkspaceRestoreTarget(): PersistedWorkspaceTarget | null {
@@ -197,6 +208,12 @@ export async function restoreMediaWorkspace(
     resourceKind: restored.resourceKind,
     history: 'skip',
   });
+}
+
+export function restoreDocumentListWorkspace(
+  restored: DocumentListTarget,
+): void {
+  openDocumentListTarget(restored, { history: 'skip' });
 }
 
 function isCurrentNavigation(requestId: number): boolean {
@@ -268,6 +285,14 @@ export function historyEntryFromWorkColumnTarget(
   target: WorkColumnTarget,
 ): DocumentHistoryEntry | null {
   switch (target.kind) {
+    case 'document-list':
+      return {
+        kind: 'document-list',
+        displayId: target.displayId,
+        scope: target.scope,
+        filters: target.filters,
+        openedAt: Date.now(),
+      };
     case 'external': {
       if (!target.path) return null;
       return {

@@ -47,6 +47,7 @@ export interface DocTreeItem {
 
 export interface NotebookViewPreferences {
   hiddenListFolders: string[];
+  defaultCreateFolder: string | null;
 }
 
 export const files = {

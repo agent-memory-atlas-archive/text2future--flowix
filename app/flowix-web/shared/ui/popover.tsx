@@ -7,6 +7,7 @@ interface PopoverContextValue {
 	open: boolean;
 	setOpen: (open: boolean) => void;
 	triggerRef: React.RefObject<HTMLElement | null>;
+	anchorRect: DOMRect | null;
 }
 
 const PopoverContext = React.createContext<PopoverContextValue | null>(null);
@@ -23,11 +24,14 @@ interface PopoverProps {
 	children: React.ReactNode;
 	open?: boolean;
 	onOpenChange?: (open: boolean) => void;
+	anchorElement?: HTMLElement | null;
+	anchorRect?: DOMRect | null;
 }
 
-function Popover({ children, open: controlledOpen, onOpenChange }: PopoverProps) {
+function Popover({ children, open: controlledOpen, onOpenChange, anchorElement = null, anchorRect = null }: PopoverProps) {
 	const [uncontrolledOpen, setUncontrolledOpen] = React.useState(false);
 	const triggerRef = React.useRef<HTMLElement>(null);
+	if (anchorElement) triggerRef.current = anchorElement;
 	const open = controlledOpen !== undefined ? controlledOpen : uncontrolledOpen;
 	const setOpen = React.useCallback(
 		(newOpen: boolean) => {
@@ -40,7 +44,7 @@ function Popover({ children, open: controlledOpen, onOpenChange }: PopoverProps)
 	);
 
 	return (
-		<PopoverContext.Provider value={{ open, setOpen, triggerRef }}>
+		<PopoverContext.Provider value={{ open, setOpen, triggerRef, anchorRect }}>
 			<div className="relative">{children}</div>
 		</PopoverContext.Provider>
 	);
@@ -123,7 +127,7 @@ function PopoverContent({
 	className,
 	onExitComplete,
 }: PopoverContentProps) {
-	const { open, setOpen, triggerRef } = usePopoverContext();
+	const { open, setOpen, triggerRef, anchorRect } = usePopoverContext();
 	const contentRef = React.useRef<HTMLDivElement>(null);
 	const [position, setPosition] = React.useState({ top: 0, left: 0 });
 	const [present, setPresent] = React.useState(open);
@@ -164,23 +168,30 @@ function PopoverContent({
 
 	// Position the invisible starting frame before paint, then enter next frame.
 	React.useLayoutEffect(() => {
-		if (!open || !present || !triggerRef.current) return;
+			if (!open || !present || (!anchorRect && !triggerRef.current)) return;
 
 		let rafId: number;
 		let settleTimerId: number;
 
 		const updatePosition = () => {
 			const trigger = triggerRef.current;
-			if (!trigger) return;
-			const rect = trigger.getBoundingClientRect();
+			const rect = anchorRect ?? trigger?.getBoundingClientRect();
+			if (!rect) return;
 			const width = contentRef.current?.offsetWidth ?? 200;
 			const height = contentRef.current?.offsetHeight ?? 200;
 
 			let topPos: number;
 			let leftPos: number;
 
-			if (side === "right" || side === "left") {
-				leftPos = side === "right" ? rect.right + sideOffset : rect.left - width - sideOffset;
+			let resolvedSide = side;
+			if (side === 'right' && rect.right + width + sideOffset > window.innerWidth - 4 && rect.left - width - sideOffset >= 4) {
+				resolvedSide = 'left';
+			} else if (side === 'left' && rect.left - width - sideOffset < 4 && rect.right + width + sideOffset <= window.innerWidth - 4) {
+				resolvedSide = 'right';
+			}
+
+			if (resolvedSide === "right" || resolvedSide === "left") {
+				leftPos = resolvedSide === "right" ? rect.right + sideOffset : rect.left - width - sideOffset;
 				topPos = align === "center"
 					? rect.top + rect.height / 2 - height / 2
 					: align === "end"
@@ -219,7 +230,7 @@ function PopoverContent({
 			window.removeEventListener('scroll', updatePosition, true);
 			window.removeEventListener('resize', updatePosition);
 		};
-	}, [open, present, side, sideOffset, align]);
+	}, [open, present, side, sideOffset, align, anchorRect]);
 
 	// Close on pointerdown outside. Capture matches DropdownMenu's behavior and
 	// makes the close reliable when an ancestor stops propagation (for example
@@ -231,7 +242,8 @@ function PopoverContent({
 			const target = e.target as Node;
 			if (
 				contentRef.current?.contains(target) ||
-				triggerRef.current?.contains(target)
+				(!anchorRect && triggerRef.current?.contains(target)) ||
+				(target instanceof Element && target.closest('[data-flowix-surface="select"]'))
 			) {
 				return;
 			}
@@ -243,7 +255,7 @@ function PopoverContent({
 
 		document.addEventListener("pointerdown", handlePointerDownOutside, true);
 		return () => document.removeEventListener("pointerdown", handlePointerDownOutside, true);
-	}, [open, setOpen]);
+	}, [open, setOpen, anchorRect]);
 
 	// Close on escape
 	React.useEffect(() => {
@@ -277,7 +289,7 @@ function PopoverContent({
 				className
 			)}
 				data-motion-state={motionState}
-				data-side={side}
+			data-side={side}
 				data-flowix-surface="popover"
 			style={{
 				top: position.top,

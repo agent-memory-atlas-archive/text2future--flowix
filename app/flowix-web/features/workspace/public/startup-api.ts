@@ -2,6 +2,7 @@ import { restoreAgentConversationWorkspace as restore } from '@features/workspac
 import { useWorkspaceRestoreStore } from '@features/workspace/store/workspace-restore-store';
 export {
   captureWorkspaceRestoreTarget,
+  restoreDocumentListWorkspace,
   restoreExternalDocumentWorkspace,
   restoreMediaWorkspace,
 } from '@features/workspace/use-cases/workspace-navigation';

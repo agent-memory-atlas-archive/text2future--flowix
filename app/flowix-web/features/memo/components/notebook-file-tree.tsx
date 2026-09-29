@@ -15,8 +15,18 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import { ArrowDown, ArrowUp, ChevronRight, File, ListFilter, MoreHorizontal, Plus } from 'lucide-react';
-import { FolderPlus } from 'lucide-react';
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronRight,
+  File,
+  FileCog,
+  ListFilter,
+  ListPlus,
+  MoreHorizontal,
+  Settings2,
+  FolderPlus,
+} from 'lucide-react';
 
 import {
   canonicalDirectoryPath,
@@ -36,6 +46,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@shared/ui/dropdown-menu';
 import { FileTypeIcon } from '@features/memo/components/file-type-icon';
@@ -43,7 +54,8 @@ import { useMemoStore } from '@features/memo/store/memo-store';
 import { memoRepository } from '@features/memo/services/memo-repository';
 import { EMPTY_CUSTOM_FILTERS, useCustomFilterStore } from '@features/memo/store/custom-filter-store';
 import { updateNoteLinksAfterMove } from '@features/memo/services/note-link-rewriter';
-import { replaceExternalDocumentPath } from '@features/workspace/use-cases/workspace-navigation';
+import { openDocumentListTarget, replaceExternalDocumentPath } from '@features/workspace/use-cases/workspace-navigation';
+import { createDocumentListTarget } from '@features/workspace/store/work-column-target';
 import { findFileDisplayIdentity } from '@/lib/file-display-registry';
 import {
   elementFromExternalDropPosition,
@@ -59,7 +71,13 @@ import {
   type FolderTreeController,
 } from '@features/memo/components/use-folder-tree';
 import { NotebookTreeRow } from '@features/memo/components/notebook-tree-row';
-import { files, system, type DocTreeItem, type DocTreeResourceKind } from '@platform/tauri/client';
+import {
+  files,
+  system,
+  windows,
+  type DocTreeItem,
+  type DocTreeResourceKind,
+} from '@platform/tauri/client';
 import { resourceKindFromPath } from '@features/editor/code-file';
 import { useDynamicVirtualList } from '@features/memo/components/memo-list/use-dynamic-virtual-list';
 import {
@@ -84,7 +102,8 @@ const logger = createLogger('notebook-file-tree');
 const FOLDER_CARET_CENTER_OFFSET = 12;
 type NotebookTreeSection = 'agents' | 'pinned' | 'views' | 'files';
 
-const DEFAULT_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'files', 'views'];
+const DEFAULT_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'views', 'files'];
+const PREVIOUS_DEFAULT_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'files', 'views'];
 
 function normalizeTreeSectionOrder(value: unknown): NotebookTreeSection[] {
   if (!Array.isArray(value)) return DEFAULT_TREE_SECTION_ORDER;
@@ -92,7 +111,11 @@ function normalizeTreeSectionOrder(value: unknown): NotebookTreeSection[] {
     (item === 'agents' || item === 'pinned' || item === 'views' || item === 'files')
     && items.indexOf(item) === index
   ));
-  if (order.length === 4) return order;
+  if (order.length === 4) {
+    return order.every((item, index) => item === PREVIOUS_DEFAULT_TREE_SECTION_ORDER[index])
+      ? DEFAULT_TREE_SECTION_ORDER
+      : order;
+  }
   const legacyOrder = order.filter((item): item is 'files' | 'views' => item === 'files' || item === 'views');
   if (legacyOrder.length === 2) return ['agents', 'pinned', ...legacyOrder];
   return [...DEFAULT_TREE_SECTION_ORDER.filter((item) => !order.includes(item)), ...order];
@@ -103,11 +126,15 @@ function TreeSectionMoreMenu({
   canMoveDown,
   onMoveUp,
   onMoveDown,
+  onCreateFolder,
+  onCreateNote,
 }: {
   canMoveUp: boolean;
   canMoveDown: boolean;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  onCreateFolder?: () => void;
+  onCreateNote?: () => void;
 }) {
   const { t } = useI18n();
   const itemClassName = 'group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)] disabled:cursor-not-allowed disabled:opacity-40';
@@ -116,7 +143,7 @@ function TreeSectionMoreMenu({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] opacity-0 transition-[color,opacity] hover:text-[var(--foreground)] focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100"
+          className="notebook-file-tree__section-more-trigger flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] opacity-0 transition-[color,opacity] hover:text-[var(--foreground)] focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100"
           aria-label={t('memo.fileTree.moreSectionActions')}
           title={t('memo.fileTree.moreSectionActions')}
         >
@@ -131,6 +158,27 @@ function TreeSectionMoreMenu({
         <DropdownMenuItem disabled={!canMoveDown} onClick={onMoveDown} className={itemClassName}>
           <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
           {t('memo.fileTree.moveSectionDown')}
+        </DropdownMenuItem>
+        {onCreateNote && (
+          <DropdownMenuItem onClick={onCreateNote} className={itemClassName}>
+            <File className="h-3.5 w-3.5" aria-hidden="true" />
+            {t('memo.fileTree.newNote')}
+          </DropdownMenuItem>
+        )}
+        {onCreateFolder && (
+          <DropdownMenuItem onClick={onCreateFolder} className={itemClassName}>
+            <FolderPlus className="h-3.5 w-3.5" aria-hidden="true" />
+            {t('memo.fileTree.newFolder')}
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => { void windows.openPreferences('general'); }} className={itemClassName}>
+          <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />
+          {t('memo.fileTree.fileDisplaySettings')}
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={() => { void windows.openPreferences('noteSettings'); }} className={itemClassName}>
+          <FileCog className="h-3.5 w-3.5" aria-hidden="true" />
+          {t('memo.fileTree.noteProperties')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -215,6 +263,7 @@ interface NotebookFileTreeProps {
   onDeleteResource?: (item: DocTreeItem) => Promise<void>;
   hiddenListFolders?: string[];
   onToggleListFolderVisibility?: (folderPath: string) => void;
+  onSetDefaultCreateFolder?: (folderPath: string) => void;
 }
 
 interface PointerNoteDrag {
@@ -369,6 +418,7 @@ export function NotebookFileTree({
   onDeleteResource,
   hiddenListFolders = [],
   onToggleListFolderVisibility,
+  onSetDefaultCreateFolder,
 }: NotebookFileTreeProps) {
   const { t } = useI18n();
   const selectedFolderPath = useWorkColumnStore((state) => state.navigation.target.kind === 'document-list' ? state.navigation.target.scope.path : null);
@@ -1067,6 +1117,7 @@ export function NotebookFileTree({
             : undefined}
           hiddenFromList={item.type === 'folder' && hiddenListFolders.includes(relativeFolderPath(notebookPath, item.fullPath))}
           onToggleListVisibility={item.type === 'folder' ? onToggleListFolderVisibility : undefined}
+          onSetDefaultFolder={item.type === 'folder' ? onSetDefaultCreateFolder : undefined}
           onKeepAliveChange={handleRowKeepAliveChange}
           onPointerDown={handlePointerDownItem}
         />
@@ -1409,7 +1460,7 @@ export function NotebookFileTree({
             style={{ order: sectionOrder.indexOf('pinned') + 1 }}
           >
               <div
-                className="group mb-0.5 flex h-7 items-center rounded-lg px-1.5 transition-colors hover:bg-[var(--muted)]"
+                className="notebook-file-tree__section-header group mb-0.5 flex h-7 items-center rounded-lg px-1.5 transition-colors hover:bg-[var(--muted)]"
                 style={{
                   marginLeft: TREE_EDGE_GUTTER,
                   width: `calc(100% - ${TREE_EDGE_GUTTER * 2}px)`,
@@ -1457,14 +1508,14 @@ export function NotebookFileTree({
                 />
               ))}
           </section>
-          <section
+          {customFilters.length > 0 && <section
             className="pb-3"
             aria-label={t('memo.fileTree.viewsSectionTitle')}
             data-notebook-views-section="true"
             style={{ order: sectionOrder.indexOf('views') + 1 }}
           >
             <div
-              className="group mb-0.5 flex h-7 items-center rounded-lg px-1.5 transition-colors hover:bg-[var(--muted)]"
+              className="notebook-file-tree__section-header group mb-0.5 flex h-7 items-center rounded-lg px-1.5 transition-colors hover:bg-[var(--muted)]"
               style={{
                 marginLeft: TREE_EDGE_GUTTER,
                 width: `calc(100% - ${TREE_EDGE_GUTTER * 2}px)`,
@@ -1486,11 +1537,11 @@ export function NotebookFileTree({
                   className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] opacity-0 transition-[color,opacity] hover:text-[var(--foreground)] focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100"
                   aria-label={t('memo.customFilter.button')}
                   title={t('memo.customFilter.button')}
-                  onClick={() => window.dispatchEvent(new CustomEvent('flowix:open-custom-filter-create', {
-                    detail: { notebookId },
+                  onClick={(event) => window.dispatchEvent(new CustomEvent('flowix:open-custom-filter-create', {
+                    detail: { notebookId, anchorElement: event.currentTarget },
                   }))}
                 >
-                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                  <ListPlus className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
                 <TreeSectionMoreMenu
                   canMoveUp={sectionOrder.indexOf('views') > 0}
@@ -1513,25 +1564,18 @@ export function NotebookFileTree({
                   width: `calc(100% - ${TREE_EDGE_GUTTER * 2}px)`,
                 }}
                 onClick={() => {
-                  const target = {
-                    kind: 'document-list' as const,
-                    scope: {
-                      kind: 'folder' as const,
-                      path: notebookPath,
-                      notebookPath,
-                      notebookId,
-                    },
-                    filters: { customFilterId: filter.id },
-                  };
-                  const store = useWorkColumnStore.getState();
-                  store.commitNavigation(store.beginNavigation(target, null, false, false), target);
+                  const target = createDocumentListTarget(
+                    { kind: 'folder', path: notebookPath, notebookPath, notebookId },
+                    { customFilterId: filter.id },
+                  );
+                  openDocumentListTarget(target);
                 }}
               >
                 <ListFilter className="mr-1.5 h-[15px] w-[15px] shrink-0 text-[var(--muted-foreground)]" aria-hidden="true" />
                 <span className="min-w-0 flex-1 truncate text-left">{filter.name}</span>
               </button>
             ))}
-          </section>
+          </section>}
           <section
             className="flex min-h-0 flex-col pb-3"
             aria-label={t('memo.fileTree.sectionTitle')}
@@ -1544,7 +1588,7 @@ export function NotebookFileTree({
           <div
             ref={treeHeaderRef}
             className={cn(
-              'group mb-0.5 flex h-7 shrink-0 items-center gap-1 rounded-lg px-1.5 transition-colors duration-150 hover:bg-[var(--muted)]',
+              'notebook-file-tree__section-header group mb-0.5 flex h-7 shrink-0 items-center gap-1 rounded-lg px-1.5 transition-colors duration-150 hover:bg-[var(--muted)]',
               isRootDropTarget && 'bg-[color-mix(in_oklch,var(--brand)_10%,transparent)]',
             )}
             style={{
@@ -1563,22 +1607,24 @@ export function NotebookFileTree({
               <ChevronRight className={cn('h-3.5 w-3.5 opacity-0 transition-[opacity,transform] group-hover:opacity-100 group-focus-within:opacity-100', !filesCollapsed && 'rotate-90')} />
             </button>
             <div className="ml-auto flex items-center">
-              {onCreateFolder && (
-                <button
-                  type="button"
-                  onClick={onCreateFolder}
-                  aria-label={t('memo.fileTree.newFolder')}
-                  title={t('memo.fileTree.newFolder')}
-                  className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] opacity-0 transition-[color,opacity] hover:text-[var(--foreground)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--brand)] group-hover:opacity-100"
-                >
-                  <FolderPlus className="h-3.5 w-3.5" aria-hidden="true" />
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={(event) => window.dispatchEvent(new CustomEvent('flowix:open-custom-filter-create', {
+                  detail: { notebookId, anchorElement: event.currentTarget },
+                }))}
+                aria-label={t('memo.customFilter.button')}
+                title={t('memo.customFilter.button')}
+                className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] opacity-0 transition-[color,opacity] hover:text-[var(--foreground)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--brand)] group-hover:opacity-100"
+              >
+                <ListPlus className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
               <TreeSectionMoreMenu
                 canMoveUp={sectionOrder.indexOf('files') > 0}
                 canMoveDown={sectionOrder.indexOf('files') < sectionOrder.length - 1}
                 onMoveUp={() => moveTreeSection('files', -1)}
                 onMoveDown={() => moveTreeSection('files', 1)}
+                onCreateFolder={onCreateFolder}
+                onCreateNote={() => handleCreateNoteAtPath(notebookPath)}
               />
             </div>
           </div>
@@ -1706,6 +1752,15 @@ export function NotebookFileTree({
               >
                 <FolderPlus className="mr-2 h-4 w-4" aria-hidden="true" />
                 {t('memo.fileTree.newFolder')}
+              </ContextMenuItem>
+              <ContextMenuItem
+                onClick={(event) => window.dispatchEvent(new CustomEvent('flowix:open-custom-filter-create', {
+                  detail: { notebookId, anchorRect: event.currentTarget.getBoundingClientRect() },
+                }))}
+                className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left transition-colors hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
+              >
+                <ListPlus className="mr-2 h-4 w-4" aria-hidden="true" />
+                {t('memo.customFilter.title')}
               </ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>

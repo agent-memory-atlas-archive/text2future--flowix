@@ -6,6 +6,7 @@ import { Tooltip } from '@shared/ui/tooltip';
 import {
   type DocumentTitlebarProps,
   type DocumentState,
+  DocumentListTitlebarActions,
   ExternalTitlebarBadge,
   ExternalDocumentActions,
   MediaActions,
@@ -40,6 +41,7 @@ export function DocumentTitlebarMac({
     onNavigateForward,
     visible: showNavigationButtons = true,
     title: navigationTitle,
+    documentListActions,
   },
   contentCapabilities: {
     copyFullText: canCopyFullText,
@@ -131,6 +133,7 @@ export function DocumentTitlebarMac({
         data-tauri-drag-region
         className="ml-auto flex shrink-0 items-center gap-3 pr-3"
       >
+        {documentListActions && <DocumentListTitlebarActions actions={documentListActions} />}
         <AgentThreadCardFullscreenExitButton className="agent-thread-card-fullscreen-exit-btn" />
         {documentState === 'external' && (
           <ExternalTitlebarBadge />

@@ -259,6 +259,7 @@ function SelectContent({
 				fitViewport && "overflow-y-auto overscroll-contain [scrollbar-gutter:stable]",
 				className
 			)}
+			data-flowix-surface="select"
 		>
 			{children}
 		</div>,

@@ -138,6 +138,7 @@ export interface WebSurface extends SurfaceBase {
 
 export interface DocumentListSurface extends SurfaceBase {
   kind: 'document-list';
+  displayId: string;
   folderPath: string;
   notebookPath: string;
   notebookId: string | null;

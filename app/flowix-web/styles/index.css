@@ -201,6 +201,17 @@
 	width: 100%;
 }
 
+/* Keep section headers in their hover state while the reorder menu is open. */
+.notebook-file-tree__section-header:has(
+	.notebook-file-tree__section-more-trigger[data-state='open']
+) {
+	background: var(--muted);
+}
+
+.notebook-file-tree__section-more-trigger[data-state='open'] {
+	opacity: 1;
+}
+
 /* 资料文件树的子树展开/收起: 用 grid 行高从 0fr 过渡到 1fr。
  * 收起时由渲染层卸载子节点，避免隐藏分支继续参与 React 更新和布局。 */
 .folder-file-tree__subtree {

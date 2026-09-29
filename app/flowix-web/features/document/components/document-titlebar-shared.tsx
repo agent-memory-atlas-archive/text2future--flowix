@@ -89,6 +89,10 @@ export interface DocumentTitlebarProps {
     onNavigateForward: () => void;
     visible?: boolean;
     title?: string | null;
+    documentListActions?: {
+      onCreate: () => void;
+      onEditFilter?: (anchor: HTMLButtonElement) => void;
+    };
   };
   contentCapabilities: {
     copyFullText: boolean;
@@ -111,6 +115,34 @@ export interface DocumentTitlebarProps {
     onRevealInFileManager: () => void;
     onRequestDelete: () => void;
   };
+}
+
+export function DocumentListTitlebarActions({
+  actions,
+}: {
+  actions: NonNullable<DocumentTitlebarProps['navigation']['documentListActions']>;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      {actions.onEditFilter && (
+        <button
+          type="button"
+          onClick={(event) => actions.onEditFilter?.(event.currentTarget)}
+          className="h-7 rounded-lg border border-[var(--border)] px-2.5 text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] [-webkit-app-region:no-drag]"
+        >
+          {t('memo.customFilter.edit')}
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={actions.onCreate}
+        className="h-7 rounded-lg bg-[var(--brand)] px-2.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 [-webkit-app-region:no-drag]"
+      >
+        {t('memo.documentList.new')}
+      </button>
+    </div>
+  );
 }
 
 const AGENT_THREAD_CARD_FULLSCREEN_CHANGE_EVENT =

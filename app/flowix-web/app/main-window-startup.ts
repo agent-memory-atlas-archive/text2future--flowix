@@ -5,6 +5,7 @@ import {
 import { waitForInitialDocumentLoad } from '@features/document/public/startup-api';
 import {
   captureWorkspaceRestoreTarget,
+  restoreDocumentListWorkspace,
   restoreAgentConversationWorkspace,
   restoreExternalDocumentWorkspace,
   restoreMediaWorkspace,
@@ -84,6 +85,10 @@ async function restoreDesiredTarget(target: PersistedWorkspaceTarget | null): Pr
   }
   if (target.kind === 'media') {
     await restoreMediaWorkspace(target);
+    return;
+  }
+  if (target.kind === 'document-list') {
+    restoreDocumentListWorkspace(target);
     return;
   }
   await restoreAgentConversationWorkspace();

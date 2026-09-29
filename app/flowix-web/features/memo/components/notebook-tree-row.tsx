@@ -10,8 +10,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import { FilePlusIcon, FileTextIcon, FolderPlusIcon, LinkIcon, PencilSimpleIcon, TrashSimpleIcon } from '@phosphor-icons/react';
-import { ChevronRight, Eye, EyeOff, FolderPlus, MoreHorizontal, Plus } from 'lucide-react';
+import { FileTextIcon, LinkIcon, PencilSimpleIcon, TrashSimpleIcon } from '@phosphor-icons/react';
+import { ChevronRight, Eye, EyeOff, File, FolderPlus, MoreHorizontal } from 'lucide-react';
 
 import { toast } from '@/lib/toast';
 import { cn, displayTitleFromFilename } from '@/lib/utils';
@@ -70,6 +70,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   onDeleteResource,
   hiddenFromList,
   onToggleListVisibility,
+  onSetDefaultFolder,
   onPointerDown,
   onKeyDown,
   onFocus,
@@ -97,6 +98,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   onDeleteResource?: (item: DocTreeItem) => Promise<void>;
   hiddenFromList?: boolean;
   onToggleListVisibility?: (folderPath: string) => void;
+  onSetDefaultFolder?: (folderPath: string) => void;
   onKeyDown?: (path: string, event: ReactKeyboardEvent<HTMLDivElement>) => void;
   onFocus?: (path: string) => void;
   onKeepAliveChange?: (path: string, active: boolean) => void;
@@ -291,6 +293,13 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
       );
     }
 
+    if (isFolder && onSetDefaultFolder) {
+      items.push({ item: 'Separator' }, {
+        text: t('memo.fileTree.setDefaultCreateFolder'),
+        action: () => onSetDefaultFolder(item.fullPath),
+      });
+    }
+
     if (isFolder) {
       if (onDeleteFolder) {
         items.push({ text: t('memo.fileTree.copyLink'), action: () => void navigator.clipboard.writeText(item.fullPath) });
@@ -449,7 +458,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
               'relative flex h-[18px] w-[18px] shrink-0 items-center justify-center',
               isFolder
                 ? (isInHiddenDirectory ? 'text-[var(--muted-foreground)]' : 'text-[var(--brand)]')
-                : 'text-[color-mix(in_oklch,var(--foreground)_90%,white_10%)]',
+                : 'text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)]',
               isInHiddenDirectory && 'opacity-80',
             )}
           >
@@ -509,7 +518,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
               )} />
             </button>
           ) : (
-            <span className="relative flex h-[18px] w-[18px] shrink-0 items-center justify-center text-[color-mix(in_oklch,var(--foreground)_90%,white_10%)]">
+            <span className={'relative flex h-[18px] w-[18px] shrink-0 items-center justify-center text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)]'}>
               {noteIcon ? (
                 <img
                   src={noteIcon.src}
@@ -549,43 +558,6 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
               ? item.name
               : !isNote ? item.name : displayTitleFromFilename(item.name)}
           </span>
-          {isFolder && (
-            <span className={cn(
-              'pointer-events-none ml-1 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100',
-              contextMenuOpen && 'pointer-events-auto opacity-100',
-            )}>
-              <button
-                type="button"
-                aria-label={t('memo.fileTree.newNote')}
-                title={t('memo.fileTree.newNote')}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onCreateNote(actionParentPath);
-                }}
-                onDoubleClick={(event) => event.stopPropagation()}
-                onKeyDown={(event) => event.stopPropagation()}
-                className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--brand)]"
-              >
-                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
-              <button
-                type="button"
-                aria-label={t('memo.fileTree.newFolder')}
-                title={t('memo.fileTree.newFolder')}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onCreateFolder(actionParentPath);
-                }}
-                onDoubleClick={(event) => event.stopPropagation()}
-                onKeyDown={(event) => event.stopPropagation()}
-                className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--brand)]"
-              >
-                <FolderPlus className="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
-            </span>
-          )}
         </>
       )}
       {!renaming && moveStatus && (
@@ -610,11 +582,11 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
       </ContextMenuTrigger>
       <ContextMenuContent className={TREE_MENU_CLASS}>
         <ContextMenuItem onClick={() => onCreateNote(actionParentPath)} className={TREE_MENU_ITEM_CLASS}>
-          <FilePlusIcon className="mr-2 h-4 w-4" />
+          <File className="mr-2 h-4 w-4" aria-hidden="true" />
           {t('memo.fileTree.newNote')}
         </ContextMenuItem>
         <ContextMenuItem onClick={() => onCreateFolder(actionParentPath)} className={TREE_MENU_ITEM_CLASS}>
-          <FolderPlusIcon className="mr-2 h-4 w-4" />
+          <FolderPlus className="mr-2 h-4 w-4" aria-hidden="true" />
           {t('memo.fileTree.newFolder')}
         </ContextMenuItem>
         <ContextMenuItem
@@ -672,6 +644,15 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
                 {t('memo.fileTree.delete')}
               </ContextMenuItem>
             ) : null}
+          </>
+        )}
+        {isFolder && onSetDefaultFolder && (
+          <>
+            <div role="separator" aria-hidden="true" className={TREE_MENU_DIVIDER_CLASS} />
+            <ContextMenuItem onClick={() => onSetDefaultFolder(item.fullPath)} className={TREE_MENU_ITEM_CLASS}>
+              <FolderPlus className="mr-2 h-4 w-4" aria-hidden="true" />
+              {t('memo.fileTree.setDefaultCreateFolder')}
+            </ContextMenuItem>
           </>
         )}
         {!isFolder && (
