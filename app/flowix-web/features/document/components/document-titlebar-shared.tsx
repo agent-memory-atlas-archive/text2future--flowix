@@ -1,13 +1,11 @@
 'use client';
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronRight, Code2, Ellipsis, Loader2, Palette, Type } from 'lucide-react';
+import { Check, ChevronRight, Ellipsis, Loader2, Palette } from 'lucide-react';
 import {
   LinkSimpleIcon,
   CopyIcon,
   FolderOpenIcon,
-  PushPinIcon,
-  PushPinSlashIcon,
   FileMdIcon,
   FileDocIcon,
   FilePdfIcon,
@@ -32,19 +30,24 @@ import {
 import {
   MEMO_COLORS,
   MEMO_COLOR_HEX,
+  useMemoStore,
 } from '@features/memo/store/memo-store';
-import type { MemoColor, MemoItem } from '@/types/memo-item';
-import type { DocumentEditorMode } from '@features/document/store/document-editor-view-store';
+import { setDocumentProperties } from '@features/document/public/path-properties';
+import { extractFrontmatter } from '@features/document/properties/frontmatter-model';
+import type { MemoColor } from '@/types/memo-item';
 import { EditorFontSwitcher, useEditorFontSwitch } from '@features/document/components/editor-font-switcher';
 import {
+  applyLoadedDocumentContent,
   flushDocumentPath,
+  saveDocumentPath,
   getDocumentBuffer,
 } from '@features/document/store/document-session-service';
 import { useDocumentStore } from '@features/document/store/document-store';
-import type { DocumentIdentity } from '@features/document/store/document-identity';
-import { memos as memosClient, product, windows, type MemoVersionMeta } from '@platform/tauri/client';
+import { documentIdentityFromFile } from '@features/document/store/document-identity';
+import { memos as memosClient, product, type MemoVersionMeta, type PathVersionMeta } from '@platform/tauri/client';
+
+type VersionDisplay = MemoVersionMeta | PathVersionMeta;
 import { toast } from '@/lib/toast';
-import { replaceActiveMemoPath } from '@features/workspace/use-cases/workspace-navigation';
 import type { WorkspaceHostId } from '@features/workspace/store/workspace-focus-store';
 import { useI18n, translate, type AppLanguage, type I18nKey, type I18nParams } from '@/lib/i18n';
 import { createLogger } from '@/lib/logger';
@@ -72,7 +75,6 @@ export interface DocumentTitlebarProps {
   /** Surface-specific titlebar skin for non-editable document-like views. */
   surfaceChrome?: 'document' | 'media';
   document: {
-    currentMemo: MemoItem | null;
     externalFilePath?: string | null;
   };
   sidebar: {
@@ -86,6 +88,7 @@ export interface DocumentTitlebarProps {
     onNavigateBack: () => void;
     onNavigateForward: () => void;
     visible?: boolean;
+    title?: string | null;
   };
   contentCapabilities: {
     copyFullText: boolean;
@@ -97,16 +100,11 @@ export interface DocumentTitlebarProps {
   actions: {
     onCopyLink: () => void;
     onCopyFullText: () => void;
-    onTogglePin: () => void;
     onExportMarkdown: () => void;
     onSaveAsTemplate: () => void;
     onExportWord: () => void;
     onExportPdf: () => void;
-    onRequestDeleteMemo: () => void;
     onDeleteExternalFile: () => void | Promise<void>;
-    onColorsChange?: (next: MemoColor[]) => void;
-    editorMode: DocumentEditorMode;
-    onToggleEditorMode: () => void;
   };
   mediaActions?: {
     onCopyLink: () => void | Promise<void>;
@@ -137,7 +135,7 @@ interface AgentThreadCardFullscreenInfo {
  *   - 'external': an external file is open → path display in the middle,
  *                 "保存为笔记" button on the right
  */
-export type DocumentState = 'empty' | 'memo' | 'external';
+export type DocumentState = 'empty' | 'external';
 
 // =====================================================================
 // External document titlebar badge — shown next to the path in the
@@ -147,6 +145,8 @@ export type DocumentState = 'empty' | 'memo' | 'external';
 
 export function ExternalTitlebarBadge() {
   const { t } = useI18n();
+  const indexable = useDocumentStore((state) => state.activeExternalSession?.indexable ?? false);
+  if (indexable) return null;
   return (
     <span
       className="shrink-0 whitespace-nowrap pl-3 text-xs text-[var(--muted-foreground)]"
@@ -168,8 +168,10 @@ export function ExternalDocumentActions({
   onSaveAsTemplate,
   onDeleteExternalFile,
   canCopyFullText,
+  canEditColors,
   canExportContent,
   canSaveAsTemplate,
+  canViewVersionHistory,
 }: {
   filePath: string;
   iconButtonClass: string;
@@ -181,15 +183,93 @@ export function ExternalDocumentActions({
   onSaveAsTemplate: () => void;
   onDeleteExternalFile: () => void | Promise<void>;
   canCopyFullText: boolean;
+  canEditColors: boolean;
   canExportContent: boolean;
   canSaveAsTemplate: boolean;
+  canViewVersionHistory: boolean;
 }) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
+  const indexable = useDocumentStore((state) => state.activeExternalSession?.indexable ?? false);
+  const session = useDocumentStore((state) => state.activeExternalSession);
+  const pathNote = useMemoStore((state) => state.pathNotes.find((note) =>
+    note.notebookId === session?.notebookId && note.relativePath === session?.relativePath));
+  const [fileColors, setFileColors] = useState<MemoColor[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmVersion, setConfirmVersion] = useState<VersionDisplay | null>(null);
+  const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null);
+  const [versionRefreshKey, setVersionRefreshKey] = useState(0);
   const fontSwitch = useEditorFontSwitch();
   const itemClass = 'group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]';
 
+  const changePathColors = async (colors: MemoColor[]) => {
+    try {
+      if (!await setDocumentProperties(filePath, { flowix_colors: colors })) {
+        toast.error(t('media.properties.saveFailed'));
+        return;
+      }
+      useMemoStore.setState((state) => ({
+        pathNotes: state.pathNotes.map((note) => note.notebookId === session?.notebookId
+          && note.relativePath === session?.relativePath ? { ...note, colors } : note),
+      }));
+      setFileColors(colors);
+      useMemoStore.getState().triggerRefresh();
+    } catch (error) {
+      logger.error('save path note colors failed', { error, filePath });
+      toast.error(t('media.properties.saveFailed'));
+    }
+  };
+
+  useEffect(() => {
+    if (!indexable) return;
+    if (pathNote) {
+      setFileColors(pathNote.colors);
+      return;
+    }
+    let cancelled = false;
+    void memosClient.readDocument(filePath).then((content) => {
+      if (cancelled || content === null) return;
+      const colors = extractFrontmatter(content).data.flowix_colors;
+      setFileColors(Array.isArray(colors)
+        ? MEMO_COLORS.filter((color) => colors.includes(color))
+        : []);
+    }).catch((error) => logger.warn('read path note colors failed', { error, filePath }));
+    return () => { cancelled = true; };
+  }, [filePath, indexable, pathNote]);
+
+  const restorePathVersion = async () => {
+    if (!session?.notebookId || !session.relativePath || !confirmVersion || restoringVersionId) return;
+    const version = confirmVersion;
+    setRestoringVersionId(version.id);
+    try {
+      const session = useDocumentStore.getState().activeExternalSession;
+      if (!session?.notebookId || !session.relativePath || session.fileIdentity.path !== filePath) throw new Error('Document session changed');
+      const identity = documentIdentityFromFile(session.fileIdentity);
+      if (!await flushDocumentPath(identity, filePath, session.scopePath)) {
+        toast.error(t('document.version.saveCurrentFailed'));
+        return;
+      }
+      const expectedContent = getDocumentBuffer(identity).lastSavedContent;
+      const content = await memosClient.restorePathVersion(session.notebookId, session.relativePath, version.id, expectedContent);
+      const restored = content === null ? null : { path: filePath, content };
+      if (!restored) throw new Error('Version restore was refused');
+      applyLoadedDocumentContent(identity, restored.path, restored.content, { preservePending: false });
+      setConfirmVersion(null);
+      setVersionRefreshKey((key) => key + 1);
+      toast.success(t('document.version.restored'));
+    } catch (error) {
+      logger.error('restore path version failed', { error, filePath });
+      toast.error(t('document.version.restoreFailed'));
+    } finally {
+      setRestoringVersionId(null);
+    }
+  };
+
   return (
+    <>
+    {canEditColors && (
+      <MemoColorPicker colors={fileColors} iconButtonClass={iconButtonClass}
+        onChange={(colors) => { void changePathColors(colors); }} />
+    )}
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
@@ -245,19 +325,40 @@ export function ExternalDocumentActions({
           </>
         )}
         <div role="separator" aria-hidden="true" className="mx-2 my-1 h-px bg-[var(--border-popup)] opacity-60" />
+        {canViewVersionHistory && session?.notebookId && session.relativePath && (
+          <>
+            <DropdownMenuItem className={itemClass} onClick={() => {
+              const current = useDocumentStore.getState().activeExternalSession;
+              if (!current?.notebookId || !current.relativePath) return;
+              const identity = documentIdentityFromFile(current.fileIdentity);
+              void saveDocumentPath(identity, filePath, current.scopePath).then(async (saved) => {
+                if (!saved) return;
+                await memosClient.createPathVersion(current.notebookId!, current.relativePath!);
+                setVersionRefreshKey((key) => key + 1);
+              });
+            }}><ClockIcon className="mr-2 h-4 w-4" /> 保存归档</DropdownMenuItem>
+            <VersionHistorySubmenu
+              notebookId={session.notebookId}
+              relativePath={session.relativePath}
+              refreshKey={versionRefreshKey}
+              restoringVersionId={restoringVersionId}
+              onSelectVersion={setConfirmVersion}
+            />
+          </>
+        )}
         <DropdownMenuItem
           onClick={() => setConfirmDelete(true)}
           className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-transparent hover:text-[var(--destructive)]"
         >
-          <TrashSimpleIcon className="mr-2 h-4 w-4" /> {t('document.external.deleteFile')}
+          <TrashSimpleIcon className="mr-2 h-4 w-4" /> {t(indexable ? 'memo.delete.confirm' : 'document.external.deleteFile')}
         </DropdownMenuItem>
       </DropdownMenuContent>
       <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t('document.external.deleteFileTitle')}</DialogTitle>
+            <DialogTitle>{t(indexable ? 'memo.delete.title' : 'document.external.deleteFileTitle')}</DialogTitle>
             <DialogDescription>
-              {t('document.external.deleteFileDescription', { name: filePath.split(/[\\/]/).pop() ?? filePath })}
+              {t(indexable ? 'memo.delete.description' : 'document.external.deleteFileDescription', { name: filePath.split(/[\\/]/).pop() ?? filePath })}
             </DialogDescription>
           </DialogHeader>
           <div className="mt-4 flex justify-end gap-2">
@@ -272,12 +373,31 @@ export function ExternalDocumentActions({
               }}
               className="h-8 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 text-sm text-[var(--foreground)] hover:border-[var(--destructive)] hover:bg-transparent hover:text-[var(--destructive)]"
             >
-              {t('document.external.deleteFileConfirm')}
+              {t(indexable ? 'memo.delete.confirm' : 'document.external.deleteFileConfirm')}
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!confirmVersion} onOpenChange={(open) => !open && setConfirmVersion(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('document.version.confirmTitle')}</DialogTitle>
+            <DialogDescription>{t('document.version.confirmDescription', {
+              time: confirmVersion ? formatVersionTime(confirmVersion.createdAt, language) : '',
+            } satisfies I18nParams)}</DialogDescription>
+          </DialogHeader>
+          <div className="mt-4 flex justify-end gap-2">
+            <button type="button" disabled={!!restoringVersionId} onClick={() => setConfirmVersion(null)} className="h-8 rounded-lg px-3 text-sm hover:bg-[var(--muted)] disabled:opacity-60">
+              {t('document.version.cancel')}
+            </button>
+            <button type="button" disabled={!!restoringVersionId} onClick={() => { void restorePathVersion(); }} className="h-8 rounded-lg bg-[var(--primary)] px-3 text-sm text-[var(--primary-foreground)] disabled:opacity-60">
+              {t('document.version.confirm')}
             </button>
           </div>
         </DialogContent>
       </Dialog>
     </DropdownMenu>
+    </>
   );
 }
 
@@ -692,19 +812,21 @@ function formatVersionSize(size: number): string {
 }
 
 function VersionHistorySubmenu({
-  memoId,
+  notebookId,
+  relativePath,
   refreshKey,
   restoringVersionId,
   onSelectVersion,
 }: {
-  memoId: string;
+  notebookId: string;
+  relativePath: string;
   refreshKey: number;
   restoringVersionId: string | null;
-  onSelectVersion: (version: MemoVersionMeta) => void;
+  onSelectVersion: (version: VersionDisplay) => void;
 }) {
   const { t, language } = useI18n();
   const [open, setOpen] = useState(false);
-  const [versions, setVersions] = useState<MemoVersionMeta[]>([]);
+  const [versions, setVersions] = useState<VersionDisplay[]>([]);
   const [loading, setLoading] = useState(false);
   const requestSeqRef = useRef(0);
   const mountedRef = useRef(true);
@@ -721,14 +843,14 @@ function VersionHistorySubmenu({
     const requestSeq = ++requestSeqRef.current;
     setLoading(true);
 
-    void memosClient.listVersions(memoId)
+    void memosClient.listPathVersions(notebookId, relativePath)
       .then((items) => {
         if (!mountedRef.current || requestSeqRef.current !== requestSeq) return;
         setVersions(items);
       })
       .catch((err) => {
         if (!mountedRef.current || requestSeqRef.current !== requestSeq) return;
-        logger.error('list versions failed', { error: err, memoId });
+        logger.error('list versions failed', { error: err, notebookId, relativePath });
         setOpen(false);
         toast.error(t("document.version.loadFailed"));
       })
@@ -737,7 +859,7 @@ function VersionHistorySubmenu({
           setLoading(false);
         }
       });
-  }, [open, memoId, refreshKey, t]);
+  }, [open, notebookId, relativePath, refreshKey, t]);
 
   const orderedVersions = useMemo(
     () => [...versions].sort((a, b) => b.createdAt - a.createdAt),
@@ -803,7 +925,7 @@ function VersionHistorySubmenu({
                   onSelectVersion(version);
                 }}
                 className="group block w-full rounded-lg px-2 py-2 text-left hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
-                title={version.title || version.filename}
+                title={'title' in version ? (version.title || version.filename) : relativePath}
               >
                 <div className="flex items-center gap-2">
                   <span className="min-w-0 flex-1 truncate text-xs text-[var(--foreground)] group-hover:text-[var(--foreground)]">
@@ -818,7 +940,7 @@ function VersionHistorySubmenu({
                 </div>
                 <div className="mt-1 flex items-center gap-2 text-[11px] text-[var(--muted-foreground)] group-hover:text-[var(--foreground)]">
                   <span className="min-w-0 flex-1 truncate group-hover:text-[var(--foreground)]">
-                    {version.title || version.filename}
+                    {'title' in version ? (version.title || version.filename) : relativePath}
                   </span>
                   <span className="shrink-0">{formatVersionSize(version.size)}</span>
                 </div>
@@ -828,253 +950,6 @@ function VersionHistorySubmenu({
         </div>
       )}
     </div>
-  );
-}
-
-export function MemoActions({
-  memo,
-  iconButtonClass,
-  onCopyLink,
-  onCopyFullText,
-  onTogglePin,
-  onExportMarkdown,
-  onSaveAsTemplate,
-  onExportWord,
-  onExportPdf,
-  onRequestDeleteMemo,
-  onColorsChange,
-  showColorPicker,
-  editorMode,
-  onToggleEditorMode,
-  canCopyFullText,
-  canExportContent,
-  canSaveAsTemplate,
-  canViewVersionHistory,
-}: {
-  memo: MemoItem;
-  iconButtonClass: string;
-  onCopyLink: () => void;
-  onCopyFullText: () => void;
-  onTogglePin: () => void;
-  onExportMarkdown: () => void;
-  onSaveAsTemplate: () => void;
-  onExportWord: () => void;
-  onExportPdf: () => void;
-  onRequestDeleteMemo: () => void;
-  onColorsChange: (next: MemoColor[]) => void;
-  showColorPicker: boolean;
-  editorMode: DocumentEditorMode;
-  onToggleEditorMode: () => void;
-  canCopyFullText: boolean;
-  canExportContent: boolean;
-  canSaveAsTemplate: boolean;
-  canViewVersionHistory: boolean;
-}) {
-  const { t, language } = useI18n();
-  const isPinned = !!memo.favorited;
-  const [confirmVersion, setConfirmVersion] = useState<MemoVersionMeta | null>(null);
-  const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null);
-  const [versionRefreshKey, setVersionRefreshKey] = useState(0);
-  const fontSwitch = useEditorFontSwitch();
-  const handleConfirmRestoreVersion = async () => {
-    if (!confirmVersion || restoringVersionId) return;
-
-    const version = confirmVersion;
-    setRestoringVersionId(version.id);
-
-    try {
-      const activeMemoSession = useDocumentStore.getState().activeMemoSession;
-      const activeSession = activeMemoSession?.memoId === memo.id ? activeMemoSession : null;
-      const activePath = activeSession?.fileIdentity.path ?? null;
-      if (!activePath) {
-        toast.error(t("document.version.restoreFailed"));
-        return;
-      }
-      const identity: DocumentIdentity | null = activeSession ? {
-        kind: 'md',
-        memoId: memo.id,
-        ...activeSession.fileIdentity,
-      } : null;
-
-      if (identity && activePath) {
-        const flushed = await flushDocumentPath(identity, activePath);
-        if (!flushed) {
-          toast.error(t("document.version.saveCurrentFailed"));
-          return;
-        }
-      }
-
-      const expectedContent = identity && activePath
-        ? getDocumentBuffer(identity).lastSavedContent
-        : undefined;
-      const restored = await memosClient.restoreVersion(memo.id, activePath, version.id, expectedContent);
-
-      if (!restored) {
-        toast.error(t("document.version.restoreFailed"));
-        return;
-      }
-
-      const latestActiveMemoSession = useDocumentStore.getState().activeMemoSession;
-      if (latestActiveMemoSession?.memoId === memo.id) {
-        replaceActiveMemoPath(memo.id, restored.path);
-        window.dispatchEvent(new CustomEvent('flowix:memo-version-restored', {
-          detail: {
-            memoId: memo.id,
-            path: restored.path,
-            content: restored.content,
-          },
-        }));
-      }
-
-      setConfirmVersion(null);
-      setVersionRefreshKey((key) => key + 1);
-      toast.success(t("document.version.restored"));
-    } catch (err) {
-      logger.error('restore version failed', { error: err, memoId: memo.id });
-      toast.error(t("document.version.restoreFailed"));
-    } finally {
-      setRestoringVersionId(null);
-    }
-  };
-
-  return (
-    <>
-      {showColorPicker && (
-        <MemoColorPicker
-          colors={memo.colors}
-          iconButtonClass={iconButtonClass}
-          onChange={onColorsChange}
-        />
-      )}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Tooltip content={t("document.titlebar.moreTooltip")}>
-            <button className={iconButtonClass}>
-              <Ellipsis className="w-4 h-4" />
-            </button>
-          </Tooltip>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-[200px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
-          <EditorFontSwitcher fontMode={fontSwitch.fontMode} downloadingMode={fontSwitch.downloadingMode} percent={fontSwitch.percent} onSelect={fontSwitch.selectFontMode} />
-          <DropdownMenuItem
-            onClick={() => { void windows.openPreferences('format'); }}
-            className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
-          >
-            <Type className="mr-2 h-4 w-4" /> {t('preferences.tabs.format')}
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={onCopyLink}
-            className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
-          >
-            <LinkSimpleIcon className="w-4 h-4 mr-2" /> {t("document.action.copyLink")}
-          </DropdownMenuItem>
-          {canCopyFullText && (
-            <DropdownMenuItem
-              onClick={onCopyFullText}
-              className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
-            >
-              <CopyIcon className="w-4 h-4 mr-2" /> {t("document.action.copyFullText")}
-            </DropdownMenuItem>
-          )}
-          <DropdownMenuItem
-            onClick={onTogglePin}
-            className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
-          >
-            {isPinned ? (
-              <><PushPinSlashIcon className="w-4 h-4 mr-2" /> {t("document.action.unpin")}</>
-            ) : (
-              <><PushPinIcon className="w-4 h-4 mr-2" /> {t("document.action.pin")}</>
-            )}
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onClick={onToggleEditorMode}
-            className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
-          >
-            <Code2 className="mr-2 h-4 w-4" />
-            {editorMode === 'source'
-              ? t("document.action.richTextMode")
-              : t("document.action.sourceMode")}
-          </DropdownMenuItem>
-          {(canSaveAsTemplate || canExportContent) && (
-            <div role="separator" aria-hidden="true" className="mx-2 my-1 h-px bg-[var(--border-popup)] opacity-60" />
-          )}
-          {canSaveAsTemplate && (
-            <DropdownMenuItem
-              onClick={onSaveAsTemplate}
-              className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
-            >
-              <SwatchesIcon className="w-4 h-4 mr-2" /> {t("document.action.saveAsTemplate")}
-            </DropdownMenuItem>
-          )}
-          {canExportContent && (
-            <>
-              <DropdownMenuItem
-                onClick={onExportMarkdown}
-                className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
-              >
-                <FileMdIcon className="w-4 h-4 mr-2" /> {t("document.action.exportMarkdown")}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={onExportWord}
-                className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
-              >
-                <FileDocIcon className="w-4 h-4 mr-2" /> {t("document.action.exportWord")}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={onExportPdf}
-                className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
-              >
-                <FilePdfIcon className="w-4 h-4 mr-2" /> {t("document.action.exportPdf")}
-              </DropdownMenuItem>
-            </>
-          )}
-          <div role="separator" aria-hidden="true" className="mx-2 my-1 h-px bg-[var(--border-popup)] opacity-60" />
-          {canViewVersionHistory && (
-            <VersionHistorySubmenu
-              memoId={memo.id}
-              refreshKey={versionRefreshKey}
-              restoringVersionId={restoringVersionId}
-              onSelectVersion={setConfirmVersion}
-            />
-          )}
-          <DropdownMenuItem
-            onClick={onRequestDeleteMemo}
-            className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-transparent hover:text-[var(--destructive)]"
-          >
-            <TrashSimpleIcon className="w-4 h-4 mr-2" /> {t("document.action.delete")}
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <Dialog open={!!confirmVersion} onOpenChange={(open) => !open && setConfirmVersion(null)}>
-        <DialogContent className="rounded-xl border border-[var(--border-popup)] bg-[var(--card)] shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
-          <DialogHeader>
-            <DialogTitle>{t("document.version.confirmTitle")}</DialogTitle>
-            <DialogDescription>
-              {t("document.version.confirmDescription", { time: confirmVersion ? formatVersionTime(confirmVersion.createdAt, language) : '' } satisfies I18nParams)}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="mt-4 flex justify-end gap-2">
-            <button
-              type="button"
-              disabled={!!restoringVersionId}
-              onClick={() => setConfirmVersion(null)}
-              className="h-8 rounded-lg px-3 text-sm hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {t("document.version.cancel")}
-            </button>
-            <button
-              type="button"
-              disabled={!!restoringVersionId}
-              onClick={handleConfirmRestoreVersion}
-              className="inline-flex h-8 items-center gap-2 rounded-lg bg-[var(--primary)] px-3 text-sm text-[var(--primary-foreground)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {restoringVersionId && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {t("document.version.confirm")}
-            </button>
-          </div>
-        </DialogContent>
-      </Dialog>
-    </>
   );
 }
 

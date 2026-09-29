@@ -1,12 +1,9 @@
 ﻿'use client';
 
 import { getDocumentSession } from '../store/document-runtime-session';
-import { rebaseWorkspaceDocumentPath } from '../public/workspace-api';
 
 import { useEffect, useCallback, useRef, useMemo } from 'react';
-import { useMemoStore } from '@features/memo/store/memo-store';
 import {
-  applyLoadedDocumentContent,
   captureLatestDocumentContent,
   hasDocumentUnsavedChanges,
 } from '@features/document/store/document-session-service';
@@ -21,11 +18,9 @@ import {
   documentPropertyTargetId,
 } from '@features/document/store/document-identity';
 import { canonicalPath, fileNameFromPath } from '@/lib/path';
-import { displayTitleFromFilename } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { product } from '@platform/tauri/client/desktop';
 import { localDocumentOperations } from '@features/document/use-cases/local-document-operations';
-import { memoDocumentOperations } from '@features/document/use-cases/memo-document-operations';
 import { openPath } from '@platform/tauri/opener';
 import {
   initialDocumentContainerState,
@@ -38,7 +33,6 @@ import {
 import { useDocumentContent } from '@features/document/components/session/use-document-content';
 import { useDocumentAutosave } from '@features/document/components/session/use-document-autosave';
 import { useExternalDocumentChangeWatch } from '@features/document/components/session/use-external-document-change-watch';
-import { useMemoDocumentChangeWatch } from '@features/document/components/session/use-memo-document-change-watch';
 import {
   LazyDocumentEditor,
   preloadDocumentEditor,
@@ -55,11 +49,7 @@ import type { ClipboardSnapshot } from '@features/editor/extensions/paste-rules/
 import { useI18n } from '@/lib/i18n';
 import { CenteredLoadingSpinner } from '@shared/ui/centered-loading-spinner';
 import { WorkspaceEmptyState } from '@shared/ui/workspace-empty-state';
-import {
-  clearWorkspaceDocument,
-  replaceExternalDocumentPath,
-} from '@features/workspace/use-cases/workspace-navigation';
-import { removeBrowserColumnTabsByMemoId } from '@features/workspace/use-cases/browser-column-navigation';
+import { replaceExternalDocumentPath } from '@features/workspace/use-cases/workspace-navigation';
 import { useWorkspaceFocusStore } from '@features/workspace/store/workspace-focus-store';
 import { getBuffer, subscribeDocumentBufferChanges } from '@features/document/store/buffer-registry';
 import { documentIdentityKey } from '@features/document/store/document-identity';
@@ -69,7 +59,6 @@ import {
   isExternalDocumentRenameInProgress,
 } from '@features/document/store/external-document-operation';
 import { rebaseActiveDocumentPath } from '@features/document/store/document-session-service';
-import { syncMemoPathAfterLocalWrite } from '@features/document/use-cases/sync-memo-path-after-local-write';
 import type { Editor } from '@tiptap/core';
 
 function externalMarkdownTitleParts(path: string): { title: string; extension: string } {
@@ -84,8 +73,6 @@ function externalMarkdownTitleParts(path: string): { title: string; extension: s
 
 export function DocumentContainer({
   fileIdentity,
-  memoId = null,
-  notebookPath = null,
   transitionId = null,
   onMetainfoData,
   isExternalDocument = false,
@@ -114,7 +101,7 @@ export function DocumentContainer({
     [displayId]
   );
   const documentIdentity = getDocumentSession(
-    documentIdentityFromFile({ path: filePath, displayId }, memoId ?? null),
+    documentIdentityFromFile({ path: filePath, displayId }),
   ).identity;
   const propertyTargetId = documentPropertyTargetId(displayId);
   const editorMode = useDocumentEditorMode(hostId, documentIdentity);
@@ -135,9 +122,6 @@ export function DocumentContainer({
     reloadDocument,
   } = useDocumentContent({
     identity: documentIdentity,
-    memoId,
-    notebookPath,
-    isExternalDocument,
     externalScopePath,
     transitionId,
     isolatedSession: documentSessionMode === 'isolated',
@@ -196,25 +180,6 @@ export function DocumentContainer({
     );
   }, [documentIdentity, editorMode, externalEditorMode, hostId, isExternalDocument]);
 
-  // The title editor owns file-scoped draft/IME state. The cache ID only
-  // updates legacy memo metadata when it is available; the rename address is the path.
-  const renameDocumentTitle = useCallback(async (title: string, expectedFilename: string) => {
-    if (title === displayTitleFromFilename(expectedFilename)) return expectedFilename;
-    {
-      const result = await memoDocumentOperations.renameTitle({
-        path: getCurrentFilePath(),
-        title,
-        expectedFilename,
-        expectedContent: state.fullContent,
-      });
-      rebaseWorkspaceDocumentPath(documentIdentity, result.path);
-      if (result.memo) useMemoStore.getState().handleMemoUpdated(result.memo);
-      if (memoId) syncMemoPathAfterLocalWrite(memoId, result.path);
-      return result.filename;
-    }
-  }, [displayId, documentIdentity, memoId, state.fullContent]);
-
-
   const {
     clearSaveTimer,
     flushDocument,
@@ -225,8 +190,6 @@ export function DocumentContainer({
     filePath,
     getCurrentFilePath,
     identity: documentIdentity,
-    memoId,
-    isExternalDocument,
     externalScopePath,
     setState,
     reloadDocument,
@@ -371,42 +334,6 @@ export function DocumentContainer({
   }, [documentInstanceKey]);
 
   useEffect(() => {
-    if (!memoId) return;
-
-    const handleVersionRestored = (event: Event) => {
-      const detail = (event as CustomEvent<{
-        memoId: string;
-        path: string;
-        content: string;
-      }>).detail;
-
-      if (!detail || detail.memoId !== memoId) return;
-
-      clearSaveTimer();
-      const body = extractBodyContent(detail.content);
-      const textUnits = countTextUnits(body);
-      applyLoadedDocumentContent(documentIdentity, detail.path, detail.content, {
-        preservePending: false,
-      });
-      setState((prev) => ({
-        ...prev,
-        fullContent: detail.content,
-        isLoaded: true,
-        isLoading: false,
-        error: null,
-        isScrolled: false,
-        charCount: textUnits,
-        tokenCount: Math.ceil(textUnits / 4),
-      }));
-    };
-
-    window.addEventListener('flowix:memo-version-restored', handleVersionRestored);
-    return () => {
-      window.removeEventListener('flowix:memo-version-restored', handleVersionRestored);
-    };
-  }, [clearSaveTimer, documentIdentity, memoId, setState]);
-
-  useEffect(() => {
     if (!filePath) {
       setState(initialDocumentContainerState);
       return;
@@ -432,19 +359,12 @@ export function DocumentContainer({
       preservePending: hasDocumentUnsavedChanges(documentIdentity),
       showLoading: true,
     });
-  }, [filePath, documentIdentity, documentInstanceKey, documentSessionMode, isExternalDocument, memoId, reloadDocument, clearSaveTimer]);
+  }, [filePath, documentIdentity, documentInstanceKey, documentSessionMode, isExternalDocument, reloadDocument, clearSaveTimer]);
 
   useExternalDocumentChangeWatch({
     filePath,
     identity: documentIdentity,
     scopePath: externalScopePath,
-    clearSaveTimer,
-    reloadDocument,
-  });
-
-  useMemoDocumentChangeWatch({
-    filePath,
-    identity: documentIdentity,
     clearSaveTimer,
     reloadDocument,
   });
@@ -455,12 +375,12 @@ export function DocumentContainer({
       tokenCount: state.tokenCount,
       createdAt: state.createdAt,
       updatedAt: state.updatedAt,
-      memoPath: memoId ?? null,
+      memoPath: null,
       memoContent: state.fullContent,
       isFavorited: state.isFavorited,
       frontmatterMeta: state.frontmatterMeta,
     };
-  }, [state.charCount, state.tokenCount, state.createdAt, state.updatedAt, state.fullContent, state.isFavorited, state.frontmatterMeta, memoId]);
+  }, [state.charCount, state.tokenCount, state.createdAt, state.updatedAt, state.fullContent, state.isFavorited, state.frontmatterMeta]);
 
   useEffect(() => {
     if (filePath) {
@@ -473,53 +393,11 @@ export function DocumentContainer({
   }
 
   if (state.error) {
-    // 物理文件丢失场景: memo index 还有这条 entry, 但磁盘上 .md 没了。
-    // 之前的兜底只有一行 "读取失败" 文字, 用户没有任何方式主动清掉这个
-    // 幽灵 entry。 现在加一个 "删除当前笔记" 按钮 ── 直接走 store 的
-    // deleteMemo, 后端 ops::delete_memo 在 file 不存在时会落进 ghost 分支
-    // (ops.rs:411-414) 只清 memo index, 然后 emit MemoEvent::Deleted。
-    // store 收到事件把 memos 数组里这一项 filter 掉, 列表幽灵消失;
-    // 同步调 clearDocument() 把当前打开的 ghost 文档也清掉, 避免下次
-    // 切回时再次尝试 readDocument 同一个 path。
-    //
-    // 不走 flowix:request-delete-memo 弹窗 ── 用户在错误态点按钮本身
-    // 已经是"我接受清掉这条"的明确意图, 多一层 dialog 反而干扰恢复流。
-    const handleDeleteCurrent = async () => {
-      if (!memoId) return;
-      try {
-        const success = await useMemoStore.getState().deleteMemo(memoId);
-        if (success) {
-          removeBrowserColumnTabsByMemoId(memoId);
-          if (documentSessionMode !== 'isolated') await clearWorkspaceDocument();
-          toast.success(t('document.ghost.removed'));
-        } else {
-          toast.error(t('document.ghost.deleteFailed'));
-        }
-      } catch {
-        toast.error(t('document.ghost.deleteFailed'));
-      }
-    };
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--muted-foreground)]">
-        <span className="text-sm">{state.error}</span>
-        {!isExternalDocument && memoId && (
-          <button
-            type="button"
-            onClick={handleDeleteCurrent}
-            className="inline-flex items-center h-7 px-2.5 text-xs rounded-lg bg-transparent border border-[var(--border)] text-[var(--muted-foreground)] hover:bg-transparent hover:border-[var(--destructive)] hover:text-[var(--destructive)]"
-          >
-            {t('document.ghost.deleteButton')}
-          </button>
-        )}
-      </div>
-    );
+    return <WorkspaceEmptyState tone="document" message={state.error} />;
   }
 
-  const hasMarkdownTitle = (!isExternalDocument && Boolean(memoId))
-    || (isExternalDocument && externalEditorMode === 'markdown');
-  const renameTitle: RenameDocumentTitle = isExternalDocument
-    ? commitExternalTitle
-    : renameDocumentTitle;
+  const hasMarkdownTitle = isExternalDocument && externalEditorMode === 'markdown';
+  const renameTitle: RenameDocumentTitle = commitExternalTitle;
   const documentHeader = hasMarkdownTitle ? (
     <MemoDocumentHeader
       titleRef={titleEditorRef}
@@ -572,7 +450,6 @@ export function DocumentContainer({
         )}
         {!state.isLoading && state.isLoaded && !usesCodeEditor && (
           <LazyDocumentEditor
-            memoId={memoId ?? undefined}
             propertyTargetId={propertyTargetId}
             onViewSourceMode={handleToggleEditorMode}
             transitionId={transitionId}

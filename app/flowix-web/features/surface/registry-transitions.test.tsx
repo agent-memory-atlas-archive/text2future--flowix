@@ -45,17 +45,13 @@ function externalSurface(
   }
 }
 
-function contentSurface(kind: 'note' | 'md' | 'code' | 'html-file', transitionId: number): WorkColumnSurface {
+function contentSurface(kind: 'md' | 'code' | 'html-file', transitionId: number): WorkColumnSurface {
   const filePath = kind === 'html-file' ? '/notebook/index.html' : '/notebook/readme.md';
   const base = {
     instanceKey: `${kind}:${filePath}`,
     fileIdentity: { path: filePath, displayId: `display:${filePath}` },
   };
   switch (kind) {
-    case 'note': return {
-      ...base, kind, memoId: 'memo-1',
-      props: { transitionId },
-    };
     case 'md': return {
       ...base, kind,
       props: { isExternalDocument: true, transitionId },
@@ -106,7 +102,7 @@ describe('work column external-file transition completion', () => {
     }
   });
 
-  it.each(['note', 'md', 'code', 'html-file'] as const)(
+  it.each(['md', 'code', 'html-file'] as const)(
     'leaves the %s transition active while its content reader is mounted',
     async (kind) => {
       (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

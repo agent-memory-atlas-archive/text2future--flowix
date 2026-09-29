@@ -1,5 +1,5 @@
 import { captureFileBrowserContext } from './file-browser-context';
-import type { PluginDescriptor } from '@platform/tauri/client';
+import { memos as memosClient, type PluginDescriptor, type MarkdownLocation } from '@platform/tauri/client';
 import { canonicalPath } from '@/lib/path';
 import { resourceKindFromPath } from '@features/editor/public/code-file';
 import { canonicalUrl } from '@features/workspace/store/workspace-content-identity';
@@ -7,31 +7,21 @@ import {
   flushWorkspaceDocumentPath,
   getWorkspaceDocumentState,
   recordWorkspaceDocumentNavigation,
-  replaceWorkspaceMemoHistoryPath,
   replaceWorkspaceDocumentPath,
   type DocumentHistoryEntry,
 } from '@features/document/public/workspace-api';
 import {
   useBrowserColumnStore,
-  type BrowserColumnTab,
 } from '@features/workspace/store/browser-column-store';
 import { documentIdentityFromFile } from '@features/document/public/workspace-api';
 import {
-  findFileDisplayId,
-  ensureFileDisplayIdentity,
   suspendFileDisplayReconciliation,
 } from '@/lib/file-display-registry';
-import { waitForWorkspaceDocumentSaves } from '@features/document/public/workspace-api';
 import {
   getWorkspaceMemoState,
   setCurrentWorkspaceNotebook,
   type Notebook,
 } from '@features/memo/public/workspace-api';
-import type { MemoItem } from '@/types/memo-item';
-import {
-  getPluginNoteInfo,
-  type PluginArtifactRendererId,
-} from '@features/plugin/public/workspace-api';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
 import { EMPTY_WORK_COLUMN_TARGET } from '@features/workspace/store/work-column-target';
 import type { WorkColumnTarget } from '@features/workspace/store/work-column-target';
@@ -51,27 +41,14 @@ import {
   type PersistedWorkspaceTarget,
 } from '@features/workspace/store/workspace-restore-store';
 
-export interface OpenMemoTargetParams {
-  memoId: string;
-  path: string | null;
-  notebookId?: string | null;
-  notebookPath?: string | null;
-  history?: 'push' | 'skip';
-  initialContent?: string;
-  initialFocus?: 'title' | 'body';
-  destination?: 'main-third';
-  /** When supplied, selection is part of this navigation transaction. */
-  memo?: MemoItem | null;
-  /** Optional authoritative Notebook entity used during a cross-notebook open. */
-  notebook?: Notebook | null;
-}
-
 export interface OpenExternalTargetOptions {
   fileBrowser?: import('../store/file-browser-target').FileBrowserContext;
   /** Explicit cross-column moves must not reactivate a BrowserColumn tab. */
   destination?: 'main-third';
   history?: 'push' | 'skip';
   scopePath?: string | null;
+  markdownLocation?: MarkdownLocation | null;
+  initialFocus?: 'title' | 'body';
 }
 
 export interface OpenMediaTargetParams {
@@ -83,23 +60,11 @@ export interface OpenMediaTargetParams {
   destination?: 'main-third';
 }
 
-export interface OpenArtifactTargetParams {
-  pointerMemoId: string;
-  notebookId?: string | null;
-  notebookPath?: string | null;
-  pluginId?: string | null;
-  renderer?: PluginArtifactRendererId | null;
-  history?: 'push' | 'skip';
-  /** Optional pointer memo metadata used to avoid re-reading the list item. */
-  memo?: MemoItem | null;
-  notebook?: Notebook | null;
-}
-
 type RetryAction = () => Promise<void>;
 
 type DocumentSnapshot = Pick<
   ReturnType<typeof getWorkspaceDocumentState>,
-  'activeMemoSession' | 'activeExternalSession' | 'activeAgentConversationId'
+  'activeExternalSession' | 'activeAgentConversationId'
 >;
 
 const retryActions = new Map<string, RetryAction>();
@@ -111,17 +76,6 @@ let retrySequence = 0;
  * paints, so the second frame is intentional: the first frame is the one in
  * which React can paint the selected memo card.
  */
-function waitForSelectionPaint(): Promise<void> {
-  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => resolve());
-    });
-  });
-}
-
 /**
  * Keep the no-op/main-third path synchronous. BrowserColumn activation is the
  * only path which needs to cross the save-before-unmount barrier.
@@ -136,17 +90,6 @@ function activateExistingContentForNavigation(
     return existing;
   }
   return activateExistingWorkspaceContentAsync(identity);
-}
-
-function pendingMemoTarget(params: OpenMemoTargetParams): WorkColumnTarget {
-  return {
-    kind: 'memo',
-    memoId: params.memoId,
-    path: params.path ?? '',
-    notebookId: params.notebookId ?? params.notebook?.id ?? null,
-    notebookPath: params.notebookPath ?? params.notebook?.path ?? null,
-    transitionId: null,
-  };
 }
 
 function pendingExternalTarget(
@@ -172,19 +115,6 @@ function pendingMediaTarget(params: OpenMediaTargetParams): WorkColumnTarget {
     notebookId: params.notebookId ?? null,
     notebookPath: params.notebookPath,
     resourceKind,
-  };
-}
-
-function pendingArtifactTarget(params: OpenArtifactTargetParams): WorkColumnTarget {
-  const noteInfo = getPluginNoteInfo(params.memo);
-  const notebook = params.notebook;
-  return {
-    kind: 'artifact',
-    pointerMemoId: params.pointerMemoId.trim(),
-    notebookId: params.notebookId ?? notebook?.id ?? null,
-    notebookPath: params.notebookPath ?? notebook?.path ?? null,
-    pluginId: params.pluginId ?? noteInfo?.pluginId ?? null,
-    renderer: params.renderer ?? noteInfo?.renderer ?? null,
   };
 }
 
@@ -225,9 +155,7 @@ function commitNavigation(
         historyEntryFromWorkColumnTarget(target),
       );
     }
-    const desiredTarget: PersistedWorkspaceTarget | null = target.kind === 'memo'
-      ? { kind: 'memo', memoId: target.memoId }
-      : target.kind === 'external' && target.path
+    const desiredTarget: PersistedWorkspaceTarget | null = target.kind === 'external' && target.path
         ? { kind: 'external', path: canonicalPath(target.path), scopePath: target.scopePath }
         : target.kind === 'media'
           ? {
@@ -281,16 +209,6 @@ function targetToPreserveOnNotebookSwitch(
   document: DocumentSnapshot,
 ): WorkColumnTarget {
   if (target.kind !== 'empty') return target;
-  if (document.activeMemoSession) {
-    return {
-      kind: 'memo',
-      memoId: document.activeMemoSession.memoId,
-      path: document.activeMemoSession.fileIdentity.path,
-      notebookId: document.activeMemoSession.notebookId,
-      notebookPath: document.activeMemoSession.notebookPath,
-      transitionId: document.activeMemoSession.transitionId,
-    };
-  }
   if (document.activeExternalSession) {
     return {
       kind: 'external',
@@ -342,25 +260,14 @@ async function runNavigation(
 }
 
 function captureDocumentSnapshot(): DocumentSnapshot {
-  const { activeMemoSession, activeExternalSession, activeAgentConversationId } = getWorkspaceDocumentState();
-  return { activeMemoSession, activeExternalSession, activeAgentConversationId };
+  const { activeExternalSession, activeAgentConversationId } = getWorkspaceDocumentState();
+  return { activeExternalSession, activeAgentConversationId };
 }
 
 export function historyEntryFromWorkColumnTarget(
   target: WorkColumnTarget,
 ): DocumentHistoryEntry | null {
   switch (target.kind) {
-    case 'memo': {
-      if (!target.path) return null;
-      return {
-        kind: 'memo',
-        memoId: target.memoId,
-        notebookId: target.notebookId,
-        notebookPath: target.notebookPath,
-        path: target.path,
-        openedAt: Date.now(),
-      };
-    }
     case 'external': {
       if (!target.path) return null;
       return {
@@ -387,17 +294,6 @@ export function historyEntryFromWorkColumnTarget(
         instanceId: target.instanceId,
         openedAt: Date.now(),
       };
-    case 'artifact':
-      if (!target.pointerMemoId) return null;
-      return {
-        kind: 'artifact',
-        pointerMemoId: target.pointerMemoId,
-        notebookId: target.notebookId,
-        notebookPath: target.notebookPath,
-        pluginId: target.pluginId,
-        renderer: target.renderer,
-        openedAt: Date.now(),
-      };
     case 'web':
       if (!canonicalUrl(target.url)) return null;
       return {
@@ -410,30 +306,18 @@ export function historyEntryFromWorkColumnTarget(
   }
 }
 
-function selectArtifactMemo(params: OpenArtifactTargetParams): void {
-  const state = getWorkspaceMemoState();
-  const memo = params.memo
-    ?? state.memos?.find((item) => item.id === params.pointerMemoId)
-    ?? null;
-  if (!memo) return;
-  if (!state.memos?.some((item) => item.id === memo.id)) state.upsertMemo?.(memo);
-  state.setSelectedMemo(memo);
-}
-
 async function restoreDocumentSnapshot(snapshot: DocumentSnapshot): Promise<void> {
-  if (snapshot.activeMemoSession) {
-    await getWorkspaceDocumentState().openMemoDocument({
-      memoId: snapshot.activeMemoSession.memoId,
-      path: snapshot.activeMemoSession.fileIdentity.path,
-      notebookId: snapshot.activeMemoSession.notebookId,
-      notebookPath: snapshot.activeMemoSession.notebookPath,
-    });
-    return;
-  }
   if (snapshot.activeExternalSession) {
     await getWorkspaceDocumentState().openExternalDocument(
       snapshot.activeExternalSession.fileIdentity.path,
-      { scopePath: snapshot.activeExternalSession.scopePath },
+      {
+        scopePath: snapshot.activeExternalSession.scopePath,
+        notebookId: snapshot.activeExternalSession.notebookId,
+        notebookPath: snapshot.activeExternalSession.notebookPath,
+        relativePath: snapshot.activeExternalSession.relativePath,
+        indexable: snapshot.activeExternalSession.indexable,
+        initialFocus: snapshot.activeExternalSession.initialFocus,
+      },
     );
     return;
   }
@@ -459,16 +343,13 @@ export function dismissNavigationFailure(): void {
 
 /** Switch the main workspace notebook as one navigation transaction. */
 export async function selectNotebook(notebook: Notebook): Promise<void> {
-  const previousMemo = getWorkspaceMemoState().selectedMemo;
   const previousNotebook = getWorkspaceMemoState().selectedNotebook;
   const previousDocument = captureDocumentSnapshot();
   const previousWorkColumnTarget = targetToPreserveOnNotebookSwitch(
     useWorkColumnStore.getState().navigation.target,
     previousDocument,
   );
-  const clearPreviousTarget = (previousWorkColumnTarget.kind === 'memo'
-    || previousWorkColumnTarget.kind === 'media'
-    || previousWorkColumnTarget.kind === 'artifact')
+  const clearPreviousTarget = previousWorkColumnTarget.kind === 'media'
     && previousWorkColumnTarget.notebookId !== notebook.id;
   const nextWorkColumnTarget = clearPreviousTarget
     ? EMPTY_WORK_COLUMN_TARGET
@@ -497,7 +378,6 @@ export async function selectNotebook(notebook: Notebook): Promise<void> {
         if (clearPreviousTarget) {
           await getWorkspaceDocumentState().clearDocument();
           if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
-          getWorkspaceMemoState().setSelectedMemo(null);
         }
         commitNavigation(requestId, nextWorkColumnTarget);
       },
@@ -509,7 +389,6 @@ export async function selectNotebook(notebook: Notebook): Promise<void> {
         }
         if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
         getWorkspaceMemoState().setSelectedNotebook(previousNotebook);
-        getWorkspaceMemoState().setSelectedMemo(previousMemo);
         await restoreDocumentSnapshot(previousDocument);
       },
       true,
@@ -518,30 +397,6 @@ export async function selectNotebook(notebook: Notebook): Promise<void> {
   } finally {
     useWorkColumnStore.getState().endNotebookSwitch?.();
   }
-}
-
-function publishMemoTargetIfCurrent(
-  requestId: number,
-  memoId: string,
-  path: string | null,
-  history: 'push' | 'skip',
-): boolean {
-  const document = getWorkspaceDocumentState();
-  const session = document.activeMemoSession;
-  if (
-    !session
-    || session.memoId !== memoId
-    || (path !== null && canonicalPath(session.fileIdentity.path) !== canonicalPath(path))
-  ) return false;
-
-  return commitNavigation(requestId, {
-    kind: 'memo',
-    memoId: session.memoId,
-    path: session.fileIdentity.path,
-    notebookId: session.notebookId,
-    notebookPath: session.notebookPath,
-    transitionId: session.transitionId,
-  }, history);
 }
 
 function publishExternalTargetIfCurrent(
@@ -569,194 +424,23 @@ function publishExternalTargetIfCurrent(
   }, history);
 }
 
-export async function openMemoTarget(
-  params: OpenMemoTargetParams,
-): Promise<WorkspaceContentLocation | null> {
-  let promotedExternalTab: BrowserColumnTab | null = null;
-  const previousFocusHostId = useWorkspaceFocusStore.getState().focusedHostId;
-  const memoPath = params.path ? canonicalPath(params.path) : null;
-  if (memoPath) {
-    const activeExternal = getWorkspaceDocumentState().activeExternalSession;
-    if (activeExternal && canonicalPath(activeExternal.fileIdentity.path) === memoPath) {
-      const externalIdentity = documentIdentityFromFile(ensureFileDisplayIdentity(memoPath));
-      const flushed = await flushWorkspaceDocumentPath(
-        externalIdentity,
-        memoPath,
-        activeExternal.scopePath,
-      );
-      if (!flushed || !await waitForWorkspaceDocumentSaves(externalIdentity)) {
-        throw new Error('Memo open cancelled because the external document save did not complete');
-      }
-    }
-
-    const identity: ContentIdentity = {
-      kind: 'memo',
-      memoId: params.memoId,
-      path: memoPath,
-    };
-    const existing = params.destination === 'main-third'
-      ? null
-      : findExistingWorkspaceContent(identity);
-    const openExternalTab = existing?.host === 'browser-column'
-      ? useBrowserColumnStore.getState().tabs.find((tab) => tab.id === existing.tabId)
-      : null;
-    const isSameBrowserExternalSurface = openExternalTab?.target.kind === 'file-browser'
-      && !!openExternalTab.target.activeFilePath
-      && canonicalPath(openExternalTab.target.activeFilePath) === memoPath;
-    if (existing && isSameBrowserExternalSurface) {
-      // Flush the external editor before changing its persistence semantics.
-      // Keep its tab id and path identity, but make it a Memo surface so later
-      // edits use the Memo save channel and expose Memo-specific operations.
-      const activated = await activateExistingWorkspaceContentAsync(identity);
-      if (activated?.host === 'browser-column') {
-        const runtimeIdentity = documentIdentityFromFile(
-          ensureFileDisplayIdentity(memoPath),
-          params.memoId,
-        );
-        if (!await waitForWorkspaceDocumentSaves(runtimeIdentity)) {
-          throw new Error('Memo open cancelled because the external document save did not complete');
-        }
-        const tab = useBrowserColumnStore.getState().tabs.find(
-          (candidate) => candidate.id === activated.tabId,
-        );
-        if (tab?.target.kind === 'file-browser'
-          && tab.target.activeFilePath
-          && canonicalPath(tab.target.activeFilePath) === memoPath) {
-          promotedExternalTab = tab;
-          useBrowserColumnStore.getState().openTab({
-            ...tab,
-            target: {
-              kind: 'memo',
-              memoId: params.memoId,
-              notebookId: params.notebookId ?? params.notebook?.id ?? '',
-              notebookPath: params.notebookPath ?? params.notebook?.path ?? '',
-              filePath: memoPath,
-            },
-          }, 'focus-existing');
-        }
-      }
-    }
-  }
-
-  const previousMemo = getWorkspaceMemoState().selectedMemo;
-  const previousNotebook = getWorkspaceMemoState().selectedNotebook;
-  const previousDocument = captureDocumentSnapshot();
-  const notebookId = params.notebookId ?? params.notebook?.id ?? null;
-  const memo = params.memo ?? null;
-  let switchedNotebook = false;
-
-  await runNavigation(
-    pendingMemoTarget(params),
-    async (requestId) => {
-      let targetNotebook = params.notebook
-        ?? getWorkspaceMemoState().notebooks.find((item) => item.id === notebookId)
-        ?? null;
-      const currentNotebookId = getWorkspaceMemoState().selectedNotebookId
-        ?? getWorkspaceMemoState().selectedNotebook?.id
-        ?? null;
-
-      if (notebookId && currentNotebookId !== notebookId) {
-        await setCurrentWorkspaceNotebook(notebookId);
-        switchedNotebook = true;
-        if (!isCurrentNavigation(requestId)) return;
-
-        if (!targetNotebook) {
-          await getWorkspaceMemoState().loadNotebooks();
-          if (!isCurrentNavigation(requestId)) return;
-          targetNotebook = getWorkspaceMemoState().notebooks.find(
-            (item) => item.id === notebookId,
-          ) ?? null;
-        }
-        if (memo && !targetNotebook) {
-          throw new Error(`Notebook is unavailable: ${notebookId}`);
-        }
-        if (targetNotebook) {
-          getWorkspaceMemoState().setSelectedNotebook(targetNotebook);
-          if (!isCurrentNavigation(requestId)) return;
-        }
-        await getWorkspaceMemoState().loadPathNotes({ notebookId });
-        if (!isCurrentNavigation(requestId)) return;
-      }
-
-      if (!isCurrentNavigation(requestId)) return;
-      if (memo) {
-        const latest = getWorkspaceMemoState();
-        // Create already inserted its authoritative item before navigation.
-        if (params.initialContent === undefined) latest.upsertMemo(memo);
-        latest.setSelectedMemo(memo);
-        if (!isCurrentNavigation(requestId)) return;
-
-        // Selection and document switching used to happen in the same turn.
-        // For a large outgoing document, the editor flush then occupied the
-        // main thread before the selected card background got a paint. Keep
-        // the selection responsive and start the document transition after
-        // that visual update has actually had a chance to render.
-        if (params.initialContent === undefined) await waitForSelectionPaint();
-        if (!isCurrentNavigation(requestId)) return;
-      }
-
-      const {
-        memo: _memo,
-        notebook: _notebook,
-        history: _history,
-        ...documentParams
-      } = params;
-      if (!isCurrentNavigation(requestId)) return;
-      await getWorkspaceDocumentState().openMemoDocument({
-        ...documentParams,
-        notebookPath: params.notebookPath ?? targetNotebook?.path ?? null,
-      });
-
-      // A newer intent may have started while the document transition was
-      // queued. Its session and target must remain authoritative.
-      if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
-      if (!publishMemoTargetIfCurrent(
-        requestId,
-        params.memoId,
-        params.path,
-        params.history ?? 'push',
-      )) {
-        throw new Error(`Memo session was not committed: ${params.memoId}`);
-      }
-      useWorkspaceFocusStore.getState().focusHost('main-third');
-    },
-    async () => {
-      await openMemoTarget(params);
-    },
-    async (requestId) => {
-      if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
-      await restoreDocumentSnapshot(previousDocument);
-      if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
-      if (memo && getWorkspaceMemoState().selectedMemo?.id === memo.id) {
-        getWorkspaceMemoState().setSelectedMemo(previousMemo);
-      }
-      if (switchedNotebook) {
-        const previousNotebookId = previousNotebook?.id ?? null;
-        if (previousNotebookId) await setCurrentWorkspaceNotebook(previousNotebookId);
-        getWorkspaceMemoState().setSelectedNotebook(previousNotebook);
-      }
-      if (promotedExternalTab) {
-        const currentTab = useBrowserColumnStore.getState().tabs.find(
-          (candidate) => candidate.id === promotedExternalTab?.id,
-        );
-        if (currentTab?.target.kind === 'memo'
-          && currentTab.target.memoId === params.memoId
-          && canonicalPath(currentTab.target.filePath) === memoPath) {
-          useBrowserColumnStore.getState().openTab(promotedExternalTab, 'focus-existing');
-        }
-        useWorkspaceFocusStore.getState().focusHost(previousFocusHostId);
-      }
-    },
-  );
-  return null;
-}
-
 export async function openExternalTarget(
   path: string | null,
   options?: OpenExternalTargetOptions,
 ): Promise<WorkspaceContentLocation | null> {
-  const fileBrowser = options?.fileBrowser ?? captureFileBrowserContext(path, options?.scopePath);
-  options = { ...options, fileBrowser, scopePath: options?.scopePath ?? fileBrowser.scopePath };
+  const markdownLocation = path && /\.(md|markdown)$/i.test(path)
+    ? options?.markdownLocation ?? await memosClient.resolveMarkdownLocation(path)
+    : null;
+  const capturedFileBrowser = options?.fileBrowser ?? captureFileBrowserContext(path, options?.scopePath);
+  const fileBrowser = markdownLocation?.notebookId
+    ? { ...capturedFileBrowser, notebookId: markdownLocation.notebookId }
+    : capturedFileBrowser;
+  options = {
+    ...options,
+    fileBrowser,
+    markdownLocation,
+    scopePath: options?.scopePath ?? markdownLocation?.notebookPath ?? fileBrowser.scopePath,
+  };
   const existing = path && options?.destination !== 'main-third'
     ? activateExistingContentForNavigation({ kind: 'external', path })
     : null;
@@ -767,16 +451,45 @@ export async function openExternalTarget(
     return existing;
   }
 
-  const previousMemo = getWorkspaceMemoState().selectedMemo;
+  const previousNotebook = getWorkspaceMemoState().selectedNotebook;
+  const previousPathNote = getWorkspaceMemoState().selectedPathNote;
+  let switchedNotebook = false;
   const previousDocument = captureDocumentSnapshot();
   await runNavigation(
     pendingExternalTarget(path, options),
     async (requestId) => {
-      getWorkspaceMemoState().setSelectedMemo(null);
+      if (markdownLocation?.notebookId && markdownLocation.notebookId !== (
+        getWorkspaceMemoState().selectedNotebookId ?? getWorkspaceMemoState().selectedNotebook?.id
+      )) {
+        await setCurrentWorkspaceNotebook(markdownLocation.notebookId);
+        switchedNotebook = true;
+        if (!isCurrentNavigation(requestId)) return;
+        let notebook = getWorkspaceMemoState().notebooks.find((item) => item.id === markdownLocation.notebookId);
+        if (!notebook) {
+          await getWorkspaceMemoState().loadNotebooks();
+          if (!isCurrentNavigation(requestId)) return;
+          notebook = getWorkspaceMemoState().notebooks.find((item) => item.id === markdownLocation.notebookId);
+        }
+        if (notebook) {
+          getWorkspaceMemoState().setSelectedNotebook(notebook);
+          await getWorkspaceMemoState().loadPathNotes({ notebookId: notebook.id });
+          if (!isCurrentNavigation(requestId)) return;
+        }
+      }
+      getWorkspaceMemoState().setSelectedPathNote(markdownLocation?.indexable && markdownLocation.relativePath && markdownLocation.notebookId
+        ? { notebookId: markdownLocation.notebookId, relativePath: markdownLocation.relativePath }
+        : null);
       if (!isCurrentNavigation(requestId)) return;
       await getWorkspaceDocumentState().openExternalDocument(
         path,
-        { scopePath: options?.scopePath },
+        {
+          scopePath: options?.scopePath,
+          notebookId: markdownLocation?.notebookId,
+          notebookPath: markdownLocation?.notebookPath,
+          relativePath: markdownLocation?.relativePath,
+          indexable: markdownLocation?.indexable,
+          initialFocus: options?.initialFocus,
+        },
       );
       if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
       const scopePath = options?.scopePath ? canonicalPath(options.scopePath) : null;
@@ -799,8 +512,10 @@ export async function openExternalTarget(
       if (!isCurrentNavigation(requestId)) return;
       await restoreDocumentSnapshot(previousDocument);
       if (!isCurrentNavigation(requestId)) return;
-      if (!getWorkspaceMemoState().selectedMemo) {
-        getWorkspaceMemoState().setSelectedMemo(previousMemo);
+      getWorkspaceMemoState().setSelectedPathNote(previousPathNote);
+      if (switchedNotebook) {
+        await setCurrentWorkspaceNotebook(previousNotebook?.id ?? null);
+        getWorkspaceMemoState().setSelectedNotebook(previousNotebook);
       }
     },
   );
@@ -824,7 +539,6 @@ export async function openMediaTarget(
     return existing;
   }
 
-  const previousMemo = getWorkspaceMemoState().selectedMemo;
   const previousDocument = captureDocumentSnapshot();
   await runNavigation(
     target,
@@ -833,7 +547,6 @@ export async function openMediaTarget(
       if (!isCurrentNavigation(requestId)) return;
       await getWorkspaceDocumentState().clearDocument();
       if (!isCurrentNavigation(requestId)) return;
-      getWorkspaceMemoState().setSelectedMemo(null);
       if (!commitNavigation(requestId, target, params.history ?? 'push')) return;
       useWorkspaceFocusStore.getState().focusHost('main-third');
     },
@@ -842,7 +555,6 @@ export async function openMediaTarget(
       if (!isCurrentNavigation(requestId)) return;
       await restoreDocumentSnapshot(previousDocument);
       if (!isCurrentNavigation(requestId)) return;
-      getWorkspaceMemoState().setSelectedMemo(previousMemo);
     },
   );
   return null;
@@ -880,49 +592,12 @@ export async function openWebTarget(
   return null;
 }
 
-/**
- * Open a durable pointer-memo artifact without creating an editable memo
- * session. The host artifact service owns loading and fallback behavior; this
- * target only records which artifact the workColumn should display.
- */
-export async function openArtifactTarget(
-  params: OpenArtifactTargetParams,
-): Promise<WorkspaceContentLocation | null> {
-  const pointerMemoId = params.pointerMemoId.trim();
-  if (!pointerMemoId) return null;
-
-  const target = pendingArtifactTarget({ ...params, pointerMemoId });
-  await runNavigation(
-    target,
-    async (requestId) => {
-      // Artifact rendering is independent from the editable document session,
-      // but pending edits must be durable before the workColumn leaves that
-      // document surface underneath the artifact.
-      await flushWorkspaceDocument();
-      if (!isCurrentNavigation(requestId)) return;
-      if (!commitNavigation(requestId, target, params.history ?? 'push')) return;
-      selectArtifactMemo(params);
-      useWorkspaceFocusStore.getState().focusHost('main-third');
-    },
-    async () => { await openArtifactTarget(params); },
-  );
-  return null;
-}
-
 /** Flush the active editable document without clearing its session or target. */
 export async function flushWorkspaceDocument(): Promise<void> {
   const document = getWorkspaceDocumentState();
   let flushed = true;
 
-  if (document.activeMemoSession) {
-    flushed = await flushWorkspaceDocumentPath(
-      documentIdentityFromFile(
-        document.activeMemoSession.fileIdentity,
-        document.activeMemoSession.memoId,
-      ),
-      document.activeMemoSession.fileIdentity.path,
-    );
-  } else if (document.activeExternalSession) {
+  if (document.activeExternalSession) {
     flushed = await flushWorkspaceDocumentPath(
       documentIdentityFromFile(document.activeExternalSession.fileIdentity),
       document.activeExternalSession.fileIdentity.path,
@@ -964,7 +639,6 @@ export async function openAgentTarget(
         throw new Error(`Agent session was not committed: ${normalized}`);
       }
       getWorkspaceMemoState().setActivePluginId(null);
-      getWorkspaceMemoState().setSelectedMemo(null);
       if (!isCurrentNavigation(requestId)) return;
       commitNavigation(
         requestId,
@@ -986,81 +660,13 @@ export async function clearWorkspaceDocument(): Promise<void> {
       await getWorkspaceDocumentState().clearDocument();
       if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
       const document = getWorkspaceDocumentState();
-      if (document.activeMemoSession || document.activeExternalSession || document.activeAgentConversationId) {
+      if (document.activeExternalSession || document.activeAgentConversationId) {
         throw new Error('Document session was not cleared');
       }
       commitNavigation(requestId, EMPTY_WORK_COLUMN_TARGET);
     },
     () => clearWorkspaceDocument(),
   );
-}
-
-export function replaceActiveMemoPath(memoId: string, path: string): void {
-  const nextPath = canonicalPath(path);
-  if (!memoId || !nextPath) return;
-  const current = getWorkspaceDocumentState().activeMemoSession;
-  const activeMemo = current?.memoId === memoId ? current : null;
-  const navigation = useWorkColumnStore.getState().navigation;
-  const tabs = useBrowserColumnStore.getState().tabs;
-  const previousPaths = new Set<string>();
-  if (activeMemo?.fileIdentity.path) previousPaths.add(canonicalPath(activeMemo.fileIdentity.path));
-  for (const target of [navigation.target, navigation.pendingTarget, navigation.previousTarget]) {
-    if (target?.kind === 'memo' && target.memoId === memoId && target.path) {
-      previousPaths.add(canonicalPath(target.path));
-    }
-  }
-  for (const tab of tabs) {
-    if (tab.target.kind === 'memo' && tab.target.memoId === memoId && tab.target.filePath) {
-      previousPaths.add(canonicalPath(tab.target.filePath));
-    }
-  }
-
-  const hasStalePath = [...previousPaths].some((previousPath) => previousPath !== nextPath);
-  const activePathChanged = !!activeMemo && canonicalPath(activeMemo.fileIdentity.path) !== nextPath;
-  if (!hasStalePath && !activePathChanged) {
-    replaceWorkspaceMemoHistoryPath(memoId, nextPath);
-    return;
-  }
-
-  const resumeDisplayIdReconciliation = suspendFileDisplayReconciliation();
-  try {
-    for (const previousPath of previousPaths) {
-      if (previousPath === nextPath) continue;
-      const displayId = activeMemo?.fileIdentity.path && canonicalPath(activeMemo.fileIdentity.path) === previousPath
-        ? activeMemo.fileIdentity.displayId
-        : findFileDisplayId(previousPath) ?? findFileDisplayId(nextPath);
-      if (!displayId) continue;
-      // A Memo rename can also have legacy file-browser/external references to
-      // the same path. Rebase their shared file identity before updating tabs.
-      replaceWorkspaceDocumentPath({
-        kind: 'md',
-        memoId,
-        path: previousPath,
-        displayId,
-      }, nextPath);
-    }
-
-    if (activeMemo && canonicalPath(activeMemo.fileIdentity.path) !== nextPath) {
-      const requestId = beginNavigation({
-        kind: 'memo',
-        memoId,
-        path: nextPath,
-        notebookId: activeMemo.notebookId,
-        notebookPath: activeMemo.notebookPath,
-        transitionId: null,
-      }, null);
-      getWorkspaceDocumentState().replaceActiveMemoPath(memoId, nextPath);
-      useWorkColumnStore.getState().replaceMemoPath(memoId, nextPath);
-      publishMemoTargetIfCurrent(requestId, memoId, nextPath, 'skip');
-    } else if (!activeMemo) {
-      getWorkspaceDocumentState().replaceActiveMemoPath(memoId, nextPath);
-      useWorkColumnStore.getState().replaceMemoPath(memoId, nextPath);
-    }
-    useBrowserColumnStore.getState().replaceMemoPath(memoId, nextPath);
-    replaceWorkspaceMemoHistoryPath(memoId, nextPath);
-  } finally {
-    resumeDisplayIdReconciliation();
-  }
 }
 
 /** Update every live reference to an external file after an in-place rename. */
@@ -1071,15 +677,27 @@ export function replaceExternalDocumentPath(
 ): void {
   const previous = canonicalPath(previousPath);
   const next = canonicalPath(path);
+  const selectedPathNote = getWorkspaceMemoState().selectedPathNote;
+  const activeExternal = getWorkspaceDocumentState().activeExternalSession;
 
   const resumeDisplayIdReconciliation = suspendFileDisplayReconciliation();
   try {
     replaceWorkspaceDocumentPath({
       kind: 'md',
-      memoId: null,
       path: previous,
       displayId,
     }, next);
+    if (activeExternal?.indexable && selectedPathNote
+      && selectedPathNote.notebookId === activeExternal.notebookId
+      && selectedPathNote.relativePath === activeExternal.relativePath) {
+      const updatedRelativePath = getWorkspaceDocumentState().activeExternalSession?.relativePath;
+      if (updatedRelativePath) {
+        getWorkspaceMemoState().setSelectedPathNote({
+          notebookId: selectedPathNote.notebookId,
+          relativePath: updatedRelativePath,
+        });
+      }
+    }
     useWorkColumnStore.getState().replaceExternalPath(previous, next);
     useBrowserColumnStore.getState().replaceExternalPath(previous, next);
     const restored = useWorkspaceRestoreStore.getState().desiredTarget;
@@ -1092,28 +710,6 @@ export function replaceExternalDocumentPath(
   } finally {
     resumeDisplayIdReconciliation();
   }
-}
-
-export async function discardMemoDocument(memoId: string): Promise<void> {
-  await runNavigation(
-    EMPTY_WORK_COLUMN_TARGET,
-    async (requestId) => {
-      await getWorkspaceDocumentState().discardMemoDocument(memoId);
-      if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
-      const document = getWorkspaceDocumentState();
-      const target = useWorkColumnStore.getState().navigation.target;
-      if (
-        target.kind === 'memo'
-        && target.memoId === memoId
-        && !document.activeMemoSession
-      ) {
-        commitNavigation(requestId, EMPTY_WORK_COLUMN_TARGET);
-      } else {
-        commitNavigation(requestId, target);
-      }
-    },
-    () => discardMemoDocument(memoId),
-  );
 }
 
 export function closeAgentTarget(): void {
@@ -1140,16 +736,6 @@ export function clearPluginWorkbenchTarget(): boolean {
   return true;
 }
 
-/** Close the artifact surface while preserving any underlying document. */
-export function closeArtifactTarget(): boolean {
-  const workspace = useWorkColumnStore.getState();
-  if (workspace.navigation.target.kind !== 'artifact') return false;
-  const restoredTarget = workspace.navigation.previousTarget ?? EMPTY_WORK_COLUMN_TARGET;
-  const requestId = beginNavigation(EMPTY_WORK_COLUMN_TARGET, null);
-  commitNavigation(requestId, restoredTarget);
-  return true;
-}
-
 /** Open a document-independent plugin workbench after the current document is flushed. */
 export async function openPluginWorkbench(plugin: PluginDescriptor): Promise<void> {
   await runNavigation(
@@ -1157,7 +743,6 @@ export async function openPluginWorkbench(plugin: PluginDescriptor): Promise<voi
     async (requestId) => {
       await getWorkspaceDocumentState().clearDocument();
       if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
-      getWorkspaceMemoState().setSelectedMemo(null);
       getWorkspaceMemoState().setActiveFilter('all');
       getWorkspaceMemoState().setActivePluginId(plugin.manifest.id);
       if (!isCurrentNavigation(requestId)) return;
@@ -1177,7 +762,6 @@ export async function closePluginWorkbench(): Promise<boolean> {
     async (requestId) => {
       await getWorkspaceDocumentState().clearDocument();
       if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
-      getWorkspaceMemoState().setSelectedMemo(null);
       getWorkspaceMemoState().setActivePluginId(null);
       if (!isCurrentNavigation(requestId)) return;
       commitNavigation(requestId, EMPTY_WORK_COLUMN_TARGET);
@@ -1217,7 +801,6 @@ export async function reconcileDeletedNotebook(
       if (!isCurrentNavigation(requestId)) return;
 
       getWorkspaceMemoState().setSelectedNotebook(nextNotebook);
-      getWorkspaceMemoState().setSelectedMemo(null);
       if (nextNotebook) {
         await getWorkspaceMemoState().loadPathNotes({ notebookId: nextNotebook.id });
         if (!isCurrentNavigation(requestId)) return;

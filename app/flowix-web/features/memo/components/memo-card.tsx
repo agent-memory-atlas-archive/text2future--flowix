@@ -1,12 +1,10 @@
 'use client';
 
 import { memo, useEffect, useState, type MouseEvent, type ReactNode } from 'react';
-import { displayTitleFromFilename } from '@/lib/utils';
 import { ChevronRight, ListTodo } from 'lucide-react';
 import { PushPin } from '@phosphor-icons/react';
 import { MEMO_COLORS, MEMO_COLOR_HEX, useMemoStore } from '@features/memo/store/memo-store';
 import {
-  isPathNoteListItem,
   memoListItemRelativePath,
   type MemoColor,
   type MemoListItem,
@@ -174,9 +172,7 @@ function MemoCardShell({
   const openProperties = () => {
     const path = resolvePath();
     window.dispatchEvent(new CustomEvent('flowix:open-note-properties', {
-      detail: isPathNoteListItem(memo)
-        ? { path, scopePath: useMemoStore.getState().selectedNotebook?.path ?? null }
-        : { memoId: memo.id },
+      detail: { path, scopePath: useMemoStore.getState().selectedNotebook?.path ?? null },
     }));
   };
 
@@ -235,7 +231,9 @@ function MemoCardShell({
         onOpenProperties: openProperties,
         onCopyLink: () => {
           const path = resolvePath();
-          if (path) void writeClipboardText(buildNoteOpenLinkFromPath(path, useMemoStore.getState().notebooks) ?? path).catch(() => toast.error(t('document.command.copyFailed')));
+          const link = path ? buildNoteOpenLinkFromPath(path, useMemoStore.getState().notebooks) : null;
+          if (link) void writeClipboardText(link).catch(() => toast.error(t('document.command.copyFailed')));
+          else toast.error(t('document.command.copyFailed'));
         },
         onCopyFullText: () => {
           const path = resolvePath();
@@ -426,8 +424,7 @@ export function MemoCardImpl({
   const hasAgents = (memo.agents?.length ?? 0) > 0;
   const hasTodos = (memo.todos?.length ?? 0) > 0;
   const timeLabel = formatTimeAgo(memo.updatedAt || memo.createdAt, t);
-  const title = (isPathNoteListItem(memo) ? memo.title : displayTitleFromFilename(memo.filename))
-    || t('memo.untitled');
+  const title = memo.title || t('memo.untitled');
   const bodyProps: MemoCardBodyProps = {
     memo,
     tagMap,

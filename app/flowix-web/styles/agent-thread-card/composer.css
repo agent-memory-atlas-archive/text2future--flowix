@@ -203,7 +203,7 @@
   a,
   [role='button'],
   .agent-thread-card__composer-image-remove,
-  .agent-thread-card__composer-role-icon,
+  .agent-thread-card__composer-add-button,
   .agent-thread-card__composer-model,
   .agent-thread-card__composer-mode,
   .agent-thread-card__composer-permission,
@@ -539,7 +539,7 @@
   opacity: 1;
 }
 
-.markdown-editor .agent-thread-card__composer-role-icon {
+.markdown-editor .agent-thread-card__composer-add-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -568,12 +568,12 @@
 /* 之前 `hidden` 时 display: none ── 现在 composerRoleIcon 永远是 button,
  * 不再设 hidden 属性, 这条规则保留作兜底, 防止后续调用方误设 hidden 时
  * 留下按钮空白 (auto 行高 collapse 已处理, 但显式更稳)。 */
-.markdown-editor .agent-thread-card__composer-role-icon[hidden] {
+.markdown-editor .agent-thread-card__composer-add-button[hidden] {
   display: none;
 }
 
-.markdown-editor .agent-thread-card__composer-role-icon img,
-.markdown-editor .agent-thread-card__composer-role-icon svg {
+.markdown-editor .agent-thread-card__composer-add-button img,
+.markdown-editor .agent-thread-card__composer-add-button svg {
   display: block;
   width: 20px;
   height: 20px;
@@ -591,8 +591,8 @@
  * 与 access popover 新增资料夹视觉同源, "次级 indicator" 这一类
  * UI 元素有统一节奏。 */
 .markdown-editor
-  .agent-thread-card__composer-role-icon
-  svg.agent-thread-card__composer-role-icon-empty {
+  .agent-thread-card__composer-add-button
+  svg.agent-thread-card__composer-add-button-empty {
   width: 14px;
   height: 14px;
 }
@@ -600,17 +600,12 @@
 /* hover / open 态 ── 与文件内 __icon-btn 的 hover 风格同源, 用 var(--muted)
  * 与 var(--foreground) 混合色 + transition 150ms。 popover 打开时挂
  * --open 修饰类, 视觉上"按钮被按下"。 */
-.markdown-editor .agent-thread-card__composer-role-icon:hover,
-.markdown-editor .agent-thread-card__composer-role-icon--open,
-.markdown-editor .agent-thread-card__composer-role-icon:focus-visible {
+.markdown-editor .agent-thread-card__composer-add-button:hover,
+.markdown-editor .agent-thread-card__composer-add-button--open,
+.markdown-editor .agent-thread-card__composer-add-button:focus-visible {
   background: color-mix(in oklch, var(--muted) 80%, var(--foreground) 12%);
   color: var(--foreground);
   outline: none;
-}
-
-.markdown-editor
-  .agent-thread-card__composer-role-icon.agent-thread-card__role-icon--svg {
-  color: var(--secondary-foreground);
 }
 
 .markdown-editor .agent-thread-card__composer-input {

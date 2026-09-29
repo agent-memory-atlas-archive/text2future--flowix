@@ -26,7 +26,6 @@ export interface DocumentContainerState {
 export interface DocumentContainerProps {
   /** Runtime identity supplied by the owning open session or file surface. */
   fileIdentity: FileDisplayIdentity;
-  memoId?: string | null;
   notebookId?: string | null;
   notebookPath?: string | null;
   transitionId?: number | null;

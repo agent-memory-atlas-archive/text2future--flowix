@@ -1,3 +1,8 @@
+import { useEffect } from 'react';
+import { useShallow } from 'zustand/react/shallow';
+import { useCustomFilterStore } from '@features/memo/store/custom-filter-store';
+import { useMemoStore } from '@features/memo/store/memo-store';
+
 export { MemoList } from '@features/memo/components/memo-list';
 export { useMemoListHoverPreview } from '@features/memo/components/use-memo-list-hover-preview';
 export { MemoListTitlebarWin } from '@features/memo/components/memo-list-titlebar-win';
@@ -17,9 +22,7 @@ export { startNotebookImportWithMonitoring } from '@features/memo/services/noteb
 
 export function useShellMemoViewModel() {
   return useMemoStore(useShallow((state) => ({
-    memos: state.memos,
     notebooks: state.notebooks,
-    selectedMemo: state.selectedMemo,
     selectedNotebook: state.selectedNotebook,
     startupPhase: state.startupPhase,
     middleColumnView: state.middleColumnView,
@@ -27,12 +30,29 @@ export function useShellMemoViewModel() {
     activePluginId: state.activePluginId,
     activeSort: state.activeSort,
     setActiveFilter: state.setActiveFilter,
-    loadMemos: state.loadMemos,
     loadPathNotes: state.loadPathNotes,
     triggerRefresh: state.triggerRefresh,
-    updateMemoMeta: state.updateMemoMeta,
-    setMemoColors: state.setMemoColors,
   })));
 }
-import { useShallow } from 'zustand/react/shallow';
-import { useMemoStore } from '@features/memo/store/memo-store';
+
+export function useShellDocumentListTitle(input: {
+  notebookId: string | null;
+  folderPath: string;
+  customFilterId: string | null;
+} | null): string | null {
+  const loadNotebookFilters = useCustomFilterStore((state) => state.loadNotebookFilters);
+  const customFilter = useCustomFilterStore((state) => (
+    input && input.notebookId && input.customFilterId
+      ? state.filtersByNotebook[input.notebookId]?.find((filter) => filter.id === input.customFilterId) ?? null
+      : null
+  ));
+
+  useEffect(() => {
+    if (input?.notebookId) void loadNotebookFilters(input.notebookId);
+  }, [input?.notebookId, loadNotebookFilters]);
+
+  if (!input) return null;
+  return customFilter?.name
+    || input.folderPath.replace(/[\\/]+$/, '').split(/[\\/]/).pop()
+    || input.folderPath;
+}

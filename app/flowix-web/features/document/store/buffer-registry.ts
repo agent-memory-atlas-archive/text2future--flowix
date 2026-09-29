@@ -108,7 +108,6 @@ export function rebaseCurrentDocumentPath(identity: DocumentIdentity, path: stri
   const nextPath = canonicalPath(path);
   currentIdentity = {
     ...normalized,
-    memoId: normalized.memoId ?? currentIdentity.memoId,
     path: nextPath,
   };
   currentPath = nextPath;
@@ -184,8 +183,6 @@ export async function flushDocument(
   identity: DocumentIdentity,
   path: string,
   callbacks?: FlushCallbacks & {
-    channel?: 'internal' | 'external';
-    key?: string | null;
     scopePath?: string | null;
     force?: boolean;
   },
@@ -198,10 +195,6 @@ export async function flushDocument(
     return true;
   }
 
-  const channel: 'internal' | 'external' = callbacks?.channel
-    ?? (normalized.memoId ? 'internal' : 'external');
-  const key: string | null = callbacks?.key
-    ?? normalized.memoId;
   const revision = buf.capturedRevision;
   buf.savingRevision = revision;
   buf.pendingRevision = revision;
@@ -213,8 +206,6 @@ export async function flushDocument(
     return await scheduleSave({
       queueKey: documentIdentityKey(normalized),
       path: canonicalPath(path),
-      channel,
-      key,
       revision,
       scopePath: callbacks?.scopePath ?? null,
       readExpected: () => buf.lastSavedContent,

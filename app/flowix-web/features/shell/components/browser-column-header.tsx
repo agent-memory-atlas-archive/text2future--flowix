@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent } from 'react';
 import { flushSync } from 'react-dom';
-import { Blocks, Check, ChevronDown, ChevronRight, Code2, File as FileIcon, FileText, Folder, Globe, MessageSquare, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Code2, File as FileIcon, FileText, Folder, Globe, MessageSquare, X } from 'lucide-react';
 import {
   canMoveBrowserColumnTargetToWorkColumn,
   type BrowserColumnTab,
@@ -55,28 +55,25 @@ function tabIcon(tab: BrowserColumnTab) {
     );
   }
   if (tab.icon) return <span className="text-sm leading-none">{tab.icon}</span>;
-  if (tab.target.kind === 'artifact') return <Blocks className="h-3.5 w-3.5" />;
   if (tab.target.kind === 'file-browser' && !tab.target.activeFilePath) return <Folder className="h-3.5 w-3.5" />;
   if (tab.target.kind === 'agent_conversation') return <MessageSquare className="h-3.5 w-3.5" />;
   if (tab.target.kind === 'web') return <Globe className="h-3.5 w-3.5" />;
-  // Keep memo tabs consistent with note rows in the notebook file tree.
-  if (tab.target.kind === 'memo') return <FileIcon className="h-[15px] w-[15px]" strokeWidth={1.3} />;
+  if (tab.target.kind === 'file-browser' && tab.target.activeFilePath?.toLowerCase().endsWith('.md'))
+    return <FileIcon className="h-[15px] w-[15px]" strokeWidth={1.3} />;
   return <FileText className="h-3.5 w-3.5" />;
 }
 
 function MemoEditorModeContextMenuItem({
-  memoId,
   filePath,
   onToggle,
 }: {
-  memoId: string;
   filePath: string;
   onToggle: () => void | Promise<void>;
 }) {
   const { t } = useI18n();
   const editorMode = useDocumentEditorMode(
     'browser-column',
-    documentIdentityFromFile(requireFileDisplayIdentity(filePath), memoId),
+    documentIdentityFromFile(requireFileDisplayIdentity(filePath)),
   );
 
   return (
@@ -209,12 +206,11 @@ export function BrowserColumnHeader({
 
     try {
       const canMoveToWorkColumn = canMoveBrowserColumnTargetToWorkColumn(tab.target);
-      const editorMode = tab.target.kind === 'memo'
+      const editorMode = tab.target.kind === 'file-browser' && Boolean(tab.target.activeFilePath)
         ? getDocumentEditorMode(
             'browser-column',
             documentIdentityFromFile(
-              requireFileDisplayIdentity(tab.target.filePath),
-              tab.target.memoId,
+              requireFileDisplayIdentity(tab.target.activeFilePath!),
             ),
           )
         : null;
@@ -413,10 +409,9 @@ export function BrowserColumnHeader({
                 >
                   <span className="leading-5">{t('tabWindow.context.closeAll')}</span>
                 </ContextMenuItem>
-                {tab.target.kind === 'memo' && (
+                {tab.target.kind === 'file-browser' && tab.target.activeFilePath && /\.md$/i.test(tab.target.activeFilePath) && (
                   <MemoEditorModeContextMenuItem
-                    memoId={tab.target.memoId}
-                    filePath={tab.target.filePath}
+                    filePath={tab.target.activeFilePath}
                     onToggle={() => onToggleMemoEditorMode(tab.id)}
                   />
                 )}

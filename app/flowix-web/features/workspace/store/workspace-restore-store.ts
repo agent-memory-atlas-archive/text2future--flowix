@@ -9,7 +9,6 @@ interface AgentConversationRestoreState {
 }
 
 export type PersistedWorkspaceTarget =
-  | { kind: 'memo'; memoId: string }
   | { kind: 'external'; path: string; scopePath: string | null }
   | {
       kind: 'media';
@@ -23,7 +22,7 @@ export type PersistedWorkspaceTarget =
 export type WorkspaceRestoreStatus = 'idle' | 'restoring' | 'restored' | 'unavailable';
 
 interface WorkspaceRestoreStore {
-  version: 4;
+  version: 5;
   agentConversation: AgentConversationRestoreState;
   desiredTarget: PersistedWorkspaceTarget | null;
   restoreStatus: WorkspaceRestoreStatus;
@@ -42,7 +41,7 @@ const EMPTY_AGENT_CONVERSATION_RESTORE: AgentConversationRestoreState = {
 export const useWorkspaceRestoreStore = create<WorkspaceRestoreStore>()(
   persist(
     (set) => ({
-      version: 4,
+      version: 5,
       agentConversation: EMPTY_AGENT_CONVERSATION_RESTORE,
       desiredTarget: null,
       restoreStatus: 'idle',
@@ -86,28 +85,18 @@ export const useWorkspaceRestoreStore = create<WorkspaceRestoreStore>()(
         agentConversation: state.agentConversation,
         desiredTarget: state.desiredTarget,
       }),
-      version: 4,
-      migrate: (persisted, version) => {
-        const state = persisted as (Partial<WorkspaceRestoreStore> & {
-          externalDocument?: { path: string; scopePath: string | null } | null;
-        }) | undefined;
-        const legacyAgent = state?.agentConversation ?? EMPTY_AGENT_CONVERSATION_RESTORE;
-        const desiredTarget = version < 3
-          ? state?.externalDocument?.path
-            ? {
-                kind: 'external' as const,
-                path: state.externalDocument.path,
-                scopePath: state.externalDocument.scopePath ?? null,
-              }
-            : legacyAgent.detailOpen && legacyAgent.selectedInstanceId
-              ? { kind: 'agent-conversation' as const, instanceId: legacyAgent.selectedInstanceId }
-              : null
-          : state?.desiredTarget ?? null;
+      version: 5,
+      migrate: (persisted) => {
+        const state = persisted as Partial<WorkspaceRestoreStore> | undefined;
+        const desiredTarget = state?.desiredTarget;
         return {
           ...state,
-          version: 4 as const,
-          agentConversation: legacyAgent,
-          desiredTarget,
+          version: 5 as const,
+          agentConversation: state?.agentConversation ?? EMPTY_AGENT_CONVERSATION_RESTORE,
+          desiredTarget: desiredTarget?.kind === 'external'
+            || desiredTarget?.kind === 'media'
+            || desiredTarget?.kind === 'agent-conversation'
+              ? desiredTarget : null,
           restoreStatus: 'idle' as const,
         };
       },

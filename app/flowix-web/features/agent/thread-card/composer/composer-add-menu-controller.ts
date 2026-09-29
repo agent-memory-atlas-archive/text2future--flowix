@@ -1,13 +1,13 @@
 import type { I18nKey } from "@/lib/i18n";
-import type { AgentRolePickerController } from "@features/agent/thread-card/role/agent-role-picker-controller";
+import type { NotePickerController } from "@features/agent/thread-card/note/note-picker-controller";
 import type { ComposerImageController } from "./composer-image-controller";
 import { COMPOSER_ATTACHMENT_ACCEPT } from "./composer-image-controller";
 
 export interface ComposerAddMenuControllerOptions {
   trigger: HTMLButtonElement;
   popover: HTMLDivElement;
-  rolePopover: HTMLDivElement;
-  rolePicker: AgentRolePickerController;
+  notePopover: HTMLDivElement;
+  notePicker: NotePickerController;
   images: ComposerImageController;
   t: (key: I18nKey) => string;
   isDestroyed: () => boolean;
@@ -22,9 +22,11 @@ export class ComposerAddMenuController {
 
   constructor(private readonly options: ComposerAddMenuControllerOptions) {
     options.trigger.addEventListener("click", this.handleTriggerClick);
-    options.rolePopover.addEventListener("pointerenter", this.cancelSubmenuClose);
-    options.rolePopover.addEventListener("pointerleave", this.handleSubmenuBoundaryLeave);
+    options.notePopover.addEventListener("pointerenter", this.cancelSubmenuClose);
+    options.notePopover.addEventListener("pointerleave", this.handleSubmenuBoundaryLeave);
   }
+
+  close(): void { this.setOpen(false); }
 
   dispose(): void {
     if (this.disposed) return;
@@ -32,8 +34,8 @@ export class ComposerAddMenuController {
     this.cancelSubmenuClose();
     this.setOpen(false);
     this.options.trigger.removeEventListener("click", this.handleTriggerClick);
-    this.options.rolePopover.removeEventListener("pointerenter", this.cancelSubmenuClose);
-    this.options.rolePopover.removeEventListener("pointerleave", this.handleSubmenuBoundaryLeave);
+    this.options.notePopover.removeEventListener("pointerenter", this.cancelSubmenuClose);
+    this.options.notePopover.removeEventListener("pointerleave", this.handleSubmenuBoundaryLeave);
     this.options.popover.remove();
   }
 
@@ -47,21 +49,21 @@ export class ComposerAddMenuController {
     this.open = open;
     this.options.popover.hidden = !open;
     this.options.trigger.setAttribute("aria-expanded", String(open));
-    this.options.trigger.classList.toggle("agent-thread-card__composer-role-icon--open", open);
+    this.options.trigger.classList.toggle("agent-thread-card__composer-add-button--open", open);
     if (open) {
       this.render();
       this.position();
       document.addEventListener("pointerdown", this.handleOutsidePointer, true);
     } else {
       this.noteItem = null;
-      this.options.rolePicker.setOpen(false);
+      this.options.notePicker.setOpen(false);
       document.removeEventListener("pointerdown", this.handleOutsidePointer, true);
     }
   }
 
   private readonly handleOutsidePointer = (event: PointerEvent): void => {
     const target = event.target as Node | null;
-    if (target && (this.options.popover.contains(target) || this.options.rolePopover.contains(target) || this.options.trigger.contains(target))) return;
+    if (target && (this.options.popover.contains(target) || this.options.notePopover.contains(target) || this.options.trigger.contains(target))) return;
     this.setOpen(false);
   };
 
@@ -93,9 +95,13 @@ export class ComposerAddMenuController {
       item.append(this.chevron());
       item.addEventListener("pointerenter", () => {
         this.cancelSubmenuClose();
-        this.options.rolePicker.openFromParent(item);
+        this.options.notePicker.openFromParent(item);
       });
-      item.addEventListener("focus", () => this.options.rolePicker.openFromParent(item));
+      item.addEventListener("focus", () => this.options.notePicker.openFromParent(item));
+      item.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.options.notePicker.openFromParent(item);
+      });
     } else if (onClick) {
       item.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -112,13 +118,13 @@ export class ComposerAddMenuController {
 
   private readonly handleSubmenuBoundaryLeave = (event: PointerEvent): void => {
     const next = event.relatedTarget as Node | null;
-    if (next && (this.noteItem?.contains(next) || this.options.rolePopover.contains(next))) return;
+    if (next && (this.noteItem?.contains(next) || this.options.notePopover.contains(next))) return;
     // A short grace period is the usual cascade-menu behavior and covers the
     // pointer crossing the shared edge between the two fixed popovers.
     this.cancelSubmenuClose();
     this.submenuCloseTimer = setTimeout(() => {
       this.submenuCloseTimer = null;
-      this.options.rolePicker.setOpen(false);
+      this.options.notePicker.setOpen(false);
     }, 100);
   };
 

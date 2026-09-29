@@ -157,7 +157,7 @@ export interface ExternalAgentSettingsControllerOptions {
    * (而不是打开笔记)。由宿主 (thread card view / 独立对话) 接到
    * `ComposerController.insertMemoReference`。
    */
-  onSelectFeaturedNote?: (ref: { id: string; filename: string; title: string }) => void;
+  onSelectFeaturedNote?: (ref: { id: string; filename: string; title: string; notebookId?: string; relativePath?: string }) => void;
   /**
    * 仓库列表增删后的轻提示。 由宿主注入而不是直接 import toast, 让本
    * controller 保持对 UI 反馈层的解耦 (测试里也可以只断言调用)。

@@ -9,7 +9,7 @@ use std::fs;
 use tauri::{AppHandle, State};
 
 use crate::lock_utils::read_lock;
-use flowix_core::memo_file::{MemoVersionMeta, MemoVersionSource};
+use flowix_core::memo_file::{FileWriteOutcome, MemoVersionMeta, MemoVersionSource, PathVersionMeta};
 use flowix_core::MemoService;
 
 use crate::app::state::AppState;
@@ -18,6 +18,54 @@ use crate::watcher::runtime::mark_self_write_for;
 
 use super::helpers::*;
 use super::*;
+
+fn path_archive_document(state: &AppState, notebook_id: &str, relative_path: &str) -> Option<std::path::PathBuf> {
+    let memo_file = read_lock(&state.memo_file, "memo_file");
+    let notebook = memo_file.get_notebook_config_by_id(notebook_id)?;
+    let root = std::path::PathBuf::from(notebook.path).canonicalize().ok()?;
+    let relative = std::path::Path::new(relative_path);
+    if relative.is_absolute() || !relative_path.ends_with(".md")
+        || relative.components().any(|part| !matches!(part, std::path::Component::Normal(_))) {
+        return None;
+    }
+    let path = root.join(relative).canonicalize().ok()?;
+    (path.starts_with(root) && path.is_file()).then_some(path)
+}
+
+#[tauri::command]
+pub fn list_path_versions(notebook_id: String, relative_path: String, state: State<AppState>) -> Vec<PathVersionMeta> {
+    read_lock(&state.memo_file, "memo_file").list_path_versions(&notebook_id, &relative_path)
+}
+
+#[tauri::command]
+pub fn create_path_version(notebook_id: String, relative_path: String, source: Option<MemoVersionSource>, state: State<AppState>) -> Option<PathVersionMeta> {
+    let path = path_archive_document(&state, &notebook_id, &relative_path)?;
+    start_security_bookmark_access(&state, &path);
+    let content = fs::read_to_string(path).ok()?;
+    read_lock(&state.memo_file, "memo_file")
+        .create_path_version(&notebook_id, &relative_path, &content, source.unwrap_or(MemoVersionSource::Manual))
+        .ok()?
+}
+
+#[tauri::command]
+pub fn restore_path_version(notebook_id: String, relative_path: String, version_id: String,
+    expected_content: Option<String>, state: State<AppState>, app: AppHandle) -> Option<String> {
+    let path = path_archive_document(&state, &notebook_id, &relative_path)?;
+    start_security_bookmark_access(&state, &path);
+    let memo_file = read_lock(&state.memo_file, "memo_file");
+    let target = memo_file.read_path_version(&notebook_id, &relative_path, &version_id)?;
+    let current = fs::read_to_string(&path).ok()?;
+    if expected_content.as_deref().is_some_and(|expected| expected != current) { return None; }
+    memo_file.create_path_version(&notebook_id, &relative_path, &current, MemoVersionSource::RestoreBackup).ok()?;
+    match memo_file.write_file_if_matches(&path, &target, Some(&current)).ok()? {
+        FileWriteOutcome::Saved => {
+            mark_self_write_for(&app, &path);
+            crate::commands::helpers::refresh_notebook_note_index(&memo_file, &path);
+            Some(target)
+        },
+        _ => None,
+    }
+}
 
 #[tauri::command]
 pub fn list_memo_versions(id: String, state: State<AppState>) -> Vec<MemoVersionMeta> {

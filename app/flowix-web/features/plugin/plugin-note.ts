@@ -23,6 +23,7 @@ export function getPluginNoteInfo(memo: MemoItem | null | undefined): PluginNote
   if (!memo) return null;
   const noteType = memo.properties?.flowix_note_type;
   const pluginId = memo.properties?.flowix_plugin;
+  if (!memo.properties?.flowix_artifact) return null;
   if (typeof noteType !== 'string' || typeof pluginId !== 'string') return null;
   if (!noteType.trim() || !pluginId.trim()) return null;
   return {

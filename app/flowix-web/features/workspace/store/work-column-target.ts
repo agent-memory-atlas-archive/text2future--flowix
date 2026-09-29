@@ -1,6 +1,5 @@
 import type { FileBrowserContext } from './file-browser-target';
 import type { PluginDescriptor } from '@platform/tauri/client';
-import type { PluginArtifactRendererId } from '@features/plugin/public/workspace-api';
 
 /**
  * The stable target currently owned by the workColumn.
@@ -10,14 +9,7 @@ import type { PluginArtifactRendererId } from '@features/plugin/public/workspace
  */
 export type WorkColumnTarget =
   | { kind: 'empty' }
-  | {
-      kind: 'memo';
-      memoId: string;
-      path: string;
-      notebookId: string | null;
-      notebookPath: string | null;
-      transitionId: number | null;
-    }
+  | { kind: 'document-list'; scope: { kind: 'folder'; path: string; notebookPath: string; notebookId: string | null }; filters: { resourceKinds?: string[]; tags?: string[]; customFilterId?: string } }
   | {
       kind: 'external';
       fileBrowser?: FileBrowserContext;
@@ -32,15 +24,6 @@ export type WorkColumnTarget =
       notebookPath: string | null;
       resourceKind: 'image' | 'video';
     }
-  /** A durable host-owned artifact referenced by a pointer memo. */
-  | {
-      kind: 'artifact';
-      pointerMemoId: string;
-      notebookId: string | null;
-      notebookPath: string | null;
-      pluginId: string | null;
-      renderer: PluginArtifactRendererId | null;
-    }
   | { kind: 'agent-conversation'; instanceId: string }
   /** View identity only. Plugin run state and artifacts live in host stores. */
   | { kind: 'plugin-workbench'; plugin: PluginDescriptor }
@@ -49,7 +32,6 @@ export type WorkColumnTarget =
 /** Local file path for the last successfully committed workColumn target. */
 export function workColumnTargetFilePath(target: WorkColumnTarget): string | null {
   switch (target.kind) {
-    case 'memo':
     case 'external':
       return target.path;
     case 'media':

@@ -2,9 +2,7 @@ import { invokeDocumentMutation } from './document-mutation';
 import { invoke } from '@tauri-apps/api/core';
 import type { MemoColor, MemoItem } from '@/types/memo-item';
 import type { MemoContentCommit } from '@/types/memo';
-import type { AgentRoleMemoItem } from './general';
 import type { NotebookImportStatus } from './agent';
-import type { ResolvedOpenTarget } from '@platform/open-target/types';
 
 export type FilterType = 'all' | 'todos' | 'agents' | 'favorited' | 'tagged' | 'thisWeek' | 'thisMonth';
 export type SortType = 'createdAt' | 'updatedAt' | 'filenameAsc' | 'filenameDesc';
@@ -32,6 +30,21 @@ export interface PathNoteEntry {
   properties: Record<string, unknown>;
 }
 
+export interface CreatedPathDocument {
+  notebookId: string;
+  relativePath: string;
+  path: string;
+  initialContent: string;
+}
+
+export interface MarkdownLocation {
+  path: string;
+  notebookId: string | null;
+  relativePath: string | null;
+  notebookPath: string | null;
+  indexable: boolean;
+}
+
 export interface PathNoteListPage {
   notes: PathNoteEntry[];
   nextCursor: string | null;
@@ -47,6 +60,14 @@ export interface MemoSearchHit {
   matchedIn: MatchField;
   score: number;
   updatedAt: number;
+}
+
+export interface PathNoteSearchHit {
+  notebookId: string;
+  relativePath: string;
+  title: string;
+  snippet: string;
+  matchedIn: MatchField;
 }
 
 export interface MemoTemplate {
@@ -86,6 +107,14 @@ export interface MemoVersionMeta {
   contentHash: string;
 }
 
+export interface PathVersionMeta {
+  id: string;
+  createdAt: number;
+  source: MemoVersionSource;
+  size: number;
+  contentHash: string;
+}
+
 export interface OpenMemoSession {
   memo: MemoItem;
   notebookId: string;
@@ -95,6 +124,8 @@ export interface OpenMemoSession {
 }
 
 export const memos = {
+  resolveMarkdownLocation: (filePath: string) =>
+    invoke<MarkdownLocation>('resolve_markdown_location', { filePath }),
   getMemos: (params?: {
     notebookId?: string;
     filter?: FilterType;
@@ -136,8 +167,6 @@ export const memos = {
       query,
       limit,
     }),
-  listAgentRoleMemos: () =>
-    invoke<AgentRoleMemoItem[]>('list_agent_role_memos'),
   getUsedTagIds: (notebookId?: string) =>
     invoke<{
       usedTagIds: string[];
@@ -163,19 +192,8 @@ export const memos = {
     expectedContent: params.expectedContent,
   }),
   getLaunchOpenFiles: () => invoke<string[]>('get_launch_open_files'),
-  addDocument: (tag?: string, notebookId?: string, parentRelativePath?: string, title?: string) =>
-    invoke<{ memo: MemoItem; initialContent: string }>('add_document', { tag, notebookId, parentRelativePath, title }),
-  createWithContent: (params: {
-    title: string;
-    content: string;
-    notebookId: string;
-    parentRelativePath?: string;
-  }) => invoke<MemoItem>('create_memo_with_content', {
-    title: params.title,
-    content: params.content,
-    notebookId: params.notebookId,
-    parentRelativePath: params.parentRelativePath,
-  }),
+  addPathDocument: (notebookId: string, tag?: string, parentRelativePath?: string, title?: string) =>
+    invoke<CreatedPathDocument>('add_path_document', { tag, notebookId, parentRelativePath, title }),
   moveMemoToDirectory: (filePath: string, notebookId: string, parentRelativePath: string) =>
     invoke<{
       path: string;
@@ -192,14 +210,20 @@ export const memos = {
     invoke<MemoTemplate>('save_memo_template', { title, content }),
   deleteTemplate: (templateId: string) =>
     invoke<boolean>('delete_memo_template', { templateId }),
-  createFromTemplate: (templateId: string, notebookId?: string) =>
-    invoke<MemoItem>('create_memo_from_template', { templateId, notebookId }),
-  importExternalDocumentToMemo: (filePath: string, content: string, notebookId?: string) =>
-    invoke<MemoItem | null>('import_external_document_to_memo', { filePath, content, notebookId }),
+  createPathFromTemplate: (templateId: string, notebookId: string) =>
+    invoke<CreatedPathDocument>('create_path_from_template', { templateId, notebookId }),
+  importExternalDocumentByPath: (filePath: string, content: string, notebookId: string) =>
+    invoke<CreatedPathDocument>('import_external_document_by_path', { filePath, content, notebookId }),
   deleteMemo: (filePath: string) => invoke<boolean>('delete_memo', { filePath }),
   clearMemos: (notebookId?: string) => invoke<boolean>('clear_memos', { notebookId }),
   listVersions: (id: string) =>
     invoke<MemoVersionMeta[]>('list_memo_versions', { id }),
+  listPathVersions: (notebookId: string, relativePath: string) =>
+    invoke<PathVersionMeta[]>('list_path_versions', { notebookId, relativePath }),
+  createPathVersion: (notebookId: string, relativePath: string) =>
+    invoke<PathVersionMeta | null>('create_path_version', { notebookId, relativePath, source: 'manual' }),
+  restorePathVersion: (notebookId: string, relativePath: string, versionId: string, expectedContent?: string) =>
+    invoke<string | null>('restore_path_version', { notebookId, relativePath, versionId, expectedContent }),
   restoreVersion: (id: string, filePath: string, versionId: string, expectedContent?: string) =>
     invoke<({ path: string; content: string } & MemoContentCommit) | null>('restore_memo_version', {
       id,
@@ -213,16 +237,14 @@ export const memos = {
       query,
       limit,
     }),
+  searchPathNotes: (notebookId: string, query: string, limit?: number) =>
+    invoke<PathNoteSearchHit[]>('search_path_notes', { notebookId, query, limit }),
   // 鍏ㄥ眬"閫氳繃閾炬帴鎵撳紑绗旇"鍏ュ彛 鈹€鈹€ 鎺ユ敹浠绘剰褰㈠紡鐨?`flowix://` URL / 鐗╃悊璺緞,
   // 鍚庣璧?parser + resolver, 杩斿洖 ResolvedOpenTarget銆?null 琛ㄧず瑙ｆ瀽澶辫触
   // (id 涓嶅瓨鍦?/ 璺緞涓嶅湪 notebook 鍐?/ 鐗╃悊璺緞鎸囧悜宸插垹绗旇)銆?閰嶅悎
   // `lib/openByTarget/listener.ts` 鐩戝惉 `flowix:open-target` 浜嬩欢 鈹€鈹€ 涓诲姩
   // 璋冪敤 (noteReference 鍙屽嚮 / Agent 宸ュ叿) 璧?await, 琚姩娲惧彂 (澶栭儴娣遍摼 /
   // single-instance 浜屾鍚姩) 璧颁簨浠躲€?涓ゆ潯璺緞姹囧悎鍒板悓涓€ `openNoteByTarget`銆?
-  openMemoByTarget: (raw: string, options?: { emitEvent?: boolean }) => invoke<ResolvedOpenTarget | null>(
-    'open_memo_by_target',
-    { raw, emitEvent: options?.emitEvent ?? true },
-  ),
 };
 
 export type ExternalDocumentWriteOutcome =

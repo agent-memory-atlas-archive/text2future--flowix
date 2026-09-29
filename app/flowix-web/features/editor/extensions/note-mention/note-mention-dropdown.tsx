@@ -77,7 +77,7 @@ export function NoteMentionDropdown({
               const selected = index === selectedIndex;
               return (
                 <button
-                  key={`${item.notebookId}:${item.id}`}
+                  key={`${item.notebookId}:${item.relativePath}`}
                   ref={(node) => {
                     itemRefs.current[index] = node;
                   }}

@@ -152,8 +152,6 @@ interface AgentUserMessage {
   permissionMode?: AgentPermissionMode;
   codexModel?: AgentCodexModel;
   codexReasoningEffort?: AgentCodexReasoningEffort;
-  agentRoleMemoId?: string;
-  agentRoleName?: string;
   conversationTitle?: string;
 }
 
@@ -185,14 +183,9 @@ export interface CodexApprovalRequest {
 export type AgentConversationSource = {
   kind: 'thread-card' | 'dedicated';
   documentPath?: string | null;
-  memoId?: string | null;
+  relativePath?: string | null;
   notebookId?: string | null;
 };
-
-export interface AgentConversationRole {
-  memoId?: string | null;
-  name?: string | null;
-}
 
 export interface AgentConversationInstance {
   instanceId: string;
@@ -206,7 +199,6 @@ export interface AgentConversationInstance {
   /** Backend-owned cwd; omitted from conversation upsert requests. */
   readonly frozenCwd?: string | null;
   source: AgentConversationSource;
-  role?: AgentConversationRole | null;
   createdAt: number;
   updatedAt: number;
 }

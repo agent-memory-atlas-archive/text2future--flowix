@@ -1,7 +1,7 @@
 //! Markdown frontmatter 解析与编辑。
 //!
-//! Notes are addressed by notebook-relative path. New Markdown files do not
-//! receive `flowix_key`. Existing identity fields remain reserved, and the
+//! Notes are addressed by notebook-relative path. Supplied Markdown is kept
+//! intact, including legacy `flowix_key`. Existing identity fields remain reserved, and the
 //! merge helper can read them for legacy frontmatter compatibility. File
 //! registration never derives a note identity from those fields.
 //!
@@ -440,11 +440,10 @@ pub(crate) fn replace_frontmatter_tags_preserving_invalid_paths(
 /// Legacy creation helper. The key argument is retained for API compatibility;
 /// newly created Markdown does not contain a memo identity field.
 pub fn build_md_content(_key: &str, body: &str) -> String {
-    without_flowix_key(body)
+    body.to_string()
 }
 
-/// Creation from a template must not copy the template's obsolete identity.
-/// Ordinary reads/import indexing leave existing user files byte-for-byte intact.
+/// Explicit legacy cleanup helper. Normal creation and saving preserve supplied content.
 pub fn without_flowix_key(content: &str) -> String {
     let Some(caps) = FRONTMATTER_RE.captures(content) else {
         return content.to_string();

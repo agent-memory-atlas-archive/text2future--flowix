@@ -34,14 +34,6 @@ export function restoreRemovedAgentThreadCardInstance(
       snapshot?.threadId ??
       (typeof attrs.threadId === "string" ? attrs.threadId : null),
     source: snapshot?.source ?? { kind: "thread-card" },
-    role: snapshot?.role ?? {
-      memoId:
-        typeof attrs.agentRoleMemoId === "string"
-          ? attrs.agentRoleMemoId
-          : null,
-      name:
-        typeof attrs.agentRoleName === "string" ? attrs.agentRoleName : null,
-    },
     runtimeConfig:
       snapshot?.runtimeConfig ?? buildInitialInstanceRuntimeConfig(typeKey),
   });

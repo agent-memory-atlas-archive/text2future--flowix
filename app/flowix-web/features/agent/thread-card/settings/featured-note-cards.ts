@@ -2,6 +2,7 @@ import { system } from "@platform/tauri/client";
 import { getPropertyIconOption } from "@features/document/properties/property-icons";
 import { getNotebookIconMarkup } from "@features/memo/components/notebook-icon";
 import type { MemoItem } from "@/types/memo-item";
+import type { PathNoteEntry } from "@platform/tauri/client/memos";
 
 // Keep one row visible: one or two cards are centered, three fill the row,
 // and any additional cards move to the next page.
@@ -210,8 +211,7 @@ function noteTitle(filename: string): string {
 /**
  * 把笔记图标写进卡片图标位。
  *
- * 图标值可能有两种形态, 与 `appendRoleIconContent` (agent 角色选择器) 保持同一
- * 套解析顺序:
+ * 图标值按以下顺序解析:
  *   1. 属性图标 id (如 `dog-face`) → 渲染成 `<img>` 引用 assets/property-icons;
  *   2. 笔记本图标 id (如 `board_fill`) → 内联 SVG (assets/notebook-icons);
  *   3. 其他 (emoji / 一个字) → 直接作为文本。
@@ -281,6 +281,22 @@ export function getFeaturedNoteCards(
       description,
     }];
   });
+}
+
+export function getFeaturedPathNoteCards(
+  notes: PathNoteEntry[],
+  config: FeaturedNoteFilterConfig = DEFAULT_FEATURED_NOTE_FILTER_CONFIG,
+): FeaturedNoteCard[] {
+  const { conditions } = normalizeFeaturedNoteFilterConfig(config);
+  return notes.filter((note) => matchesAnyCondition(note.properties ?? {}, conditions))
+    .map((note) => ({
+      id: note.relativePath,
+      icon: propertyString(note.properties, "icon") || note.icon?.trim() || DEFAULT_FEATURED_NOTE_ICON,
+      name: propertyString(note.properties, "name"),
+      title: note.title,
+      description: propertyString(note.properties, "desc")
+        || propertyString(note.properties, "description") || note.preview.trim(),
+    }));
 }
 
 export function getFeaturedNotePageCount(noteCount: number): number {

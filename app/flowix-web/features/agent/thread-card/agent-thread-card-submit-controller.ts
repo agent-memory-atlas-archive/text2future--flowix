@@ -20,14 +20,9 @@ export interface SubmitAgentThreadCardConversationInput {
   currentTitle: string;
   runtimeHandleId: string;
   source: AgentConversationSource;
-  role: {
-    memoId: string | null;
-    name: string | null;
-  };
   isFirstMessage: boolean;
   documentContext: string;
   buildTitle: (prompt: string, fallback: string) => string;
-  loadAgentRoleBody: (memoId: string) => Promise<string | null>;
   onThreadBound: (binding: {
     instanceId: string;
     threadId: string;
@@ -44,10 +39,6 @@ export interface EnsureAgentThreadCardConversationInput {
   currentTitle: string;
   runtimeHandleId: string;
   source: AgentConversationSource;
-  role: {
-    memoId: string | null;
-    name: string | null;
-  };
   buildTitle: (prompt: string, fallback: string) => string;
   onThreadBound: (binding: {
     instanceId: string;
@@ -103,7 +94,6 @@ export async function ensureAgentThreadCardConversation(
     title: nextTitle,
     threadId: nextThreadId,
     source: input.source,
-    role: input.role,
     runtimeConfig: buildInitialInstanceRuntimeConfig(nextTypeKey),
   });
   nextInstanceId = conversation.instanceId;
@@ -137,21 +127,13 @@ export async function submitAgentThreadCardConversation(
     runtimeConfig,
   } = ensured;
 
-  const roleBody =
-    input.isFirstMessage && input.role.memoId
-      ? await input.loadAgentRoleBody(input.role.memoId)
-      : null;
-
   const sendPromise = useAgentSessionStore
     .getState()
     .sendMessageToThread(nextThreadId, input.prompt, nextTypeKey, {
       instanceId: nextInstanceId,
       conversationTitle: nextTitle,
       currentNoteContent: input.documentContext,
-      agentRoleMemoId: input.role.memoId ?? undefined,
-      agentRoleName: input.role.name ?? undefined,
       isFirstMessage: input.isFirstMessage,
-      agentRoleBody: roleBody,
       runtimeConfig,
       imagePaths: input.imagePaths,
     });

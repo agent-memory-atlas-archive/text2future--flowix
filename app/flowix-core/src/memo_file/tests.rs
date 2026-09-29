@@ -1061,7 +1061,7 @@ fn template_note_with_existing_flowix_key_creates_after_prior_nested_notes() {
 
     assert_ne!(memo.id, template_key);
     assert_eq!(memo.relative_path, "人物/当前人物状态.md");
-    assert_eq!(super::frontmatter::extract_frontmatter_key(&content), None);
+    assert_eq!(super::frontmatter::extract_frontmatter_key(&content), Some(template_key.to_string()));
 }
 
 #[test]
@@ -1753,6 +1753,7 @@ fn reconcile_indexes_root_agents_but_skips_hidden_paths_and_generated_directorie
         ".hidden",
         "docs/.drafts",
         "node_modules/pkg",
+        "attachments",
         "attachments-cache",
     ] {
         fs::create_dir_all(base.join(directory)).unwrap();
@@ -1760,6 +1761,7 @@ fn reconcile_indexes_root_agents_but_skips_hidden_paths_and_generated_directorie
     }
     fs::write(base.join(".hidden-note.md"), "# Hidden\n").unwrap();
     fs::write(base.join("AGENTS.md"), "# Agent instructions\n").unwrap();
+    fs::write(base.join("docs").join("AGENTS.md"), "# Nested instructions\n").unwrap();
     fs::create_dir_all(base.join("docs/public")).unwrap();
     fs::write(base.join("docs/public/Visible.md"), "# Visible\n").unwrap();
 

@@ -32,18 +32,14 @@ function memo(input: Partial<Pick<MemoItem, 'id' | 'agents'>> = {}): Pick<MemoIt
 }
 
 describe('running agent index', () => {
-  it('matches by memo id and thread id', () => {
-    const byMemo = instance({
-      instanceId: 'by-memo',
-      source: { kind: 'thread-card', memoId: 'memo-1' },
-    });
+  it('matches by thread id', () => {
     const byThread = instance({
       instanceId: 'by-thread',
       threadId: 'thread-1',
     });
-    const index = buildRunningAgentIndex([byMemo, byThread]);
+    const index = buildRunningAgentIndex([byThread]);
 
-    expect(findRunningAgentForMemo(index, memo())).toBe(byMemo);
+    expect(findRunningAgentForMemo(index, memo())).toBeNull();
     expect(
       findRunningAgentForMemo(index, memo({ id: 'memo-2', agents: [
         { threadId: 'thread-1', title: 'Thread', agentType: 'codex' },
@@ -56,11 +52,7 @@ describe('running agent index', () => {
       instanceId: 'by-thread',
       threadId: 'thread-1',
     });
-    const byMemo = instance({
-      instanceId: 'by-memo',
-      source: { kind: 'thread-card', memoId: 'memo-1' },
-    });
-    const index = buildRunningAgentIndex([byThread, byMemo]);
+    const index = buildRunningAgentIndex([byThread]);
 
     expect(findRunningAgentForMemo(index, memo({
       agents: [{ threadId: 'thread-1', title: 'Thread', agentType: 'codex' }],
@@ -79,12 +71,7 @@ describe('running agent index', () => {
       threadId: 'thread-1',
       agentType: 'deepseek-harness',
     });
-    const byMemo = instance({
-      instanceId: 'by-memo',
-      source: { kind: 'thread-card', memoId: 'memo-1' },
-      agentType: 'codex',
-    });
-    const index = buildRunningAgentTypeIndex([byThread, byMemo]);
+    const index = buildRunningAgentTypeIndex([byThread]);
 
     expect(findRunningAgentTypeForMemo(index, memo({
       agents: [{ threadId: 'thread-1', title: 'Thread', agentType: 'codex' }],

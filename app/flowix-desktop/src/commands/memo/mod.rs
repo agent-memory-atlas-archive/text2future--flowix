@@ -87,19 +87,6 @@ pub struct MentionNoteSearchItem {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentRoleMemoItem {
-    pub memo_id: String,
-    pub role_name: String,
-    pub filename: String,
-    pub relative_path: String,
-    pub memo_icon: Option<String>,
-    pub notebook_id: String,
-    pub notebook_name: String,
-    pub notebook_icon: Option<String>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct UsedMemoTagIdsResponse {
     pub used_tag_ids: Vec<String>,
     pub tag_counts: Vec<MemoTagCount>,

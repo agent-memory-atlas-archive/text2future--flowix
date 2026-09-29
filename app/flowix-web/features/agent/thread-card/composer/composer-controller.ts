@@ -38,7 +38,7 @@ import type {
 } from "@features/agent/thread-card/composer/composer-slash-command-controller";
 import type { AgentTypeKey } from "@/types/agent";
 import { NoteReference } from "@features/editor/extensions/note-link";
-import type { MemoRef } from "@features/agent/thread-card/role/agent-role-picker-controller";
+import type { MemoRef } from "@features/agent/thread-card/note/note-picker-controller";
 import type { Root } from "react-dom/client";
 
 // Chromium/WebKit can expose modified cursor-navigation keys as a text input
@@ -299,7 +299,7 @@ export class ComposerController {
   }
 
   insertMemoReference(ref: MemoRef): void {
-    if (this.editor.isDestroyed) return;
+    if (this.editor.isDestroyed || !ref.notebookId || !ref.relativePath) return;
 
     const { selection, doc } = this.editor.state;
     const from = selection.from;
@@ -314,8 +314,9 @@ export class ComposerController {
     content.push({
       type: "noteReference",
       attrs: {
-        memoId: ref.id,
-        notebookId: null,
+        memoId: null,
+        notebookId: ref.notebookId,
+        relativePath: ref.relativePath,
         notebookName: "",
         title: ref.title || ref.filename,
         originalPath: null,

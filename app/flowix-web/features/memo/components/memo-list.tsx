@@ -1,4 +1,5 @@
 import { joinNotebookMemoPath } from '@/lib/path';
+import { subscribe } from '@platform/tauri/event-bus';
 'use client';
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -22,11 +23,9 @@ import { useMemoLibraryMetadataStore } from '@features/memo/store/memo-library-m
 import { useCustomFilterStore } from '@features/memo/store/custom-filter-store';
 import { useTagStore } from '@features/memo/store/tag-store';
 import {
-  isPathNoteListItem,
   memoListItemKey,
   memoListItemRelativePath,
   type MemoColor,
-  type MemoItem,
   type MemoListItem,
 } from '@/types/memo-item';
 import { resolveSelectedTagId } from '@features/memo/services/memo-list-metadata-service';
@@ -38,7 +37,8 @@ import { Tooltip } from '@shared/ui/tooltip';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
 import { DROPDOWN_DIVIDER_SKIN } from '@shared/ui/dropdown-divider';
 import { MemoCard } from '@features/memo/components/memo-card';
-import { openMemoSession, openPathNoteSession } from '@features/memo/use-cases/open-memo-session';
+import { openPathNoteSession } from '@features/memo/use-cases/open-memo-session';
+import { openNotebookNote } from '@features/memo/use-cases/open-notebook-note';
 import {
   getMemoListQueryKey,
   shouldShowMemoListLoading,
@@ -47,10 +47,7 @@ import { MemoListDataLoader } from '@features/memo/components/memo-list-data-loa
 import { memoRepository } from '@features/memo/services/memo-repository';
 import { initializeMainWindowStartup } from '@app/main-window-startup';
 import { clearWorkspaceDocument } from '@features/workspace/use-cases/workspace-navigation';
-import {
-  openBrowserColumnMemo,
-  openBrowserColumnText,
-} from '@features/workspace/use-cases/browser-column-navigation';
+import { openBrowserColumnText } from '@features/workspace/use-cases/browser-column-navigation';
 import { useI18n } from '@/lib/i18n';
 import {
   setMemoListViewPreference,
@@ -121,9 +118,7 @@ export function MemoList({
   // memos 是大头, 但要 memoize (Array equality) 才能跳过 5k 项深比; 不然
   // store 里 setNotebooks 之类也会触发 memos selector 重跑。Zustand v5 默认
   // 用 Object.is 比对, 同一个 memos 引用相等就跳过, 不需要 useMemo。
-  const memos = useMemoStore((s) => s.memos);
   const pathNotes = useMemoStore((s) => s.pathNotes);
-  const selectedMemo = useMemoStore((s) => s.selectedMemo);
   const selectedPathNote = useMemoStore((s) => s.selectedPathNote);
   const memoListView = useMemoListViewPreference();
   const showNotebookAgentsFile = useShowNotebookAgentsFile();
@@ -132,11 +127,12 @@ export function MemoList({
   const activeFilter = useMemoStore((s) => s.activeFilter);
   const activePluginId = useMemoStore((s) => s.activePluginId);
   const activeCustomFilterId = useMemoStore((s) => s.activeCustomFilterId);
+  const loadNotebookFilters = useCustomFilterStore((s) => s.loadNotebookFilters);
   const activeSort = useMemoStore((s) => s.activeSort);
   const colorFilter = useMemoStore((s) => s.colorFilter);
   const activeCustomFilter = useCustomFilterStore((s) => (
     activeCustomFilterId
-      ? s.filters.find((filter) => filter.id === activeCustomFilterId) ?? null
+      ? s.filtersByNotebook[selectedNotebook?.id ?? '']?.find((filter) => filter.id === activeCustomFilterId) ?? null
       : null
   ));
   const startupPhase = useMemoStore((s) => s.startupPhase);
@@ -144,6 +140,9 @@ export function MemoList({
   const initialMemoQueryKey = useMemoStore((s) => s.initialMemoQueryKey);
   const memoListQueryKey = useMemoStore((s) => s.memoListQueryKey);
   const selectedNotebookId = selectedNotebook?.id;
+  useEffect(() => {
+    if (selectedNotebookId) void loadNotebookFilters(selectedNotebookId);
+  }, [loadNotebookFilters, selectedNotebookId]);
   const [hiddenListFolders, setHiddenListFolders] = useState<string[]>([]);
   const selectedTagId = useTagStore((s) => s.selectedTagId);
   const tagMetadataRefreshVersion = useTagStore((s) => s.metadataRefreshVersion);
@@ -156,7 +155,6 @@ export function MemoList({
   const setSelectedTagId = useTagStore((s) => s.setSelectedTagId);
   const loadLibraryMetadata = useMemoLibraryMetadataStore((s) => s.loadMetadata);
   const {
-    setSelectedMemo,
     setSelectedNotebook,
     triggerRefresh,
     setActiveFilter,
@@ -166,10 +164,8 @@ export function MemoList({
     loadMoreMemos,
     memoListHasMore,
     memoListLoadingMore,
-    handleMemoCreated,
   } = useMemoStore(
     useShallow((s) => ({
-      setSelectedMemo: s.setSelectedMemo,
       setSelectedNotebook: s.setSelectedNotebook,
       triggerRefresh: s.triggerRefresh,
       setActiveFilter: s.setActiveFilter,
@@ -179,15 +175,21 @@ export function MemoList({
       loadMoreMemos: s.loadMoreMemos,
       memoListHasMore: s.memoListHasMore,
       memoListLoadingMore: s.memoListLoadingMore,
-      handleMemoCreated: s.handleMemoCreated,
     })),
   );
-  const listItems: MemoListItem[] = activePluginId ? memos : pathNotes;
-  const selectedListItemKey = activePluginId
-    ? selectedMemo?.id ? `memo:${selectedMemo.id}` : undefined
-    : selectedPathNote
+  const listItems: MemoListItem[] = pathNotes;
+  useEffect(() => subscribe<{ notebookId: string; relativePath: string }>(
+    'flowix:path-note-changed',
+    ({ notebookId }) => {
+      const state = useMemoStore.getState();
+      if (state.selectedNotebook?.id === notebookId) {
+        void state.loadPathNotes({ notebookId });
+      }
+    },
+  ), []);
+  const selectedListItemKey = selectedPathNote
       ? `path:${selectedPathNote.notebookId}:${selectedPathNote.relativePath}`
-      : selectedMemo?.id ? `memo:${selectedMemo.id}` : undefined;
+      : undefined;
   const [notebookDropdownOpen, setNotebookDropdownOpen] = useState(false);
   const [isCreatingMemo, setIsCreatingMemo] = useState(false);
   const [localNavigationDrawerOpen, setLocalNavigationDrawerOpen] = useState(false);
@@ -261,7 +263,6 @@ export function MemoList({
     if (!currentNotebook) {
       if (!isActiveRef.current) return;
       setSelectedNotebook(null);
-      setSelectedMemo(null);
       void clearWorkspaceDocument();
       setSelectedTagId(null);
       setLoadedMemoListQueryKey(null);
@@ -289,7 +290,7 @@ export function MemoList({
       setSelectedTagId(resolvedSelectedTagId);
     }
 
-  }, [loadLibraryMetadata, setSelectedMemo, setSelectedNotebook, setSelectedTagId, startupPhase, tagMetadataRefreshVersion]);
+  }, [loadLibraryMetadata, setSelectedNotebook, setSelectedTagId, startupPhase, tagMetadataRefreshVersion]);
 
   useEffect(() => {
     void loadData().catch((error) => {
@@ -372,7 +373,7 @@ export function MemoList({
     memos: listItems,
     activeFilter,
     colorFilter,
-    selectedMemoId: selectedListItemKey,
+    selectedItemKey: selectedListItemKey,
     queryKey: currentMemoListQueryKey,
     loading: showMemoListLoading,
     hasMorePages: memoListHasMore,
@@ -484,29 +485,19 @@ export function MemoList({
     return cb;
   };
   const handleSelectMemo = useCallback((memo: MemoListItem) => {
-    const notebook = useMemoStore.getState().selectedNotebook;
-    if (isPathNoteListItem(memo)) {
-      void openPathNoteSession(memo, notebook);
-    } else {
-      void openMemoSession(memo, notebook);
-    }
+    void openPathNoteSession(memo, useMemoStore.getState().selectedNotebook);
   }, []);
 
   const handleOpenMemoWindow = useCallback((memo: MemoListItem) => {
     const notebook = useMemoStore.getState().selectedNotebook;
-    const open = isPathNoteListItem(memo)
-      ? notebook?.path
-        ? openBrowserColumnText(
-            joinNotebookMemoPath(notebook.path, memo.relativePath) ?? memo.relativePath,
-            notebook.path,
-          )
-        : Promise.resolve(null)
-      : openBrowserColumnMemo(memo, notebook, 'open-in-column');
+    if (!notebook?.path) return;
+    const path = joinNotebookMemoPath(notebook.path, memo.relativePath) ?? memo.relativePath;
+    const open = openBrowserColumnText(path, notebook.path);
     void open
       .catch((error) => {
         logger.warn('open memo in browser column failed', {
           error,
-          path: isPathNoteListItem(memo) ? memo.relativePath : undefined,
+          path: memo.relativePath,
         });
         toast.error(error instanceof Error ? error.message : String(error));
       });
@@ -656,21 +647,19 @@ export function MemoList({
       setSelectedTagId(null);
       setActiveFilter(createFilter);
     }
-    let result: { memo: MemoItem; initialContent: string };
     const parentRelativePath = parentRelativePathOverride ?? (memoListView === 'folders'
       ? parentRelativePathForTreeCreate(
-        useDocumentStore.getState().activeMemoSession,
+        useDocumentStore.getState().activeExternalSession,
         selectedNotebook.id,
         selectedNotebook.path,
       )
       : undefined);
-    result = await memoRepository.create(
+    const result = await memoRepository.create(
       activeTagId ?? undefined,
       selectedNotebook.id,
       parentRelativePath,
       titleOverride?.trim() || undefined,
     );
-    const newMemo = result.memo;
     const shouldSelectNewMemo =
       createFilter === 'all' ||
       (createFilter === 'tagged' && Boolean(activeTagId)) ||
@@ -682,25 +671,23 @@ export function MemoList({
     // after React commits the new list but before the browser paints it.
     // 新 memo 永远渲染在列表最前，且初始窗口会包含它 ── 入场动画交给
     // useMemoInsertAnimation.onListRendered 在 layout 阶段跑一次。
-    prepareForInsert(`path:${selectedNotebook.id}:${newMemo.relativePath || newMemo.filename}`);
+    prepareForInsert(`path:${selectedNotebook.id}:${result.relativePath}`);
     // Opening is a workspace navigation transaction. Leave selection to the
     // facade so a failed document open can restore the previous memo.
-    handleMemoCreated(newMemo, { select: false });
+    await loadPathNotes({ notebookId: selectedNotebook.id, filter: createFilter });
 
     if (shouldSelectNewMemo) {
-      await openMemoSession({ ...newMemo, isOpen: true }, selectedNotebook,
-        { initialFocus: 'title', initialContent: result.initialContent });
+      await openNotebookNote(result.path, selectedNotebook, { initialFocus: 'title' });
     }
     } finally { setIsCreatingMemo(false); }
   }, [
     activeFilter,
     activeTagId,
-    handleMemoCreated,
+    loadPathNotes,
     prepareForInsert,
     memoListView,
     selectedNotebook,
     setActiveFilter,
-    setSelectedMemo,
     setSelectedTagId,
   ]);
 
@@ -719,7 +706,7 @@ export function MemoList({
   const handleRequestCreateNote = useCallback(() => {
     if (!selectedNotebook) return;
     const parentRelativePath = parentRelativePathForTreeCreate(
-      useDocumentStore.getState().activeMemoSession,
+      useDocumentStore.getState().activeExternalSession,
       selectedNotebook.id,
       selectedNotebook.path,
     );
@@ -1035,7 +1022,6 @@ export function MemoList({
               createNoteRequest={createNoteRequest}
               onCreateFolder={handleCreateFolder}
               sort={activeSort}
-              visibleMemos={activeFilter === 'all' && !activeTagId && !activePluginId ? null : listItems}
               hiddenListFolders={hiddenListFolders}
               onToggleListFolderVisibility={(folderPath) => { void handleToggleListFolderVisibility(folderPath); }}
               isActive={isActive && dataLoadingEnabled}

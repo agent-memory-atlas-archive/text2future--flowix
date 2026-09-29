@@ -76,17 +76,6 @@ export interface WebPageMetadata {
   image: string;
 }
 
-export interface AgentRoleMemoItem {
-  memoId: string;
-  roleName: string;
-  filename: string;
-  relativePath: string;
-  memoIcon?: string | null;
-  notebookId: string;
-  notebookName: string;
-  notebookIcon?: string | null;
-}
-
 export const web = {
   parsePage: (url: string) => invoke<WebPageMetadata>('parse_web_page', { url }),
 };
@@ -300,6 +289,23 @@ export interface NotebookFeaturedNoteFilter {
   conditions: NotebookFeaturedNoteCondition[];
 }
 
+export interface NotebookCustomViewFilter {
+  id: string;
+  name: string;
+  documentType?: 'note' | 'image' | 'video';
+  key: string;
+  operator: 'contains' | 'equals';
+  value: string;
+}
+
+export interface NotebookCustomViews {
+  filters: NotebookCustomViewFilter[];
+}
+
+export interface NotebookFileTreePreferences {
+  sectionOrder: string[];
+}
+
 // System metadata (backend ~/.flowix/boot/system.json).
 export const system = {
   getTagMetadata: (notebookId: string) =>
@@ -323,6 +329,14 @@ export const system = {
     invoke<NotebookFeaturedNoteFilter>('get_featured_note_filter', { notebookId }),
   setFeaturedNoteFilter: (notebookId: string, filter: NotebookFeaturedNoteFilter) =>
     invoke<void>('set_featured_note_filter', { notebookId, filter }),
+  getCustomViews: (notebookId: string) =>
+    invoke<NotebookCustomViews>('get_custom_views', { notebookId }),
+  setCustomViews: (notebookId: string, views: NotebookCustomViews) =>
+    invoke<void>('set_custom_views', { notebookId, views }),
+  getNotebookFileTreePreferences: (notebookId: string) =>
+    invoke<NotebookFileTreePreferences>('get_notebook_file_tree_preferences', { notebookId }),
+  setNotebookFileTreeSectionOrder: (notebookId: string, sectionOrder: string[]) =>
+    invoke<void>('set_notebook_file_tree_section_order', { notebookId, sectionOrder }),
 };
 
 // Memos

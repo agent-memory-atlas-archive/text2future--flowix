@@ -232,6 +232,22 @@ pub struct MemoTodoEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathTodoEntry {
+    pub notebook_id: String,
+    pub relative_path: String,
+    pub todo_id: String,
+    pub content: String,
+    pub status: String,
+    pub priority: String,
+    pub time_range: String,
+    pub owner: String,
+    pub assignee: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoMetadataFile {
     pub version: u32,
     pub last_updated: i64,

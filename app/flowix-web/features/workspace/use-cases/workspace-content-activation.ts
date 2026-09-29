@@ -17,10 +17,6 @@ export type WorkspaceContentLocation =
 
 export function workColumnTargetIdentity(target: WorkColumnTarget): ContentIdentity | null {
   switch (target.kind) {
-    case 'memo':
-      return { kind: 'memo', memoId: target.memoId, path: target.path };
-    case 'artifact':
-      return { kind: 'artifact', pointerMemoId: target.pointerMemoId };
     case 'media':
       return { kind: 'media', path: target.filePath };
     case 'external':
@@ -81,30 +77,6 @@ export async function activateExistingWorkspaceContentAsync(
 export function findExistingWorkspaceContent(
   identity: ContentIdentity,
 ): WorkspaceContentLocation | null {
-  if (identity.kind === 'memo' && !identity.path) {
-    const workColumn = getWorkColumnContentState();
-    const workTargets = workColumn.status === 'empty'
-      ? []
-      : workColumn.status === 'transitioning'
-        ? [workColumn.to, workColumn.from]
-        : [workColumn.target];
-    const matchingWorkTarget = workTargets.find((target) => (
-      target.kind === 'memo' && target.memoId === identity.memoId
-    ));
-    if (matchingWorkTarget) {
-      return {
-        host: 'main-third',
-        state: workColumn.status === 'transitioning' && workColumn.to === matchingWorkTarget
-          ? 'pending'
-          : 'active',
-      };
-    }
-    const matchingTab = useBrowserColumnStore.getState().tabs.find((tab) => (
-      tab.target.kind === 'memo' && tab.target.memoId === identity.memoId
-    ));
-    if (matchingTab) return { host: 'browser-column', tabId: matchingTab.id };
-  }
-
   const key = contentIdentityKey(identity);
   if (!key) return null;
 

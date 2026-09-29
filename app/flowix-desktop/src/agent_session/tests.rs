@@ -130,10 +130,10 @@ mod tests {
                 source: AgentConversationSource {
                     kind: "dedicated".to_string(),
                     document_path: None,
-                    memo_id: None,
+                    relative_path: None,
                     notebook_id: notebook_id.map(str::to_string),
                 },
-                role: None,
+
                 created_at: Some(updated_at),
                 updated_at: Some(updated_at),
             })
@@ -374,10 +374,10 @@ mod tests {
                 source: AgentConversationSource {
                     kind: "dedicated".to_string(),
                     document_path: None,
-                    memo_id: None,
+                    relative_path: None,
                     notebook_id: None,
                 },
-                role: None,
+
                 created_at: None,
                 updated_at: None,
             })
@@ -413,10 +413,10 @@ mod tests {
                 source: AgentConversationSource {
                     kind: "thread-card".to_string(),
                     document_path: None,
-                    memo_id: None,
+                    relative_path: None,
                     notebook_id: None,
                 },
-                role: None,
+
                 created_at: None,
                 updated_at: None,
             })
@@ -478,10 +478,10 @@ mod tests {
                 source: AgentConversationSource {
                     kind: "thread-card".to_string(),
                     document_path: None,
-                    memo_id: None,
+                    relative_path: None,
                     notebook_id: None,
                 },
-                role: None,
+
                 created_at: None,
                 updated_at: None,
             })
@@ -506,6 +506,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn conversation_source_rebases_without_memo_ids() {
+        let manager = ThreadManager::for_tests();
+        let saved = manager
+            .upsert_agent_conversation_instance(UpsertAgentConversationInstance {
+                instance_id: "path-role".to_string(),
+                agent_type: "codex".to_string(),
+                initial_title: "Path role".to_string(),
+                thread_id: Some("thread-path-role".to_string()),
+                runtime_config: None,
+                source: AgentConversationSource {
+                    kind: "thread-card".to_string(),
+                    document_path: Some("C:/Notebook/Notes/Source.md".to_string()),
+                    relative_path: Some("Notes/Source.md".to_string()),
+                    notebook_id: Some("nb-1".to_string()),
+                },
+                created_at: Some(1),
+                updated_at: Some(1),
+            })
+            .await
+            .unwrap();
+        assert_eq!(saved.source.relative_path.as_deref(), Some("Notes/Source.md"));
+        manager.rebase_agent_note_paths(
+            "nb-1", "nb-1", "Notes/Source.md", "Notes/Renamed.md",
+            "C:/Notebook/Notes/Source.md", "C:/Notebook/Notes/Renamed.md",
+        ).unwrap();
+        let loaded = manager.find_agent_conversation_by_thread_id("thread-path-role").await.unwrap().unwrap();
+        assert_eq!(loaded.source.relative_path.as_deref(), Some("Notes/Renamed.md"));
+        let conn = manager.lock_conn();
+        let source_id: Option<String> = conn
+            .query_row(
+                "SELECT source_memo_id FROM agent_conversation_instances WHERE instance_id = ?1",
+                ["path-role"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(source_id.is_none());
+    }
+
+    #[tokio::test]
     async fn stale_conversation_upsert_cannot_overwrite_newer_state() {
         let manager = ThreadManager::for_tests();
         let input = |title: &str, updated_at: i64| UpsertAgentConversationInstance {
@@ -517,10 +556,10 @@ mod tests {
             source: AgentConversationSource {
                 kind: "thread-card".to_string(),
                 document_path: None,
-                memo_id: None,
+                relative_path: None,
                 notebook_id: None,
             },
-            role: None,
+
             created_at: Some(1),
             updated_at: Some(updated_at),
         };
@@ -559,10 +598,10 @@ mod tests {
                 source: AgentConversationSource {
                     kind: "thread-card".to_string(),
                     document_path: None,
-                    memo_id: None,
+                    relative_path: None,
                     notebook_id: None,
                 },
-                role: None,
+
                 created_at: None,
                 updated_at: None,
             })
@@ -1289,6 +1328,35 @@ mod tests {
     }
 
     #[test]
+    fn migration_removes_persisted_role_file_selection() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("thread.db");
+        drop(ThreadManager::new(db_path.clone()).expect("create database"));
+        let conn = rusqlite::Connection::open(&db_path).expect("open database");
+        conn.execute_batch(
+            "INSERT INTO agent_conversation_instances
+                (instance_id, agent_type, source_kind, role_memo_id, role_address, role_name, created_at, updated_at)
+             VALUES ('legacy-role', 'codex', 'dedicated', 'old-id', 'nb::Role.md', 'Role', 1, 1);
+             INSERT INTO agent_instances
+                (id, agent, source, role_memo_id, role_address, role_name, created_at, updated_at)
+             VALUES ('legacy-role', 'codex', 'dedicated', 'old-id', 'nb::Role.md', 'Role', 1, 1);
+             PRAGMA user_version = 10;",
+        ).expect("seed previous role data");
+        drop(conn);
+
+        drop(ThreadManager::new(db_path.clone()).expect("migrate role data"));
+        let conn = rusqlite::Connection::open(&db_path).expect("open migrated database");
+        for table in ["agent_conversation_instances", "agent_instances"] {
+            let remaining: i64 = conn.query_row(
+                &format!("SELECT count(*) FROM {table} WHERE role_memo_id IS NOT NULL OR role_address IS NOT NULL OR role_name IS NOT NULL"),
+                [],
+                |row| row.get(0),
+            ).expect("read cleared roles");
+            assert_eq!(remaining, 0);
+        }
+    }
+
+    #[test]
     fn current_schema_skips_historical_event_backfill() {
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("thread.db");
@@ -1647,10 +1715,10 @@ mod tests {
                 source: AgentConversationSource {
                     kind: "thread-card".to_string(),
                     document_path: None,
-                    memo_id: None,
+                    relative_path: None,
                     notebook_id: None,
                 },
-                role: None,
+
                 created_at: None,
                 updated_at: None,
             })
@@ -1696,10 +1764,10 @@ mod tests {
                 source: AgentConversationSource {
                     kind: "thread-card".to_string(),
                     document_path: None,
-                    memo_id: None,
+                    relative_path: None,
                     notebook_id: None,
                 },
-                role: None,
+
                 created_at: None,
                 updated_at: None,
             })
@@ -2134,7 +2202,6 @@ mod tests {
             instances[0].thread_id.as_deref(),
             Some("codex-local-thread")
         );
-        assert_eq!(instances[0].source.memo_id.as_deref(), Some("memo-1"));
     }
 
     #[tokio::test]

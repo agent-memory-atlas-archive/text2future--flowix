@@ -36,7 +36,6 @@ describe('document buffer semantic equality', () => {
   it('keeps code and plain-text whitespace byte-sensitive', () => {
     const identity = {
       kind: 'md' as const,
-      memoId: null,
       path: '/project/src/main.ts',
       displayId: 'display:test-main-ts',
     };
@@ -47,7 +46,6 @@ describe('document buffer semantic equality', () => {
   it('retains semantic comparison for external Markdown', () => {
     const identity = {
       kind: 'md' as const,
-      memoId: null,
       path: '/notes/readme.md',
       displayId: 'display:test-readme-md',
     };

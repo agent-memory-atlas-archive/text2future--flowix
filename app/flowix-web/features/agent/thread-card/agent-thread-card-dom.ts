@@ -65,8 +65,6 @@ export function consumeEditorPopoverDismissPointer(event: PointerEvent): void {
 const AGENT_THREAD_CARD_MESSAGE_AFFECTING_KEYS = [
   "threadId",
   "typeKey",
-  "agentRoleMemoId",
-  "agentRoleName",
 ] as const;
 
 export function canSkipMessageRebuild(
@@ -93,7 +91,7 @@ export function isAgentThreadCardInteractiveTarget(target: Element): boolean {
       '[role="button"]',
       ".agent-thread-card__composer",
       ".agent-thread-card__access-popover",
-      ".agent-thread-card__composer-role-popover",
+      ".agent-thread-card__composer-note-popover",
       ".agent-thread-card__message-reasoning-header",
     ].join(","),
   );

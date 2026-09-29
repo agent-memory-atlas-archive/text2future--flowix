@@ -1,14 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MemoItem } from '@/types/memo-item';
+import type { PathNoteListItem } from '@/types/memo-item';
 import { MEMO_COLORS } from '@features/memo/store/memo-store';
 import type { NativeMenuIconImage } from '@platform/tauri/native-menu-icons';
 import { buildMemoCardContextMenuItems } from './memo-card-context-menu';
 
 const memo = {
-  id: 'memo-1',
+  kind: 'path-note',
+  notebookId: 'notebook-1',
+  relativePath: 'note.md',
+  title: 'Note',
   favorited: true,
   colors: ['blue'],
-} as MemoItem;
+} as PathNoteListItem;
 
 const labels = {
   openInSplit: 'Open in split',

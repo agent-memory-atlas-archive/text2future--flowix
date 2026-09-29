@@ -3,9 +3,7 @@ import { getDocumentSession } from '../../store/document-runtime-session';
 import { restoreTitleDraft } from '@features/document/store/document-title-session';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { memos as memosClient } from '@platform/tauri/client';
-import { documentContentOperations } from '@features/document/use-cases/document-operations';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { localDocumentOperations } from '@features/document/use-cases/local-document-operations';
 import {
   captureLatestDocumentContent,
   setActiveDocumentPath,
@@ -17,10 +15,8 @@ import { readRecoveryDraft, type RecoveryDraft } from '@features/document/store/
 import { useDocumentStore } from '@features/document/store/document-store';
 import type { DocumentIdentity } from '@features/document/store/document-identity';
 import { translate } from '@/lib/i18n';
-import { replaceActiveMemoPath } from '@features/workspace/use-cases/workspace-navigation';
 import { isFileDisplayIdLive } from '@/lib/file-display-registry';
 import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
-import { formatDateTime } from '@/lib/utils';
 import { markDocumentOpenTrace } from '@/lib/document-open-perf';
 import {
   initialDocumentContainerState,
@@ -30,35 +26,15 @@ import {
 import {
   countTextUnits,
   extractBodyContent,
-  findMemoById,
-  joinPath,
 } from '@features/document/components/session/document-utils';
 
 interface UseDocumentContentOptions {
   identity: DocumentIdentity;
-  memoId: string | null;
-  notebookPath?: string | null;
-  isExternalDocument: boolean;
   externalScopePath: string | null;
   /** Non-text external files are rendered by a dedicated preview surface. */
   skipContentLoad?: boolean;
   transitionId: number | null;
   isolatedSession?: boolean;
-}
-
-function getMemoSnapshot(memoId: string | null | undefined) {
-  return findMemoById(useMemoStore.getState(), memoId);
-}
-
-async function resolveLatestMemoPathFromBackend(
-  memoId: string | null,
-  notebookPath: string | null | undefined,
-): Promise<string | null> {
-  if (!memoId || !notebookPath) return null;
-  const memo = await memosClient.readMemo(memoId);
-  if (!memo?.filename) return null;
-  useMemoStore.getState().handleMemoUpdated(memo);
-  return joinPath(notebookPath, memo.relativePath || memo.filename);
 }
 
 function logOpenDocPerf(label: string, startedAt: number, meta?: Record<string, unknown>) {
@@ -77,9 +53,6 @@ function logOpenDocPerf(label: string, startedAt: number, meta?: Record<string, 
 
 export function useDocumentContent({
   identity,
-  memoId,
-  notebookPath,
-  isExternalDocument,
   externalScopePath,
   skipContentLoad = false,
   transitionId,
@@ -119,7 +92,6 @@ export function useDocumentContent({
     ) => {
       const startedAt = performance.now();
       markDocumentOpenTrace(transitionId, 'content:apply-start', {
-        memoId,
         bytes: fullContent.length,
         isolatedSession,
       });
@@ -127,13 +99,7 @@ export function useDocumentContent({
         preservePending: options?.preservePending ?? true,
         setAsCurrent: !isolatedSession,
       });
-      const memo = isExternalDocument ? null : getMemoSnapshot(memoId);
-      // A new note may reuse a deleted note's path. Its old recovery draft
-      // belongs to the previous file and must not replace the new content.
-      const recovery = options?.recovery && (
-        (options.recovery.memoId && options.recovery.memoId !== memoId)
-        || (memo?.createdAt && options.recovery.createdAt < memo.createdAt)
-      ) ? null : options?.recovery ?? null;
+      const recovery = options?.recovery ?? null;
       if (recovery && recovery.originalPath === path) {
         const session = getDocumentSession(identity);
         session.recoveryRevision = Math.max(session.recoveryRevision, recovery.revision);
@@ -151,14 +117,7 @@ export function useDocumentContent({
           buf.saveState = 'conflict';
         }
       }
-      const createdAt = memo?.createdAt ? formatDateTime(memo.createdAt, getCurrentAppLanguage()) : '';
-      const updatedAt = memo?.updatedAt ? formatDateTime(memo.updatedAt, getCurrentAppLanguage()) : '';
-      const updatedAtDate = memo?.updatedAt ? new Date(memo.updatedAt) : null;
-      const isFavorited = memo?.favorited || false;
-      // New memo focus is explicit navigation metadata now.  Inferring it
-      // from the first Markdown heading would make an existing document look
-      // newly created and is invalid once the title lives outside Markdown.
-      const isNew = false;
+      // A document heading does not imply that the file was just created.
       const initialContent = recovery
         && recovery.originalPath === path
         ? recovery.content
@@ -172,23 +131,22 @@ export function useDocumentContent({
         isLoading: false,
         error: null,
         isScrolled: false,
-        isNewlyCreated: isNew,
+        isNewlyCreated: false,
         charCount: initialCharCount,
         tokenCount: Math.ceil(initialCharCount / 4),
-        createdAt,
-        updatedAt,
-        updatedAtDate,
-        isFavorited,
+        createdAt: '',
+        updatedAt: '',
+        updatedAtDate: null,
+        isFavorited: false,
         frontmatterMeta: {},
       });
       logOpenDocPerf('applyLoadedContent', startedAt, {
-        memoId,
         transitionId,
         bytes: fullContent.length,
         chars: initialCharCount,
       });
     },
-    [identity, isolatedSession, isExternalDocument, memoId, transitionId],
+    [identity, isolatedSession, transitionId],
   );
 
   const reloadDocument = useCallback(
@@ -196,9 +154,7 @@ export function useDocumentContent({
       if (!path) return;
       const startedAt = performance.now();
       markDocumentOpenTrace(transitionId, 'content:load-start', {
-        memoId,
         path,
-        isExternalDocument,
         isolatedSession,
       });
 
@@ -242,7 +198,6 @@ export function useDocumentContent({
         }
         applyLoadedContent(path, stagedContent, { preservePending: true });
         logOpenDocPerf('reloadDocument:staged', startedAt, {
-          memoId,
           transitionId,
           bytes: stagedContent.length,
         });
@@ -264,20 +219,15 @@ export function useDocumentContent({
 
       try {
         logOpenDocPerf('reloadDocument:start', startedAt, {
-          memoId,
           transitionId,
           path,
         });
         const readStartedAt = performance.now();
         markDocumentOpenTrace(transitionId, 'ipc:read-start', {
-          memoId,
           path,
-          isExternalDocument,
         });
         let readPath = path;
-        const read = () => documentContentOperations(isExternalDocument ? 'external' : 'internal').read({
-          path: readPath, scopePath: externalScopePath, memoId,
-        });
+        const read = () => localDocumentOperations.read({ path: readPath, scopePath: externalScopePath });
         const opening = options?.showLoading ?? true;
         const operation = opening && session.openingRead?.path === readPath
           ? session.openingRead.promise : read();
@@ -286,43 +236,14 @@ export function useDocumentContent({
         try { fullContent = await operation; }
         finally { if (session.openingRead?.promise === operation) session.openingRead = undefined; }
 
-        if (
-          (fullContent === null || fullContent === undefined) &&
-          !isExternalDocument
-        ) {
-          const latestPath = await resolveLatestMemoPathFromBackend(memoId, notebookPath);
-          if (latestPath && latestPath !== path) {
-            const retryStartedAt = performance.now();
-            const retryContent = await documentContentOperations('internal').read({
-              path: latestPath, scopePath: externalScopePath, memoId,
-            });
-            logOpenDocPerf('readDocument:retry-latest-path', retryStartedAt, {
-              memoId,
-              transitionId,
-              previousPath: path,
-              latestPath,
-              bytes: retryContent?.length ?? 0,
-            });
-            if (retryContent !== null && retryContent !== undefined) {
-              readPath = latestPath;
-              fullContent = retryContent;
-              if (memoId) {
-                replaceActiveMemoPath(memoId, latestPath);
-              }
-            }
-          }
-        }
         logOpenDocPerf('readDocument', readStartedAt, {
-          memoId,
           transitionId,
           path: readPath,
           bytes: fullContent?.length ?? 0,
         });
         markDocumentOpenTrace(transitionId, 'ipc:read-end', {
-          memoId,
           path: readPath,
           bytes: fullContent?.length ?? 0,
-          isExternalDocument,
         });
 
         if (fullContent === null || fullContent === undefined) {
@@ -340,12 +261,11 @@ export function useDocumentContent({
           applyLoadedContent(session.identity.path, session.buffer.lastSavedContent, { preservePending: true });
           return;
         }
-        markDocumentOpenTrace(transitionId, 'recovery:read-start', { memoId });
+        markDocumentOpenTrace(transitionId, 'recovery:read-start', { path });
         const recovery = (options?.showLoading ?? true)
           ? await readOpeningRecovery() : await readRecoveryDraft(identity).catch(() => null);
         markDocumentOpenTrace(transitionId, 'recovery:read-end', {
-          memoId,
-          found: recovery !== null,
+            found: recovery !== null,
         });
         if (currentLoadId !== counter.current || !isFileDisplayIdLive(identity.displayId)) return;
         captureLatestDocumentContent(identity);
@@ -370,7 +290,6 @@ export function useDocumentContent({
           recovery,
         });
         logOpenDocPerf('reloadDocument:loaded', startedAt, {
-          memoId,
           transitionId,
           bytes: fullContent.length,
         });
@@ -382,7 +301,6 @@ export function useDocumentContent({
         const language = getCurrentAppLanguage();
         setState((prev) => ({ ...prev, isLoading: false, error: translate(language, 'document.load.failed') }));
         logOpenDocPerf('reloadDocument:error', startedAt, {
-          memoId,
           transitionId,
         });
       } finally {
@@ -391,7 +309,7 @@ export function useDocumentContent({
         }
       }
     },
-    [applyLoadedContent, identity, isolatedSession, isExternalDocument, externalScopePath, memoId, notebookPath, readOpeningRecovery, skipContentLoad, transitionId],
+    [applyLoadedContent, identity, isolatedSession, externalScopePath, readOpeningRecovery, skipContentLoad, transitionId],
   );
 
   return {

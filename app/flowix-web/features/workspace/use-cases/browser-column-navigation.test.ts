@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   openBrowserColumnAgentConversation,
   openBrowserColumnFileBrowser,
-  openBrowserColumnMemo,
   openBrowserColumnMarkdown,
+  openBrowserColumnNotebookNote,
   openBrowserColumnTabInWorkColumn,
   openBrowserColumnTarget,
   openBrowserColumnWebpage,
@@ -16,7 +16,7 @@ import {
   registerBrowserColumnDocumentFlush,
   resetBrowserColumnCoordinator,
 } from './browser-column-coordinator';
-import type { MemoItem } from '@/types/memo-item';
+import { memos } from '@platform/tauri/client';
 
 function resetWorkspace() {
   useWorkColumnStore.setState({
@@ -54,55 +54,11 @@ describe('browser column navigation', () => {
     });
   });
 
-  it('upgrades an existing same-path file tab when opened as a Memo', async () => {
-    const path = '/notes/shared.md';
-    await openBrowserColumnMarkdown(path);
-
-    const result = await openBrowserColumnTarget({
-      kind: 'memo',
-      memoId: 'shared',
-      notebookId: 'notebook-a',
-      notebookPath: '/notes',
-      filePath: path,
-    }, 'open-in-column');
-
-    expect(result).toEqual({
-      host: 'browser-column',
-      tabId: `file:${path}`,
-      alreadyOpen: true,
-    });
-    expect(useBrowserColumnStore.getState().tabs).toHaveLength(1);
-    expect(useBrowserColumnStore.getState().tabs[0].target).toEqual({
-      kind: 'memo',
-      memoId: 'shared',
-      notebookId: 'notebook-a',
-      notebookPath: '/notes',
-      filePath: path,
-    });
-  });
-
-  it('upgrades an existing same-path file tab when focusing a Memo target', async () => {
-    const path = '/notes/shared-focus.md';
-    await openBrowserColumnMarkdown(path);
-
-    const result = await openBrowserColumnTarget({
-      kind: 'memo',
-      memoId: 'shared-focus',
-      notebookId: 'notebook-a',
-      notebookPath: '/notes',
-      filePath: path,
-    }, 'focus-existing');
-
-    expect(result).toEqual({
-      host: 'browser-column',
-      tabId: `file:${path}`,
-      alreadyOpen: true,
-    });
-    expect(useBrowserColumnStore.getState().tabs).toHaveLength(1);
+  it('keeps a background notebook note scoped to its notebook', async () => {
+    await openBrowserColumnNotebookNote('/other/Created.md', 'other', '/other');
     expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({
-      kind: 'memo',
-      memoId: 'shared-focus',
-      filePath: path,
+      kind: 'file-browser', activeFilePath: '/other/Created.md',
+      notebookId: 'other', scopePath: '/other',
     });
   });
 
@@ -221,21 +177,19 @@ describe('browser column navigation', () => {
     });
   });
 
-  it('explicitly opens a memo in the right column, retaining the left and reusing its tab', async () => {
-    const target = { kind: 'memo' as const, memoId: 'shared', path: '/notes/shared.md', notebookId: 'notes', notebookPath: '/notes', transitionId: 1 };
+  it('deduplicates the same document path across work and browser columns', async () => {
+    const target = { kind: 'external' as const, path: '/notes/shared.md', scopePath: '/notes', transitionId: 1 };
     const work = useWorkColumnStore.getState();
     const requestId = work.beginNavigation(target, null);
     work.commitNavigation(requestId, target);
-    const browserTarget = { kind: 'memo' as const, memoId: 'shared', filePath: target.path, notebookId: 'notes', notebookPath: '/notes' };
-    const first = await openBrowserColumnTarget(browserTarget, 'open-in-column');
+    const first = await openBrowserColumnNotebookNote(target.path, 'notes', '/notes');
     await openBrowserColumnWebpage('https://example.com');
-    const second = await openBrowserColumnTarget(browserTarget, 'open-in-column');
-    expect(first?.alreadyOpen).toBe(false);
+    const second = await openBrowserColumnNotebookNote(target.path, 'notes', '/notes');
+    expect(first?.alreadyOpen).toBe(true);
     expect(second?.alreadyOpen).toBe(true);
-    expect(useBrowserColumnStore.getState().activeTabId).toBe('memo:shared');
-    expect(useBrowserColumnStore.getState().tabs).toHaveLength(2);
+    expect(useBrowserColumnStore.getState().tabs).toHaveLength(1);
     expect(useWorkColumnStore.getState().navigation.target).toEqual(target);
-    expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('browser-column');
+    expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('main-third');
   });
 
   it('supports replacing the active tab', async () => {
@@ -330,43 +284,27 @@ describe('browser column navigation', () => {
     });
   });
 
-  it('opens plugin pointer notes as artifact tabs', async () => {
-    const memo: MemoItem = {
-      id: 'artifact-memo',
-      filename: 'Roadmap.md',
-      preview: '',
-      tags: [],
-      todos: [],
-      agents: [],
-      createdAt: 1,
-      updatedAt: 1,
-      favorited: false,
-      icon: null,
-      colors: [],
-      properties: {
-        flowix_note_type: 'mindmap',
-        flowix_plugin: 'mindmap',
-        flowix_artifact: { renderer: 'markmap' },
-      },
-    };
+  it('opens plugin notes by file path', async () => {
+    await openBrowserColumnNotebookNote('/notes/Roadmap.md', 'notes', '/notes');
 
-    await openBrowserColumnMemo(memo, null);
-
-    expect(useBrowserColumnStore.getState().tabs[0].target).toEqual({
-      kind: 'artifact',
-      pointerMemoId: 'artifact-memo',
-      renderer: 'markmap',
+    expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({
+      kind: 'file-browser',
+      activeFilePath: '/notes/Roadmap.md',
     });
   });
 });
 
 it('moves a folder selection to the main column even when a separate file tab already exists', async () => {
+  const location = vi.spyOn(memos, 'resolveMarkdownLocation').mockResolvedValue({
+    path: '/workspace/readme.md', notebookId: null, notebookPath: null,
+    relativePath: null, indexable: false,
+  });
   resetWorkspace();
   resetBrowserColumnCoordinator();
   useBrowserColumnStore.getState().reset();
   const { useDocumentStore } = await import('@features/document/store/document-store');
   const previousDocument = useDocumentStore.getState();
-  useDocumentStore.setState({ activeMemoSession: null, activeExternalSession: null, currentDocumentPath: null, currentDocumentSource: null });
+  useDocumentStore.setState({ activeExternalSession: null, currentDocumentPath: null, currentDocumentSource: null });
   try {
     await openBrowserColumnMarkdown('/workspace/readme.md');
     useBrowserColumnStore.setState((state) => ({
@@ -386,6 +324,7 @@ it('moves a folder selection to the main column even when a separate file tab al
     await openBrowserColumnWebpage('https://example.com/after-move');
     expect(useBrowserColumnStore.getState().tabs).toHaveLength(2);
   } finally {
+    location.mockRestore();
     resetBrowserColumnCoordinator();
     resetWorkspace();
     useDocumentStore.setState(previousDocument);

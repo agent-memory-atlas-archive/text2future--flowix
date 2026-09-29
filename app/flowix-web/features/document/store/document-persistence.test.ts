@@ -3,7 +3,7 @@ import { applyLoadedDocumentContent, getDocumentBuffer, recordDocumentEdit, save
 import { waitForDocumentCommits } from './document-commit-queue';
 
 const mocks = vi.hoisted(() => ({ write: vi.fn(), checkpoint: vi.fn() }));
-vi.mock('../use-cases/document-operations', () => ({ documentContentOperations: () => ({ write: mocks.write }) }));
+vi.mock('../use-cases/local-document-operations', () => ({ localDocumentOperations: { write: mocks.write } }));
 vi.mock('./recovery-draft-store', () => ({
   persistRecoveryDraft: mocks.checkpoint, clearRecoveryDraftThrough: vi.fn().mockResolvedValue(undefined),
   flushRecoveryOperations: vi.fn().mockResolvedValue(true),
@@ -11,13 +11,12 @@ vi.mock('./recovery-draft-store', () => ({
 
 let sequence = 0;
 function document() {
-  const identity = { kind: 'md' as const, memoId: 'review-' + ++sequence, path: '/review.md', displayId: 'review-' + sequence };
+  const identity = { kind: 'md' as const, path: '/review.md', displayId: 'review-' + ++sequence };
   applyLoadedDocumentContent(identity, identity.path, 'A');
   return identity;
 }
 function save(identity: ReturnType<typeof document>) {
-  return saveDocumentContent({ identity, path: identity.path, content: getDocumentBuffer(identity).content,
-    channel: 'internal', key: identity.memoId });
+  return saveDocumentContent({ identity, path: identity.path, content: getDocumentBuffer(identity).content });
 }
 describe('persistence under slow and failed writes', () => {
   beforeEach(() => {

@@ -4,7 +4,6 @@ import type { WorkColumnNavigationState, WorkColumnTarget } from './work-column-
 import { resolveWorkColumnContentState } from './work-column-content-state';
 
 const emptyDocument = {
-  activeMemoSession: null,
   activeExternalSession: null,
   activeAgentConversationId: null,
 };
@@ -27,21 +26,19 @@ function navigation(
 }
 
 const memoA: WorkColumnTarget = {
-  kind: 'memo',
-  memoId: 'a',
+  kind: 'external',
   path: '/notes/a.md',
-  notebookId: null,
-  notebookPath: null,
+  scopePath: '/notes',
   transitionId: 1,
 };
 
-const memoB: WorkColumnTarget = { ...memoA, memoId: 'b', path: '/notes/b.md', transitionId: null };
+const memoB: WorkColumnTarget = { ...memoA, path: '/notes/b.md', transitionId: null };
 
 const sessionA = {
   fileIdentity: { displayId: 'display-a', path: '/notes/a.md' },
-  memoId: 'a',
   notebookId: null,
   notebookPath: null,
+  scopePath: '/notes',
   openedAt: 1,
   transitionId: 1,
 };
@@ -50,14 +47,14 @@ describe('work-column content state', () => {
   it('keeps the loaded A session while navigation to B is in progress', () => {
     const state = resolveWorkColumnContentState(
       navigation(memoA, { phase: 'loading', pendingTarget: memoB, previousTarget: memoA }),
-      { ...emptyDocument, activeMemoSession: sessionA },
+      { ...emptyDocument, activeExternalSession: sessionA },
     );
 
     expect(state).toEqual({
       status: 'transitioning',
       from: memoA,
       to: memoB,
-      session: { kind: 'memo', session: sessionA },
+      session: { kind: 'external', session: sessionA },
     });
   });
 
@@ -77,14 +74,14 @@ describe('work-column content state', () => {
         failure,
         retryToken: 'retry-b',
       }),
-      { ...emptyDocument, activeMemoSession: sessionA },
+      { ...emptyDocument, activeExternalSession: sessionA },
     );
 
     expect(state).toMatchObject({
       status: 'failed',
       target: memoA,
       attemptedTarget: memoB,
-      session: { kind: 'memo', session: sessionA },
+      session: { kind: 'external', session: sessionA },
       failure,
     });
   });
@@ -92,11 +89,11 @@ describe('work-column content state', () => {
   it('returns ready only after the target and loaded session are committed', () => {
     expect(resolveWorkColumnContentState(
       navigation(memoA),
-      { ...emptyDocument, activeMemoSession: sessionA },
+      { ...emptyDocument, activeExternalSession: sessionA },
     )).toEqual({
       status: 'ready',
       target: memoA,
-      session: { kind: 'memo', session: sessionA },
+      session: { kind: 'external', session: sessionA },
     });
   });
 });

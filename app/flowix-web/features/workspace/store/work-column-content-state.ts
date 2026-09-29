@@ -1,7 +1,4 @@
-import type {
-  ExternalDocumentSession,
-  MemoDocumentSession,
-} from '@features/document/public/workspace-api';
+import type { ExternalDocumentSession } from '@features/document/public/workspace-api';
 import { getWorkspaceDocumentState } from '@features/document/public/workspace-api';
 
 import { useWorkColumnStore } from './work-column-store';
@@ -13,7 +10,6 @@ import type {
 
 export type WorkColumnSession
   =
-  | { kind: 'memo'; session: MemoDocumentSession }
   | { kind: 'external'; session: ExternalDocumentSession }
   | { kind: 'agent-conversation'; instanceId: string };
 
@@ -36,15 +32,11 @@ export type WorkColumnContentState
     };
 
 interface WorkColumnDocumentSnapshot {
-  activeMemoSession: MemoDocumentSession | null;
   activeExternalSession: ExternalDocumentSession | null;
   activeAgentConversationId: string | null;
 }
 
 function activeSession(document: WorkColumnDocumentSnapshot): WorkColumnSession | null {
-  if (document.activeMemoSession) {
-    return { kind: 'memo', session: document.activeMemoSession };
-  }
   if (document.activeExternalSession) {
     return { kind: 'external', session: document.activeExternalSession };
   }

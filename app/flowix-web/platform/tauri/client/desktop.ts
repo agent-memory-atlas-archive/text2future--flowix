@@ -316,8 +316,6 @@ export const plugins = {
     sourceNote?: string;
   }) => invoke<PluginRunStarted>('plugin_run', params),
   runStop: (runId: string) => invoke<boolean>('plugin_run_stop', { runId }),
-  listNotes: (pluginId: string, notebookId: string) =>
-    invoke<import('@/types/memo-item').MemoItem[]>('plugin_list_notes', { pluginId, notebookId }),
   resolveNote: (memoId: string) =>
     invoke<PluginArtifact>('plugin_resolve_note', { memoId }),
 };

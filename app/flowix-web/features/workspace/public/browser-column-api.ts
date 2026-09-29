@@ -25,7 +25,7 @@ export {
 export function useBrowserColumnViewModel() {
   return useBrowserColumnStore(useShallow((state) => {
     const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId) ?? null;
-    const activeMemoId = activeTab?.target.kind === 'memo' ? activeTab.target.memoId : null;
+    const activePath = activeTab?.target.kind === 'file-browser' ? activeTab.target.activeFilePath : null;
     return {
       tabs: state.tabs,
       activeTabId: state.activeTabId,
@@ -33,9 +33,9 @@ export function useBrowserColumnViewModel() {
       activeWebRuntime: state.activeTabId && activeTab?.target.kind === 'web'
         ? state.webRuntimes[state.activeTabId] ?? null
         : null,
-      activeMemoHasDuplicateTab: activeMemoId !== null
+      activePathHasDuplicateTab: activePath !== null
         && state.tabs.filter(
-          (tab) => tab.target.kind === 'memo' && tab.target.memoId === activeMemoId,
+          (tab) => tab.target.kind === 'file-browser' && tab.target.activeFilePath === activePath,
         ).length > 1,
     };
   }));

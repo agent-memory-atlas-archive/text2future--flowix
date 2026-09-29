@@ -217,7 +217,7 @@ pub(crate) fn cli_command() -> Command {
     Command::new(DISPLAY_BIN)
         .version(env!("CARGO_PKG_VERSION"))
         .about("Manage local Flowix notebooks, Markdown notes, and artifacts")
-        .after_help("For Markdown content, --file is recommended (especially on Windows PowerShell 5.1). Files must be UTF-8. On Windows, stdin is opt-in with --stdin because PowerShell may corrupt non-ASCII text. Note commands accept an absolute path; legacy IDs remain supported. Examples:\n  flowix create <notebook> --file body.md --json\n  flowix write <absolute-note-path> --file body.md --json\n  flowix create <notebook> --stdin --json\n  flowix list\n  flowix search TODO --tag project/flowix --limit 20\n  flowix mcp")
+        .after_help("For Markdown content, --file is recommended (especially on Windows PowerShell 5.1). Files must be UTF-8. Note addresses use <notebook-id>::<relative-path> or an absolute path. Examples:\n  flowix create <notebook> --file body.md --json\n  flowix show work::Notes/Example.md --json\n  flowix write work::Notes/Example.md --file body.md --json\n  flowix list\n  flowix search TODO --tag project/flowix --limit 20\n  flowix mcp")
         .arg(
             Arg::new("json")
                 .long("json")
@@ -287,7 +287,7 @@ pub(crate) fn cli_command() -> Command {
         )
         .subcommand(
             Command::new("search")
-                .about("Search memo text")
+                .about("Search Markdown note text")
                 .arg(required_arg("query"))
                 .arg(Arg::new("notebook").long("notebook").short('b').num_args(1))
                 .arg(
@@ -346,7 +346,7 @@ fn required_arg(name: &'static str) -> Arg {
         .allow_hyphen_values(true)
         .num_args(1);
     if name == "id" {
-        arg.value_name("PATH-OR-LEGACY-ID")
+        arg.value_name("NOTEBOOK::RELATIVE-PATH-OR-ABSOLUTE-PATH")
     } else {
         arg
     }

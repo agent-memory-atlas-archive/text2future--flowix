@@ -24,7 +24,6 @@ export type {
   WorkColumnSurfaceCapability,
   WorkColumnSurfaceChrome,
   WorkColumnSurfaceKind,
-  NoteSurface,
   UnavailableFileSurface,
   VideoFileSurface,
 } from './types';

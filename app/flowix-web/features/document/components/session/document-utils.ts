@@ -1,5 +1,3 @@
-import type { MemoItem } from '@/types/memo-item';
-import type { MemoStore } from '@features/memo/store/memo-store';
 
 // Re-exported for callers that import DocumentBuffer from this module.
 // The canonical definition lives in lib/store/document-buffer.ts so that
@@ -22,13 +20,4 @@ export function joinPath(basePath: string, filePath: string): string {
     return filePath;
   }
   return `${basePath.replace(/[\\/]+$/, '')}/${filePath.replace(/^[\\/]+/, '')}`;
-}
-
-export function findMemoById(
-  state: Pick<MemoStore, 'memos' | 'selectedMemo'>,
-  memoId: string | null | undefined,
-): MemoItem | null {
-  if (!memoId) return null;
-  return state.memos.find((memo) => memo.id === memoId)
-    ?? (state.selectedMemo?.id === memoId ? state.selectedMemo : null);
 }

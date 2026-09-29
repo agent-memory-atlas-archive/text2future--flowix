@@ -1,4 +1,3 @@
-import type { MemoItem } from '@/types/memo-item';
 import { getWorkColumnSurfaceDefinition } from './registry';
 import { resolveWorkColumnContent } from './resolver';
 import type {
@@ -9,7 +8,6 @@ import type {
 } from './types';
 
 export interface WorkColumnDocumentHeaderPresentation {
-  currentMemo: MemoItem | null;
   externalFilePath: string | null;
 }
 
@@ -32,26 +30,18 @@ export interface WorkColumnPresentation {
 
 function documentHeaderPresentation(
   surface: Extract<WorkColumnContentPresentation, { status: 'surface' }>['surface'],
-  input: ResolveWorkColumnContentInput,
 ): WorkColumnDocumentHeaderPresentation {
-  if (surface.kind === 'note') {
-    return {
-      currentMemo: input.document?.memo ?? null,
-      externalFilePath: null,
-    };
-  }
-
   switch (surface.kind) {
     case 'code':
     case 'md':
     case 'html-file':
-      return { currentMemo: null, externalFilePath: surface.fileIdentity.path };
+      return { externalFilePath: surface.fileIdentity.path };
     case 'image-file':
     case 'video-file':
     case 'unavailable-file':
-      return { currentMemo: null, externalFilePath: surface.fileIdentity.path };
+      return { externalFilePath: surface.fileIdentity.path };
     default:
-      return { currentMemo: null, externalFilePath: null };
+      return { externalFilePath: null };
   }
 }
 
@@ -74,14 +64,17 @@ export function resolveWorkColumnPresentation(
     : {
         kind: 'document',
         document: content.status === 'surface'
-          ? documentHeaderPresentation(content.surface, input)
-          : { currentMemo: null, externalFilePath: null },
+          ? documentHeaderPresentation(content.surface)
+          : { externalFilePath: null },
       };
 
   return {
     header,
     chrome: definition?.chrome ?? 'document',
-    capabilities: definition?.capabilities ?? [],
+    capabilities: content.status === 'surface' && content.surface.kind === 'md'
+      && input.document?.identity.kind === 'external' && input.document.identity.indexable
+      ? [...(definition?.capabilities ?? []), 'memo-colors', 'properties', 'version-history']
+      : definition?.capabilities ?? [],
     content,
   };
 }

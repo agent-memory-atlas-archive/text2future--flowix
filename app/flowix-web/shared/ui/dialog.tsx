@@ -48,12 +48,13 @@ interface DialogContentProps {
 	className?: string;
 	fullScreen?: boolean;
 	showOverlay?: boolean;
-	showCloseButton?: boolean;
+  showCloseButton?: boolean;
+  rightSide?: boolean;
 }
 
 const EXIT_ANIMATION_MS = 300;
 
-export function DialogContent({ children, className, showOverlay = true, showCloseButton = true }: DialogContentProps) {
+export function DialogContent({ children, className, showOverlay = true, showCloseButton = true, rightSide = false }: DialogContentProps) {
 	const context = useDialogContext();
 	const open = context?.open ?? false;
 	const onOpenChange = context?.onOpenChange ?? (() => {});
@@ -105,10 +106,12 @@ export function DialogContent({ children, className, showOverlay = true, showClo
 			    the keyframe's `transform` (which would clobber Tailwind's
 			    `-translate-x-1/2 -translate-y-1/2`). `pointer-events-none` lets
 			    clicks on the wrapper pass through to the overlay behind. */}
-			<div className="fixed inset-0 z-[130] flex items-center justify-center pointer-events-none">
+      <div className={cn('fixed inset-0 z-[130] flex pointer-events-none', rightSide ? 'justify-end' : 'items-center justify-center')}>
 				<div
 					className={cn(
-						'relative w-full max-w-[380px] rounded-2xl bg-[var(--background)] px-5 py-4 shadow-lg pointer-events-auto',
+          rightSide
+            ? 'relative h-full w-full max-w-[420px] overflow-y-auto rounded-none border-l border-[var(--border)] bg-[var(--background)] px-6 py-5 shadow-2xl pointer-events-auto'
+            : 'relative w-full max-w-[380px] rounded-2xl bg-[var(--background)] px-5 py-4 shadow-lg pointer-events-auto',
 						contentAnimationClass,
 						className
 					)}

@@ -132,25 +132,17 @@ export function createPlusIcon(): SVGSVGElement {
   );
 }
 
-export function createComposerRoleEmptyIcon(): SVGSVGElement {
-  const svg = createSvg(
-    "0 0 24 24",
-    "agent-thread-card__composer-role-icon-empty",
+export function createComposerAddIcon(): SVGSVGElement {
+  return appendFillPath(
+    createSvg("0 0 24 24", "agent-thread-card__composer-add-button-empty"),
+    ICON_PLUS_PATH,
   );
-  return appendFillPath(svg, ICON_PLUS_PATH);
 }
 
 export function createAlertIcon(): SVGSVGElement {
   return appendStrokePath(
     createSvg("0 0 24 24", "agent-thread-card__access-alert-icon"),
     ICON_ALERT_PATH,
-  );
-}
-
-export function createRoleOptionsLoadingIcon(): SVGSVGElement {
-  return appendStrokePath(
-    createSvg("0 0 24 24", "agent-thread-card__composer-role-popover-spinner"),
-    ICON_LOADER_PATH,
   );
 }
 

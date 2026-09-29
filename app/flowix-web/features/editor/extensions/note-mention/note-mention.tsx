@@ -95,8 +95,6 @@ const wikiNoteMentionConfig: SuggestionMenuConfig<MentionNoteItem> = {
       type: 'noteReference',
       attrs: {
         ...toNoteReferenceAttrs(item),
-        linkStyle: 'wiki',
-        linkTarget: item.filename || `${item.title}.md`,
         heading: null,
       },
     });

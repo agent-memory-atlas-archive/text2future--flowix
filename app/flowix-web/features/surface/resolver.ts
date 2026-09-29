@@ -1,4 +1,3 @@
-import type { PluginArtifactRendererId } from '@features/plugin/plugin-note';
 import { canonicalPath } from '@/lib/path';
 import { externalFileViewKind } from '@features/editor/public/code-file';
 import type {
@@ -27,31 +26,6 @@ function emptyContent(
 
 function surfaceContent(surface: WorkColumnSurface): WorkColumnContentPresentation {
   return { status: 'surface', surface };
-}
-
-function artifactSurface(
-  instanceKey: string,
-  memoId: string,
-  transitionId: number | undefined,
-  renderer: PluginArtifactRendererId | null,
-): WorkColumnSurface {
-  const base = { instanceKey, renderer, props: { memoId, transitionId } };
-  switch (renderer) {
-    case 'markmap': return { ...base, kind: 'mindmap', renderer };
-    case 'html':
-    case 'webpage': return { ...base, kind: 'html', renderer };
-    case 'json-viewer': return { ...base, kind: 'json', renderer };
-    case 'markdown':
-    case 'text': return { ...base, kind: 'text', renderer };
-    case null: return { ...base, kind: 'plugin-artifact' };
-    default: return assertNever(renderer);
-  }
-}
-
-function resolveDocumentSurface(
-  document: Extract<DocumentSurfaceContext, { identity: { kind: 'memo' } }>,
-): WorkColumnSurface {
-  return document.surface;
 }
 
 function resolveExternalDocumentSurface(
@@ -96,52 +70,12 @@ function resolveMediaTargetContent(
   });
 }
 
-function resolveArtifactTargetContent(
-  target: Extract<WorkColumnTarget, { kind: 'artifact' }>,
-  emptyMessage: string,
-): WorkColumnContentPresentation {
-  const pointerMemoId = target.pointerMemoId.trim();
-  if (!pointerMemoId) {
-    return emptyContent(emptyMessage, 'invalid-artifact');
-  }
-  return surfaceContent(artifactSurface(
-    `artifact:${pointerMemoId}`,
-    pointerMemoId,
-    undefined,
-    target.renderer,
-  ));
-}
-
 function samePath(left: string | null | undefined, right: string | null | undefined): boolean {
   return left != null && right != null && canonicalPath(left) === canonicalPath(right);
 }
 
 function sameTransition(left: number | null | undefined, right: number | null): boolean {
   return left === right;
-}
-
-/** Reject adjacent-render stale contexts instead of mounting them under a new target. */
-function isMemoDocumentContext(
-  target: Extract<WorkColumnTarget, { kind: 'memo' }>,
-  document: DocumentSurfaceContext,
-): document is Extract<DocumentSurfaceContext, { identity: { kind: 'memo' } }> {
-  if (!('surface' in document) || document.identity.kind !== 'memo' || document.surface.kind !== 'note') return false;
-  const props = document.surface.props;
-  return document.identity.kind === 'memo'
-    && document.identity.memoId === target.memoId
-    && samePath(document.identity.fileIdentity.path, target.path)
-    && document.identity.notebookId === target.notebookId
-    && ((document.identity.notebookPath == null && target.notebookPath == null)
-      || samePath(document.identity.notebookPath, target.notebookPath))
-    && sameTransition(document.identity.transitionId, target.transitionId)
-    && document.memo?.id === target.memoId
-    && document.surface.memoId === target.memoId
-    && samePath(document.surface.fileIdentity.path, target.path)
-    && props.notebookId === target.notebookId
-    && ((props.notebookPath == null && target.notebookPath == null)
-      || samePath(props.notebookPath, target.notebookPath))
-    && !props.isExternalDocument
-    && sameTransition(props.transitionId, target.transitionId);
 }
 
 function isExternalDocumentContext(
@@ -154,8 +88,6 @@ function isExternalDocumentContext(
     && ((document.identity.scopePath == null && target.scopePath == null)
       || samePath(document.identity.scopePath, target.scopePath))
     && sameTransition(document.identity.transitionId, target.transitionId)
-    && document.memo === null
-    && props.memoId === null
     && props.isExternalDocument === true
     && ((props.externalScopePath == null && target.scopePath == null)
       || samePath(props.externalScopePath, target.scopePath))
@@ -176,6 +108,8 @@ function resolveWorkColumnTarget(
   switch (target.kind) {
     case 'empty':
       return emptyContent(input.emptyMessage, 'no-target');
+    case 'document-list':
+      return surfaceContent({ kind: 'document-list', instanceKey: `folder:${canonicalPath(target.scope.path)}:view:${target.filters.customFilterId ?? ''}`, folderPath: target.scope.path, notebookPath: target.scope.notebookPath, notebookId: target.scope.notebookId, filters: target.filters });
     case 'web':
       return surfaceContent({ kind: 'web', instanceKey: target.url, url: target.url });
     case 'agent-conversation':
@@ -193,14 +127,8 @@ function resolveWorkColumnTarget(
         props: context,
       });
     }
-    case 'artifact':
-      return resolveArtifactTargetContent(target, input.emptyMessage);
     case 'media':
       return resolveMediaTargetContent(target);
-    case 'memo':
-      return input.document && isMemoDocumentContext(target, input.document)
-        ? surfaceContent(resolveDocumentSurface(input.document))
-        : emptyContent(input.emptyMessage, 'stale-context');
     case 'external':
       return input.document && isExternalDocumentContext(target, input.document)
         ? surfaceContent(resolveExternalDocumentSurface(input.document))

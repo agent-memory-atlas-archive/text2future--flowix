@@ -8,7 +8,7 @@ import { enqueueDocumentCommit } from '../../store/document-commit-queue';
 import { ensureFileDisplayIdentity, rebaseFileDisplayPath, reconcileFileDisplays } from '@/lib/file-display-registry';
 
 const save = vi.hoisted(() => vi.fn().mockImplementation(async request => ({ status: 'saved', path: request.path, content: request.content })));
-vi.mock('../../use-cases/document-operations', () => ({ documentContentOperations: () => ({ write: save }) }));
+vi.mock('../../use-cases/local-document-operations', () => ({ localDocumentOperations: { write: save } }));
 vi.mock('../../store/recovery-draft-store', () => ({
   persistRecoveryDraft: vi.fn().mockResolvedValue(true),
   clearRecoveryDraftThrough: vi.fn().mockResolvedValue(undefined),
@@ -20,15 +20,15 @@ describe('shared document autosave', () => {
 
   it('saves the latest shared draft when the outgoing surface timer fires', async () => {
     vi.useFakeTimers();
-    const identity = { kind: 'md' as const, memoId: 'shared-autosave', path: '/shared-autosave.md', displayId: 'display-shared-autosave' };
+    const identity = { kind: 'md' as const, path: '/shared-autosave.md', displayId: 'display-shared-autosave' };
     applyLoadedDocumentContent(identity, '/notes/shared.md', '# Base');
     let onChange: ((content: string) => void) | undefined;
     const setState = vi.fn();
     const reloadDocument = vi.fn().mockResolvedValue(undefined);
     function Surface() {
       onChange = useDocumentAutosave({
-        identity, filePath: '/notes/shared.md', memoId: identity.memoId,
-        isExternalDocument: false, externalScopePath: null, setState, reloadDocument,
+        identity, filePath: '/notes/shared.md',
+        externalScopePath: null, setState, reloadDocument,
       }).handleChange;
       return null;
     }
@@ -51,7 +51,7 @@ describe('shared document autosave', () => {
   it.each([false, true])('waits for a title rename and saves %s document edits at the new path', async (isExternalDocument) => {
     vi.useFakeTimers();
     const originalPath = '/notes/old-' + isExternalDocument + '.md';
-    const identity = { kind: 'md' as const, memoId: isExternalDocument ? null : 'memo-rename', ...ensureFileDisplayIdentity(originalPath) };
+    const identity = { kind: 'md' as const, ...ensureFileDisplayIdentity(originalPath) };
     reconcileFileDisplays([identity]);
     applyLoadedDocumentContent(identity, '/notes/old.md', 'Base');
     let currentPath = originalPath;
@@ -59,7 +59,7 @@ describe('shared document autosave', () => {
     function Surface() {
       onChange = useDocumentAutosave({
         identity, filePath: '/notes/old.md', getCurrentFilePath: () => currentPath,
-        memoId: identity.memoId, isExternalDocument, externalScopePath: isExternalDocument ? '/notes' : null,
+        externalScopePath: isExternalDocument ? '/notes' : null,
         setState: vi.fn(), reloadDocument: vi.fn().mockResolvedValue(undefined),
       }).handleChange;
       return null;
@@ -96,7 +96,7 @@ describe('shared document autosave', () => {
   });
 
   it('publishes unsaved edits to both subscribers and preserves them when another surface loads', () => {
-    const identity = { kind: 'md' as const, memoId: 'shared-live', path: '/shared-live.md', displayId: 'display-shared-live' };
+    const identity = { kind: 'md' as const, path: '/shared-live.md', displayId: 'display-shared-live' };
     applyLoadedDocumentContent(identity, '/notes/live.md', '# Disk');
     const left: string[] = [];
     const right: string[] = [];

@@ -14,10 +14,8 @@ describe('document history store', () => {
       openedAt: 1,
     };
     const memo = {
-      kind: 'memo' as const,
-      memoId: 'memo-1',
-      notebookId: 'notebook-1',
-      notebookPath: '/notes',
+      kind: 'external' as const,
+      scopePath: '/notes',
       path: '/notes/memo-1.md',
       openedAt: 2,
     };
@@ -42,27 +40,24 @@ describe('document history store', () => {
     expect(useDocumentHistoryStore.getState().backStack).toHaveLength(1);
   });
 
-  it('keeps artifact targets distinct from their pointer memos', () => {
+  it('keeps generated documents distinct by file path', () => {
     const artifact = {
-      kind: 'artifact' as const,
-      pointerMemoId: 'pointer-1',
-      notebookId: 'notebook-1',
-      notebookPath: '/notes',
-      pluginId: 'mindmap',
-      renderer: 'markmap' as const,
+      kind: 'external' as const,
+      path: '/notes/map-one.md',
+      scopePath: '/notes',
       openedAt: 1,
     };
 
     useDocumentHistoryStore.getState().pushBack(artifact);
     useDocumentHistoryStore.getState().pushBack({
       ...artifact,
-      pointerMemoId: 'pointer-2',
+      path: '/notes/map-two.md',
       openedAt: 2,
     });
 
     expect(useDocumentHistoryStore.getState().backStack).toEqual([artifact, {
       ...artifact,
-      pointerMemoId: 'pointer-2',
+      path: '/notes/map-two.md',
       openedAt: 2,
     }]);
   });

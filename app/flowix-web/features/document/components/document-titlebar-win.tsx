@@ -9,7 +9,6 @@ import {
   ExternalTitlebarBadge,
   ExternalDocumentActions,
   MediaActions,
-  MemoActions,
   DOCUMENT_TITLEBAR_ICON_BUTTON_WIN,
   AgentThreadCardFullscreenExitButton,
   AgentThreadCardFullscreenIdentity,
@@ -26,7 +25,7 @@ const ICON_BTN = DOCUMENT_TITLEBAR_ICON_BUTTON_WIN;
 export function DocumentTitlebarWin({
   reserveWindowsControls = true,
   surfaceChrome = 'document',
-  document: { currentMemo, externalFilePath = null },
+  document: { externalFilePath = null },
   sidebar: {
     hidden: isSidebarHidden,
     onToggle: onToggleSidebar,
@@ -37,6 +36,7 @@ export function DocumentTitlebarWin({
     onNavigateBack,
     onNavigateForward,
     visible: showNavigationButtons = true,
+    title: navigationTitle,
   },
   contentCapabilities: {
     copyFullText: canCopyFullText,
@@ -48,27 +48,18 @@ export function DocumentTitlebarWin({
   actions: {
     onCopyLink,
     onCopyFullText,
-    onTogglePin,
     onExportMarkdown,
     onSaveAsTemplate,
     onExportWord,
     onExportPdf,
-    onRequestDeleteMemo,
     onDeleteExternalFile,
-    onColorsChange,
-    editorMode,
-    onToggleEditorMode,
       },
   mediaActions,
 }: DocumentTitlebarProps) {
   const { t } = useI18n();
   const isAgentThreadCardFullscreen = useAgentThreadCardFullscreenActive();
   const isMediaSurface = surfaceChrome === 'media';
-  const documentState: DocumentState = currentMemo
-    ? 'memo'
-    : externalFilePath
-      ? 'external'
-      : 'empty';
+  const documentState: DocumentState = externalFilePath ? 'external' : 'empty';
 
   return (
       <WorkColumnTitlebarShell
@@ -121,6 +112,14 @@ export function DocumentTitlebarWin({
             </Tooltip>
           </>
         )}
+        {navigationTitle && (
+          <span
+            className="ml-2 min-w-0 max-w-[320px] truncate text-sm font-medium text-[var(--foreground)]"
+            title={navigationTitle}
+          >
+            {navigationTitle}
+          </span>
+        )}
       </div>
 
       <AgentThreadCardFullscreenIdentity />
@@ -146,28 +145,7 @@ export function DocumentTitlebarWin({
             onSaveAsTemplate={onSaveAsTemplate}
             onDeleteExternalFile={onDeleteExternalFile}
             canCopyFullText={canCopyFullText}
-            canExportContent={canExportContent}
-            canSaveAsTemplate={canSaveAsTemplate}
-          />
-        )}
-        {documentState === 'memo' && currentMemo && (
-          <MemoActions
-            key={currentMemo.id}
-            memo={currentMemo}
-            iconButtonClass={ICON_BTN}
-            onCopyLink={onCopyLink}
-            onCopyFullText={onCopyFullText}
-            onTogglePin={onTogglePin}
-            onExportMarkdown={onExportMarkdown}
-            onSaveAsTemplate={onSaveAsTemplate}
-            onExportWord={onExportWord}
-            onExportPdf={onExportPdf}
-            onRequestDeleteMemo={onRequestDeleteMemo}
-            onColorsChange={onColorsChange ?? (() => {})}
-            showColorPicker={canEditMemoColors}
-            editorMode={editorMode}
-            onToggleEditorMode={onToggleEditorMode}
-            canCopyFullText={canCopyFullText}
+            canEditColors={canEditMemoColors}
             canExportContent={canExportContent}
             canSaveAsTemplate={canSaveAsTemplate}
             canViewVersionHistory={canViewVersionHistory}

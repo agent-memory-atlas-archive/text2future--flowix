@@ -28,7 +28,6 @@ import {
   useMemoStore,
 } from '@features/memo/store/memo-store';
 import {
-  isPathNoteListItem,
   memoListItemRelativePath,
   type MemoListItem,
   type MemoColor,
@@ -214,7 +213,7 @@ export function MemoCardActions<T extends MemoListItem>({
 }: MemoCardActionsProps<T>) {
   const { t } = useI18n();
 
-  // Resolve the on-disk path the same way `openMemoSession` does, so the
+  // Resolve the note's on-disk path from its notebook-relative path, so the
   // memo-card menu's "copy link" / "copy full text" target the same file
   // the titlebar's commands would when the memo is actively open.
   const resolvePath = () => {
@@ -229,7 +228,9 @@ export function MemoCardActions<T extends MemoListItem>({
     const path = resolvePath();
     if (!path) return;
     try {
-      await writeClipboardText(buildNoteOpenLinkFromPath(path, useMemoStore.getState().notebooks) ?? path);
+      const link = buildNoteOpenLinkFromPath(path, useMemoStore.getState().notebooks);
+      if (!link) throw new Error('Cannot create an unambiguous notebook link');
+      await writeClipboardText(link);
       toast.success(t('document.command.copySuccess'));
     } catch (error) {
       console.warn('[MemoCardActions] copy link failed', error);
@@ -266,9 +267,7 @@ export function MemoCardActions<T extends MemoListItem>({
     const notebook = useMemoStore.getState().selectedNotebook;
     window.dispatchEvent(
       new CustomEvent('flowix:open-note-properties', {
-        detail: isPathNoteListItem(memo)
-          ? { path, scopePath: notebook?.path ?? null }
-          : { memoId: memo.id },
+        detail: { path, scopePath: notebook?.path ?? null },
       }),
     );
   };

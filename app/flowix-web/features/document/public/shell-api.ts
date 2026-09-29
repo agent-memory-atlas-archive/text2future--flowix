@@ -23,7 +23,6 @@ export { documentHistoryEntryKey } from '@features/document/store/document-histo
 export { localDocumentOperations } from '@features/document/use-cases/local-document-operations';
 export {
   type DocumentHistoryEntry,
-  type MemoDocumentSession,
 } from '@features/document/store';
 
 export function useShellDocumentViewModel() {
@@ -31,7 +30,6 @@ export function useShellDocumentViewModel() {
     currentDocumentPath: state.currentDocumentPath,
     currentDocumentSource: state.currentDocumentSource,
     activeAgentConversationId: state.activeAgentConversationId,
-    activeMemoSession: state.activeMemoSession,
     activeExternalSession: state.activeExternalSession,
     isDocumentTransitioning: state.isDocumentTransitioning,
   })));

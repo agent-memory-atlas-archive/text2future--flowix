@@ -120,21 +120,19 @@ describe('memo dispatcher window isolation', () => {
     });
     const { memoDispatcher, acquireMemoEventBridge } = await import('@/lib/memo-dispatcher');
     const releaseBridge = acquireMemoEventBridge();
-    const openMemoInBrowserColumn = vi.fn().mockResolvedValue(undefined);
+    const openPathInBrowserColumn = vi.fn().mockResolvedValue(undefined);
     const unsubscribe = memoDispatcher.subscribe((event) => {
       handleMainWindowMemoEvent(event, {
         getSelectedNotebookId: () => 'notebook-a',
         invalidateMentionCaches: vi.fn(),
-        openMemoInBrowserColumn,
+        openPathInBrowserColumn,
         reportOpenFailure: vi.fn(),
         handleMemoCreated: vi.fn(),
         handleMemoUpdated: vi.fn(),
         handleMemoDeleted: vi.fn(),
-        removeBrowserColumnTabsByMemoId: vi.fn(),
+        removeBrowserColumnTabsByPath: vi.fn(),
         handleTagsRenamed: vi.fn(),
         handleTagsDeleted: vi.fn(),
-        replaceActiveMemoPath: vi.fn(),
-        replaceBrowserColumnMemoPath: vi.fn(),
         refreshSelectedNotebookMetadata: vi.fn(),
         refreshBackgroundTodoCount: vi.fn(),
       });
@@ -161,7 +159,7 @@ describe('memo dispatcher window isolation', () => {
       source: 'external_tool',
     });
 
-    expect(openMemoInBrowserColumn).toHaveBeenCalledWith('memo-external');
+    expect(openPathInBrowserColumn).toHaveBeenCalledWith('notebook-b', 'External.md');
     unsubscribe();
     releaseBridge();
   });

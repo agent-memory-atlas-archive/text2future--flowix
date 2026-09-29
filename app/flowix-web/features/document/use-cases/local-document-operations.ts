@@ -1,6 +1,7 @@
 import { canonicalPath } from '@/lib/path';
 import { externalDocuments } from '@platform/tauri/client';
 import { files } from '@platform/tauri/client/desktop';
+import { updateNoteLinksAfterMove } from '@features/memo/services/note-link-rewriter';
 
 import type { EditableDocumentOperations } from './editable-document-operations';
 
@@ -20,7 +21,11 @@ export const localDocumentOperations: EditableDocumentOperations = {
   },
   rename: async ({ path, name, scopePath }) => {
     if (!scopePath) throw new Error('A file scope is required to rename this document');
-    return { path: canonicalPath(await files.rename(path, name, scopePath)) };
+    const renamedPath = canonicalPath(await files.rename(path, name, scopePath));
+    if (/\.(?:md|markdown)$/i.test(path) && renamedPath !== canonicalPath(path)) {
+      updateNoteLinksAfterMove(path, renamedPath);
+    }
+    return { path: renamedPath };
   },
   delete: async ({ path, scopePath }) => {
     const deleted = await files.delete(path, scopePath ?? undefined);

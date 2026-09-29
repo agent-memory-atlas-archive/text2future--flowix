@@ -18,7 +18,7 @@ import { ensureFileDisplayIdentity, rebaseFileDisplayPath, reconcileFileDisplays
 import { waitForDocumentCommits } from '../store/document-commit-queue';
 
 const mocks = vi.hoisted(() => ({ write: vi.fn(), read: vi.fn() }));
-vi.mock('../use-cases/document-operations', () => ({ documentContentOperations: () => ({ write: mocks.write, read: mocks.read }) }));
+vi.mock('../use-cases/local-document-operations', () => ({ localDocumentOperations: { write: mocks.write, read: mocks.read } }));
 vi.mock('../store/recovery-draft-store', () => ({
   persistRecoveryDraft: vi.fn().mockResolvedValue(true), clearRecoveryDraftThrough: vi.fn().mockResolvedValue(undefined),
   flushRecoveryOperations: vi.fn().mockResolvedValue(true),
@@ -29,7 +29,7 @@ let releaseRename: () => void;
 const environment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
 let sequence = 0;
 function mountDocument() {
-  const identity = { kind: 'md' as const, memoId: 'interaction', ...ensureFileDisplayIdentity('/interaction-' + ++sequence + '.md') };
+  const identity = { kind: 'md' as const, ...ensureFileDisplayIdentity('/interaction-' + ++sequence + '.md') };
   reconcileFileDisplays([identity]);
   applyLoadedDocumentContent(identity, identity.path, 'Body');
   const renameGate = new Promise<void>(resolve => { releaseRename = resolve; });
@@ -42,12 +42,12 @@ function mountDocument() {
     const capture = useCallback(() => handle.current?.flushPendingChanges() ?? null, []);
     useEffect(() => registerDocumentCapture(identity, capture), [capture]);
     const autosave = useDocumentAutosave({ identity, filePath: identity.path, getCurrentFilePath: () => path.current,
-      memoId: identity.memoId, isExternalDocument: false, externalScopePath: null, setState,
+      externalScopePath: null, setState,
       reloadDocument: async () => {}, flushPendingContent: capture });
     return <I18nProvider language="en-US"><ShortcutsProvider overrides={{}}>
       {createPortal(<Toaster />, document.body)}
       <button data-testid="click" onClick={() => setClicks(value => value + 1)}>Clicks {clicks}</button>
-      <DocumentSaveStatus identity={identity} external={false} scopePath={null} />
+      <DocumentSaveStatus identity={identity} scopePath={null} />
       <MarkdownEditor ref={handle} content={state.fullContent} onChange={autosave.handleChange} onDirty={autosave.handleDirty}
         onBeforeCreate={value => { editor = value; mounts++; }} editable
         header={<MemoTitleEditor displayId={identity.displayId} filename={filename} editable showPropertiesToggle={false}

@@ -22,7 +22,7 @@ import {
 } from '@features/document/components/document-titlebar-shared';
 import { DEFAULT_AGENT_TYPE_KEY, getAgentType } from '@/lib/agent-types';
 import { useAgentSessionStore } from '@features/agent/store/agent-session-store';
-import { openNoteByMemoId, openNoteByPhysicalPath } from '@features/memo/use-cases/open-by-target';
+import { openNoteByNotebookPath, openNoteByPhysicalPath } from '@features/memo/use-cases/open-by-target';
 import { openExternalTarget } from '@features/workspace/use-cases/workspace-navigation';
 import { getAgentConversationPresentation } from '@features/agent/conversation-presentation';
 import { AgentIcon } from '@features/agent/components/agent-icon';
@@ -182,10 +182,10 @@ function AgentConversationHeader({ instanceId }: { instanceId: string }) {
   const onOpenSourceDocument = useCallback(() => {
     if (!instance || !presentation?.hasSourceDocument) return;
     const { source } = presentation;
-    const open = source?.documentPath
-      ? openNoteByPhysicalPath(source.documentPath).catch(() => openExternalTarget(source.documentPath!))
-      : source?.memoId
-        ? openNoteByMemoId(source.memoId)
+    const open = source?.notebookId && source.relativePath
+      ? openNoteByNotebookPath(source.notebookId, source.relativePath)
+      : source?.documentPath
+        ? openNoteByPhysicalPath(source.documentPath).catch(() => openExternalTarget(source.documentPath!))
         : Promise.resolve();
     void open.catch(() => toast.error(t('status.agent.originUnavailable')));
   }, [instance, presentation, t]);

@@ -26,7 +26,6 @@ describe('agent conversation presentation', () => {
       title: '  ',
       source: {
         kind: 'thread-card',
-        memoId: 'memo-1',
         documentPath: null,
       },
       runtimeConfig: null,
@@ -34,7 +33,7 @@ describe('agent conversation presentation', () => {
 
     expect(presentation).toMatchObject({
       title: 'Untitled',
-      hasSourceDocument: true,
+      hasSourceDocument: false,
       runtimeCwd: undefined,
     });
   });

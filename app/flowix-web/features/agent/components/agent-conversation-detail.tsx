@@ -26,7 +26,7 @@ import {
   disposeAgentComposerDom,
   getAgentThreadCardUserHistoryMessagesFromMessages,
 } from '@features/agent/thread-card/composer';
-import { AgentRolePickerController } from '@features/agent/thread-card/role/agent-role-picker-controller';
+import { NotePickerController } from '@features/agent/thread-card/note/note-picker-controller';
 import { ExternalAgentSettingsController } from '@features/agent/thread-card/settings/external-agent-settings-controller';
 import { NotebookAgentSettingsDialogController } from '@features/agent/thread-card/settings/notebook-agent-settings-dialog';
 import { AgentConversationSurfaceController } from '@features/agent/thread-card/surface/agent-conversation-surface-controller';
@@ -162,7 +162,6 @@ export function AgentConversationDetail({
   const composerControllerRef = useRef<ComposerController | null>(null);
   const composerImagesControllerRef = useRef<ComposerImageController | null>(null);
   const externalSettingsRef = useRef<ExternalAgentSettingsController | null>(null);
-  const rolePickerRef = useRef<AgentRolePickerController | null>(null);
   const addMenuRef = useRef<ComposerAddMenuController | null>(null);
   const notebookAgentSettingsDialogRef = useRef<NotebookAgentSettingsDialogController | null>(null);
   const surfaceRef = useRef<AgentConversationSurfaceController | null>(null);
@@ -204,7 +203,6 @@ export function AgentConversationDetail({
         threadId: result.thread.threadId,
         runtimeConfig: currentInstance.runtimeConfig ?? buildInitialInstanceRuntimeConfig(agentType),
         source: { kind: 'dedicated', notebookId: currentInstance.source.notebookId ?? null },
-        role: currentInstance.role ?? undefined,
       });
       await selectAndOpenAgentConversation(fork.instanceId);
     } catch (error) {
@@ -547,7 +545,7 @@ export function AgentConversationDetail({
       t: (key, params) => tRef.current(key, params),
       isDestroyed: () => destroyedRef.current,
       isRunning: () => isLoadingRef.current || isDshCommandRunningRef.current || isCodexCommandRunningRef.current || submittingRef.current,
-      // 常用笔记卡片 → 注入 composer 输入框 (与角色选择器的文档引用同一路径)。
+      // 常用笔记卡片 → 注入 composer 输入框。
       onSelectFeaturedNote: (ref) => {
         composerControllerRef.current?.insertMemoReference(ref);
       },
@@ -707,33 +705,21 @@ export function AgentConversationDetail({
     });
     messageController = surface.messages;
     const composerController = surface.composer;
-    const rolePicker = new AgentRolePickerController({
+    const notePicker = new NotePickerController({
       trigger: composerRoleButton,
       popover: rolePopover,
-      // 必须把 params 透传给 tRef.current ── formatTimeAgo 走的是
-      // t('memo.time.minutesAgo', { m }) 这种带参调用, 老 wrapper
-      // (key) => tRef.current(key) 会丢掉 params, 让 translate 拿到
-      // undefined, 文案就只剩 "{m} 分钟前" 字面量, 数字永远不替换。
       t: (key, params) => tRef.current(key, params),
       isDestroyed: () => destroyedRef.current,
-      getCurrentMemoId: () => instanceRef.current?.role?.memoId?.trim() || null,
-      getCurrentName: () => instanceRef.current?.role?.name?.trim() || null,
-      getMessageCount: () => messagesRef.current.length,
-      updateRole: (role) => {
-        const target = instanceRef.current;
-        if (target) useAgentSessionStore.getState().upsertInstance(target.instanceId, { role });
-      },
-      consumeOutsidePointer: () => undefined,
       injectMemoReference: (ref) => {
         composerController.insertMemoReference(ref);
       },
-      triggerManagedExternally: true,
+      onSelect: () => addMenuRef.current?.close(),
     });
     const addMenu = new ComposerAddMenuController({
       trigger: composerRoleButton,
       popover: addPopover,
-      rolePopover: rolePopover,
-      rolePicker,
+      notePopover: rolePopover,
+      notePicker,
       images: composerImagesController,
       t: (key) => tRef.current(key),
       isDestroyed: () => destroyedRef.current,
@@ -756,12 +742,10 @@ export function AgentConversationDetail({
         }
       },
     });
-    rolePicker.refreshIcon();
     messagesControllerRef.current = messageController;
     composerControllerRef.current = composerController;
     surfaceRef.current = surface;
     composerImagesControllerRef.current = composerImagesController;
-    rolePickerRef.current = rolePicker;
     addMenuRef.current = addMenu;
     composerController.updateMultiLineState();
     // Paint the selected thread's initial state in the same layout pass. The
@@ -788,7 +772,7 @@ export function AgentConversationDetail({
       composerController.flushPendingDraft();
       surface.dispose();
       composerImagesController.dispose();
-      rolePicker.dispose();
+      notePicker.dispose();
       addMenu.dispose();
       externalSettings.dispose();
       notebookAgentSettingsDialogRef.current?.close();
@@ -800,7 +784,6 @@ export function AgentConversationDetail({
       composerControllerRef.current = null;
       surfaceRef.current = null;
       composerImagesControllerRef.current = null;
-      rolePickerRef.current = null;
       addMenuRef.current = null;
     };
   }, []);
@@ -813,7 +796,6 @@ export function AgentConversationDetail({
       isInitialHistoryLoading,
     });
     composerControllerRef.current?.setSendButtonState();
-    rolePickerRef.current?.refreshIcon();
   }, [isInitialHistoryLoading, isLoading, isCommandRunning, messages]);
 
   useEffect(() => {

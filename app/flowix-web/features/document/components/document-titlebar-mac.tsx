@@ -9,7 +9,6 @@ import {
   ExternalTitlebarBadge,
   ExternalDocumentActions,
   MediaActions,
-  MemoActions,
   DOCUMENT_TITLEBAR_ICON_BUTTON_MAC,
   AgentThreadCardFullscreenExitButton,
   AgentThreadCardFullscreenIdentity,
@@ -28,7 +27,7 @@ const ICON_BTN = DOCUMENT_TITLEBAR_ICON_BUTTON_MAC;
 export function DocumentTitlebarMac({
   reserveWindowsControls: _reserveWindowsControls = true,
   surfaceChrome = 'document',
-  document: { currentMemo, externalFilePath = null },
+  document: { externalFilePath = null },
   sidebar: {
     hidden: isSidebarHidden,
     noteNavigationVisible,
@@ -40,6 +39,7 @@ export function DocumentTitlebarMac({
     onNavigateBack,
     onNavigateForward,
     visible: showNavigationButtons = true,
+    title: navigationTitle,
   },
   contentCapabilities: {
     copyFullText: canCopyFullText,
@@ -51,27 +51,18 @@ export function DocumentTitlebarMac({
   actions: {
     onCopyLink,
     onCopyFullText,
-    onTogglePin,
     onExportMarkdown,
     onSaveAsTemplate,
     onExportWord,
     onExportPdf,
-    onRequestDeleteMemo,
     onDeleteExternalFile,
-    onColorsChange,
-    editorMode,
-    onToggleEditorMode,
       },
   mediaActions,
 }: DocumentTitlebarProps) {
   const { t } = useI18n();
   const isAgentThreadCardFullscreen = useAgentThreadCardFullscreenActive();
   const isMediaSurface = surfaceChrome === 'media';
-  const documentState: DocumentState = currentMemo
-    ? 'memo'
-    : externalFilePath
-      ? 'external'
-      : 'empty';
+  const documentState: DocumentState = externalFilePath ? 'external' : 'empty';
 
   return (
       <WorkColumnTitlebarShell
@@ -124,6 +115,14 @@ export function DocumentTitlebarMac({
             </Tooltip>
           </>
         )}
+        {navigationTitle && (
+          <span
+            className="ml-2 min-w-0 max-w-[320px] truncate text-sm font-medium text-[var(--foreground)]"
+            title={navigationTitle}
+          >
+            {navigationTitle}
+          </span>
+        )}
       </div>
 
       <AgentThreadCardFullscreenIdentity />
@@ -149,28 +148,7 @@ export function DocumentTitlebarMac({
             onSaveAsTemplate={onSaveAsTemplate}
             onDeleteExternalFile={onDeleteExternalFile}
             canCopyFullText={canCopyFullText}
-            canExportContent={canExportContent}
-            canSaveAsTemplate={canSaveAsTemplate}
-          />
-        )}
-        {documentState === 'memo' && currentMemo && (
-          <MemoActions
-            key={currentMemo.id}
-            memo={currentMemo}
-            iconButtonClass={ICON_BTN}
-            onCopyLink={onCopyLink}
-            onCopyFullText={onCopyFullText}
-            onTogglePin={onTogglePin}
-            onExportMarkdown={onExportMarkdown}
-            onSaveAsTemplate={onSaveAsTemplate}
-            onExportWord={onExportWord}
-            onExportPdf={onExportPdf}
-            onRequestDeleteMemo={onRequestDeleteMemo}
-            onColorsChange={onColorsChange ?? (() => {})}
-            showColorPicker={canEditMemoColors}
-            editorMode={editorMode}
-            onToggleEditorMode={onToggleEditorMode}
-            canCopyFullText={canCopyFullText}
+            canEditColors={canEditMemoColors}
             canExportContent={canExportContent}
             canSaveAsTemplate={canSaveAsTemplate}
             canViewVersionHistory={canViewVersionHistory}

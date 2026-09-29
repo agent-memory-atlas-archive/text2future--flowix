@@ -7,22 +7,17 @@ export interface DocumentLocator {
   path: string;
 }
 
-/** Runtime identity shared by every Markdown surface displaying this file.
- * memoId is optional Memo business context and never participates in identity keys.
- */
+/** Runtime identity shared by every Markdown surface displaying this file. */
 export interface DocumentIdentity extends FileDisplayIdentity {
   kind: 'md';
-  memoId: string | null;
 }
 
-/** Add Markdown business context to an already established local-file identity. */
+/** Add Markdown context to an already established local-file identity. */
 export function documentIdentityFromFile(
   fileIdentity: FileDisplayIdentity,
-  memoId: string | null = null,
 ): DocumentIdentity {
   return {
     kind: 'md',
-    memoId,
     path: canonicalPath(fileIdentity.path),
     displayId: fileIdentity.displayId,
   };

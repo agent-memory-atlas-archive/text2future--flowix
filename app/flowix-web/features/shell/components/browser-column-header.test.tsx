@@ -88,7 +88,7 @@ async function withHeader(
     id, title: id, icon: null, target: { kind: 'web', url: `https://${id}.example` },
   }));
   const tabs = options.tabs ?? defaultTabs;
-  for (const tab of tabs) if (tab.target.kind === 'memo') ensureFileDisplayIdentity(tab.target.filePath);
+  for (const tab of tabs) if (tab.target.kind === 'file-browser' && tab.target.activeFilePath) ensureFileDisplayIdentity(tab.target.activeFilePath);
   try {
     await act(async () => root.render(<BrowserColumnHeader tabs={tabs} activeTabId="one" activeSurfaceChrome="document" onSelectTab={onSelectTab}
       onCloseTab={vi.fn()} onCloseOtherTabs={vi.fn()} onCloseTabsToRight={vi.fn()}
@@ -226,7 +226,7 @@ it('shows the reason why a webpage cannot be moved in its context menu', async (
   });
 });
 
-it('shows the editor mode entry only for memo tabs and toggles its label', async () => {
+it('shows the editor mode entry for Markdown file tabs and toggles its label', async () => {
   useDocumentEditorModeMock.mockReturnValue('rich');
   const onToggleMemoEditorMode = vi.fn();
   const memoTab: BrowserColumnTab = {
@@ -234,11 +234,13 @@ it('shows the editor mode entry only for memo tabs and toggles its label', async
     title: 'Memo',
     icon: null,
     target: {
-      kind: 'memo',
-      memoId: 'memo-1',
+      kind: 'file-browser',
       notebookId: 'notebook-1',
-      notebookPath: '/notes',
-      filePath: '/notes/memo.md',
+      folderPath: '/notes',
+      scopePath: '/notes',
+      fileTreeVisible: true,
+      fileTreeWidth: 220,
+      activeFilePath: '/notes/memo.md',
     },
   };
   await withHeader(vi.fn(), async () => {

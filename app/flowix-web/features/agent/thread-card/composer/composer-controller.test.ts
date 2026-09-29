@@ -103,7 +103,7 @@ describe("ComposerController note references", () => {
     const { controller } = setup();
     const editor = controller.editorInstance;
     editor.commands.setContent("first\nsecond", { contentType: "markdown" });
-    controller.insertMemoReference({ id: "abc123", filename: "reference.md", title: "Reference" });
+    controller.insertMemoReference({ notebookId: "notebook-a", relativePath: "reference.md", filename: "reference.md", title: "Reference" });
     const other = setup().controller;
     other.editorInstance.commands.setContent("other", { contentType: "markdown" });
     controller.focus();
@@ -151,14 +151,15 @@ describe("ComposerController note references", () => {
     editor.commands.setContent("before after", { contentType: "markdown" });
     editor.commands.setTextSelection(7);
     controller.insertMemoReference({
-      id: "abc123",
       filename: "reference.md",
       title: "Reference",
+      notebookId: "notebook-a",
+      relativePath: "reference.md",
     });
     draft.flush();
 
     expect(controller.getPrompt()).toBe(
-      "before [Reference](flowix://memo/abc123) after",
+      "before [Reference](flowix://open?notebookId=notebook-a&relativePath=reference.md) after",
     );
     expect(editor.getJSON().content?.[0]?.content).toEqual(
       expect.arrayContaining([
@@ -166,7 +167,7 @@ describe("ComposerController note references", () => {
       ]),
     );
     expect(getPersistedDraft()).toBe(
-      "before [Reference](flowix://memo/abc123) after",
+      "before [Reference](flowix://open?notebookId=notebook-a&relativePath=reference.md) after",
     );
   });
 

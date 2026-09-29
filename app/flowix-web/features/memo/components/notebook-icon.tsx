@@ -104,8 +104,8 @@ export function getNotebookIconMarkup(icon: string | null | undefined): string |
   return option ? NOTEBOOK_ICON_MARKUP_BY_ID[option.id] ?? null : null;
 }
 
-// 保持同步签名 (NotebookIcon 组件 / agent-role-picker-controller 命令式调用 /
-// 测试 mock 都依赖同步返回)。pinyin-pro 动态加载, 未就绪时降级返回原字符占位;
+// 保持同步签名 (NotebookIcon 组件 / 测试 mock 都依赖同步返回)。
+// pinyin-pro 动态加载, 未就绪时降级返回原字符占位;
 // NotebookIcon 经 usePinyinReady 在加载后重渲染刷新为拼音首字母。
 export function getNotebookIconLetter(name: string | undefined | null, fallback: string = 'N'): string {
   if (!name) return fallback;

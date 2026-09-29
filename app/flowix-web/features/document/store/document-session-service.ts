@@ -222,10 +222,6 @@ interface SaveDocumentContentOptions {
   path: string;
   identity: DocumentIdentity;
   content: string;
-  /** Both channels write the exact path with CAS; title changes are separate. */
-  channel: 'internal' | 'external';
-  /** Optional cache association used only to reject a replaced file. */
-  key: string | null;
   /** Authorized file-tree root for external code/text documents. */
   scopePath?: string | null;
   force?: boolean;
@@ -280,8 +276,6 @@ export async function saveDocumentContent({
   path,
   identity,
   content,
-  channel,
-  key,
   scopePath,
   force,
   callbacks,
@@ -293,7 +287,7 @@ export async function saveDocumentContent({
     recordDocumentEdit(identity, content);
   }
 
-  return flushDocument(identity, path, { key, channel, scopePath, force, ...callbacks });
+  return flushDocument(identity, path, { scopePath, force, ...callbacks });
 }
 
 export function flushDocumentPath(
@@ -302,6 +296,19 @@ export function flushDocumentPath(
   scopePath: string | null = null,
 ): Promise<boolean> {
   return prepareDocumentLeave(identity, path, scopePath);
+}
+
+/** Wait until the current editor buffer is on disk before reading it for a snapshot or preview. */
+export async function saveDocumentPath(
+  identity: DocumentIdentity,
+  path: string,
+  scopePath: string | null = null,
+): Promise<boolean> {
+  if (!path) return false;
+  cancelDocumentCapture(documentIdentityKey(identity));
+  captureLatestDocumentContent(identity);
+  await flushTitleDraft(identity.displayId);
+  return flushDocument(identity, path, { scopePath });
 }
 
 /**

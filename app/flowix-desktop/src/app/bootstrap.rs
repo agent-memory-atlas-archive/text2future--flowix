@@ -17,7 +17,6 @@ use crate::config::AgentAccessStore;
 use crate::config::SecurityBookmarkStore;
 use crate::events as dispatcher;
 use crate::memo_events::{self, MemoChangeSource, MemoDerivedChanged, MemoEvent};
-use crate::open_target;
 use crate::plugin;
 use crate::runtime_log;
 use crate::system_data::SystemData;
@@ -428,7 +427,6 @@ pub fn run() {
             commands::plugin::plugin_prepare_prompt,
             commands::plugin::plugin_run,
             commands::plugin::plugin_run_stop,
-            commands::plugin::plugin_list_notes,
             commands::plugin::plugin_resolve_note,
             commands::artifact::artifact_resolve,
             commands::settings::get_preference,
@@ -494,6 +492,10 @@ pub fn run() {
             // Notebook-scoped metadata (<notebook>/.flowix/system.json)
             commands::kv::get_featured_note_filter,
             commands::kv::set_featured_note_filter,
+            commands::kv::get_custom_views,
+            commands::kv::set_custom_views,
+            commands::kv::get_notebook_file_tree_preferences,
+            commands::kv::set_notebook_file_tree_section_order,
             // 笔�? / Doc ── �?commands/memo/{reads,creates,versions,deletes}.rs
             // 瀛愭ā鍧楄矾寰勫彇, 涓嶈蛋 `commands::memo::xxx` 椤跺眰 re-export 鈹€鈹€
             // `#[tauri::command]` 宏生成的 `__cmd__xxx` wrapper �?��数所�?            // 模块的同�?macro, �?��在�?模块�?�� (`commands::memo::reads::xxx`)
@@ -501,8 +503,8 @@ pub fn run() {
             commands::memo::reads::get_memos,
             commands::memo::reads::list_notes_by_path,
             commands::memo::reads::get_path_notes,
+            commands::memo::reads::resolve_markdown_location,
             commands::memo::reads::search_mention_notes,
-            commands::memo::reads::list_agent_role_memos,
             commands::media::get_media_resource,
             commands::media::update_media_resource,
             commands::media::delete_media_resource,
@@ -526,18 +528,21 @@ pub fn run() {
             commands::external_document::write_external_document,
             commands::memo::reads::get_launch_open_files,
             commands::memo::reads::search_memos,
-            commands::memo::creates::add_document,
-            commands::memo::creates::create_memo_with_content,
+            commands::memo::reads::search_path_notes,
+            commands::memo::creates::add_path_document,
             commands::memo::creates::list_notebook_templates,
             commands::memo::creates::initialize_notebook_template,
-            commands::memo::creates::import_external_document_to_memo,
+            commands::memo::creates::import_external_document_by_path,
             commands::memo::creates::rename_memo_title,
             commands::memo::creates::move_memo_to_directory,
             commands::memo::creates::list_memo_templates,
             commands::memo::creates::save_memo_template,
             commands::memo::creates::delete_memo_template,
-            commands::memo::creates::create_memo_from_template,
+            commands::memo::creates::create_path_from_template,
             commands::memo::versions::list_memo_versions,
+            commands::memo::versions::list_path_versions,
+            commands::memo::versions::create_path_version,
+            commands::memo::versions::restore_path_version,
             commands::memo::versions::read_memo_version,
             commands::memo::versions::create_memo_version,
             commands::memo::versions::restore_memo_version,
@@ -691,7 +696,6 @@ pub fn run() {
             commands::file_browser_watch::watch_file_browser_root,
             commands::file_browser_watch::unwatch_file_browser_root,
             // 鍏ㄥ眬"閫氳繃閾炬帴鎵撳紑绗旇"鍏ュ彛 鈹€鈹€ 鎺ユ敹 URL / 鐗╃悊璺緞, 瑙ｆ瀽 + emit
-            open_target::handler::open_memo_by_target,
             commands::cli::cli_link_status,
             commands::cli::install_cli_path,
         ])
@@ -880,9 +884,7 @@ fn run_startup_reconciliation(
     record_startup_stage(startup, "data-migrations-checked");
 
     startup.mark_running("migratingCurrentNotebook");
-    let (current_notebook_path, moved_legacy_files) = if let Some(notebook_id) =
-        current_notebook_id.as_deref()
-    {
+    if let Some(notebook_id) = current_notebook_id.as_deref() {
         {
             let memo_file = crate::lock_utils::read_lock(memo_file, "memo_file");
             let migration_started = Instant::now();
@@ -898,16 +900,8 @@ fn run_startup_reconciliation(
                     "current notebook migrations completed"
                 );
             }
-            (
-                memo_file
-                    .get_notebook_config_by_id(notebook_id)
-                    .map(|notebook| notebook.path),
-                report.moved_files > 0,
-            )
         }
-    } else {
-        (None, false)
-    };
+    }
 
     record_startup_stage(startup, "current-notebook-migrations-checked");
     startup.mark_running("reconcilingCurrentNotebook");
@@ -918,22 +912,6 @@ fn run_startup_reconciliation(
         let _ = reconcile_startup_notebook(app, notebook, memo_file);
     }
     record_startup_stage(startup, "current-notebook-reconciled");
-
-    if let (Some(notebook_id), Some(notebook_path)) =
-        (current_notebook_id.as_deref(), current_notebook_path)
-    {
-        let migration_started = Instant::now();
-        if let Err(error) = crate::plugin::migrate_notebook_data(
-            notebook_id,
-            Path::new(&notebook_path),
-            memo_file,
-            Some(app),
-            moved_legacy_files,
-        ) {
-            tracing::warn!(notebook = %notebook_id, "plugin notebook migration failed: {error}");
-        }
-        tracing::info!(notebook = %notebook_id, elapsed_ms = migration_started.elapsed().as_millis(), "[startup] plugin data migration checked");
-    }
 
     // Bind the watcher after structural migrations, before background scans.
     // Its index updates share the memo index lock with reconciliation.
@@ -962,130 +940,37 @@ fn run_startup_reconciliation(
 }
 
 fn reconcile_startup_notebook(
-    app: &tauri::AppHandle,
+    _app: &tauri::AppHandle,
     notebook: &flowix_core::memo_file::NotebookConfig,
     memo_file: &Arc<RwLock<flowix_core::memo_file::MemoFile>>,
 ) -> Result<(), String> {
     let started = Instant::now();
-    match crate::lock_utils::read_lock(memo_file, "memo_file")
-        .reconcile_notebook_with_disk_bidirectional(&notebook.id)
-    {
-        Ok(report) if report.added > 0 || report.removed > 0 => {
-            runtime_log::record_event(
-                "info",
-                "startup.reconcile",
-                format!(
-                    "notebook={} reconcile added={}, removed={}",
-                    notebook.id, report.added, report.removed
-                ),
-            );
-            tracing::info!(
-                "[startup] notebook {} reconcile: +{} added, -{} removed",
-                notebook.id,
-                report.added,
-                report.removed
-            );
-            for removed in &report.removed_memos {
-                let path = flowix_core::memo_file::notebook_path_from_relative(
-                    Path::new(&notebook.path),
-                    &removed.relative_path,
-                )
-                .unwrap_or_else(|_| PathBuf::from(&notebook.path).join(&removed.filename));
-                memo_events::emit(
-                    app,
-                    MemoEvent::Deleted {
-                        id: removed.id.clone(),
-                        path: path.to_string_lossy().into_owned(),
-                        notebook_id: notebook.id.clone(),
-                        derived_changed: MemoDerivedChanged::from_deleted(removed),
-                        source: MemoChangeSource::ExternalTool,
-                    },
-                );
-            }
-            if report.removed_memos.len() != report.removed {
-                tracing::warn!(
-                    notebook = %notebook.id,
-                    removed = report.removed,
-                    snapshots = report.removed_memos.len(),
-                    "startup reconcile removed count did not match tombstone snapshots"
-                );
-            }
-        }
-        Ok(_) => tracing::debug!(notebook = %notebook.id, "[startup] reconcile: no-op"),
-        Err(error) => {
-            runtime_log::record_event(
-                "error",
-                "startup.reconcile_failed",
-                format!("notebook={} startup reconcile failed: {error}", notebook.id),
-            );
-            tracing::warn!(notebook = %notebook.id, "[startup] reconcile failed: {error}");
-            return Err(format!(
-                "notebook {} reconciliation failed: {error}",
-                notebook.id
-            ));
-        }
+    let memo_file = crate::lock_utils::read_lock(memo_file, "memo_file");
+    match memo_file.migrate_v2_note_properties_for_notebook(&notebook.id) {
+        Ok(report) if report.notes_written > 0 => tracing::info!(notebook = %notebook.id, notes = report.notes_written, "[startup] note properties migrated"),
+        Err(error) => tracing::warn!(notebook = %notebook.id, %error, "[startup] note property migration will retry"),
+        _ => {}
     }
-    // Build the path-keyed V2 projection in the existing notebook database.
-    // During migration the legacy index still serves application queries, so
-    // a V2 build failure is reported but does not prevent opening the notes.
-    match crate::lock_utils::read_lock(memo_file, "memo_file")
-        .migrate_v2_note_properties_for_notebook(&notebook.id)
-    {
-        Ok(report) if report.notes_written > 0 => tracing::info!(
-            notebook = %notebook.id,
-            notes = report.notes_written,
-            properties = report.properties_written,
-            "[startup] persisted legacy note properties in Markdown"
-        ),
-        Ok(_) => (),
-        Err(error) => tracing::warn!(
-            notebook = %notebook.id,
-            %error,
-            "[startup] legacy note property migration incomplete; old tables retained"
-        ),
+    match memo_file.migrate_v2_todo_metadata_for_notebook(&notebook.id) {
+        Ok(report) if report.notes_written > 0 => tracing::info!(notebook = %notebook.id, notes = report.notes_written, "[startup] task metadata migrated"),
+        Err(error) => tracing::warn!(notebook = %notebook.id, %error, "[startup] task migration will retry"),
+        _ => {}
     }
-    match crate::lock_utils::read_lock(memo_file, "memo_file")
-        .migrate_v2_todo_metadata_for_notebook(&notebook.id)
-    {
-        Ok(report) if report.notes_written > 0 => tracing::info!(
-            notebook = %notebook.id,
-            notes = report.notes_written,
-            tasks = report.tasks_written,
-            "[startup] persisted legacy task metadata in Markdown"
-        ),
-        Ok(_) => (),
-        Err(error) => tracing::warn!(
-            notebook = %notebook.id,
-            %error,
-            "[startup] legacy task metadata migration incomplete; old tables retained"
-        ),
-    }
-    let v2_store = Arc::clone(memo_file);
-    let v2_notebook_id = notebook.id.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        match crate::lock_utils::read_lock(&v2_store, "memo_file")
-            .reconcile_v2_note_index(&v2_notebook_id)
-        {
-            Ok(report) => tracing::info!(
-                notebook = %v2_notebook_id,
-                added = report.added,
-                updated = report.updated,
-                removed = report.removed,
-                unchanged = report.unchanged,
-                "[startup] V2 path index reconciled"
-            ),
-            Err(error) => tracing::warn!(
-                notebook = %v2_notebook_id,
-                %error,
-                "[startup] V2 path index reconciliation failed"
-            ),
-        }
-    });
-    tracing::info!(notebook = %notebook.id, elapsed_ms = started.elapsed().as_millis(), "[startup] notebook reconciliation checked");
+    let report = memo_file
+        .reconcile_v2_note_index(&notebook.id)
+        .map_err(|error| format!("notebook {} path reconciliation failed: {error}", notebook.id))?;
+    tracing::info!(
+        notebook = %notebook.id,
+        added = report.added,
+        updated = report.updated,
+        removed = report.removed,
+        unchanged = report.unchanged,
+        elapsed_ms = started.elapsed().as_millis(),
+        "[startup] path index reconciled"
+    );
     record_slow_notebook_stage(&notebook.id, "markdown-reconcile", started.elapsed());
     Ok(())
 }
-
 fn maintain_startup_versions(
     notebook: &flowix_core::memo_file::NotebookConfig,
     memo_file: &Arc<RwLock<flowix_core::memo_file::MemoFile>>,
@@ -1265,16 +1150,23 @@ fn emit_open_target_batch_if_needed(app: &tauri::AppHandle, paths: &[String]) {
         .read_notebook_configs()
         .unwrap_or_default();
     for path in paths {
-        if let Ok(target) = open_target::parse_open_target(path) {
+        if path.to_ascii_lowercase().starts_with("flowix://memo/")
+            || path.to_ascii_lowercase().starts_with("flowix://open?")
+        {
+            emit_open_target_if_resolved(app, path);
+            continue;
+        }
+        if commands::markdown_paths_from_args([path.clone()]).is_empty() {
+            continue;
+        }
+        {
             let canonical = dunce::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path));
             let inside_notebook = configs.iter().any(|config| {
                 let root = dunce::canonicalize(&config.path)
                     .unwrap_or_else(|_| PathBuf::from(&config.path));
                 canonical == root || canonical.starts_with(root.join(""))
             });
-            if open_target::resolve_open_target(target, state.memo_file.as_ref()).is_err()
-                && !inside_notebook
-            {
+            if !inside_notebook {
                 state.document_access.grant("main", &canonical);
                 external_paths.push(path.clone());
             } else {
@@ -1300,24 +1192,16 @@ fn emit_open_target_if_resolved(app: &tauri::AppHandle, raw: &str) {
             state.document_access.grant("main", &path);
         }
     }
-    if let Ok(target) = open_target::parse_open_target(raw) {
-        if let Ok(resolved) = open_target::resolve_open_target(target, state.memo_file.as_ref()) {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_focus();
-                let _ = window.unminimize();
-            }
-            dispatcher::emit_to(app, "flowix:open-target", resolved);
-        } else if let Some(path) = markdown_paths.first() {
-            // A Markdown file outside every registered notebook is still a
-            // valid Flowix open request. Let the UI ask which notebook should
-            // receive a copy instead of silently dropping the request.
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-                let _ = window.unminimize();
-            }
-            emit_external_markdown_open(app, vec![path.clone()]);
+    if raw.to_ascii_lowercase().starts_with("flowix://open?")
+        || raw.to_ascii_lowercase().starts_with("flowix://memo/")
+        || !markdown_paths.is_empty()
+    {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.set_focus();
+            let _ = window.unminimize();
         }
+        dispatcher::emit_to(app, "flowix:open-path", raw.to_string());
     }
 }
 

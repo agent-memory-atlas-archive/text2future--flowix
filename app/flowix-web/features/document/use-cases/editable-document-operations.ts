@@ -6,8 +6,6 @@ export interface DocumentWriteRequest {
   content: string;
   expectedContent: string;
   scopePath: string | null;
-  /** Optional legacy event correlation; never the note address or save guard. */
-  memoId?: string | null;
 }
 
 export type DocumentWriteOutcome =
@@ -20,8 +18,6 @@ export type DocumentWriteOutcome =
 export interface DocumentPathRequest {
   path: string;
   scopePath: string | null;
-  /** Optional caller context for legacy metadata consumers. */
-  memoId?: string | null;
 }
 
 /**

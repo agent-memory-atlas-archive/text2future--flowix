@@ -5,14 +5,12 @@ import { useCallback } from 'react';
 import { displayTitleFromFilename } from '@/lib/utils';
 import { sanitizeFileName, stripFrontmatter } from '@/lib/export-utils';
 import { memos as memosClient, dialogs, type SaveFileFilter } from '@platform/tauri/client';
-import { setDocumentProperties } from '@features/document/public/path-properties';
 import { buildNoteOpenLinkFromPath } from '@platform/open-target/path-link';
 import { useMemoStore } from '@features/memo/store/memo-store';
 import { memoDocumentOperations } from '@features/document/use-cases/memo-document-operations';
 import { translate } from '@/lib/i18n';
 import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
 import { toast } from '@/lib/toast';
-import type { MemoColor, MemoItem } from '@/types/memo-item';
 import { preparePdfPrint } from '@features/document/pdf-print';
 import type { Editor } from '@tiptap/core';
 
@@ -51,9 +49,6 @@ interface UseDocumentCommandsOptions {
   currentDocumentPath: string | null;
   getCurrentDocumentContent: () => string;
   getCurrentDocumentEditor: () => Editor | null;
-  currentMemo: MemoItem | null;
-  updateMemoMeta: (id: string, meta: Partial<Pick<MemoItem, 'updatedAt' | 'preview' | 'thumbnail' | 'favorited' | 'filename'>>) => void;
-  setMemoColors: (id: string, colors: MemoColor[]) => Promise<boolean>;
   onExported?: (filePath: string) => void;
 }
 
@@ -106,9 +101,6 @@ export function useDocumentCommands({
   currentDocumentPath,
   getCurrentDocumentContent,
   getCurrentDocumentEditor,
-  currentMemo,
-  updateMemoMeta,
-  setMemoColors,
   onExported,
 }: UseDocumentCommandsOptions) {
   const getExportableDocument = useCallback(async (): Promise<ExportableDocument | null> => {
@@ -126,11 +118,11 @@ export function useDocumentCommands({
     }
 
     const pathFilename = currentDocumentPath.split(/[\\/]/).filter(Boolean).pop();
-    const title = displayTitleFromFilename(currentMemo?.filename ?? pathFilename)
+    const title = displayTitleFromFilename(pathFilename)
       || extractTitleFromMarkdown(stripFrontmatter(raw))
       || 'Untitled';
     return { title, markdown: raw };
-  }, [currentDocumentPath, currentMemo?.filename, getCurrentDocumentContent]);
+  }, [currentDocumentPath, getCurrentDocumentContent]);
 
   const requireExportableDocument = useCallback(async () => {
     const doc = await getExportableDocument();
@@ -163,38 +155,14 @@ export function useDocumentCommands({
 
     try {
       const link = buildNoteOpenLinkFromPath(currentDocumentPath, useMemoStore.getState().notebooks);
-      await writeClipboardText(link ?? currentDocumentPath);
+      if (!link) throw new Error('Cannot create an unambiguous notebook link');
+      await writeClipboardText(link);
       toast.success(tCmd('document.command.copySuccess'));
     } catch (error) {
       logger.warn('[useDocumentCommands] Failed to copy document link:', { error: error });
       toast.error(tCmd('document.command.copyFailed'));
     }
   }, [currentDocumentPath]);
-
-  const handleTogglePin = useCallback(async () => {
-    if (!currentMemo || !currentDocumentPath) return;
-
-    const wasFavorited = currentMemo.favorited;
-    try {
-      const ok = await setDocumentProperties(currentDocumentPath, { flowix_favorited: !wasFavorited }, currentMemo.id);
-
-      if (!ok) {
-        toast.error(tCmd(wasFavorited ? 'document.command.unpinFailed' : 'document.command.pinFailed'));
-        return;
-      }
-
-      updateMemoMeta(currentMemo.id, { favorited: !wasFavorited });
-      toast.success(tCmd(wasFavorited ? 'document.command.unpinSuccess' : 'document.command.pinSuccess'));
-    } catch (error) {
-      logger.warn('[useDocumentCommands] Failed to toggle pin:', { error: error });
-      toast.error(tCmd(wasFavorited ? 'document.command.unpinFailed' : 'document.command.pinFailed'));
-    }
-  }, [currentDocumentPath, currentMemo, updateMemoMeta]);
-
-  const handleColorsChange = useCallback((next: MemoColor[]) => {
-    if (!currentMemo) return;
-    void setMemoColors(currentMemo.id, next);
-  }, [currentMemo, setMemoColors]);
 
   const handleExportMarkdown = useCallback(async () => {
     const doc = await requireExportableDocument();
@@ -279,8 +247,6 @@ export function useDocumentCommands({
   return {
     handleCopyFullText,
     handleCopyLink,
-    handleTogglePin,
-    handleColorsChange,
     handleExportMarkdown,
     handleSaveAsTemplate,
     handleExportWord,

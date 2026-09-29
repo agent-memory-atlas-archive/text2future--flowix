@@ -29,6 +29,8 @@ interface DynamicVirtualListOptions<T> {
   resetKey?: string;
   overscan?: number;
   keepAliveKeys?: readonly string[];
+  /** Height of non-virtual content before this list in the same scroller. */
+  scrollMargin?: number;
 }
 
 interface Layout<T> {
@@ -106,6 +108,7 @@ export function useDynamicVirtualList<T>({
   resetKey,
   overscan = DEFAULT_OVERSCAN,
   keepAliveKeys = [],
+  scrollMargin = 0,
 }: DynamicVirtualListOptions<T>) {
   const [layoutVersion, bumpLayoutVersion] = useState(0);
   const [viewport, setViewport] = useState<Viewport>({
@@ -147,7 +150,7 @@ export function useDynamicVirtualList<T>({
         firstIndexWhoseEndExceeds(
           currentLayout.offsets,
           currentLayout.sizes,
-          scroller.scrollTop,
+          Math.max(0, scroller.scrollTop - scrollMargin),
         ),
       ),
     );
@@ -155,9 +158,9 @@ export function useDynamicVirtualList<T>({
     if (!key) return null;
     return {
       key,
-      offset: scroller.scrollTop - currentLayout.offsets[index],
+      offset: Math.max(0, scroller.scrollTop - scrollMargin) - currentLayout.offsets[index],
     };
-  }, [keyByIndex, scrollerRef]);
+  }, [keyByIndex, scrollMargin, scrollerRef]);
 
   const beginReflow = useCallback((preserveAnchor: boolean) => {
     if (!isReflowingRef.current) {
@@ -186,14 +189,14 @@ export function useDynamicVirtualList<T>({
     }
     lastScrollerWidthRef.current = nextWidth;
     const nextViewport = {
-      scrollTop: scroller.scrollTop,
+      scrollTop: Math.max(0, scroller.scrollTop - scrollMargin),
       width: nextWidth,
       height: scroller.clientHeight,
     };
     setViewport((previous) =>
       sameViewport(previous, nextViewport) ? previous : nextViewport,
     );
-  }, [beginReflow, scrollerRef]);
+  }, [beginReflow, scrollMargin, scrollerRef]);
 
   useLayoutEffect(() => {
     if (lastResetKeyRef.current === resetKey) return;
@@ -247,7 +250,7 @@ export function useDynamicVirtualList<T>({
         oldPosition &&
         scroller &&
         !isReflowingRef.current &&
-        oldPosition.start < scroller.scrollTop
+        oldPosition.start < Math.max(0, scroller.scrollTop - scrollMargin)
       ) {
         scroller.scrollTop += nextSize - (previousSize ?? oldPosition.size);
       }
@@ -255,7 +258,7 @@ export function useDynamicVirtualList<T>({
       sizeByKeyRef.current.set(key, nextSize);
       bumpLayoutVersion((version) => version + 1);
     },
-    [scrollerRef],
+    [scrollMargin, scrollerRef],
   );
 
   // ResizeObserver is complemented by a synchronous layout read. This makes
@@ -446,10 +449,10 @@ export function useDynamicVirtualList<T>({
     const position = currentLayout?.byKey.get(anchor.key);
     if (!scroller || !position) return;
 
-    scroller.scrollTop = Math.max(0, position.start + anchor.offset);
+    scroller.scrollTop = Math.max(0, scrollMargin + position.start + anchor.offset);
     pendingAnchorRef.current = null;
     syncViewport();
-  }, [isReflowing, layoutVersion, scrollerRef, syncViewport]);
+  }, [isReflowing, layoutVersion, scrollMargin, scrollerRef, syncViewport]);
 
   const onScroll = useCallback(
     (_event: UIEvent<HTMLDivElement>) => {
@@ -465,12 +468,12 @@ export function useDynamicVirtualList<T>({
     // measurements.
     const scroller = scrollerRef.current;
     if (!scroller || !enabled) return;
-    const maxScrollTop = Math.max(0, layout.totalSize - scroller.clientHeight);
+    const maxScrollTop = Math.max(0, scrollMargin + layout.totalSize - scroller.clientHeight);
     if (scroller.scrollTop > maxScrollTop) {
       scroller.scrollTop = maxScrollTop;
       syncViewport();
     }
-  }, [enabled, layout.totalSize, scrollerRef, syncViewport]);
+  }, [enabled, layout.totalSize, scrollMargin, scrollerRef, syncViewport]);
 
   return {
     totalSize: enabled ? layout.totalSize : 0,

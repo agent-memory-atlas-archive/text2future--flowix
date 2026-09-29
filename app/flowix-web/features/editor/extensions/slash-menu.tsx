@@ -20,7 +20,6 @@ import { useAgentRuntimeStore } from '@features/agent/store/agent-runtime-store'
 import { normalizeAgentRuntimeStatus } from '@features/agent/public/runtime-status-api';
 import { windows } from '@platform/tauri/client';
 import { translate } from '@/lib/i18n';
-import { joinNotebookMemoPath } from '@/lib/path';
 import type { AgentTypeKey } from '@/types/agent';
 import { isAgentTypeComingSoon } from '@/lib/agent-types';
 import { applyListType } from './list-transforms';
@@ -481,7 +480,7 @@ async function createChildNoteReference(editor: Editor): Promise<void> {
   closeMenu();
 
   try {
-    const { memo } = await store.createMemo(undefined, notebook.id);
+    const created = await store.createMemo(undefined, notebook.id);
     invalidateMentionNotes();
     editor
       .chain()
@@ -490,11 +489,12 @@ async function createChildNoteReference(editor: Editor): Promise<void> {
       .insertContent({
         type: 'noteReference',
         attrs: {
-          memoId: memo.id,
+          memoId: null,
           notebookId: notebook.id,
           notebookName: notebook.name,
-          title: memoTitleFromFilename(memo.filename),
-          originalPath: joinNotebookMemoPath(notebook.path, memo.relativePath ?? memo.filename),
+          title: memoTitleFromFilename(created.relativePath.split('/').pop() ?? created.relativePath),
+          originalPath: created.path,
+          relativePath: created.relativePath,
           stale: false,
         },
       })

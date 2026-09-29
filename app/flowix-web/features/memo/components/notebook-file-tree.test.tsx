@@ -11,7 +11,6 @@ import {
   type NotebookMoveResult,
   type NotebookMoveSource,
 } from './notebook-file-tree';
-import { resolveMemoByPath } from '@features/memo/use-cases/open-by-target';
 
 vi.mock('@/lib/i18n', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/i18n')>(),
@@ -57,7 +56,6 @@ vi.mock('@features/memo', () => ({
     { getState: () => ({ memos: [], selectedMemo: null }) },
   ),
 }));
-vi.mock('@features/memo/use-cases/open-by-target', () => ({ resolveMemoByPath: vi.fn() }));
 
 type TestMoveNote = (
   sources: NotebookMoveSource[],
@@ -124,13 +122,13 @@ describe('NotebookFileTree pointer dragging', () => {
     vi.useRealTimers();
     host.remove();
     environment.IS_REACT_ACT_ENVIRONMENT = false;
-    vi.mocked(resolveMemoByPath).mockReset();
     vi.restoreAllMocks();
   });
 
   async function mount(
     onMoveNote: TestMoveNote,
     noteOverride?: DocTreeItem,
+    onFolderSelect?: (path: string) => void,
   ) {
     const folder = item('/notes/projects', 'folder');
     const note = noteOverride ?? item('/notes/a.md', 'document');
@@ -151,7 +149,7 @@ describe('NotebookFileTree pointer dragging', () => {
     const root = createRoot(host);
     await act(async () => root.render(
       <NotebookFileTree notebookPath="/notes" notebookName="Notes" tree={{ ...tree } as FolderTreeController}
-        onNoteSelect={vi.fn()} onCreateNote={vi.fn()} onMoveNote={onMoveNote} />,
+        onNoteSelect={vi.fn()} onFolderSelect={onFolderSelect} onCreateNote={vi.fn()} onMoveNote={onMoveNote} />,
     ));
     return { root, refresh, tree };
   }
@@ -216,6 +214,30 @@ describe('NotebookFileTree pointer dragging', () => {
     return new MouseEvent('click', { bubbles: true, button: 0, ...modifiers });
   }
 
+  it('selects a folder on single click and toggles it on double click', async () => {
+    const onFolderSelect = vi.fn();
+    const { root, tree } = await mount(successfulMove, undefined, onFolderSelect);
+    const folderRow = host.querySelector<HTMLElement>('[data-notebook-tree-kind="folder"]')!;
+    vi.useFakeTimers();
+
+    await act(async () => folderRow.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
+    expect(onFolderSelect).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTime(220));
+    expect(onFolderSelect).toHaveBeenCalledWith('/notes/projects');
+    expect(tree.toggle).not.toHaveBeenCalled();
+
+    onFolderSelect.mockClear();
+    await act(async () => {
+      folderRow.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+      folderRow.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 2 }));
+      folderRow.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, detail: 2 }));
+      vi.advanceTimersByTime(220);
+    });
+    expect(onFolderSelect).not.toHaveBeenCalled();
+    expect(tree.toggle).toHaveBeenCalledWith('/notes/projects');
+    await act(async () => root.unmount());
+  });
+
   it('captures a drag on the clicked row so a normal click can still open it', async () => {
     const { root } = await mount(successfulMove);
     const noteRow = host.querySelector<HTMLElement>('[data-notebook-tree-kind="note"]')!;
@@ -232,7 +254,6 @@ describe('NotebookFileTree pointer dragging', () => {
     const readMemo = vi.spyOn(memos, 'readMemo').mockResolvedValue(null);
     const { root } = await mount(successfulMove);
 
-    expect(resolveMemoByPath).not.toHaveBeenCalled();
     expect(readMemo).not.toHaveBeenCalled();
     await act(async () => root.unmount());
   });
@@ -254,7 +275,6 @@ describe('NotebookFileTree pointer dragging', () => {
     expect(noteRow.querySelector('img')).not.toBeNull();
     expect(noteRow.querySelector('.lucide-file')).toBeNull();
     expect(noteRow.querySelector('[aria-label="Note colors"]')).not.toBeNull();
-    expect(resolveMemoByPath).not.toHaveBeenCalled();
     expect(readMemo).not.toHaveBeenCalled();
     await act(async () => root.unmount());
   });
@@ -283,7 +303,6 @@ describe('NotebookFileTree pointer dragging', () => {
       [{ path: '/notes/a.md' }],
       '/notes/projects',
     ));
-    expect(resolveMemoByPath).not.toHaveBeenCalled();
     await act(async () => root.unmount());
   });
 

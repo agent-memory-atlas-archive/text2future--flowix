@@ -10,7 +10,7 @@ use rusqlite::{params, Connection};
 
 use super::error::ThreadError;
 
-pub(super) const THREAD_DB_SCHEMA_VERSION: i64 = 8;
+pub(super) const THREAD_DB_SCHEMA_VERSION: i64 = 11;
 pub(super) const WAL_AUTOCHECKPOINT_PAGES: i64 = 4000;
 pub(super) const WAL_JOURNAL_SIZE_LIMIT_BYTES: i64 = 64 * 1024 * 1024;
 
@@ -98,9 +98,11 @@ impl super::store::ThreadManager {
                 frozen_cwd TEXT,
                 source_kind TEXT NOT NULL DEFAULT 'thread-card',
                 source_document_path TEXT,
+                source_relative_path TEXT,
                 source_memo_id TEXT,
                 source_notebook_id TEXT,
                 role_memo_id TEXT,
+                role_address TEXT,
                 role_name TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
@@ -152,6 +154,13 @@ impl super::store::ThreadManager {
         // legacy tables remain available to the old read/write paths. The
         // cut-over happens in a later migration once all callers are moved.
         Self::ensure_simplified_thread_schema(conn)?;
+        Self::ensure_path_and_legacy_role_columns(conn)?;
+        // Role files are no longer part of conversations. Clear values from
+        // historical columns before marking the schema current.
+        conn.execute_batch(
+            "UPDATE agent_conversation_instances SET role_memo_id = NULL, role_address = NULL, role_name = NULL;
+             UPDATE agent_instances SET role_memo_id = NULL, role_address = NULL, role_name = NULL;",
+        )?;
         conn.execute_batch(
             "
             CREATE INDEX IF NOT EXISTS idx_agent_external_events_thread
@@ -183,9 +192,11 @@ impl super::store::ThreadManager {
                 config_json TEXT,
                 source TEXT NOT NULL DEFAULT 'thread-card',
                 document_path TEXT,
+                relative_path TEXT,
                 memo_id TEXT,
                 notebook_id TEXT,
                 role_memo_id TEXT,
+                role_address TEXT,
                 role_name TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
@@ -431,6 +442,24 @@ impl super::store::ThreadManager {
                  WHERE instance_id = ?3",
                 params![migrated_cwd, cleaned_config, instance_id],
             )?;
+        }
+        Ok(())
+    }
+
+    fn ensure_path_and_legacy_role_columns(conn: &Connection) -> Result<(), ThreadError> {
+        for (table, required) in [
+            ("agent_conversation_instances", &["role_address", "source_relative_path"][..]),
+            ("agent_instances", &["role_address", "relative_path"][..]),
+        ] {
+            let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+            let columns = stmt
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()?;
+            for column in required {
+                if !columns.iter().any(|existing| existing == column) {
+                    conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} TEXT"), [])?;
+                }
+            }
         }
         Ok(())
     }

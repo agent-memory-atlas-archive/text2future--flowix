@@ -1,12 +1,8 @@
 import { useWorkspaceRestoreStore } from '@features/workspace/store/workspace-restore-store';
 export { ensureFileDisplayTrackingStarted } from '@features/workspace/use-cases/file-display-tracking';
 export {
-  replaceActiveMemoPath,
-} from '@features/workspace/use-cases/workspace-navigation';
-export {
-  removeBrowserColumnTabsByMemoId,
-  replaceBrowserColumnMemoPath,
-  openBrowserColumnMemoById,
+  removeBrowserColumnTabsByPath,
+  openBrowserColumnNotebookNote,
 } from '@features/workspace/use-cases/browser-column-navigation';
 
 export function syncAppAgentConversationRestore(instanceId: string | null): void {

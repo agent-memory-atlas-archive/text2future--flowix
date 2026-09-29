@@ -5,16 +5,14 @@ import { useUserSettingsStore } from '@features/preferences/store/user-settings-
 export interface MainWindowMemoEventActions {
   getSelectedNotebookId: () => string | null;
   invalidateMentionCaches: () => void;
-  openMemoInBrowserColumn: (memoId: string) => Promise<void>;
+  openPathInBrowserColumn: (notebookId: string, relativePath: string) => Promise<void>;
   reportOpenFailure: (error: unknown) => void;
   handleMemoCreated: (memo: MemoItem) => void;
   handleMemoUpdated: (memo: MemoItem) => void;
   handleMemoDeleted: (memoId: string) => void;
-  removeBrowserColumnTabsByMemoId: (memoId: string) => void;
+  removeBrowserColumnTabsByPath: (path: string) => void;
   handleTagsRenamed: (event: Extract<MemoEvent, { kind: 'tags_renamed' }>) => void;
   handleTagsDeleted: (event: Extract<MemoEvent, { kind: 'tags_deleted' }>) => void;
-  replaceActiveMemoPath: (memoId: string, path: string) => void;
-  replaceBrowserColumnMemoPath: (memoId: string, path: string) => void;
   refreshSelectedNotebookMetadata: (event: MemoEvent) => void;
   refreshBackgroundTodoCount: (notebookId: string) => void;
 }
@@ -58,10 +56,8 @@ export function handleMainWindowMemoEvent(
   // BrowserColumn tabs are independent of the currently selected notebook.
   // Keep their identity/path projection in sync even for background notebook
   // events, otherwise a later tab activation can resurrect the old filename.
-  if (event.kind === 'updated') {
-    actions.replaceBrowserColumnMemoPath(event.id, event.path);
-  } else if (event.kind === 'deleted') {
-    actions.removeBrowserColumnTabsByMemoId(event.id);
+  if (event.kind === 'deleted') {
+    actions.removeBrowserColumnTabsByPath(event.path);
   }
 
   const selectedNotebookId = actions.getSelectedNotebookId();
@@ -74,7 +70,8 @@ export function handleMainWindowMemoEvent(
     && event.source !== 'notebook_template'
     && useUserSettingsStore.getState().settings.autoOpenCreatedNotesInBrowser;
   if (shouldOpenCreatedNote) {
-    void actions.openMemoInBrowserColumn(event.memo.id).catch(actions.reportOpenFailure);
+    void actions.openPathInBrowserColumn(event.notebookId, event.memo.relativePath || event.memo.filename)
+      .catch(actions.reportOpenFailure);
   }
 
   if (!selectedNotebookId || selectedNotebookId !== event.notebookId) {
@@ -88,7 +85,6 @@ export function handleMainWindowMemoEvent(
     actions.handleMemoCreated(event.memo);
   } else if (event.kind === 'updated') {
     actions.handleMemoUpdated(event.memo);
-    actions.replaceActiveMemoPath(event.id, event.path);
   } else {
     actions.handleMemoDeleted(event.id);
   }

@@ -21,10 +21,7 @@ mod artifact;
 mod lifecycle;
 mod manifest;
 
-use artifact::{
-    artifact_document, output_file_path, parse_plugin_output, pointer_document,
-    PluginArtifactPointer, PluginNoteFrontmatter,
-};
+use artifact::{output_file_path, parse_plugin_output};
 #[cfg(test)]
 use artifact::{clean_markdown, parse_html, parse_json, parse_mindmap_markdown};
 pub(crate) use lifecycle::PluginRunCoordinator;
@@ -709,359 +706,61 @@ pub fn write_output(
     let parsed = parse_plugin_output(&plugin, content)?;
     let clean = parsed.content;
     let title = parsed.title;
-    let output_dir = notebook.join(&plugin.definition.output_directory);
-    if !path_is_inside(&output_dir, &notebook) {
-        return Err("plugin output directory escaped notebook root".to_string());
-    }
-    fs::create_dir_all(&output_dir).map_err(|e| format!("create plugin output: {e}"))?;
-    if !path_is_inside(&output_dir, &notebook) {
-        return Err("plugin output directory escaped notebook root".to_string());
-    }
-    let output_path = output_file_path(&output_dir, &title, &plugin.definition.extension);
-    if !path_is_inside(&output_path, &notebook) {
-        return Err("plugin output path escaped notebook root".to_string());
-    }
-    let document = artifact_document(&plugin, &clean, agent_type, source_note);
-    flowix_core::memo_file::atomic_write_bytes(&output_path, document.as_bytes())
-        .map_err(|e| format!("write plugin output: {e}"))?;
-    let artifact_relative_path = output_path
-        .strip_prefix(&notebook)
-        .map_err(|_| "plugin output path is outside notebook root".to_string())?
-        .to_string_lossy()
-        .replace('\\', "/");
-    let pointer = PluginArtifactPointer {
-        path: artifact_relative_path,
-        format: plugin.manifest.output.format.clone(),
-        parser: match plugin.definition.parser {
-            PluginParser::MindmapMarkdown => "mindmap-markdown",
-            PluginParser::Markdown => "markdown",
-            PluginParser::Json => "json",
-            PluginParser::Html => "html",
-            PluginParser::Text => "text",
+    {
+        let output_dir = if id == "mindmap" { notebook.join("Mindmaps") }
+            else { notebook.join("Plugins").join(id) };
+        fs::create_dir_all(&output_dir).map_err(|e| format!("create plugin directory: {e}"))?;
+        if !path_is_inside(&output_dir, &notebook) {
+            return Err("mindmap directory escaped notebook root".to_string());
         }
-        .to_string(),
-        renderer: plugin.manifest.output.renderer.clone(),
-        title: title.clone(),
-        content_hash: flowix_plugin_runtime::artifact_content_hash(&clean),
-        created_at: chrono::Local::now().to_rfc3339(),
-        source_note: source_note.map(str::to_string),
-    };
-    let pointer_body = pointer_document(&plugin, &pointer)?;
-    let notebook_id = {
-        let memo_guard = read_lock(memo_file, "memo_file");
-        memo_guard
-            .read_notebook_configs()
-            .map_err(|e| format!("read notebooks: {e}"))?
-            .into_iter()
-            .find(|config| Path::new(&config.path) == notebook)
+        let output_path = output_file_path(&output_dir, &title, "md");
+        if !path_is_inside(&output_path, &notebook) {
+            return Err("mindmap path escaped notebook root".to_string());
+        }
+        let document = flowix_plugin_runtime::serialize_path_plugin_document(
+            &plugin.manifest.id, &plugin.manifest.version,
+            &plugin.manifest.output.format, &plugin.manifest.output.renderer,
+            &clean, agent_type, source_note,
+        );
+        flowix_core::memo_file::atomic_write_bytes(&output_path, document.as_bytes())
+            .map_err(|e| format!("write mindmap: {e}"))?;
+        let relative_path = output_path.strip_prefix(&notebook)
+            .map_err(|_| "mindmap path escaped notebook root".to_string())?
+            .to_string_lossy().replace('\\', "/");
+        let notebook_id = read_lock(memo_file, "memo_file")
+            .read_notebook_configs().map_err(|e| e.to_string())?
+            .into_iter().find(|config| Path::new(&config.path) == notebook)
             .map(|config| config.id)
-            .ok_or_else(|| "notebook path is not registered in Flowix".to_string())?
-    };
-    let pointer_created = flowix_core::MemoService::new(&read_lock(memo_file, "memo_file"))
-        .create_memo_named(Some(&notebook_id), &title, &pointer_body)
-        .map_err(|e| {
-            let _ = fs::remove_file(&output_path);
-            format!("create plugin note: {e}")
-        })?;
-    let pointer_memo = pointer_created.memo;
-    if let Some(app_handle) = app_handle.as_ref() {
-        crate::watcher::runtime::mark_self_write_for(app_handle, &pointer_created.path);
-        crate::memo_events::emit(
-            app_handle,
-            crate::memo_events::MemoEvent::Created {
-                memo: pointer_memo.clone(),
-                notebook_id: notebook_id.clone(),
-                derived_changed: crate::memo_events::MemoDerivedChanged::from_memos(
-                    None,
-                    &pointer_memo,
-                ),
-                source: crate::memo_events::MemoChangeSource::ExternalTool,
-            },
-        );
-    }
-    let artifact = PluginArtifact {
-        plugin_id: plugin.manifest.id,
-        path: output_path.to_string_lossy().to_string(),
-        name: title,
-        created_at: chrono::Local::now().to_rfc3339(),
-        format: plugin.manifest.output.format,
-        renderer: plugin.manifest.output.renderer,
-        content: Some(clean),
-        note_id: Some(pointer_memo.id.clone()),
-    };
-    if let (Some(run_id), Some(app_handle)) = (run_id, app_handle) {
-        app_handle
-            .emit(
-                "plugin-run",
-                PluginRunEvent {
-                    run_id: run_id.to_string(),
-                    plugin_id: artifact.plugin_id.clone(),
-                    status: "completed".to_string(),
-                    agent_type: agent_type.to_string(),
-                    artifact: Some(artifact.clone()),
-                    error: None,
-                    content: None,
-                },
-            )
-            .map_err(|e| format!("emit plugin run event: {e}"))?;
-    }
-    Ok(artifact)
-}
-
-/// Create pointer notes for artifacts written before the pointer-note model
-/// was introduced. This is deliberately idempotent: the artifact relative
-/// path is the stable identity, while the memo id and filename are allowed to
-/// be generated by MemoService.
-fn migrate_legacy_outputs(
-    plugin: &PluginDescriptor,
-    notebook_id: &str,
-    notebook: &Path,
-    memo_file: &Arc<std::sync::RwLock<flowix_core::memo_file::MemoFile>>,
-    app_handle: Option<&tauri::AppHandle>,
-) -> Result<bool, String> {
-    let output_dir = notebook.join(&plugin.definition.output_directory);
-    if !path_is_inside(&output_dir, notebook) || !output_dir.is_dir() {
-        return Ok(true);
-    }
-
-    let existing_paths = {
-        let memo_file = read_lock(memo_file, "memo_file");
-        memo_file
-            .read_all_memos_with_body_for_notebook_id(Some(notebook_id))
-            .into_iter()
-            .filter_map(|(_, body)| {
-                let yaml = body
-                    .strip_prefix("---\n")
-                    .and_then(|value| value.split_once("\n---"))
-                    .map(|(yaml, _)| yaml)?;
-                let metadata = serde_yaml::from_str::<PluginNoteFrontmatter>(yaml).ok()?;
-                (metadata.flowix_plugin == plugin.manifest.id
-                    && metadata.flowix_note_type == plugin.definition.note_type)
-                    .then(|| metadata.flowix_artifact.path)
-            })
-            .collect::<std::collections::HashSet<_>>()
-    };
-
-    let entries =
-        fs::read_dir(&output_dir).map_err(|error| format!("list plugin outputs: {error}"))?;
-    let mut completed = true;
-    for entry in entries {
-        let path = entry
-            .map_err(|error| format!("read plugin output entry: {error}"))?
-            .path();
-        if !path.is_file()
-            || path.extension().and_then(|extension| extension.to_str())
-                != Some(plugin.definition.extension.trim_start_matches('.'))
-        {
-            continue;
-        }
-        let relative = path
-            .strip_prefix(notebook)
-            .map_err(|_| "plugin output path is outside notebook root".to_string())?
-            .to_string_lossy()
-            .replace('\\', "/");
-        if existing_paths.contains(&relative) {
-            continue;
-        }
-        let raw =
-            fs::read_to_string(&path).map_err(|error| format!("read plugin output: {error}"))?;
-        let parsed = match parse_plugin_output(plugin, &raw) {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                tracing::warn!(plugin = %plugin.manifest.id, path = %path.display(), "skip legacy plugin output migration: {error}");
-                completed = false;
-                continue;
-            }
-        };
-        let pointer = PluginArtifactPointer {
-            path: relative.clone(),
-            format: plugin.manifest.output.format.clone(),
-            parser: parser_key(plugin.definition.parser).to_string(),
-            renderer: plugin.manifest.output.renderer.clone(),
-            title: parsed.title.clone(),
-            content_hash: flowix_plugin_runtime::artifact_content_hash(&parsed.content),
-            created_at: fs::metadata(&path)
-                .and_then(|metadata| metadata.modified())
-                .map(chrono::DateTime::<chrono::Local>::from)
-                .map(|date| date.to_rfc3339())
-                .unwrap_or_else(|_| chrono::Local::now().to_rfc3339()),
-            source_note: None,
-        };
-        let body = pointer_document(plugin, &pointer)?;
-        let created = flowix_core::MemoService::new(&read_lock(memo_file, "memo_file"))
-            .create_memo_named(Some(notebook_id), &parsed.title, &body)
-            .map_err(|error| format!("create migrated plugin note: {error}"))?;
-        if let Some(app_handle) = app_handle {
-            crate::watcher::runtime::mark_self_write_for(app_handle, &created.path);
-            crate::memo_events::emit(
-                app_handle,
-                crate::memo_events::MemoEvent::Created {
-                    memo: created.memo.clone(),
-                    notebook_id: notebook_id.to_string(),
-                    derived_changed: crate::memo_events::MemoDerivedChanged::from_memos(
-                        None,
-                        &created.memo,
-                    ),
-                    source: crate::memo_events::MemoChangeSource::ExternalTool,
-                },
-            );
-        }
-    }
-    Ok(completed)
-}
-
-fn legacy_output_prefix(plugin_id: &str) -> String {
-    format!(".plugin-output/{plugin_id}/")
-}
-
-fn migrated_output_path(plugin_id: &str, relative: &str) -> Option<String> {
-    let prefix = legacy_output_prefix(plugin_id);
-    relative
-        .strip_prefix(&prefix)
-        .map(|suffix| format!(".flowix/plugin/{plugin_id}/{suffix}"))
-}
-
-/// Repair pointer notes after a legacy artifact has moved. This is separate
-/// from the filesystem migration so a failed note write never causes an
-/// already-moved artifact to be removed.
-pub fn repair_notebook_artifact_pointers(
-    notebook_id: &str,
-    notebook: &Path,
-    memo_file: &Arc<std::sync::RwLock<flowix_core::memo_file::MemoFile>>,
-) -> Result<usize, String> {
-    let entries = {
-        let memo_file = read_lock(memo_file, "memo_file");
-        memo_file.read_all_memos_with_body_for_notebook_id(Some(notebook_id))
-    };
-    let mut repaired = 0;
-    for (memo, raw_note) in entries {
-        let Some(yaml) = raw_note
-            .strip_prefix("---\n")
-            .and_then(|value| value.split_once("\n---"))
-            .map(|(yaml, _)| yaml)
-        else {
-            continue;
-        };
-        let Ok(mut metadata) = serde_yaml::from_str::<PluginNoteFrontmatter>(yaml) else {
-            continue;
-        };
-        let Ok(plugin) = get_plugin(&metadata.flowix_plugin) else {
-            continue;
-        };
-        if metadata.flowix_note_type != plugin.definition.note_type {
-            continue;
-        }
-        let Some(mapped) =
-            migrated_output_path(&plugin.manifest.id, &metadata.flowix_artifact.path)
-        else {
-            continue;
-        };
-        let old_path = notebook.join(&metadata.flowix_artifact.path);
-        let new_path = notebook.join(&mapped);
-        if !new_path.is_file() || old_path.is_file() {
-            continue;
-        }
-        metadata.flowix_artifact.path = mapped.clone();
-        let body = pointer_document(&plugin, &metadata.flowix_artifact)?;
-        flowix_core::MemoService::new(&read_lock(memo_file, "memo_file"))
-            .save_memo_preserving_filename(&memo.id, &body)
-            .map_err(|error| format!("repair plugin pointer {}: {error}", memo.id))?;
-        repaired += 1;
-        tracing::info!(
-            plugin = %plugin.manifest.id,
-            memo_id = %memo.id,
-            from = %old_path.display(),
-            to = %new_path.display(),
-            "repaired plugin artifact pointer path"
-        );
-    }
-    Ok(repaired)
-}
-
-fn parser_key(parser: PluginParser) -> &'static str {
-    match parser {
-        PluginParser::MindmapMarkdown => "mindmap-markdown",
-        PluginParser::Markdown => "markdown",
-        PluginParser::Json => "json",
-        PluginParser::Html => "html",
-        PluginParser::Text => "text",
-    }
-}
-
-/// Run notebook-scoped plugin migrations during notebook activation/startup.
-/// Keeping this outside `list_notes` makes plugin queries read-only and keeps
-/// all legacy artifact writes behind the notebook migration boundary.
-pub fn migrate_notebook_data(
-    notebook_id: &str,
-    notebook: &Path,
-    memo_file: &Arc<std::sync::RwLock<flowix_core::memo_file::MemoFile>>,
-    app_handle: Option<&tauri::AppHandle>,
-    force: bool,
-) -> Result<(), String> {
-    static MIGRATION_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    let _migration_guard = MIGRATION_LOCK
-        .get_or_init(|| std::sync::Mutex::new(()))
-        .lock()
-        .map_err(|_| "plugin output migration lock poisoned".to_string())?;
-
-    const POINTER_REPAIR_KEY: &str = "plugin_pointer_repair_v1";
-    let pointer_repaired = read_lock(memo_file, "memo_file")
-        .notebook_data_migration_version(notebook_id, POINTER_REPAIR_KEY)
-        .map_err(|error| format!("read plugin pointer migration state: {error}"))?
-        .unwrap_or_default()
-        >= 1;
-    if force || !pointer_repaired {
-        repair_notebook_artifact_pointers(notebook_id, notebook, memo_file)?;
+            .ok_or_else(|| "notebook path is not registered in Flowix".to_string())?;
         read_lock(memo_file, "memo_file")
-            .mark_notebook_data_migration(notebook_id, POINTER_REPAIR_KEY, 1)
-            .map_err(|error| format!("record plugin pointer migration: {error}"))?;
-    }
-    for plugin in list_plugins()? {
-        let key = format!(
-            "plugin_legacy_outputs_{}_{}",
-            plugin.manifest.id, plugin.manifest.version
-        );
-        if !force
-            && read_lock(memo_file, "memo_file")
-                .notebook_data_migration_version(notebook_id, &key)
-                .map_err(|error| format!("read plugin output migration state: {error}"))?
-                .unwrap_or_default()
-                >= 1
-        {
-            continue;
+            .refresh_v2_note_path(&notebook_id, &relative_path)
+            .map_err(|e| format!("index mindmap: {e}"))?;
+        if let Some(app_handle) = app_handle.as_ref() {
+            crate::watcher::runtime::mark_self_write_for(app_handle, &output_path);
         }
-        if migrate_legacy_outputs(&plugin, notebook_id, notebook, memo_file, app_handle)? {
-            read_lock(memo_file, "memo_file")
-                .mark_notebook_data_migration(notebook_id, &key, 1)
-                .map_err(|error| format!("record plugin output migration: {error}"))?;
+        let artifact = PluginArtifact {
+            plugin_id: plugin.manifest.id,
+            path: output_path.to_string_lossy().to_string(),
+            name: title,
+            created_at: chrono::Local::now().to_rfc3339(),
+            format: plugin.manifest.output.format,
+            renderer: plugin.manifest.output.renderer,
+            content: Some(clean),
+            note_id: None,
+        };
+        if let (Some(run_id), Some(app_handle)) = (run_id, app_handle) {
+            app_handle.emit("plugin-run", PluginRunEvent {
+                run_id: run_id.to_string(),
+                plugin_id: artifact.plugin_id.clone(),
+                status: "completed".to_string(),
+                agent_type: agent_type.to_string(),
+                artifact: Some(artifact.clone()),
+                error: None,
+                content: None,
+            }).map_err(|e| e.to_string())?;
         }
+        return Ok(artifact);
     }
-    Ok(())
-}
-
-pub fn list_notes(
-    id: &str,
-    notebook_id: &str,
-    memo_file: &Arc<std::sync::RwLock<flowix_core::memo_file::MemoFile>>,
-) -> Result<Vec<flowix_core::memo_file::Memo>, String> {
-    let plugin = get_plugin(id)?;
-    let memo_file = read_lock(memo_file, "memo_file");
-    let notes = memo_file
-        .read_all_memos_for_notebook_id(Some(notebook_id))
-        .into_iter()
-        .filter(|memo| {
-            memo.properties
-                .get("flowix_note_type")
-                .and_then(serde_json::Value::as_str)
-                == Some(plugin.definition.note_type.as_str())
-                && memo
-                    .properties
-                    .get("flowix_plugin")
-                    .and_then(serde_json::Value::as_str)
-                    == Some(plugin.manifest.id.as_str())
-        })
-        .collect();
-    Ok(notes)
 }
 
 #[cfg(test)]

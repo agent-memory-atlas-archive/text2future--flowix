@@ -22,8 +22,8 @@ import {
   MemoListServicesHost,
   NoteNavigationDrawer,
   useShellMemoViewModel,
+  useShellDocumentListTitle,
   startNotebookImportWithMonitoring,
-  type MemoItem,
   type Notebook,
 } from '@features/memo/public/shell-api';
 import { AgentConversationTitlebar } from '@features/agent/public/shell-api';
@@ -156,9 +156,7 @@ export function MainLayout({
   // document 容器一起抖。切到 selector 后, 只在用到的字段变化时本组件
   // 才重渲, memo-list / document-container 各自独立订阅, 互不污染。
   const {
-    memos,
     notebooks,
-    selectedMemo,
     selectedNotebook,
     startupPhase: memoStartupPhase,
     middleColumnView,
@@ -168,14 +166,10 @@ export function MainLayout({
     setActiveFilter,
     loadPathNotes,
     triggerRefresh,
-    updateMemoMeta,
-    setMemoColors,
   } = useShellMemoViewModel();
   const isAgentConversationView = middleColumnView === 'conversations';
   const {
     currentDocumentPath,
-    currentDocumentSource,
-    activeMemoSession,
     activeExternalSession,
     isDocumentTransitioning,
   } = useShellDocumentViewModel();
@@ -307,27 +301,19 @@ export function MainLayout({
     isMemoListHidden,
     noteNavigationPhase,
   });
-  const currentMemo = currentDocumentPath && currentDocumentSource === 'memo' && activeMemoSession
-    ? memos.find((memo) => memo.id === activeMemoSession.memoId)
-      ?? (selectedMemo?.id === activeMemoSession.memoId ? selectedMemo : null)
-    : null;
-  const currentFileIdentity = activeMemoSession?.fileIdentity
-    ?? activeExternalSession?.fileIdentity
-    ?? null;
+  const currentFileIdentity = activeExternalSession?.fileIdentity ?? null;
   const currentDocumentInstanceKey = currentFileIdentity?.displayId ?? null;
-  const mainMemoEditorIdentity = activeMemoSession
+  const mainMemoEditorIdentity = activeExternalSession
     ? {
         kind: 'md' as const,
-        memoId: activeMemoSession.memoId,
-        path: activeMemoSession.fileIdentity.path,
-        displayId: activeMemoSession.fileIdentity.displayId,
+        path: activeExternalSession.fileIdentity.path,
+        displayId: activeExternalSession.fileIdentity.displayId,
       }
     : null;
   const mainEditorMode = useDocumentEditorMode(
     'main-third',
     mainMemoEditorIdentity ?? {
       kind: 'md',
-      memoId: null,
       path: currentDocumentPath ?? '',
       displayId: activeExternalSession?.fileIdentity.displayId ?? 'inactive-external-display',
     },
@@ -343,8 +329,6 @@ export function MainLayout({
   const {
     handleCopyFullText,
     handleCopyLink,
-    handleTogglePin,
-    handleColorsChange,
     handleExportMarkdown,
     handleSaveAsTemplate,
     handleExportWord,
@@ -353,9 +337,6 @@ export function MainLayout({
     currentDocumentPath,
     getCurrentDocumentContent,
     getCurrentDocumentEditor,
-    currentMemo,
-    updateMemoMeta,
-    setMemoColors,
     onExported: handleDocumentExported,
   });
 
@@ -404,15 +385,6 @@ export function MainLayout({
     void navigateDocumentHistory('forward');
   }, []);
 
-  // Forward the titlebar delete action to MemoListServicesHost through a custom event.
-  // MainLayout remains independent from the dialog state.
-  const handleRequestDeleteMemo = useCallback(() => {
-    if (!currentMemo) return;
-    window.dispatchEvent(
-      new CustomEvent<MemoItem>('flowix:request-delete-memo', { detail: currentMemo })
-    );
-  }, [currentMemo]);
-
   const handleCopyMediaLink = useCallback(async () => {
     if (!mediaTarget) return;
     try {
@@ -455,21 +427,11 @@ export function MainLayout({
     }));
   }, [mediaTarget]);
 
-  const handleToggleEditorMode = useCallback(() => {
-    if (!currentMemo || !mainMemoEditorIdentity) return;
-    // Publish the active editor's latest serialized content before replacing
-    // its React subtree. The autosave pipeline continues asynchronously from
-    // the shared document buffer; mode switching itself must stay immediate.
-    captureLatestDocumentContent(mainMemoEditorIdentity, 'main-third');
-    const nextMode = mainEditorMode === 'source' ? 'rich' : 'source';
-    setDocumentEditorMode('main-third', mainMemoEditorIdentity, nextMode);
-  }, [currentMemo, mainEditorMode, mainMemoEditorIdentity]);
-
   const handleViewSourceMode = useCallback(() => {
-    if (!currentMemo || !mainMemoEditorIdentity || mainEditorMode === 'source') return;
+    if (!mainMemoEditorIdentity || mainEditorMode === 'source') return;
     captureLatestDocumentContent(mainMemoEditorIdentity, 'main-third');
     setDocumentEditorMode('main-third', mainMemoEditorIdentity, 'source');
-  }, [currentMemo, mainEditorMode, mainMemoEditorIdentity]);
+  }, [mainEditorMode, mainMemoEditorIdentity]);
 
   useEffect(() => {
     const handleViewSource = () => handleViewSourceMode();
@@ -478,54 +440,20 @@ export function MainLayout({
   }, [handleViewSourceMode]);
 
   const workColumnDocument: DocumentSurfaceContext | null = currentDocumentPath && currentFileIdentity
-    ? activeMemoSession
-      ? {
-          identity: {
-            kind: 'memo' as const,
-            memoId: activeMemoSession.memoId,
-            fileIdentity: activeMemoSession.fileIdentity,
-            notebookId: activeMemoSession.notebookId,
-            notebookPath: activeMemoSession.notebookPath,
-            transitionId: activeMemoSession.transitionId,
-          },
-          memo: currentMemo,
-          surface: {
-            kind: 'note' as const,
-            memoId: activeMemoSession.memoId,
-            instanceKey: activeMemoSession.fileIdentity.displayId,
-            fileIdentity: activeMemoSession.fileIdentity,
-            props: {
-              notebookId: activeMemoSession.notebookId,
-              notebookPath: activeMemoSession.notebookPath,
-              transitionId: activeMemoSession.transitionId,
-              initialFocus: activeMemoSession.initialFocus,
-              isExternalDocument: false,
-              externalScopePath: null,
-              searchPanelOpen: isSearchPanelOpen,
-              onSearchPanelOpenChange: setIsSearchPanelOpen,
-              toolbarCollapsed,
-              onToolbarCollapsedChange: setToolbarCollapsed,
-              onMetainfoData: (data: { memoContent: string }) => {
-                currentDocumentContentRef.current = data.memoContent;
-              },
-              onEditorReady: handleDocumentEditorReady,
-            },
-          },
-        }
-      : activeExternalSession ? {
+    ? activeExternalSession ? {
           identity: {
             kind: 'external' as const,
             fileIdentity: activeExternalSession.fileIdentity,
             scopePath: activeExternalSession.scopePath,
+            indexable: activeExternalSession.indexable,
             transitionId: activeExternalSession.transitionId,
           },
           instanceKey: activeExternalSession.fileIdentity.displayId,
-          memo: null,
           documentProps: {
-            memoId: null,
-            notebookId: null,
-            notebookPath: null,
+            notebookId: activeExternalSession.notebookId ?? null,
+            notebookPath: activeExternalSession.notebookPath ?? null,
             transitionId: activeExternalSession.transitionId,
+            initialFocus: activeExternalSession.initialFocus,
             isExternalDocument: true,
             externalScopePath: activeExternalSession.scopePath,
             searchPanelOpen: isSearchPanelOpen,
@@ -540,9 +468,7 @@ export function MainLayout({
         } : null
     : null;
   const visibleNavigationState = selectedNotebook && (
-    (navigationState.target.kind === 'memo'
-      || navigationState.target.kind === 'media'
-      || navigationState.target.kind === 'artifact')
+    navigationState.target.kind === 'media'
     && navigationState.target.notebookId !== selectedNotebook.id
   ) ? { ...navigationState, target: { kind: 'empty' as const } } : navigationState;
   const workColumnPresentation = resolveWorkColumnPresentation({
@@ -558,6 +484,15 @@ export function MainLayout({
       : null,
     emptyMessage: t('shell.emptyDocument'),
   });
+  const documentListTitle = useShellDocumentListTitle(
+    navigationState.target.kind === 'document-list'
+      ? {
+          notebookId: navigationState.target.scope.notebookId,
+          folderPath: navigationState.target.scope.path,
+          customFilterId: navigationState.target.filters.customFilterId ?? null,
+        }
+      : null,
+  );
   const isAgentConversationDetail = workColumnPresentation.header.kind === 'agent';
   const workColumnLoadingTone = navigationState.phase === 'loading'
     ? navigationState.pendingTarget?.kind === 'agent-conversation'
@@ -573,9 +508,6 @@ export function MainLayout({
       // An artifact is allowed to sit above an existing editable session.
       // Do not expose that underlying memo's actions in the artifact chrome;
       // the workColumn target, not the DocumentStore session, owns the view.
-      currentMemo: workColumnPresentation.header.kind === 'document'
-        ? workColumnPresentation.header.document.currentMemo
-        : null,
       externalFilePath: workColumnPresentation.header.kind === 'document'
         ? workColumnPresentation.header.document.externalFilePath
         : null,
@@ -590,6 +522,7 @@ export function MainLayout({
       canNavigateForward,
       onNavigateBack: handleNavigateBack,
       onNavigateForward: handleNavigateForward,
+      title: documentListTitle,
     },
     contentCapabilities: {
       copyFullText: workColumnPresentation.capabilities.includes('copy-content'),
@@ -601,16 +534,11 @@ export function MainLayout({
     actions: {
       onCopyLink: handleCopyLink,
       onCopyFullText: handleCopyFullText,
-      onTogglePin: handleTogglePin,
       onExportMarkdown: handleExportMarkdown,
       onSaveAsTemplate: handleSaveAsTemplate,
       onExportWord: handleExportWord,
       onExportPdf: handleExportPdf,
-      onRequestDeleteMemo: handleRequestDeleteMemo,
       onDeleteExternalFile: handleDeleteExternalFile,
-      onColorsChange: handleColorsChange,
-      editorMode: mainEditorMode,
-      onToggleEditorMode: handleToggleEditorMode,
     },
     mediaActions: mediaTarget ? {
       onCopyLink: handleCopyMediaLink,

@@ -79,10 +79,10 @@ pub use ops::{
 pub use types::{
     AgentThreadItem, DeleteTagReport, Memo, MemoColor, MemoIndexEntry, MemoIndexFile, MemoLocation,
     MemoMetadataFile, MemoTag, MemoTodoEntry, MemoVersionCleanupReport, MoveTagReport, Notebook,
-    NotebookConfig, NotebookManifest, ReconcileReport, TodoItem,
+    NotebookConfig, NotebookManifest, PathTodoEntry, ReconcileReport, TodoItem,
 };
 pub use versions::{
-    MemoVersionManifest, MemoVersionMeta, MemoVersionSource, MEMO_AUTO_VERSION_INTERVAL_MS,
+    MemoVersionManifest, MemoVersionMeta, MemoVersionSource, PathVersionMeta, MEMO_AUTO_VERSION_INTERVAL_MS,
     MEMO_ORPHAN_VERSION_RETENTION, MEMO_VERSION_LIMIT,
 };
 

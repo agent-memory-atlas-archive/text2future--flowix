@@ -1,6 +1,6 @@
 'use client';
 
-import { cn, displayTitleFromFilename } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import {
   Check,
   FileText,
@@ -29,11 +29,12 @@ import {
 } from '@shared/ui/command';
 import {
   NotebookIcon,
-  openMemoSession,
   useGlobalSearchMemoViewModel,
   type Notebook,
 } from '@features/memo/public/global-search-api';
-import type { MemoItem } from '@/types/memo-item';
+import { openNotebookNote } from '@features/memo/use-cases/open-notebook-note';
+import { joinNotebookMemoPath } from '@/lib/path';
+import { useMemoStore } from '@features/memo/store/memo-store';
 import {
   selectAndOpenAgentConversation,
   selectNotebook,
@@ -50,7 +51,7 @@ import {
   memos,
   tags,
   windows,
-  type MemoSearchHit,
+  type PathNoteSearchHit,
   type MemoTemplate,
 } from '@platform/tauri/client';
 import { ShortcutKbd } from '@shared/ui/shortcut-kbd';
@@ -100,7 +101,7 @@ function getPropertyFilterOperatorLabel(
  * 全局搜索 / 命令面板.
  *
  * 数据流:
- * - `query` 受控, 150ms 防抖后调后端 `search_memos` 拉 `hits`
+ * - Search uses the notebook path index after a 150ms debounce.
  * - 切 notebook / 关闭弹窗都清掉 query + hits, 避免旧 notebook 结果污染
  * - `shouldFilter={false}` 关掉 cmdk 内置过滤 — 后端 score 决定排序
  * - snippet 由后端用 `\x01...\x02` 包裹命中区间, 前端切片渲染为 `<mark>`
@@ -114,14 +115,14 @@ function getPropertyFilterOperatorLabel(
 export function GlobalSearchCommand({ open, onOpenChange }: GlobalSearchCommandProps) {
   const { t } = useI18n();
   const [query, setQuery] = useState('');
-  const [hits, setHits] = useState<MemoSearchHit[]>([]);
+  const [hits, setHits] = useState<PathNoteSearchHit[]>([]);
   const [indexReady, setIndexReady] = useState(true);
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [propertyFilters, setPropertyFilters] = useState<PropertyFilterCondition[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reqIdRef = useRef(0);
 
-  const { selectedNotebook, memosInStore } = useGlobalSearchMemoViewModel();
+  const { selectedNotebook } = useGlobalSearchMemoViewModel();
 
   // 关闭弹窗时清空 query
   useEffect(() => {
@@ -154,12 +155,13 @@ export function GlobalSearchCommand({ open, onOpenChange }: GlobalSearchCommandP
     const myReq = ++reqIdRef.current;
     debounceRef.current = setTimeout(async () => {
       try {
-        const nbId = selectedNotebook?.id ?? null;
-        const res = await memos.search(nbId, q, 30);
+        const res = selectedNotebook
+          ? await memos.searchPathNotes(selectedNotebook.id, q, 30)
+          : [];
         // 期间用户可能又改了 query / 切了 notebook, 旧请求直接丢弃
         if (myReq !== reqIdRef.current) return;
-        setHits(res.hits);
-        setIndexReady(res.indexReady);
+        setHits(res);
+        setIndexReady(true);
       } catch (err) {
         logger.error('search failed', { error: err });
         if (myReq !== reqIdRef.current) return;
@@ -322,9 +324,11 @@ export function GlobalSearchCommand({ open, onOpenChange }: GlobalSearchCommandP
             <SearchResultsGroup
               hits={hits}
               indexReady={indexReady}
-              memosInStore={memosInStore}
-              onPick={(memo) => {
-                openMemoSession(memo, selectedNotebook);
+              onPick={(hit) => {
+                if (selectedNotebook?.id === hit.notebookId) {
+                  const path = joinNotebookMemoPath(selectedNotebook.path, hit.relativePath);
+                  if (path) void openNotebookNote(path, selectedNotebook);
+                }
                 onOpenChange(false);
               }}
             />
@@ -400,30 +404,12 @@ function RunningAgentConversationsGroup({ onClose }: RunningAgentConversationsGr
 }
 
 interface SearchResultsGroupProps {
-  hits: MemoSearchHit[];
+  hits: PathNoteSearchHit[];
   indexReady: boolean;
-  memosInStore: MemoItem[];
-  onPick: (memo: MemoItem) => void;
+  onPick: (hit: PathNoteSearchHit) => void;
 }
 
-function memoFromSearchHit(hit: MemoSearchHit): MemoItem {
-  return {
-    id: hit.id,
-    filename: hit.filename,
-    preview: hit.snippet,
-    tags: [],
-    todos: [],
-    agents: [],
-    createdAt: hit.updatedAt,
-    updatedAt: hit.updatedAt,
-    favorited: false,
-    icon: null,
-    colors: [],
-    properties: {},
-  };
-}
-
-function SearchResultsGroup({ hits, indexReady, memosInStore, onPick }: SearchResultsGroupProps) {
+function SearchResultsGroup({ hits, indexReady, onPick }: SearchResultsGroupProps) {
   const { t } = useI18n();
   if (hits.length === 0) {
     return (
@@ -435,19 +421,15 @@ function SearchResultsGroup({ hits, indexReady, memosInStore, onPick }: SearchRe
   return (
     <CommandGroup heading={t('shell.commandPalette.searchResults')}>
       {hits.map((h) => {
-        // tag/filter 会让 store 里只保留当前列表子集; search hit 仍可来自
-        // 当前 notebook 的其它 memo。找不到完整 MemoItem 时用 hit 合成最小
-        // 可打开对象, openMemoSession 实际依赖 id + filename + notebook。
-        const memo = memosInStore.find((m) => m.id === h.id) ?? memoFromSearchHit(h);
         return (
           <CommandItem
-            key={h.id}
-            value={h.id}
-            onSelect={() => onPick(memo)}
+            key={`${h.notebookId}:${h.relativePath}`}
+            value={`${h.notebookId}:${h.relativePath}`}
+            onSelect={() => onPick(h)}
           >
             <FileText />
             <div className="flex min-w-0 flex-col">
-              <span className="truncate">{displayTitleFromFilename(h.filename)}</span>
+              <span className="truncate">{h.title}</span>
               {h.snippet && (
                 <span className="truncate text-xs text-[var(--muted-foreground)]">
                   {renderSnippet(h.snippet)}
@@ -523,7 +505,6 @@ function StaticGroups({ onClose }: StaticGroupsProps) {
     activeFilter,
     setActiveFilter,
     createMemo,
-    handleMemoCreated,
     setSelectedTagId,
   } = useGlobalSearchMemoViewModel();
 
@@ -565,7 +546,7 @@ function StaticGroups({ onClose }: StaticGroupsProps) {
     onClose();
   };
 
-  /** 切 notebook — 触发 search_memos 索引 rebuild (走 switch_notebook_and_rebuild). */
+  /** Select a notebook and refresh path-based search results. */
   const handleNotebookSelect = async (notebook: Notebook) => {
     if (notebook.id === selectedNotebook?.id) {
       onClose();
@@ -582,13 +563,12 @@ function StaticGroups({ onClose }: StaticGroupsProps) {
     onClose();
   };
 
-  /** 新建 memo — store createMemo 已把新 memo 加到 memos[], 这里再选上,
-   *  这里需要显式打开文档会话，避免依赖列表选中态副作用。 */
+  /** Create a path-indexed note and open its file session. */
   const handleNewMemo = async () => {
     if (!selectedNotebook) return;
     try {
-      const { memo, initialContent } = await createMemo(undefined, selectedNotebook.id);
-      void openMemoSession({ ...memo, isOpen: true }, selectedNotebook, { initialContent });
+      const created = await createMemo(undefined, selectedNotebook.id);
+      void openNotebookNote(created.path, selectedNotebook);
     } catch (err) {
       logger.error('create memo failed', { error: err });
     }
@@ -600,9 +580,9 @@ function StaticGroups({ onClose }: StaticGroupsProps) {
   const handleCreateFromTemplate = async (template: MemoTemplate) => {
     if (!selectedNotebook) return;
     try {
-      const memo = await memos.createFromTemplate(template.id, selectedNotebook.id);
-      handleMemoCreated(memo, { select: true });
-      openMemoSession({ ...memo, isOpen: true }, selectedNotebook);
+      const created = await memos.createPathFromTemplate(template.id, selectedNotebook.id);
+      await useMemoStore.getState().loadPathNotes({ notebookId: selectedNotebook.id });
+      void openNotebookNote(created.path, selectedNotebook);
     } catch (err) {
       logger.error('create from template failed', { error: err });
     }

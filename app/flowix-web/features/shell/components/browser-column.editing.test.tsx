@@ -20,10 +20,10 @@ it('does not force the right document read-only when the same memo is open on th
   const element = document.createElement('div');
   const root = createRoot(element);
   const previousNavigation = useWorkColumnStore.getState().navigation;
-  const target = { kind: 'memo' as const, memoId: 'both', path: '/notes/both.md', notebookId: 'notes', notebookPath: '/notes', transitionId: 1 };
+  const target = { kind: 'external' as const, path: '/notes/both.md', scopePath: '/notes', transitionId: 1 };
   const work = useWorkColumnStore.getState();
   work.commitNavigation(work.beginNavigation(target, null), target);
-  const tab = { id: 'memo:both', title: 'Both', icon: null, target: { kind: 'memo' as const, memoId: 'both', filePath: target.path, notebookId: 'notes', notebookPath: '/notes' } };
+  const tab = { id: 'memo:both', title: 'Both', icon: null, target: { kind: 'file-browser' as const, activeFilePath: target.path, folderPath: '/notes', notebookId: 'notes', scopePath: '/notes', fileTreeVisible: true, fileTreeWidth: 220 } };
   useBrowserColumnStore.getState().openTab(tab);
   try {
     await act(async () => root.render(<BrowserColumn width={500} layoutKey="test" onResize={() => {}} toolbarCollapsed={false} onToolbarCollapsedChange={() => {}} />));

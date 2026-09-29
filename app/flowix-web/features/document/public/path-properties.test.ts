@@ -5,7 +5,7 @@ import { documentIdentityFromFile } from '../store/document-identity';
 import { applyLoadedContent, getBuffer } from '../store/buffer-registry';
 import { recordDocumentEdit } from '../store/document-session-service';
 const mocks = vi.hoisted(() => ({ write: vi.fn(), read: vi.fn() }));
-vi.mock('../use-cases/document-operations', () => ({ documentContentOperations: () => ({ write: mocks.write }) }));
+vi.mock('../use-cases/local-document-operations', () => ({ localDocumentOperations: { write: mocks.write } }));
 vi.mock('../use-cases/memo-document-operations', () => ({ memoDocumentOperations: { read: mocks.read } }));
 
 it('preserves body bytes, comments and unrelated YAML while setting colors', () => {
@@ -27,14 +27,14 @@ it('saves properties with unsaved body edits through the same document buffer', 
   applyLoadedContent(identity, identity.path, '# Initial\n', { setAsCurrent: false });
   recordDocumentEdit(identity, '# Latest unsaved body\n');
   mocks.write.mockImplementation(async request => ({ status: 'saved', path: request.path, content: request.content }));
-  expect(await setDocumentProperties(identity.path, { flowix_colors: ['green'] }, 'cache123')).toBe(true);
+  expect(await setDocumentProperties(identity.path, { flowix_colors: ['green'] })).toBe(true);
   const request = mocks.write.mock.calls[0][0];
   expect(request.path).toBe(identity.path);
   expect(request.content).toContain('# Latest unsaved body');
   expect(request.content).toContain('green');
   expect(request.content).not.toContain('flowix_key');
   expect(request.expectedContent).toBe('# Initial\n');
-  expect(request.memoId).toBe('cache123');
+  expect(request.memoId).toBeUndefined();
   expect(getBuffer(identity)?.content).toBe(request.content);
 });
 

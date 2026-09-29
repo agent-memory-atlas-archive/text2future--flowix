@@ -4,6 +4,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
@@ -19,8 +20,7 @@ import { getMemoColorLabel, MemoCardActions } from '@features/memo/components/me
 import { memoRepository } from '@features/memo/services/memo-repository';
 import { MEMO_COLORS, MEMO_COLOR_HEX, useMemoStore } from '@features/memo/store/memo-store';
 import { buildNoteOpenLinkFromPath } from '@platform/open-target/path-link';
-import type { MemoColor, MemoItem } from '@/types/memo-item';
-import { resolveMemoByPath } from '@features/memo/use-cases/open-by-target';
+import type { MemoColor, PathNoteListItem } from '@/types/memo-item';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, useContextMenuContext } from '@shared/ui/context-menu';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@shared/ui/dialog';
 import folderIcon from '@/assets/folder-outline.svg?raw';
@@ -39,6 +39,7 @@ const TREE_MENU_ITEM_CLASS =
 const TREE_MENU_DIVIDER_CLASS = 'mx-1 my-1 h-px bg-[var(--border-popup)] opacity-60';
 const TREE_EDGE_GUTTER = 6;
 const INDENT_PER_LEVEL = 20;
+const FOLDER_SINGLE_CLICK_DELAY_MS = 220;
 
 const NOTEBOOK_AGENT_PROJECT_FOLDER_NAMES = new Set([
   '.agents',
@@ -59,6 +60,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   active,
   selected,
   onToggle,
+  onSelectFolder,
   onOpen,
   onOpenInNewTab,
   onCreateNote,
@@ -84,6 +86,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   active: boolean;
   selected: boolean;
   onToggle: (path: string) => void;
+  onSelectFolder?: (path: string) => void;
   onOpen: (path: string, event?: ReactMouseEvent<HTMLDivElement>) => void;
   onOpenInNewTab?: (path: string) => void;
   onCreateNote: (parentPath: string) => void;
@@ -102,6 +105,25 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
 }) {
   const { t, language } = useI18n();
   const isFolder = item.type === 'folder';
+  const folderClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (folderClickTimer.current !== null) clearTimeout(folderClickTimer.current);
+  }, []);
+  const selectFolderOnSingleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.detail !== 1) return;
+    if (folderClickTimer.current !== null) clearTimeout(folderClickTimer.current);
+    folderClickTimer.current = setTimeout(() => {
+      folderClickTimer.current = null;
+      onSelectFolder?.(item.fullPath);
+    }, FOLDER_SINGLE_CLICK_DELAY_MS);
+  };
+  const toggleFolderOnDoubleClick = () => {
+    if (folderClickTimer.current !== null) {
+      clearTimeout(folderClickTimer.current);
+      folderClickTimer.current = null;
+    }
+    onToggle(item.fullPath);
+  };
   const sourceFolderName = item.fullPath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? item.name;
   const isHiddenFolder = isFolder && sourceFolderName.startsWith('.');
   const isInHiddenDirectory = isFolder && (
@@ -119,21 +141,15 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   const resourceKind = isFolder ? null : item.resourceKind ?? resourceKindFromPath(item.name);
   const isNote = resourceKind === 'note';
   const isMediaResource = resourceKind === 'image' || resourceKind === 'video';
-  const [memo, setMemo] = useState<MemoItem | null>(null);
-  // The memo is initially loaded by path because the file tree can contain
-  // notes outside the currently loaded list query. Keep listening to the
-  // store as well so changes made from the work column are reflected here
-  // immediately, without requiring a tree refresh.
-  const storeMemo = useMemoStore((state) => {
-    const memoId = item.memoMeta?.id ?? memo?.id;
-    if (!memoId) return null;
-    return state.memos.find((candidate) => candidate.id === memoId)
-      ?? (state.selectedMemo?.id === memoId ? state.selectedMemo : null);
+  const [pathNote, setPathNote] = useState<PathNoteListItem | null>(null);
+  const storeNote = useMemoStore((state) => {
+    const notebook = state.notebooks.find((candidate) => item.fullPath.toLowerCase().startsWith(`${candidate.path.replace(/[\\/]+$/, '').toLowerCase()}\\`)
+      || item.fullPath.toLowerCase().startsWith(`${candidate.path.replace(/[\\/]+$/, '').toLowerCase()}/`));
+    if (!notebook) return null;
+    const relativePath = item.fullPath.slice(notebook.path.replace(/[\\/]+$/, '').length + 1).replace(/\\/g, '/');
+    return state.pathNotes.find((candidate) => candidate.notebookId === notebook.id && candidate.relativePath === relativePath) ?? null;
   });
-  const displayedMemo = storeMemo ?? memo;
-  // `memo` is loaded from read_memo for the initial render. Once the memo
-  // store receives the write event, prefer that authoritative snapshot so
-  // property changes made in the document view appear without a tree refresh.
+  const displayedMemo = storeNote ?? pathNote;
   const displayedIcon = displayedMemo
     ? displayedMemo.icon
     : item.memoMeta?.icon ?? null;
@@ -166,41 +182,37 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
 
   const loadMemo = useCallback(async () => {
     if (isFolder || !isNote) return null;
-    const memoId = item.memoMeta?.id
-      ?? (await resolveMemoByPath(item.fullPath))?.memoId;
-    if (!memoId) return null;
-    const state = useMemoStore.getState();
-    const cached = state.memos.find((candidate) => candidate.id === memoId)
-      ?? (state.selectedMemo?.id === memoId ? state.selectedMemo : null);
-    if (cached) {
-      setMemo(cached);
-      return cached;
-    }
-    const loaded = await memos.readMemo(memoId);
-    if (loaded) setMemo(loaded);
+    const location = await memos.resolveMarkdownLocation(item.fullPath);
+    if (!location.indexable || !location.notebookId || !location.relativePath) return null;
+    const cached = useMemoStore.getState().pathNotes.find((candidate) => candidate.notebookId === location.notebookId && candidate.relativePath === location.relativePath);
+    if (cached) { setPathNote(cached); return cached; }
+    const entry = (await memos.listNotesByPath(location.notebookId)).find((candidate) => candidate.relativePath === location.relativePath);
+    if (!entry) return null;
+    const loaded: PathNoteListItem = { ...entry, kind: 'path-note', notebookId: location.notebookId, relativePath: location.relativePath, filename: location.relativePath.split('/').pop() || location.relativePath };
+    setPathNote(loaded);
     return loaded;
-  }, [isFolder, isNote, item.fullPath, item.memoMeta?.id]);
+  }, [isFolder, isNote, item.fullPath]);
 
-  const toggleFavorite = useCallback(async (nextMemo: Pick<MemoItem, 'id' | 'favorited'>) => {
+  const toggleFavorite = useCallback(async (nextMemo: PathNoteListItem) => {
     const saved = await (nextMemo.favorited
-      ? memoRepository.unfavorite(item.fullPath, nextMemo.id)
-      : memoRepository.favorite(item.fullPath, nextMemo.id));
+      ? memoRepository.unfavorite(item.fullPath)
+      : memoRepository.favorite(item.fullPath));
     if (!saved) return;
-    setMemo((current) => current?.id === nextMemo.id
+    setPathNote((current) => current?.relativePath === nextMemo.relativePath
       ? { ...current, favorited: !nextMemo.favorited }
       : current);
     useMemoStore.getState().triggerRefresh();
   }, [item.fullPath]);
 
-  const changeColors = useCallback(async (nextMemo: Pick<MemoItem, 'id'>, colors: MemoColor[]) => {
-    if (!await memoRepository.setColors(item.fullPath, colors, nextMemo.id)) return;
-    setMemo((current) => current?.id === nextMemo.id
+  const changeColors = useCallback(async (nextMemo: PathNoteListItem, colors: MemoColor[]) => {
+    if (!await memoRepository.setColors(item.fullPath, colors)) return;
+    setPathNote((current) => current?.relativePath === nextMemo.relativePath
       ? { ...current, colors }
       : current);
   }, [item.fullPath]);
 
-  const requestDelete = useCallback((nextMemo: MemoItem) => {
-    window.dispatchEvent(new CustomEvent<MemoItem>('flowix:request-delete-memo', {
+  const requestDelete = useCallback((nextMemo: PathNoteListItem) => {
+    window.dispatchEvent(new CustomEvent<PathNoteListItem>('flowix:request-delete-memo', {
       detail: nextMemo,
     }));
   }, []);
@@ -243,14 +255,10 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
     event.preventDefault();
     event.stopPropagation();
 
-    // Build the menu synchronously from tree metadata. Full memo loading is
-    // deferred until an action actually needs the complete record, so a slow
-    // read_memo call cannot delay the native popup itself.
     const nativeMemo = displayedMemo;
-    const memoId = nativeMemo?.id ?? item.memoMeta?.id ?? null;
     const memoFavorited = nativeMemo?.favorited ?? item.memoMeta?.favorited ?? false;
     const memoColors = nativeMemo?.colors ?? item.memoMeta?.colors ?? [];
-    const runWithMemo = (action: (loaded: MemoItem) => void) => {
+    const runWithMemo = (action: (loaded: PathNoteListItem) => void) => {
       void (nativeMemo ? Promise.resolve(nativeMemo) : loadMemo())
         .then((loaded) => {
           if (loaded) action(loaded);
@@ -317,21 +325,26 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
         },
         {
           text: t('document.action.properties'),
-          enabled: Boolean(memoId),
           action: () => {
-            if (!memoId) return;
             window.dispatchEvent(new CustomEvent('flowix:open-note-properties', {
-              detail: { memoId },
+              detail: { path: item.fullPath, scopePath: useMemoStore.getState().notebooks.find((notebook) => notebook.id === nativeMemo?.notebookId)?.path ?? null },
             }));
           },
         },
         {
           text: t('document.action.copyLink'),
-          action: () => void navigator.clipboard.writeText(buildNoteOpenLinkFromPath(item.fullPath, useMemoStore.getState().notebooks) ?? item.fullPath),
+          action: () => {
+            const link = buildNoteOpenLinkFromPath(item.fullPath, useMemoStore.getState().notebooks);
+            if (!link) {
+              toast.error(t('document.command.copyFailed'));
+              return;
+            }
+            void navigator.clipboard.writeText(link).catch(() => toast.error(t('document.command.copyFailed')));
+          },
         },
         {
           text: t('document.action.copyFullText'),
-          action: () => void memoDocumentOperations.read({ path: item.fullPath, scopePath: null, memoId })
+          action: () => void memoDocumentOperations.read({ path: item.fullPath, scopePath: null })
             .then((content) => navigator.clipboard.writeText(content ?? '')),
         },
         {
@@ -377,7 +390,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
         <div
           role="treeitem"
           aria-expanded={isFolder ? expanded : undefined}
-          aria-selected={!isFolder ? active || selected : undefined}
+          aria-selected={active || selected}
           aria-level={depth + 1}
           aria-posinset={posInSet}
           aria-setsize={setSize}
@@ -393,11 +406,11 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
             });
           }}
           onClick={isFolder
-            ? () => onToggle(item.fullPath)
+            ? selectFolderOnSingleClick
             : (event) => onOpen(item.fullPath, event)}
-          onDoubleClick={!isFolder && onOpenInNewTab
-            ? () => onOpenInNewTab(item.fullPath)
-            : undefined}
+          onDoubleClick={isFolder
+            ? toggleFolderOnDoubleClick
+            : onOpenInNewTab ? () => onOpenInNewTab(item.fullPath) : undefined}
           onFocus={() => onFocus?.(item.fullPath)}
           onPointerDown={(event) => {
             if (renaming) {
@@ -410,7 +423,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
           onKeyDown={(event) => {
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault();
-              if (isFolder) onToggle(item.fullPath); else onOpen(item.fullPath);
+              if (isFolder) onSelectFolder?.(item.fullPath); else onOpen(item.fullPath);
               return;
             }
             onKeyDown?.(item.fullPath, event);
@@ -433,7 +446,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
           <span
             aria-hidden="true"
             className={cn(
-              'relative flex h-[15px] w-[15px] shrink-0 items-center justify-center',
+              'relative flex h-[18px] w-[18px] shrink-0 items-center justify-center',
               isFolder
                 ? (isInHiddenDirectory ? 'text-[var(--muted-foreground)]' : 'text-[var(--brand)]')
                 : 'text-[color-mix(in_oklch,var(--foreground)_90%,white_10%)]',
@@ -448,7 +461,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
             ) : (
               <FileTypeIcon
                 path={item.name}
-                className="h-[15px] w-[15px]"
+                className="h-[18px] w-[18px]"
               />
             )}
           </span>
@@ -475,8 +488,12 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
       ) : (
         <>
           {isFolder ? (
-            <span aria-hidden="true" className={cn(
-              'relative h-[15px] w-[15px] shrink-0',
+            <button type="button" aria-label={expanded ? '收起文件夹' : '展开文件夹'} aria-expanded={expanded}
+              onClick={(event) => { event.stopPropagation(); onToggle(item.fullPath); }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onKeyDown={(event) => event.stopPropagation()}
+              className={cn(
+              'relative h-[18px] w-[18px] shrink-0',
               isInHiddenDirectory ? 'text-[var(--muted-foreground)]' : 'text-[var(--brand)]',
             )}>
               <span
@@ -487,24 +504,24 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
                 dangerouslySetInnerHTML={{ __html: folderIcon }}
               />
               <ChevronRight className={cn(
-                'absolute inset-0 h-[15px] w-[15px] opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 group-focus-visible:opacity-100',
+                'absolute left-1/2 top-1/2 h-[15px] w-[15px] -translate-x-1/2 -translate-y-1/2 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 group-focus-visible:opacity-100',
                 expanded && 'rotate-90',
               )} />
-            </span>
+            </button>
           ) : (
-            <span className="relative flex h-[15px] w-[15px] shrink-0 items-center justify-center text-[color-mix(in_oklch,var(--foreground)_90%,white_10%)]">
+            <span className="relative flex h-[18px] w-[18px] shrink-0 items-center justify-center text-[color-mix(in_oklch,var(--foreground)_90%,white_10%)]">
               {noteIcon ? (
                 <img
                   src={noteIcon.src}
                   alt=""
                   aria-hidden="true"
-                  className="h-[15px] w-[15px] object-contain"
+                  className="h-[18px] w-[18px] object-contain"
                   draggable={false}
                 />
               ) : isNote ? (
-                <FileTextIcon aria-hidden="true" className="h-[15px] w-[15px]" />
+                <FileTextIcon aria-hidden="true" className="h-[18px] w-[18px]" />
               ) : (
-                <FileTypeIcon path={item.name} className="h-[15px] w-[15px]" />
+                <FileTypeIcon path={item.name} className="h-[18px] w-[18px]" />
               )}
             </span>
           )}
@@ -525,7 +542,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
           )}
           <span className={cn(
             'min-w-0 flex-1 truncate',
-            'ml-1',
+            'ml-1.5',
             !isFolder && 'text-[color-mix(in_oklch,var(--foreground)_90%,transparent)]',
           )}>
             {isFolder
@@ -541,10 +558,12 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
                 type="button"
                 aria-label={t('memo.fileTree.newNote')}
                 title={t('memo.fileTree.newNote')}
+                onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
                   onCreateNote(actionParentPath);
                 }}
+                onDoubleClick={(event) => event.stopPropagation()}
                 onKeyDown={(event) => event.stopPropagation()}
                 className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--brand)]"
               >
@@ -554,10 +573,12 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
                 type="button"
                 aria-label={t('memo.fileTree.newFolder')}
                 title={t('memo.fileTree.newFolder')}
+                onPointerDown={(event) => event.stopPropagation()}
                 onClick={(event) => {
                   event.stopPropagation();
                   onCreateFolder(actionParentPath);
                 }}
+                onDoubleClick={(event) => event.stopPropagation()}
                 onKeyDown={(event) => event.stopPropagation()}
                 className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--brand)]"
               >

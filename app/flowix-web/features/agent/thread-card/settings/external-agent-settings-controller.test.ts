@@ -12,7 +12,22 @@ const { getMemos, getFeaturedNoteFilter, setFeaturedNoteFilter } = vi.hoisted(()
 vi.mock("@platform/tauri/client", () => ({
   agent: {},
   dshIntegration: { checkUpdate: vi.fn() },
-  memos: { getMemos },
+  memos: { listNotesByPath: vi.fn(async () => {
+    const notes: Array<Record<string, unknown>> = [];
+    let cursor: string | undefined;
+    do {
+      const page = await getMemos({ cursor });
+      notes.push(...page.memos.map((item: MemoItem) => ({
+        relativePath: item.filename,
+        title: item.filename.replace(/\.md$/i, ''),
+        preview: item.preview,
+        icon: item.icon,
+        properties: item.properties,
+      })));
+      cursor = page.hasMore ? page.nextCursor ?? undefined : undefined;
+    } while (cursor);
+    return notes;
+  }) },
   windows: {},
   // 筛选条件存在笔记本文件夹的 `.flowix/system.json`, 走 system IPC。
   system: { getFeaturedNoteFilter, setFeaturedNoteFilter },
@@ -741,9 +756,11 @@ describe("ExternalAgentSettingsController featured notes", () => {
     expect(onSelectFeaturedNote).toHaveBeenCalledTimes(1);
     // 标题取自文件名去掉 .md; filename 与 title 都传同一个值 (见 createFeaturedNoteCard)。
     expect(onSelectFeaturedNote).toHaveBeenCalledWith({
-      id: "skill",
+      id: "skill.md",
       filename: "skill",
       title: "skill",
+      notebookId: "notebook-1",
+      relativePath: "skill.md",
     });
 
     controller.dispose();

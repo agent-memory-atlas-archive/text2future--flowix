@@ -16,7 +16,6 @@ type RankedAgent = {
 };
 
 export type RunningAgentIndex = {
-  byMemoId: Map<string, RankedAgent>;
   byThreadId: Map<string, RankedAgent>;
 };
 
@@ -34,10 +33,6 @@ type RunningAgentTypeMatch = {
  * not make MemoList render again.
  */
 export type RunningAgentTypeIndex = Readonly<Record<string, string>>;
-
-function memoIndexKey(memoId: string): string {
-  return `memo:${memoId}`;
-}
 
 function threadIndexKey(threadId: string): string {
   return `thread:${threadId}`;
@@ -61,19 +56,15 @@ function decodeTypeMatch(value: string | undefined): RunningAgentTypeMatch | nul
 export function buildRunningAgentIndex(
   instances: readonly AgentConversationInstance[],
 ): RunningAgentIndex {
-  const byMemoId = new Map<string, RankedAgent>();
   const byThreadId = new Map<string, RankedAgent>();
 
   instances.forEach((instance, order) => {
     const ranked = { instance, order };
-    const memoId = instance.source.memoId;
-    if (memoId && !byMemoId.has(memoId)) byMemoId.set(memoId, ranked);
-
     const threadId = instance.threadId;
     if (threadId && !byThreadId.has(threadId)) byThreadId.set(threadId, ranked);
   });
 
-  return { byMemoId, byThreadId };
+  return { byThreadId };
 }
 
 /** Build the minimal lookup consumed by MemoCard from already-running agents. */
@@ -84,11 +75,6 @@ export function buildRunningAgentTypeIndex(
 
   instances.forEach((instance, order) => {
     const match = encodeTypeMatch({ agentType: instance.agentType, order });
-    const memoId = instance.source.memoId;
-    if (memoId && !index[memoIndexKey(memoId)]) {
-      index[memoIndexKey(memoId)] = match;
-    }
-
     const threadId = instance.threadId;
     if (threadId && !index[threadIndexKey(threadId)]) {
       index[threadIndexKey(threadId)] = match;
@@ -192,7 +178,7 @@ export function findRunningAgentForMemo(
   index: RunningAgentIndex,
   memo: Pick<MemoItem, 'id' | 'agents'>,
 ): AgentConversationInstance | null {
-  let match = index.byMemoId.get(memo.id);
+  let match: RankedAgent | undefined;
 
   for (const agent of memo.agents) {
     const candidate = index.byThreadId.get(agent.threadId);
@@ -208,7 +194,7 @@ export function findRunningAgentTypeForMemo(
   index: RunningAgentTypeIndex,
   memo: Pick<MemoItem, 'agents'> & { id?: string },
 ): AgentConversationInstance['agentType'] | null {
-  let match = memo.id ? decodeTypeMatch(index[memoIndexKey(memo.id)]) : null;
+  let match: RunningAgentTypeMatch | null = null;
 
   for (const agent of memo.agents) {
     const candidate = decodeTypeMatch(index[threadIndexKey(agent.threadId)]);

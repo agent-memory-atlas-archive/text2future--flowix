@@ -58,7 +58,7 @@ import { createAgentThreadCardDom } from "@features/agent/thread-card/view/agent
 import { AgentThreadCardChromeController } from "@features/agent/thread-card/chrome";
 import { ExternalAgentSettingsController } from "@features/agent/thread-card/settings/external-agent-settings-controller";
 import { NotebookAgentSettingsDialogController } from "@features/agent/thread-card/settings/notebook-agent-settings-dialog";
-import { AgentRolePickerController } from "@features/agent/thread-card/role/agent-role-picker-controller";
+import { NotePickerController, type MemoRef } from "@features/agent/thread-card/note/note-picker-controller";
 import { FullscreenLayoutController } from "@features/agent/thread-card/fullscreen/fullscreen-layout-controller";
 import {
   ComposerController,
@@ -156,11 +156,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
   private sendButtonMount: HTMLSpanElement;
   private body: HTMLElement;
   private composer: HTMLElement;
-  // 输入框左侧 role 图标 ── 升级为 button (之前是 span), 让点击直接打开
-  // 「选择角色」弹窗。 字段类型用 HTMLButtonElement, 以便调用 `.type = 'button'`
-  // 等 button 专属 API (HTMLElement 上没有)。 HTMLElement 的所有 API
-  // (replaceChildren / classList / setAttribute / addEventListener) 在 button
-  // 上仍然可用 ── 不影响其它调用方。
+  // 输入框左侧的添加内容按钮，打开笔记、附件与设置菜单。
   private composerRoleIcon: HTMLButtonElement;
   private chrome: AgentThreadCardChromeController;
   private metaEl: HTMLElement;
@@ -187,12 +183,12 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
   private actionsDivider: HTMLSpanElement;
   private externalAgentSettings: ExternalAgentSettingsController;
   private externalSettingsLoadedTypeKey: AgentTypeKey | null = null;
-  private agentRolePicker: AgentRolePickerController;
+  private notePicker: NotePickerController;
   private composerAddMenu: ComposerAddMenuController;
   private notebookAgentSettingsDialog = new NotebookAgentSettingsDialogController();
   private isCreating = false;
   private isDestroyed = false;
-  // Guards late async completions (thread creation / role loading) from
+  // Guards late async completions (thread creation) from
   // writing attrs after a newer submit or a document lifecycle change.
   private submitGeneration = 0;
   private interestedThreadId: string | null = null;
@@ -392,7 +388,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       isFullscreen: () => this.isFullscreen,
       closeTransientUi: () => {
         this.setCodexSettingsPopoverOpen(false);
-        this.setComposerRolePopoverOpen(false);
+        this.notePicker.setOpen(false);
       },
       dragThresholdPx: AGENT_THREAD_CARD_HEADER_DRAG_THRESHOLD_PX,
       getAttrTitle: () => this.node.attrs.title as string | null,
@@ -454,7 +450,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
     if (composerWorkspaceButton) {
       domParts.composerActions.append(composerWorkspaceButton);
     }
-    this.agentRolePicker = new AgentRolePickerController({
+    this.notePicker = new NotePickerController({
       trigger: this.composerRoleIcon,
       popover: composerRolePopover,
       // 必须把 params 透传给 this.t ── formatTimeAgo 走的是
@@ -463,13 +459,8 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       // 文案就只剩 "{m} 分钟前" 字面量, 数字永远不替换。
       t: (key, params) => this.t(key, params),
       isDestroyed: () => this.isDestroyed,
-      getCurrentMemoId: () => this.agentRoleMemoId,
-      getCurrentName: () => this.agentRoleName,
-      getMessageCount: () => this.currentMessages().length,
-      updateRole: (role) => this.updateAgentRole(role),
-      consumeOutsidePointer: consumeEditorPopoverDismissPointer,
       injectMemoReference: (ref) => this.injectMemoReference(ref),
-      triggerManagedExternally: true,
+      onSelect: () => this.composerAddMenu.close(),
     });
     this.fullscreenLayout = new FullscreenLayoutController({
       dom: this.dom,
@@ -504,8 +495,8 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
     this.composerAddMenu = new ComposerAddMenuController({
       trigger: this.composerRoleIcon,
       popover: composerAddPopover,
-      rolePopover: composerRolePopover,
-      rolePicker: this.agentRolePicker,
+      notePopover: composerRolePopover,
+      notePicker: this.notePicker,
       images: this.composerImages,
       t: (key) => this.t(key),
       isDestroyed: () => this.isDestroyed,
@@ -701,7 +692,6 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
         threadId: result.thread.threadId,
         runtimeConfig: source?.runtimeConfig ?? buildInitialInstanceRuntimeConfig(this.typeKey),
         source: { kind: "dedicated", notebookId: source?.source.notebookId ?? null },
-        role: source?.role ?? undefined,
       });
       await selectAndOpenAgentConversation(fork.instanceId);
     } catch (error) {
@@ -846,7 +836,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
     // renameInstance ── 在 conv-store 找不到 instance 就 no-op, 导致
     // session-store 的 instance.title 永远不更新, syncTitleText 卡在
     // 旧 title. 双写保证两个 store 的 instance 形状一致, 重命名 /
-    // 角色 / runtimeConfig 后续 mutation 都能正确收敛.
+    // runtimeConfig 后续 mutation 都能正确收敛.
     const existingThreadId = this.threadId;
     const instance = useAgentSessionStore.getState().createInstance({
       agentType: this.typeKey,
@@ -858,10 +848,6 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
         : "",
       threadId: existingThreadId,
       source: getCurrentThreadCardSource(),
-      role: {
-        memoId: this.agentRoleMemoId,
-        name: this.agentRoleName,
-      },
       // 这里只记录 notebookId；cwd / paths 在首次 send 前解析并冻结，避免
       // 此处 selectedNotebook / agent-access 尚未 hydrate 时写入空快照。
       runtimeConfig: buildInitialInstanceRuntimeConfig(this.typeKey),
@@ -871,24 +857,6 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       threadId: existingThreadId,
       typeKey: instance.agentType,
     });
-  }
-
-  private get agentRoleMemoId(): string | null {
-    const instanceValue = this.instance?.role?.memoId;
-    if (typeof instanceValue === "string" && instanceValue.trim()) {
-      return instanceValue.trim();
-    }
-    const value = this.node.attrs.agentRoleMemoId;
-    return typeof value === "string" && value.trim() ? value.trim() : null;
-  }
-
-  private get agentRoleName(): string | null {
-    const instanceValue = this.instance?.role?.name;
-    if (typeof instanceValue === "string" && instanceValue.trim()) {
-      return instanceValue.trim();
-    }
-    const value = this.node.attrs.agentRoleName;
-    return typeof value === "string" && value.trim() ? value.trim() : null;
   }
 
   private get collapsed(): boolean {
@@ -968,33 +936,8 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
     this.externalAgentSettings.renderPopover();
   }
 
-  private updateAgentRole(role: { memoId: string; name: string }): void {
-    this.updateAttrs({
-      agentRoleMemoId: role.memoId,
-      agentRoleName: role.name,
-    });
-
-    const instanceId = this.instanceId;
-    if (!instanceId) return;
-    useAgentSessionStore.getState().upsertInstance(instanceId, {
-      role,
-    });
-  }
-
-  private async loadAgentRoleBody(memoId: string): Promise<string | null> {
-    return this.agentRolePicker.loadRoleBody(memoId);
-  }
-
-  private setComposerRolePopoverOpen(open: boolean): void {
-    this.agentRolePicker.setOpen(open);
-  }
-
-  private refreshComposerRoleIcon(): void {
-    this.agentRolePicker.refreshIcon();
-  }
-
   /** 文档引用 → composer 注入为一个可独立选中/删除的行内笔记卡片。 */
-  private injectMemoReference(ref: { id: string; filename: string; title: string }): void {
+  private injectMemoReference(ref: MemoRef): void {
     this.composerController.insertMemoReference(ref);
   }
 
@@ -1086,11 +1029,8 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
     // 本方法同一函数内访问 2 次, 缓存到局部变量避免重复计算 (在 ProseMirror node
     // update 高频路径上累计调用很多)。
     const typeKey = this.typeKey;
-    // data-agent-type carries the Agent Type key; data-agent-role-* carries
     // the optional persona memo metadata.
     this.dom.dataset.agentType = typeKey;
-    this.dom.dataset.agentRoleMemoId = this.agentRoleMemoId ?? "";
-    this.dom.dataset.agentRoleName = this.agentRoleName ?? "";
     this.dom.dataset.collapsed = this.collapsed ? "true" : "false";
     this.dom.dataset.fullscreen = this.persistedFullscreen ? "true" : "false";
     this.dom.dataset.inputDraft = this.inputDraft;
@@ -1101,7 +1041,6 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       this.externalSettingsLoadedTypeKey = typeKey;
       this.loadCodexDefaultModel();
     }
-    this.refreshComposerRoleIcon();
     // Do not rewrite the live editor from attrs during refresh. inputDraft is
     // only the persisted remount value; submit and history navigation update
     // the editor explicitly.
@@ -1356,7 +1295,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       target &&
       (this.dom.contains(target) ||
         this.externalAgentSettings.popoverElement.contains(target) ||
-        this.agentRolePicker.popoverElement.contains(target))
+        this.notePicker.popoverElement.contains(target))
     );
   }
 
@@ -1686,8 +1625,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
 
   // 提取当前 thread 的 user 消息列表 (按时间顺序, 旧 → 新) ──
   // 仅做"前端有"的范围, 不主动去后台拉历史 (hasMoreHistory / loadMoreHistory),
-  // 也不读 agent role memo ── 用户的措辞是"次级需求", 用前端可见数据
-  // 就够了, 拉历史会拖慢键盘响应。 跳过空 content 防止 typing 期
+  // 用前端可见数据即可，拉历史会拖慢键盘响应。跳过空 content 防止 typing 期
   // 的占位 user 消息污染历史。
   private getUserHistoryMessages(): string[] {
     return getAgentThreadCardUserHistoryMessagesFromMessages(
@@ -1733,10 +1671,6 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       currentTitle: this.instance?.title ?? "",
       runtimeHandleId: this.runtimeHandleId,
       source: getCurrentThreadCardSource(),
-      role: {
-        memoId: this.agentRoleMemoId,
-        name: this.agentRoleName,
-      },
       buildTitle,
       onThreadBound: (binding) => {
         if (this.isDestroyed) return;
@@ -1762,10 +1696,6 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       currentTitle: this.instance?.title ?? "",
       runtimeHandleId: this.runtimeHandleId,
       source: getCurrentThreadCardSource(),
-      role: {
-        memoId: this.agentRoleMemoId,
-        name: this.agentRoleName,
-      },
       buildTitle,
       onThreadBound: (binding) => {
         if (this.isDestroyed) return;
@@ -1913,14 +1843,9 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
         currentTitle: this.instance?.title ?? "",
         runtimeHandleId: this.runtimeHandleId,
         source,
-        role: {
-          memoId: this.agentRoleMemoId,
-          name: this.agentRoleName,
-        },
         isFirstMessage: this.currentMessages().length === 0,
         documentContext,
         buildTitle,
-        loadAgentRoleBody: (memoId) => this.loadAgentRoleBody(memoId),
         onThreadBound: (binding) => {
           if (
             this.isDestroyed ||
@@ -2070,7 +1995,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       this.boundHandleFullscreenFocusIn,
       true,
     );
-    this.setComposerRolePopoverOpen(false);
+    this.notePicker.setOpen(false);
     this.isDestroyed = true;
     this.releaseThreadInterest?.();
     this.releaseThreadInterest = null;
@@ -2079,7 +2004,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
     this.body.removeEventListener("scroll", this.boundHandleBodyScroll);
     this.runtime.dispose();
     this.externalAgentSettings.dispose();
-    this.agentRolePicker.dispose();
+    this.notePicker.dispose();
     this.composerAddMenu.dispose();
     this.notebookAgentSettingsDialog.close();
     this.fullscreenLayout.dispose();

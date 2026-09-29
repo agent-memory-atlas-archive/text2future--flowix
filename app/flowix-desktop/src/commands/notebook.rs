@@ -353,7 +353,7 @@ fn run_notebook_import(app: AppHandle, notebook_id: String) {
     let app_state = app.state::<AppState>();
 
     let import_result = (|| {
-        let notebook_path = {
+        {
             let memo_file = read_lock(&app_state.memo_file, "memo_file");
             memo_file
                 .ensure_notebook_migrations(&notebook_id)
@@ -366,10 +366,10 @@ fn run_notebook_import(app: AppHandle, notebook_id: String) {
             // Reconcile by explicit notebook ID. This keeps the background job
             // independent from whichever notebook the user currently views and
             // avoids switching the global MemoFile context from a worker thread.
-            let report =
-                memo_file.reconcile_notebook_with_disk_bidirectional_for_import(&notebook_id)?;
+            let report = memo_file.reconcile_v2_note_index(&notebook_id)
+                .map_err(|error| format!("notebook path reconciliation failed: {error}"))?;
             tracing::info!(
-                "[create_notebook] import/reconcile done id={} added={} removed={}",
+                "[create_notebook] path reconciliation done id={} added={} removed={}",
                 notebook_id,
                 report.added,
                 report.removed
@@ -383,21 +383,7 @@ fn run_notebook_import(app: AppHandle, notebook_id: String) {
             ),
                 Err(error) => return Err(format!("seed onboarding documents failed: {error}")),
             }
-            memo_file
-                .get_notebook_config_by_id(&notebook_id)
-                .map(|notebook| notebook.path)
-                .ok_or_else(|| "NOTEBOOK_NOT_FOUND".to_string())?
         };
-        // Importing into an existing notebook can add artifacts after its
-        // one-time migration markers were written. Register those outputs as
-        // part of this import before reporting completion.
-        crate::plugin::migrate_notebook_data(
-            &notebook_id,
-            Path::new(&notebook_path),
-            &app_state.memo_file,
-            Some(&app),
-            true,
-        )?;
         Ok::<(), String>(())
     })();
 

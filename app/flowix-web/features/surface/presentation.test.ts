@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { MemoItem } from '@/types/memo-item';
 import type { WorkColumnNavigationState, WorkColumnTarget } from '@features/workspace/store/work-column-target';
 import { resolveWorkColumnPresentation } from './presentation';
-import type { NoteSurface } from './types';
 
 function navigation(target: WorkColumnTarget): WorkColumnNavigationState {
   return {
@@ -17,60 +15,50 @@ function navigation(target: WorkColumnTarget): WorkColumnNavigationState {
   };
 }
 
-function memo(): MemoItem {
-  return {
-    id: 'memo-1',
-    filename: 'note.md',
-    preview: '',
-    tags: [],
-    todos: [],
-    agents: [],
-    createdAt: 0,
-    updatedAt: 0,
-    favorited: false,
-    icon: null,
-    colors: [],
-    properties: {},
-  };
-}
-
-function note(): NoteSurface {
-  return {
-    kind: 'note',
-    memoId: 'memo-1',
-    instanceKey: 'memo:memo-1',
-    fileIdentity: { path: '/notebook/note.md', displayId: 'display:note' },
-    props: {
-      notebookId: 'notebook-1',
-      notebookPath: '/notebook',
-      transitionId: null,
-      isExternalDocument: false,
-    },
-  };
-}
-
 describe('work column presentation', () => {
+  it('gives indexed notebook Markdown note actions while external Markdown stays a file', () => {
+    const path = '/notebook/note.md';
+    const fileIdentity = { path, displayId: 'display:path-note' };
+    const present = (indexable: boolean) => resolveWorkColumnPresentation({
+      navigation: navigation({ kind: 'external', path, scopePath: '/notebook', transitionId: null }),
+      document: {
+        identity: { kind: 'external', fileIdentity, scopePath: '/notebook', indexable, transitionId: null },
+        instanceKey: fileIdentity.displayId,
+        documentProps: {
+          isExternalDocument: true,
+          externalScopePath: '/notebook',
+          transitionId: null,
+        },
+      },
+      emptyMessage: 'Select a note',
+    });
+    expect(present(true).capabilities).toContain('memo-colors');
+    expect(present(true).capabilities).toContain('version-history');
+    expect(present(false).capabilities).not.toContain('memo-colors');
+  });
+
   it('derives document header data and capabilities from the resolved surface', () => {
     const presentation = resolveWorkColumnPresentation({
       navigation: navigation({
-        kind: 'memo',
-        memoId: 'memo-1',
+        kind: 'external',
         path: '/notebook/note.md',
-        notebookId: 'notebook-1',
-        notebookPath: '/notebook',
+        scopePath: '/notebook',
         transitionId: null,
       }),
       document: {
         identity: {
-          kind: 'memo',
-          memoId: 'memo-1',
+          kind: 'external',
           fileIdentity: { path: '/notebook/note.md', displayId: 'display:note' },
-          notebookId: 'notebook-1',
-          notebookPath: '/notebook',
+          scopePath: '/notebook',
+          indexable: true,
           transitionId: null,
         },
-        memo: memo(),
-        surface: note(),
+        instanceKey: 'display:note',
+        documentProps: {
+          isExternalDocument: true,
+          externalScopePath: '/notebook',
+          transitionId: null,
+        },
       },
       emptyMessage: 'Select a note',
     });
@@ -78,11 +66,10 @@ describe('work column presentation', () => {
     expect(presentation.header).toEqual({
       kind: 'document',
       document: {
-        currentMemo: memo(),
-        externalFilePath: null,
+        externalFilePath: '/notebook/note.md',
       },
     });
-    expect(presentation.content).toEqual({ status: 'surface', surface: note() });
+    expect(presentation.content).toMatchObject({ status: 'surface', surface: { kind: 'md' } });
     expect(presentation.capabilities).toContain('edit');
   });
 
@@ -94,7 +81,7 @@ describe('work column presentation', () => {
 
     expect(presentation.header).toEqual({
       kind: 'document',
-      document: { currentMemo: null, externalFilePath: null },
+      document: { externalFilePath: null },
     });
     expect(presentation.content).toEqual({
       status: 'empty',

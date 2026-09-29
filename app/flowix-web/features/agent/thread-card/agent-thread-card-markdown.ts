@@ -293,8 +293,6 @@ function parseAgentThreadCardNodeAttrs(
     typeKey: normalizeAgentTypeKey(
       typeof values.agentType === "string" ? values.agentType : undefined,
     ),
-    agentRoleMemoId: stringValue(values.agentRoleMemoId) || null,
-    agentRoleName: stringValue(values.agentRoleName) || null,
     collapsed: values.collapsed === true || values.collapsed === "true",
     fullscreen: values.fullscreen === true || values.fullscreen === "true",
     inputDraft: inputDraftValue

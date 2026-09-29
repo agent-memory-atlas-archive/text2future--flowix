@@ -87,7 +87,7 @@ export class AgentThreadCardChromeController {
   attach(): void {
     this.header.attach();
     this.badge.renderHoverCard();
-    // mount 节点默认 `display: none` (role-picker.css),需要把它定位到 badge
+    // mount 节点默认 `display: none` (note-picker.css),需要把它定位到 badge
     // 上才能让 trigger 覆盖住图标。不能只在全屏切换时同步: 非全屏卡片可能在
     // editor 尚未完成布局时挂载,而 editor 滚动/resize 也会改变 badge 的 viewport
     // 坐标。Badge controller 会持续监听这些布局变化。

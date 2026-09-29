@@ -86,8 +86,6 @@ export const AgentThreadCard = Node.create({
       instanceId: { default: null },
       title: { default: DEFAULT_TITLE },
       typeKey: { default: DEFAULT_AGENT_TYPE_KEY },
-      agentRoleMemoId: { default: null },
-      agentRoleName: { default: null },
       collapsed: { default: false },
       fullscreen: { default: false },
       initialPrompt: { default: null },
@@ -110,9 +108,6 @@ export const AgentThreadCard = Node.create({
             typeKey: normalizeAgentTypeKey(
               element.getAttribute("data-agent-type"),
             ),
-            agentRoleMemoId:
-              element.getAttribute("data-agent-role-memo-id") || null,
-            agentRoleName: element.getAttribute("data-agent-role-name") || null,
             collapsed: element.getAttribute("data-collapsed") === "true",
             fullscreen: element.getAttribute("data-fullscreen") === "true",
             inputDraft: element.getAttribute("data-input-draft") || null,
@@ -131,8 +126,6 @@ export const AgentThreadCard = Node.create({
     const title = node.attrs.title || DEFAULT_TITLE;
     const typeKey = normalizeAgentTypeKey(node.attrs.typeKey as string | null);
     const type = getAgentType(typeKey);
-    const agentRoleMemoId = node.attrs.agentRoleMemoId || "";
-    const agentRoleName = node.attrs.agentRoleName || "";
     const collapsed = !!node.attrs.collapsed;
     const fullscreen = !!node.attrs.fullscreen;
     const inputDraft = node.attrs.inputDraft || "";
@@ -145,8 +138,6 @@ export const AgentThreadCard = Node.create({
         "data-thread-id": threadId,
         "data-instance-id": instanceId,
         "data-agent-type": typeKey,
-        "data-agent-role-memo-id": agentRoleMemoId,
-        "data-agent-role-name": agentRoleName,
         "data-collapsed": collapsed ? "true" : "false",
         "data-fullscreen": fullscreen ? "true" : "false",
         "data-input-draft": inputDraft,
@@ -210,7 +201,6 @@ export const AgentThreadCard = Node.create({
             title: DEFAULT_TITLE,
             threadId: null,
             source: getCurrentThreadCardSource(),
-            role: undefined,
             // 插入时只记录 runtime 默认和 notebookId；cwd / paths 在首次
             // send 前解析并冻结，避开插入阶段 store 尚未 hydrate 的 race。
             runtimeConfig: buildInitialInstanceRuntimeConfig(typeKey),
@@ -220,8 +210,6 @@ export const AgentThreadCard = Node.create({
             instanceId: instance.instanceId,
             title: DEFAULT_TITLE,
             typeKey,
-            agentRoleMemoId: null,
-            agentRoleName: null,
             collapsed: false,
             fullscreen: false,
             initialPrompt: options?.initialPrompt ?? null,

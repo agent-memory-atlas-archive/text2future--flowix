@@ -76,7 +76,7 @@ export function BrowserColumn({
     activeTabId,
     activeTab,
     activeWebRuntime,
-    activeMemoHasDuplicateTab,
+    activePathHasDuplicateTab,
   } = useBrowserColumnViewModel();
   const { isFocused, focusBrowserColumn } = useBrowserColumnFocusViewModel();
   const registerActiveFlush = useCallback<BrowserColumnFlushRegistration>((flush, discard) => {
@@ -117,11 +117,10 @@ export function BrowserColumn({
   ), [closeWithDiscardFallback]);
   const handleToggleMemoEditorMode = useCallback((tabId: string) => {
     const tab = tabs.find((candidate) => candidate.id === tabId);
-    if (tab?.target.kind !== 'memo') return;
+    if (tab?.target.kind !== 'file-browser' || !tab.target.activeFilePath) return;
 
     const identity = documentIdentityFromFile(
-      requireFileDisplayIdentity(tab.target.filePath),
-      tab.target.memoId,
+      requireFileDisplayIdentity(tab.target.activeFilePath),
     );
     // Publish the latest CodeMirror / rich-text content before replacing the
     // editor subtree. The browser-column host keeps this isolated from a
@@ -149,7 +148,7 @@ export function BrowserColumn({
     ? resolveBrowserColumnSurface(
         activeTab,
         // Cross-column editing ownership is controlled by DocumentContainer.
-        activeMemoHasDuplicateTab,
+        activePathHasDuplicateTab,
         registerActiveFlush,
         activeWebRuntime,
         toolbarCollapsed,

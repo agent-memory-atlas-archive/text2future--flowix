@@ -17,7 +17,6 @@ import { ChevronLeft, ChevronRight, Globe, RotateCw, X } from 'lucide-react';
 import { LazyAgentConversationDetail } from '@features/agent/components/lazy-agent-conversation-detail';
 import { DocumentContainer, UnavailableFileView } from '@features/document/components/document-container';
 import { MediaResourceView } from './media-resource-view';
-import { LazyPluginDocumentView } from '@features/plugin/public/surface-api';
 import { SurfaceSuspenseHost } from '@shared/ui/surface-suspense-host';
 import { externalFileViewKind } from '@features/editor/public/code-file';
 import { HtmlResourceView } from './html-resource-view';
@@ -49,11 +48,6 @@ interface FileSurfaceBase extends SurfaceBase {
   fileIdentity: FileDisplayIdentity;
 }
 
-export interface BrowserDocumentSurface extends FileSurfaceBase {
-  kind: 'document';
-  props: Omit<ComponentProps<typeof DocumentContainer>, 'fileIdentity'>;
-}
-
 export interface BrowserMediaSurface extends FileSurfaceBase {
   kind: 'media';
   notebookId: string;
@@ -76,22 +70,15 @@ export interface BrowserWebSurface extends SurfaceBase {
   runtime: BrowserColumnWebRuntime | null;
 }
 
-export interface BrowserArtifactSurface extends SurfaceBase {
-  kind: 'artifact';
-  props: { memoId: string; transitionId?: number };
-}
-
 export interface BrowserAgentConversationSurface extends SurfaceBase {
   kind: 'agent-conversation';
   instanceId: string;
 }
 
 export type BrowserColumnSurface =
-  | BrowserDocumentSurface
   | BrowserMediaSurface
   | BrowserFileBrowserSurface
   | BrowserWebSurface
-  | BrowserArtifactSurface
   | BrowserAgentConversationSurface;
 
 export type BrowserColumnSurfaceKind = BrowserColumnSurface['kind'];
@@ -342,10 +329,6 @@ function BrowserWebSurfaceView({ surface }: { surface: BrowserWebSurface }) {
   );
 }
 
-function BrowserDocumentSurfaceView({ surface }: { surface: BrowserDocumentSurface }) {
-  return <DocumentContainer {...surface.props} fileIdentity={surface.fileIdentity} />;
-}
-
 function BrowserMediaSurfaceView({ surface }: { surface: BrowserMediaSurface }) {
   return (
     <MediaResourceView
@@ -387,10 +370,6 @@ function BrowserFileBrowserSurfaceView({ surface }: { surface: BrowserFileBrowse
   return <UnavailableFileView filePath={surface.activeFilePath} openContainingFolder />;
 }
 
-function BrowserArtifactSurfaceView({ surface }: { surface: BrowserArtifactSurface }) {
-  return <LazyPluginDocumentView {...surface.props} />;
-}
-
 function BrowserAgentConversationSurfaceView({ surface }: { surface: BrowserAgentConversationSurface }) {
   return <LazyAgentConversationDetail instanceId={surface.instanceId} />;
 }
@@ -419,11 +398,6 @@ function defineSurface<K extends BrowserColumnSurfaceKind>(
 }
 
 export const browserColumnSurfaceRegistry = Object.freeze({
-  document: defineSurface('document', {
-    chrome: 'document',
-    capabilities: ['edit', 'search'],
-    component: BrowserDocumentSurfaceView,
-  }),
   media: defineSurface('media', {
     chrome: 'media',
     capabilities: ['fullscreen'],
@@ -438,11 +412,6 @@ export const browserColumnSurfaceRegistry = Object.freeze({
     chrome: 'document',
     capabilities: ['web-navigation'],
     component: BrowserWebSurfaceView,
-  }),
-  artifact: defineSurface('artifact', {
-    chrome: 'document',
-    capabilities: ['fullscreen', 'fit', 'zoom'],
-    component: BrowserArtifactSurfaceView,
   }),
   'agent-conversation': defineSurface('agent-conversation', {
     chrome: 'agent',
@@ -464,22 +433,6 @@ export function resolveBrowserColumnSurface(
     tabId: tab.id,
   };
   switch (tab.target.kind) {
-    case 'memo':
-      return {
-        ...base,
-        fileIdentity: requireFileDisplayIdentity(tab.target.filePath),
-        kind: 'document',
-        props: {
-          memoId: tab.target.memoId,
-          notebookId: tab.target.notebookId || null,
-          notebookPath: tab.target.notebookPath || null,
-          documentSessionMode: 'isolated',
-          readOnly,
-          onFlushReady,
-          toolbarCollapsed,
-          onToolbarCollapsedChange,
-        },
-      };
     case 'media':
       return {
         ...base,
@@ -522,12 +475,6 @@ export function resolveBrowserColumnSurface(
         url: tab.target.url,
         title: tab.title,
         runtime: webRuntime ?? null,
-      };
-    case 'artifact':
-      return {
-        ...base,
-        kind: 'artifact',
-        props: { memoId: tab.target.pointerMemoId },
       };
     case 'agent_conversation':
       return { ...base, kind: 'agent-conversation', instanceId: tab.target.instanceId };

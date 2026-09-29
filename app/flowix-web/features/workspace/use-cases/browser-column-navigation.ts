@@ -1,14 +1,8 @@
 import { captureFileBrowserContext } from './file-browser-context';
 import type { FileBrowserTarget } from '../store/file-browser-target';
-import { canonicalPath, fileLocatorKey, joinNotebookMemoPath } from '@/lib/path';
+import { canonicalPath, fileLocatorKey } from '@/lib/path';
 import { displayTitleFromFilename } from '@/lib/utils';
 import { canonicalUrl, contentIdentityKey } from '@features/workspace/store/workspace-content-identity';
-import type { MemoItem, Notebook } from '@features/memo/public/workspace-api';
-import { memos as memosClient } from '@platform/tauri/client';
-import {
-  getPluginNoteInfo,
-  type PluginArtifactRendererId,
-} from '@features/plugin/public/workspace-api';
 import {
   canMoveBrowserColumnTargetToWorkColumn,
   useBrowserColumnStore,
@@ -17,9 +11,6 @@ import {
   type BrowserColumnTarget,
 } from '@features/workspace/store/browser-column-store';
 import type { WorkColumnTarget } from '@features/workspace/store/work-column-target';
-import { documentIdentityFromFile } from '@features/document/public/workspace-api';
-import { ensureFileDisplayIdentity } from '@/lib/file-display-registry';
-import { waitForWorkspaceDocumentSaves } from '@features/document/public/workspace-api';
 import {
   activateExistingWorkspaceContent,
   activateExistingWorkspaceContentAsync,
@@ -28,20 +19,15 @@ import {
 } from './workspace-content-activation';
 import {
   enqueueBrowserColumnNavigation,
-  flushActiveBrowserColumnDocument,
 } from './browser-column-coordinator';
 import {
   openAgentTarget,
-  openArtifactTarget,
   openExternalTarget,
   openMediaTarget,
-  openMemoTarget,
   openWebTarget,
   closeAgentTarget,
-  replaceActiveMemoPath,
 } from './workspace-navigation';
 import { useWorkspaceFocusStore } from '@features/workspace/store/workspace-focus-store';
-import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
 import type { ContentIdentity } from '@features/workspace/store/workspace-content-identity';
 
 export type BrowserColumnOpenResult =
@@ -61,8 +47,6 @@ function targetTabTitle(target: BrowserColumnTarget): string {
   const filenameFromPath = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
   switch (target.kind) {
-    case 'memo':
-      return displayTitleFromFilename(filenameFromPath(target.filePath));
     case 'media':
       return filenameFromPath(target.filePath);
     case 'file-browser':
@@ -75,8 +59,6 @@ function targetTabTitle(target: BrowserColumnTarget): string {
       }
     case 'agent_conversation':
       return 'Agent 会话';
-    case 'artifact':
-      return '插件产物';
   }
 }
 
@@ -94,17 +76,13 @@ export function openBrowserColumnTarget(
   target: BrowserColumnTarget,
   disposition: BrowserColumnOpenDisposition = 'focus-existing',
 ): Promise<BrowserColumnOpenResult | null> {
-  const id = target.kind === 'memo'
-    ? `memo:${target.memoId}`
-    : target.kind === 'agent_conversation'
+  const id = target.kind === 'agent_conversation'
       ? `agent:${target.instanceId}`
       : target.kind === 'web'
         ? `web:${canonicalUrl(target.url) ?? target.url}`
     : target.kind === 'file-browser'
           ? target.activeFilePath ? fileLocatorKey(target.activeFilePath) : `file-browser:${target.folderPath}`
-        : target.kind === 'artifact'
-          ? `artifact:${target.pointerMemoId}`
-          : target.kind === 'media'
+        : target.kind === 'media'
             ? fileLocatorKey(target.filePath)
           : 'empty';
 
@@ -112,21 +90,6 @@ export function openBrowserColumnTarget(
     if (disposition === 'focus-existing') {
       const existing = findExistingWorkspaceContent(browserColumnTargetIdentity(target));
       if (existing?.host === 'main-third') {
-        const navigation = useWorkColumnStore.getState().navigation;
-        const mainTarget = navigation.phase === 'loading'
-          ? navigation.pendingTarget ?? navigation.target
-          : navigation.target;
-        if (target.kind === 'memo'
-          && mainTarget.kind === 'external'
-          && canonicalPath(mainTarget.path) === canonicalPath(target.filePath)) {
-          await openMemoTarget({
-            memoId: target.memoId,
-            path: target.filePath,
-            notebookId: target.notebookId || null,
-            notebookPath: target.notebookPath || null,
-          });
-          return { host: 'main-third', alreadyOpen: true };
-        }
         activateExistingWorkspaceContent(browserColumnTargetIdentity(target));
         return openResult(existing);
       }
@@ -147,18 +110,6 @@ export function openBrowserColumnTarget(
               store.selectFileBrowserFile(existing.tabId, target.activeFilePath);
             }
           }
-        } else if (target.kind === 'memo' && existingTab?.target.kind === 'file-browser') {
-          // A Memo open intent enriches an existing same-path external tab
-          // with Memo identity while retaining its tab slot.
-          if (!await waitForWorkspaceDocumentSaves(
-            documentIdentityFromFile(ensureFileDisplayIdentity(target.filePath), target.memoId),
-          )) return null;
-          store.openTab({
-            ...existingTab,
-            title: targetTabTitle(target),
-            target,
-          }, 'focus-existing');
-          return { host: 'browser-column', tabId: existing.tabId, alreadyOpen: true };
         }
         store.commitTab(existing.tabId);
         return { host: 'browser-column', tabId: existing.tabId, alreadyOpen: true };
@@ -170,17 +121,6 @@ export function openBrowserColumnTarget(
       const key = contentIdentityKey(browserColumnTargetIdentity(target));
       const existing = store.tabs.find((tab) => contentIdentityKey(browserColumnTargetIdentity(tab.target)) === key);
       if (existing) {
-        if (target.kind === 'memo' && existing.target.kind === 'file-browser') {
-          if (!await waitForWorkspaceDocumentSaves(
-            documentIdentityFromFile(ensureFileDisplayIdentity(target.filePath), target.memoId),
-          )) return null;
-          store.openTab({
-            ...existing,
-            title: targetTabTitle(target),
-            target,
-          }, 'open-in-column');
-          return { host: 'browser-column', tabId: existing.id, alreadyOpen: true };
-        }
         store.commitTab(existing.id);
         return { host: 'browser-column', tabId: existing.id, alreadyOpen: true };
       }
@@ -206,71 +146,6 @@ export function openBrowserColumnTarget(
     }, disposition);
     return { host: 'browser-column', tabId, alreadyOpen: false };
   });
-}
-
-export function openBrowserColumnMemo(
-  memo: MemoItem,
-  notebook: Notebook | null,
-  disposition: BrowserColumnOpenDisposition = 'open-in-column',
-): Promise<BrowserColumnOpenResult | null> {
-  const pluginNote = getPluginNoteInfo(memo);
-  if (pluginNote) {
-    return openBrowserColumnTarget({
-      kind: 'artifact',
-      pointerMemoId: memo.id,
-      renderer: pluginNote.renderer,
-    }, disposition);
-  }
-
-  const filePath = notebook?.path
-    ? joinNotebookMemoPath(notebook.path, memo.relativePath || memo.filename) ?? (memo.relativePath || memo.filename)
-    : memo.relativePath || memo.filename;
-
-  return openBrowserColumnTarget({
-    kind: 'memo',
-    memoId: memo.id,
-    notebookId: notebook?.id ?? '',
-    notebookPath: notebook?.path ?? '',
-    filePath,
-  }, disposition);
-}
-
-export async function openBrowserColumnMemoById(
-  memoId: string,
-  disposition: BrowserColumnOpenDisposition = 'focus-existing',
-): Promise<BrowserColumnOpenResult> {
-  const identity = { kind: 'memo' as const, memoId };
-  if (disposition === 'focus-existing') {
-    const existing = await activateExistingWorkspaceContentAsync(identity);
-    if (!existing && findExistingWorkspaceContent(identity)) {
-      throw new Error(`Memo tab activation was cancelled: ${memoId}`);
-    }
-    const result = openResult(existing);
-    if (result) return result;
-  }
-
-  // `MemoItem` deliberately has no notebook field. Resolving the path from
-  // the selected notebook would open a background-created memo in the wrong
-  // notebook, so use the backend's authoritative memo session response.
-  const session = await memosClient.openMemoSession(memoId);
-  if (!session) throw new Error(`Memo is unavailable: ${memoId}`);
-
-  const pluginNote = getPluginNoteInfo(session.memo);
-  const opened = await openBrowserColumnTarget(pluginNote
-    ? {
-        kind: 'artifact',
-        pointerMemoId: session.memo.id,
-        renderer: pluginNote.renderer,
-      }
-    : {
-        kind: 'memo',
-        memoId: session.memo.id,
-        notebookId: session.notebookId,
-        notebookPath: session.notebookPath,
-        filePath: session.path,
-      }, disposition);
-  if (!opened) throw new Error(`Memo tab activation was cancelled: ${memoId}`);
-  return opened;
 }
 
 export function createFileBrowserTarget(activeFilePath: string | null, scopePath: string | null = null, folderPath: string | null = null): FileBrowserTarget {
@@ -306,11 +181,15 @@ export function openBrowserColumnMarkdown(filePath: string): Promise<BrowserColu
   return openBrowserColumnTarget(createFileBrowserTarget(filePath));
 }
 
-export function openBrowserColumnArtifact(
-  pointerMemoId: string,
-  renderer: PluginArtifactRendererId | null,
+export function openBrowserColumnNotebookNote(
+  filePath: string,
+  notebookId: string,
+  notebookPath: string,
 ): Promise<BrowserColumnOpenResult | null> {
-  return openBrowserColumnTarget({ kind: 'artifact', pointerMemoId, renderer });
+  return openBrowserColumnTarget({
+    ...createFileBrowserTarget(filePath, notebookPath),
+    notebookId,
+  });
 }
 
 export function openBrowserColumnText(filePath: string, scopePath: string): Promise<BrowserColumnOpenResult | null> {
@@ -360,14 +239,6 @@ export function openWorkColumnTargetInBrowserColumn(
 ): Promise<BrowserColumnOpenResult | null> {
   const browserTarget: BrowserColumnTarget | null = (() => {
     switch (target.kind) {
-      case 'memo':
-        return {
-          kind: 'memo',
-          memoId: target.memoId,
-          notebookId: target.notebookId ?? '',
-          notebookPath: target.notebookPath ?? '',
-          filePath: target.path,
-        };
       case 'media':
         return {
           kind: 'media',
@@ -378,12 +249,6 @@ export function openWorkColumnTargetInBrowserColumn(
         };
       case 'external':
         return { ...createFileBrowserTarget(target.path, target.scopePath), ...target.fileBrowser };
-      case 'artifact':
-        return {
-          kind: 'artifact',
-          pointerMemoId: target.pointerMemoId,
-          renderer: target.renderer,
-        };
       case 'agent-conversation':
         return { kind: 'agent_conversation', instanceId: target.instanceId };
       case 'web':
@@ -396,15 +261,11 @@ export function openWorkColumnTargetInBrowserColumn(
   if (!browserTarget) return Promise.resolve(null);
 
   return enqueueBrowserColumnNavigation(async () => {
-    const id = browserTarget.kind === 'memo'
-      ? `memo:${browserTarget.memoId}`
-      : browserTarget.kind === 'agent_conversation'
+    const id = browserTarget.kind === 'agent_conversation'
         ? `agent:${browserTarget.instanceId}`
         : browserTarget.kind === 'web'
           ? `web:${canonicalUrl(browserTarget.url) ?? browserTarget.url}`
-          : browserTarget.kind === 'artifact'
-            ? `artifact:${browserTarget.pointerMemoId}`
-            : browserTarget.kind === 'file-browser' ? browserTarget.activeFilePath ? fileLocatorKey(browserTarget.activeFilePath) : `file-browser:${browserTarget.folderPath}` : 'empty';
+          : browserTarget.kind === 'file-browser' ? browserTarget.activeFilePath ? fileLocatorKey(browserTarget.activeFilePath) : `file-browser:${browserTarget.folderPath}` : 'empty';
     const tabId = useBrowserColumnStore.getState().openTab({
       id,
       title: targetTabTitle(browserTarget),
@@ -459,14 +320,6 @@ export function openBrowserColumnTabInWorkColumn(tabId: string): Promise<boolean
 
     try {
       switch (tab.target.kind) {
-        case 'memo':
-          await openMemoTarget({
-            memoId: tab.target.memoId,
-            path: tab.target.filePath,
-            notebookId: tab.target.notebookId || null,
-            notebookPath: tab.target.notebookPath || null,
-          });
-          break;
         case 'file-browser':
           if (tab.target.activeFilePath) {
             await openExternalTarget(tab.target.activeFilePath, {
@@ -487,12 +340,6 @@ export function openBrowserColumnTabInWorkColumn(tabId: string): Promise<boolean
         case 'web':
           await openWebTarget(tab.target.url);
           break;
-        case 'artifact':
-          await openArtifactTarget({
-            pointerMemoId: tab.target.pointerMemoId,
-            renderer: tab.target.renderer,
-          });
-          break;
         case 'agent_conversation':
           await openAgentTarget(tab.target.instanceId);
           break;
@@ -506,43 +353,14 @@ export function openBrowserColumnTabInWorkColumn(tabId: string): Promise<boolean
   });
 }
 
-/** Keep durable BrowserColumn memo targets aligned with backend renames. */
-export function replaceBrowserColumnMemoPath(memoId: string, path: string): void {
-  replaceActiveMemoPath(memoId, path);
-}
-
-/** Remove both a memo tab and any artifact tab pointing at that memo. */
-export function removeBrowserColumnTabsByMemoId(memoId: string): string[] {
-  return useBrowserColumnStore.getState().removeTabsByMemoId(memoId);
-}
-
 /** Remove path-owned Markdown tabs after their document buffers were flushed. */
 export function removeBrowserColumnTabsByPath(path: string): string[] {
   const wanted = canonicalPath(path);
   const state = useBrowserColumnStore.getState();
   const matching = state.tabs.filter((tab) => {
-    const tabPath = tab.target.kind === 'memo'
-      ? tab.target.filePath
-      : tab.target.kind === 'file-browser'
-        ? tab.target.activeFilePath
-        : null;
+    const tabPath = tab.target.kind === 'file-browser' ? tab.target.activeFilePath : null;
     return !!tabPath && canonicalPath(tabPath) === wanted;
   });
   for (const tab of matching) useBrowserColumnStore.getState().closeTab(tab.id);
   return matching.map((tab) => tab.id);
-}
-
-/** Flush only when the memo being deleted owns the active BrowserColumn tab. */
-export function flushBrowserColumnMemo(memoId: string): Promise<boolean | null> {
-  return enqueueBrowserColumnNavigation(async () => {
-    const active = useBrowserColumnStore.getState().tabs.find(
-      (tab) => tab.id === useBrowserColumnStore.getState().activeTabId,
-    );
-    const ownsMemo = active?.target.kind === 'memo'
-      ? active.target.memoId === memoId
-      : active?.target.kind === 'artifact'
-        ? active.target.pointerMemoId === memoId
-        : false;
-    return !ownsMemo || await flushActiveBrowserColumnDocument();
-  }, { flush: false });
 }

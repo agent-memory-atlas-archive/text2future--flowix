@@ -191,20 +191,14 @@ pub struct Thread {
 pub struct AgentConversationSource {
     pub kind: String,
     pub document_path: Option<String>,
-    pub memo_id: Option<String>,
+    #[serde(default)]
+    pub relative_path: Option<String>,
     /// Owning notebook for the source note, so the conversation list can be
     /// scoped per notebook. `None` for conversations started outside any note
     /// (dedicated conversation surface / external docs). `#[serde(default)]`
     /// keeps deserialization tolerant of older payloads that omit it.
     #[serde(default)]
     pub notebook_id: Option<String>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentConversationRole {
-    pub memo_id: Option<String>,
-    pub name: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -227,7 +221,6 @@ pub struct AgentConversationInstance {
     /// stale frontend runtime-config snapshot cannot overwrite it.
     pub frozen_cwd: Option<String>,
     pub source: AgentConversationSource,
-    pub role: Option<AgentConversationRole>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -282,7 +275,6 @@ pub struct UpsertAgentConversationInstance {
     pub thread_id: Option<String>,
     pub runtime_config: Option<String>,
     pub source: AgentConversationSource,
-    pub role: Option<AgentConversationRole>,
     pub created_at: Option<i64>,
     pub updated_at: Option<i64>,
 }

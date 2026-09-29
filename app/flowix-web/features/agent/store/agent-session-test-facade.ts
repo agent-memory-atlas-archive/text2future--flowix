@@ -268,7 +268,6 @@ export type { ThreadState } from "@features/agent/store/thread-runtime-state";
 export type {
   AgentConversationInstance,
   AgentConversationMessageState,
-  AgentConversationRole,
   AgentConversationSource,
   CreateAgentConversationInstanceInput,
 } from "@features/agent/store/agent-conversation-types";

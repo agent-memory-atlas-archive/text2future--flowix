@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use flowix_core::memo_file::MemoFile;
 use tauri::AppHandle;
 
-use crate::watcher::processor::{MemoEventProcessor, NotebookWatchContext};
+use crate::watcher::processor::{NotebookWatchContext, PathNoteEventProcessor};
 
 #[derive(Debug, Clone)]
 struct PendingRemove {
@@ -18,7 +18,7 @@ struct PendingRemove {
 }
 
 struct RemoveCoalescerInner {
-    pending: Mutex<HashMap<String, PendingRemove>>,
+    pending: Mutex<HashMap<(String, PathBuf), PendingRemove>>,
     wake: Condvar,
 }
 
@@ -49,14 +49,15 @@ impl RemoveCoalescer {
         }
     }
 
-    pub fn schedule(&self, id: String, ctx: NotebookWatchContext, path: &Path) {
+    pub fn schedule(&self, ctx: NotebookWatchContext, path: &Path) {
+        let key = (ctx.notebook_id.clone(), path.to_path_buf());
         let marker = PendingRemove {
             path: path.to_path_buf(),
             ctx,
             deadline: Instant::now() + self.delay,
         };
         if let Ok(mut pending) = self.inner.pending.lock() {
-            pending.insert(id, marker);
+            pending.insert(key, marker);
             self.inner.wake.notify_one();
         }
     }
@@ -79,18 +80,8 @@ impl RemoveCoalescer {
     }
 
     #[cfg(test)]
-    fn insert_for_test(&self, id: String, path: PathBuf, ctx: NotebookWatchContext) {
-        let marker = PendingRemove {
-            path,
-            ctx,
-            deadline: Instant::now() + Duration::from_secs(60),
-        };
-        self.inner.pending.lock().unwrap().insert(id, marker);
-    }
-
-    #[cfg(test)]
-    fn contains_for_test(&self, id: &str) -> bool {
-        self.inner.pending.lock().unwrap().contains_key(id)
+    fn contains_for_test(&self, notebook_id: &str, path: &Path) -> bool {
+        self.inner.pending.lock().unwrap().contains_key(&(notebook_id.to_string(), path.to_path_buf()))
     }
 
     #[cfg(test)]
@@ -144,7 +135,7 @@ fn spawn_worker(
         };
 
         for pending in expired {
-            MemoEventProcessor::unregister_and_emit(&app, &memo_file, &pending.ctx, &pending.path);
+            PathNoteEventProcessor::unregister_and_emit(&app, &memo_file, &pending.ctx, &pending.path);
         }
     });
 }
@@ -163,26 +154,25 @@ mod tests {
     #[test]
     fn explicit_rename_pair_cancels_old_path() {
         let coalescer = RemoveCoalescer::inert(Duration::from_secs(60));
-        coalescer.schedule("entry".into(), watch_ctx(), Path::new("Old.md"));
+        coalescer.schedule(watch_ctx(), Path::new("Old.md"));
         coalescer.cancel_path(Path::new("Old.md"));
-        assert!(!coalescer.contains_for_test("entry"));
+        assert!(!coalescer.contains_for_test("nb_test", Path::new("Old.md")));
     }
 
     #[test]
     fn schedule_records_pending_remove() {
         let coalescer = RemoveCoalescer::inert(Duration::from_secs(60));
-        let id = "memo-1".to_string();
-        coalescer.schedule(id.clone(), watch_ctx(), Path::new("Old.md"));
+        coalescer.schedule(watch_ctx(), Path::new("Old.md"));
 
-        assert!(coalescer.contains_for_test(&id));
+        assert!(coalescer.contains_for_test("nb_test", Path::new("Old.md")));
         assert_eq!(coalescer.pending_len_for_test(), 1);
     }
 
     #[test]
     fn cancel_all_clears_pending_removes() {
         let coalescer = RemoveCoalescer::inert(Duration::from_secs(60));
-        coalescer.schedule("memo-1".to_string(), watch_ctx(), Path::new("One.md"));
-        coalescer.schedule("memo-2".to_string(), watch_ctx(), Path::new("Two.md"));
+        coalescer.schedule(watch_ctx(), Path::new("One.md"));
+        coalescer.schedule(watch_ctx(), Path::new("Two.md"));
 
         coalescer.cancel_all();
 
@@ -195,20 +185,20 @@ mod tests {
         let first = watch_ctx();
         let mut second = watch_ctx();
         second.notebook_id = "nb_other".to_string();
-        coalescer.schedule("first".to_string(), first, Path::new("First.md"));
-        coalescer.schedule("second".to_string(), second, Path::new("Second.md"));
+        coalescer.schedule(first, Path::new("First.md"));
+        coalescer.schedule(second, Path::new("Second.md"));
 
         coalescer.cancel_notebook("nb_test");
 
-        assert!(!coalescer.contains_for_test("first"));
-        assert!(coalescer.contains_for_test("second"));
+        assert!(!coalescer.contains_for_test("nb_test", Path::new("First.md")));
+        assert!(coalescer.contains_for_test("nb_other", Path::new("Second.md")));
     }
 
     #[test]
     fn unrelated_path_cannot_cancel_pending_remove() {
         let coalescer = RemoveCoalescer::inert(Duration::from_secs(60));
-        coalescer.schedule("entry".into(), watch_ctx(), Path::new("Old.md"));
+        coalescer.schedule(watch_ctx(), Path::new("Old.md"));
         coalescer.cancel_path(Path::new("New.md"));
-        assert!(coalescer.contains_for_test("entry"));
+        assert!(coalescer.contains_for_test("nb_test", Path::new("Old.md")));
     }
 }

@@ -58,7 +58,7 @@
   display: none;
 }
 
-/* ── 角色/文档搜索下拉弹窗 (composer role popover) ────────────────────────
+/* ── 笔记搜索下拉弹窗 ────────────────────────
  * 独立挂在 document.body, 通过 JS 算 position: fixed 坐标 (top/left)
  * 锚定到 composerRoleIcon button 上方/下方。 视觉与文档标题栏 "…more"
  * 下拉菜单 (DropdownMenuContent) 同源 ── border / radius / box-shadow /
@@ -69,10 +69,9 @@
  * `.agent-thread-card__composer-doc-search-list` 承担滚动, 让外层
  * 跟随内容自然高, 弹窗 pop-in 动画 (fade + zoom-in) 不被裁切。
  *
- * 现在由 composer add popover 作为一级菜单，悬停「添加笔记」后把本弹窗
- * 放到右侧作为二级菜单；直接使用 role picker 的旧入口仍由 controller
- * 保留，便于兼容其它调用方。 */
-.agent-thread-card__composer-role-popover {
+ * composer add popover 是一级菜单；悬停「添加笔记」后，
+ * 笔记搜索弹窗在其右侧作为二级菜单。 */
+.agent-thread-card__composer-note-popover {
   position: fixed;
   top: 0;
   left: 0;
@@ -122,16 +121,16 @@
   color: var(--muted-foreground);
 }
 
-.agent-thread-card__composer-role-popover:not([hidden]) {
+.agent-thread-card__composer-note-popover:not([hidden]) {
   opacity: 1;
   transform: scale(1);
 }
 
-.agent-thread-card__composer-role-popover[hidden] {
+.agent-thread-card__composer-note-popover[hidden] {
   display: none;
 }
 
-.agent-thread-card__composer-role-popover-header {
+.agent-thread-card__composer-note-popover-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -142,36 +141,22 @@
   padding: 0.35rem 0.375rem 0.35rem;
 }
 
-.agent-thread-card__composer-role-popover-title {
+.agent-thread-card__composer-note-popover-title {
   color: var(--muted-foreground);
   /* 对齐 memo-list 的 sort label: text-xs font-normal leading-[1.2]
-   * ── 让弹窗内「笔记」/「选择角色」两个 group label 跟其它下拉窗
+   * ── 让笔记搜索弹窗的 group label 跟其它下拉窗
    * 的 label 视觉密度一致。 */
   font-size: 0.75rem;
   font-weight: 400;
   line-height: 1.2;
 }
 
-.agent-thread-card__composer-role-popover-meta {
+.agent-thread-card__composer-note-popover-meta {
   color: var(--muted-foreground);
   font-size: 0.7rem;
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
   opacity: 0.75;
-}
-
-.agent-thread-card__composer-role-popover-spinner {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-  color: var(--primary);
-  animation: agent-thread-card-role-spinner 1s linear infinite;
-}
-
-@keyframes agent-thread-card-role-spinner {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .agent-thread-card__access-empty {

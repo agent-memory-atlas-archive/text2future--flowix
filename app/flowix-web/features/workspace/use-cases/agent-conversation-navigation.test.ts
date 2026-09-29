@@ -16,7 +16,6 @@ const mocks = vi.hoisted(() => ({
     detailOpen: true,
   },
   setActivePluginId: vi.fn(),
-  setSelectedMemo: vi.fn(),
 }));
 
 vi.mock('@features/agent/store/agent-session-store', () => ({
@@ -39,7 +38,6 @@ vi.mock('@features/memo/store/memo-store', () => ({
     getState: () => ({
       activeFilter: mocks.activeFilter,
       setActivePluginId: mocks.setActivePluginId,
-      setSelectedMemo: mocks.setSelectedMemo,
     }),
   },
 }));
@@ -93,7 +91,6 @@ describe('agent conversation navigation', () => {
       instanceId: 'conversation-a',
     });
     expect(mocks.setActivePluginId).toHaveBeenCalledWith(null);
-    expect(mocks.setSelectedMemo).toHaveBeenCalledWith(null);
     expect(mocks.openAgentConversation).toHaveBeenCalledWith('conversation-a');
     expect(mocks.selectAgentConversation).toHaveBeenCalledWith('conversation-a', true);
   });

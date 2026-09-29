@@ -20,7 +20,7 @@ export function patchDocumentProperties(content: string, properties: Record<stri
 }
 
 /** Property controls and text edits share the same buffer and serial save queue. */
-export async function setDocumentProperties(path: string, properties: Record<string, unknown>, expectedCacheId?: string): Promise<boolean> {
+export async function setDocumentProperties(path: string, properties: Record<string, unknown>): Promise<boolean> {
   if (!path) return false;
   const file = ensureFileDisplayIdentity(path);
   const release = pinFileDisplayId(file.displayId);
@@ -37,7 +37,7 @@ export async function setDocumentProperties(path: string, properties: Record<str
     const currentPath = findFileDisplayPath(file.displayId);
     if (!currentPath) return false;
     const content = patchDocumentProperties(buffer.content, properties);
-    return await saveDocumentContent({ identity, path: currentPath, content, channel: 'internal', key: expectedCacheId ?? null });
+    return await saveDocumentContent({ identity, path: currentPath, content });
   } finally {
     release();
   }

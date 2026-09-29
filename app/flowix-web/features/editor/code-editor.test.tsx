@@ -144,6 +144,8 @@ describe('CodeEditor', () => {
     expect(container.querySelector('.cm-content > .cm-source-header [data-testid="source-title"]')?.textContent)
       .toBe('Empty note');
     expect(container.querySelector('.cm-lineNumbers .cm-source-header-gutter-marker')).not.toBeNull();
+    expect(container.querySelector('.cm-lineNumbers .cm-source-header-gutter-element')).not.toBeNull();
+    expect(container.querySelector('.cm-foldGutter .cm-source-header-gutter-element')).not.toBeNull();
     const gutterElements = Array.from(container.querySelectorAll('.cm-lineNumbers .cm-gutterElement'));
     const titleGutterIndex = gutterElements.findIndex((element) =>
       element.querySelector('.cm-source-header-gutter-marker'));

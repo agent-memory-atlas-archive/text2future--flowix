@@ -40,7 +40,7 @@ export function buildBrowserTabContextMenuItems({
     { text: labels.closeOther, enabled: tabCount > 1, action: actions.closeOther },
     { text: labels.closeRight, enabled: index < tabCount - 1, action: actions.closeRight },
     { text: labels.closeAll, action: actions.closeAll },
-    ...(tab.target.kind === 'memo'
+    ...(tab.target.kind === 'file-browser' && Boolean(tab.target.activeFilePath && /\.md$/i.test(tab.target.activeFilePath))
       ? [{
           text: editorMode === 'source' ? labels.richTextMode : labels.sourceMode,
           action: actions.toggleMemoEditorMode,

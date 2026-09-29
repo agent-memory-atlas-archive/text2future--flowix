@@ -1,16 +1,11 @@
-import { canonicalPath } from '@/lib/path';
 import {
   documentHistoryEntryKey,
   useDocumentHistoryStore,
   type DocumentHistoryEntry,
 } from '@features/document/store/document-history-store';
 import { useDocumentStore } from '@features/document/store/document-store';
-import { useMemoStore } from '@features/memo/store/memo-store';
-import { openNoteByTarget, resolveMemoById, resolveMemoByPath } from '@features/memo/use-cases/open-by-target';
-import { resolveAbsolutePath } from '@platform/open-target/path-helper';
 import { selectAndOpenAgentConversation } from '@features/workspace/use-cases/agent-conversation-navigation';
 import {
-  openArtifactTarget,
   openExternalTarget,
   openMediaTarget,
   openWebTarget,
@@ -26,17 +21,6 @@ function currentHistoryEntry(): DocumentHistoryEntry | null {
   if (workColumnHistoryEntry) return workColumnHistoryEntry;
 
   const state = useDocumentStore.getState();
-  const memo = state.activeMemoSession;
-  if (memo) {
-    return {
-      kind: 'memo',
-      memoId: memo.memoId,
-      notebookId: memo.notebookId,
-      notebookPath: memo.notebookPath,
-      path: memo.fileIdentity.path,
-      openedAt: memo.openedAt,
-    };
-  }
   const external = state.activeExternalSession;
   if (external) {
     return {
@@ -55,47 +39,7 @@ function currentHistoryEntry(): DocumentHistoryEntry | null {
     : null;
 }
 
-async function openMemoHistoryEntry(
-  entry: Extract<DocumentHistoryEntry, { kind: 'memo' }>,
-): Promise<Extract<DocumentHistoryEntry, { kind: 'memo' }>> {
-  const path = canonicalPath(entry.path);
-  const resolvedByPath = path ? await resolveMemoByPath(path) : null;
-  if (resolvedByPath) {
-    await openNoteByTarget(resolvedByPath, { history: 'skip', destination: 'main-third' });
-    const resolvedPath = canonicalPath(resolveAbsolutePath(resolvedByPath));
-    if (entry.memoId && resolvedPath && resolvedPath !== path) {
-      useDocumentHistoryStore.getState().replaceMemoPath(entry.memoId, resolvedPath);
-    }
-    return resolvedPath ? { ...entry, path: resolvedPath } : entry;
-  }
-
-  // The id remains a recovery hint for a Memo moved outside the app before
-  // its old path could be rebased in the in-memory history stack.
-  const resolvedById = entry.memoId ? await resolveMemoById(entry.memoId) : null;
-  if (resolvedById) {
-    await openNoteByTarget(resolvedById, { history: 'skip', destination: 'main-third' });
-    const resolvedPath = canonicalPath(resolveAbsolutePath(resolvedById));
-    if (resolvedPath && resolvedPath !== path) {
-      if (entry.memoId) {
-        useDocumentHistoryStore.getState().replaceMemoPath(entry.memoId, resolvedPath);
-      }
-      return { ...entry, path: resolvedPath };
-    }
-    return entry;
-  }
-
-  await openExternalTarget(path, {
-    history: 'skip',
-    scopePath: entry.notebookPath,
-    destination: 'main-third',
-  });
-  return entry;
-}
-
 async function openHistoryEntry(entry: DocumentHistoryEntry): Promise<DocumentHistoryEntry> {
-  if (entry.kind === 'memo') {
-    return openMemoHistoryEntry(entry);
-  }
   if (entry.kind === 'agent-conversation') {
     await selectAndOpenAgentConversation(entry.instanceId, {
       history: 'skip',
@@ -105,23 +49,6 @@ async function openHistoryEntry(entry: DocumentHistoryEntry): Promise<DocumentHi
   }
   if (entry.kind === 'web') {
     await openWebTarget(entry.url, { history: 'skip', destination: 'main-third' });
-    return entry;
-  }
-  if (entry.kind === 'artifact') {
-    const notebook = entry.notebookId
-      ? useMemoStore.getState().notebooks.find((item) => item.id === entry.notebookId) ?? null
-      : null;
-    const memo = useMemoStore.getState().memos.find((item) => item.id === entry.pointerMemoId) ?? null;
-    await openArtifactTarget({
-      pointerMemoId: entry.pointerMemoId,
-      notebookId: entry.notebookId,
-      notebookPath: entry.notebookPath,
-      pluginId: entry.pluginId,
-      renderer: entry.renderer,
-      history: 'skip',
-      memo,
-      notebook,
-    });
     return entry;
   }
   if (entry.kind === 'media') {

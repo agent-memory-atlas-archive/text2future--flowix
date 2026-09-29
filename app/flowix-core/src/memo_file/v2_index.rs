@@ -15,11 +15,24 @@ use walkdir::WalkDir;
 
 use super::{
     is_ignored_notebook_relative_path, notebook_path_from_relative, notebook_relative_path,
-    AgentThreadItem, Memo, MemoColor, MemoFile, MemoIndexEntry, MemoTodoEntry, TodoItem,
+    AgentThreadItem, Memo, MemoColor, MemoFile, MemoIndexEntry, MemoTodoEntry, PathTodoEntry, TodoItem,
 };
 
 const SCHEMA_VERSION: i64 = 2;
-const PARSER_VERSION: i64 = 5;
+const PARSER_VERSION: i64 = 6;
+
+fn display_title_from_relative_path(relative_path: &str) -> String {
+    let filename = relative_path.rsplit('/').next().unwrap_or(relative_path);
+    let lower = filename.to_ascii_lowercase();
+    let extension_len = if lower.ends_with(".markdown") {
+        9
+    } else if lower.ends_with(".md") {
+        3
+    } else {
+        0
+    };
+    filename[..filename.len() - extension_len].to_owned()
+}
 
 fn is_markdown_note_path(path: &Path) -> bool {
     path.extension()
@@ -156,8 +169,7 @@ impl MemoFile {
                 "empty note title",
             ));
         }
-        let content = super::frontmatter::without_flowix_key(content);
-        super::extract_document_metadata(&content)
+        super::extract_document_metadata(content)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
         let mut suffix = 0u32;
         let path = loop {
@@ -192,10 +204,9 @@ impl MemoFile {
     ) -> io::Result<V2PathWriteOutcome> {
         let root = self.notebook_root_for_v2(notebook_id)?;
         let path = self.validate_v2_note_path(&root, relative_path, true)?;
-        let clean = super::frontmatter::without_flowix_key(content);
-        super::extract_document_metadata(&clean)
+        super::extract_document_metadata(content)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-        match self.write_file_if_matches(&path, &clean, expected_content)? {
+        match self.write_file_if_matches(&path, content, expected_content)? {
             super::FileWriteOutcome::Conflict { disk_content } => {
                 Ok(V2PathWriteOutcome::Conflict { disk_content })
             }
@@ -207,7 +218,7 @@ impl MemoFile {
                         "note saved but path index refresh failed: {error}"
                     );
                 }
-                Ok(V2PathWriteOutcome::Saved { content: clean })
+                Ok(V2PathWriteOutcome::Saved { content: content.to_string() })
             }
         }
     }
@@ -284,6 +295,9 @@ impl MemoFile {
             }
         };
         let new_relative = notebook_relative_path(&root, &new_path).map_err(io::Error::other)?;
+        if let Err(error) = self.move_path_archive(notebook_id, relative_path, &new_relative) {
+            tracing::warn!(notebook_id, relative_path, "note renamed but archive move failed: {error}");
+        }
         if let Err(error) = self.refresh_v2_note_path(notebook_id, relative_path) {
             tracing::warn!(
                 notebook_id,
@@ -358,6 +372,9 @@ impl MemoFile {
             .read_v2_note_entry_by_path(notebook_id, relative_path)?
             .map(|entry| entry.created_at);
         super::rename_file_noclobber(&old_path, &new_path)?;
+        if let Err(error) = self.move_path_archive(notebook_id, relative_path, &new_relative) {
+            tracing::warn!(notebook_id, relative_path, "note moved but archive move failed: {error}");
+        }
 
         if let Err(error) = self.refresh_v2_note_path(notebook_id, relative_path) {
             tracing::warn!(
@@ -606,7 +623,7 @@ impl MemoFile {
             properties: serde_json::json!({}),
         };
         super::apply_derived_memo_fields(&mut derived, &content);
-        let (title, _) = super::extract_title_and_preview(&content);
+        let title = display_title_from_relative_path(relative_path);
         Ok(V2NoteEntry {
             relative_path: derived.relative_path,
             title,
@@ -912,6 +929,29 @@ impl MemoFile {
             .map(|row| row.map_err(io::Error::other))
             .collect();
         pairs
+    }
+
+    pub fn read_v2_path_todos(&self, notebook_id: &str, sort: &str) -> io::Result<Vec<PathTodoEntry>> {
+        let conn = self.open_v2_index_connection(notebook_id)?;
+        let order = if sort == "updatedAt" { "t.updated_at DESC, t.created_at DESC" }
+            else { "t.created_at DESC, t.updated_at DESC" };
+        let sql = format!("SELECT t.relative_path, t.todo_id, t.content, t.status, t.priority, t.time_range, \
+            t.owner, t.assignee, t.created_at, t.updated_at FROM v2_note_todos t ORDER BY {order}");
+        let mut statement = conn.prepare(&sql).map_err(io::Error::other)?;
+        let rows = statement.query_map([], |row| Ok(PathTodoEntry {
+            notebook_id: notebook_id.to_owned(),
+            relative_path: row.get(0)?,
+            todo_id: row.get(1)?,
+            content: row.get(2)?,
+            status: row.get(3)?,
+            priority: row.get(4)?,
+            time_range: row.get(5)?,
+            owner: row.get(6)?,
+            assignee: row.get(7)?,
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
+        })).map_err(io::Error::other)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(io::Error::other)
     }
 
     /// V2 owns task content and metadata. The legacy ID join only supplies
@@ -1553,7 +1593,7 @@ impl MemoFile {
         }
         let content = String::from_utf8(bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let (title, _) = super::extract_title_and_preview(&content);
+        let title = display_title_from_relative_path(&relative);
         let mut derived = Memo {
             id: String::new(),
             filename: relative.rsplit('/').next().unwrap_or(&relative).to_owned(),
@@ -1820,7 +1860,7 @@ mod tests {
         let path_entries = store.read_v2_note_entries("nb_test").unwrap();
         assert_eq!(path_entries.len(), 1);
         assert_eq!(path_entries[0].relative_path, "sub/a.md");
-        assert_eq!(path_entries[0].title, "A");
+        assert_eq!(path_entries[0].title, "a");
         assert_eq!(path_entries[0].tags, vec!["work"]);
         let mut service = crate::service::MemoService::new(&store);
         assert_eq!(
@@ -1837,7 +1877,7 @@ mod tests {
                 .unwrap()
                 .entry
                 .title,
-            "A"
+            "a"
         );
         let tags: i64 = conn
             .query_row(
@@ -1990,7 +2030,7 @@ mod tests {
         let title: String = conn
             .query_row("SELECT title FROM v2_notes", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(title, "Changed");
+        assert_eq!(title, "Legacy and V2");
         drop(conn);
         store.delete_memo_result_global(&created.id).unwrap();
         let conn = store.open_v2_index_connection("nb_test").unwrap();
@@ -2045,6 +2085,10 @@ mod tests {
         let content = fs::read_to_string(root.join(&created.relative_path)).unwrap();
         assert!(content.contains("flowix_todo_metadata:"));
         store.reconcile_v2_note_index("nb_test").unwrap();
+        let path_tasks = store.read_v2_path_todos("nb_test", "createdAt").unwrap();
+        assert_eq!(path_tasks.len(), 1);
+        assert_eq!(path_tasks[0].relative_path, created.relative_path);
+        assert_eq!(path_tasks[0].priority, "high");
         let conn = store.open_v2_index_connection("nb_test").unwrap();
         let (priority, owner, created_at): (String, String, i64) = conn
             .query_row(

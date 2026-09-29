@@ -5,17 +5,6 @@ import { CONTEXT_PROMPT_MARKER } from "@features/agent/message";
 import { useMemoStore } from "@features/memo/store/memo-store";
 import { useTagStore } from "@features/memo/store/tag-store";
 
-function joinPath(basePath: string, filePath: string): string {
-  if (
-    /^[a-zA-Z]:[\\/]/.test(filePath) ||
-    filePath.startsWith("/") ||
-    filePath.startsWith("\\")
-  ) {
-    return filePath;
-  }
-  return `${basePath.replace(/[\\/]+$/, "")}\\${filePath.replace(/^[\\/]+/, "")}`;
-}
-
 export function normalizeContextValue(
   value: string | null | undefined,
 ): string {
@@ -56,21 +45,6 @@ function buildContextPromptBlock(currentNoteContent?: string): string {
   ].join("\n");
 }
 
-function buildAgentRolePromptBlockFromContent(
-  agentRoleMemoId: string,
-  agentRoleName: string | undefined,
-  body: string | null,
-): string | null {
-  const preview = body ? truncateContextContent(body, 10000) : "";
-  if (!preview) return null;
-  const label = agentRoleName?.trim() || agentRoleMemoId;
-  return [
-    `## Agent Role: ${label} 请在接下来的对话中,始终扮演这个角色,遵循角色规范行动`,
-    "",
-    preview,
-  ].join("\n");
-}
-
 const FLOWIX_CLI_PROMPT_BLOCK = [
   "# flowix CLI",
   "非交互笔记与插件产物 CLI，--json 取 JSON 输出。",
@@ -101,22 +75,9 @@ export function appendFirstMessageContext(
   isFirstMessage: boolean,
   currentNoteContent?: string,
   agentType?: AgentTypeKey,
-  agentRoleMemoId?: string,
-  agentRoleName?: string,
-  agentRoleBody?: string | null,
 ): string {
   if (!isFirstMessage) return content;
   const blocks = [buildContextPromptBlock(currentNoteContent)];
-  if (agentRoleMemoId) {
-    const roleBlock = buildAgentRolePromptBlockFromContent(
-      agentRoleMemoId,
-      agentRoleName,
-      agentRoleBody ?? null,
-    );
-    if (roleBlock) {
-      blocks.push(roleBlock);
-    }
-  }
   if (agentType && !NATIVE_AGENTS_INSTRUCTION_AGENT_TYPES.has(agentType)) {
     blocks.push(FLOWIX_CLI_PROMPT_BLOCK);
   }
@@ -135,11 +96,7 @@ export function buildUserLlmContent(content: string, directoryOverride?: string)
     return { llmContent: content };
   }
 
-  const currentNotePath =
-    documentState.currentDocumentPath?.trim() ||
-    (memoState.selectedMemo?.filename
-      ? joinPath(currentDirectory, memoState.selectedMemo.relativePath || memoState.selectedMemo.filename)
-      : undefined);
+  const currentNotePath = documentState.currentDocumentPath?.trim() || undefined;
 
   return {
     llmContent: content,

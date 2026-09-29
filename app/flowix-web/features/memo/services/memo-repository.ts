@@ -2,10 +2,8 @@ import { setDocumentProperties } from '@features/document/public/path-properties
 import {
   memos,
   notebooks,
-  plugins,
   type FilterType,
   type MemoColorFilter,
-  type MemoListPage,
   type PathNoteListPage,
   type NotebookSortEntry,
   type SortType,
@@ -16,16 +14,6 @@ import type { Notebook } from '@features/memo/store/memo-store';
 export type { FilterType, SortType } from '@platform/tauri/client';
 
 export const memoRepository = {
-  list: (params?: {
-    notebookId?: string;
-    filter?: FilterType;
-    sort?: SortType;
-    tagId?: string;
-    pluginId?: string;
-    color?: MemoColorFilter;
-    cursor?: string;
-    limit?: number;
-  }): Promise<MemoListPage> => memos.getMemos(params),
   listByPath: (params: {
     notebookId: string;
     filter?: FilterType;
@@ -35,15 +23,13 @@ export const memoRepository = {
     cursor?: string;
     limit?: number;
   }): Promise<PathNoteListPage> => memos.getPathNotes(params),
-  listPluginNotes: (pluginId: string, notebookId: string) => plugins.listNotes(pluginId, notebookId),
-  create: (tag?: string, notebookId?: string, parentRelativePath?: string, title?: string) =>
-    memos.addDocument(tag, notebookId, parentRelativePath, title),
-  createWithContent: (title: string, content: string, notebookId: string, parentRelativePath?: string) =>
-    memos.createWithContent({ title, content, notebookId, parentRelativePath }),
+  listAllByPath: (notebookId: string) => memos.listNotesByPath(notebookId),
+  create: (tag: string | undefined, notebookId: string, parentRelativePath?: string, title?: string) =>
+    memos.addPathDocument(notebookId, tag, parentRelativePath, title),
   delete: (path: string) => memos.deleteMemo(path),
-  favorite: (path: string, expectedCacheId?: string) => setDocumentProperties(path, { flowix_favorited: true }, expectedCacheId),
-  unfavorite: (path: string, expectedCacheId?: string) => setDocumentProperties(path, { flowix_favorited: false }, expectedCacheId),
-  setColors: (path: string, colors: MemoColor[], expectedCacheId?: string) => setDocumentProperties(path, { flowix_colors: colors }, expectedCacheId),
+  favorite: (path: string, _expectedCacheId?: string) => setDocumentProperties(path, { flowix_favorited: true }),
+  unfavorite: (path: string, _expectedCacheId?: string) => setDocumentProperties(path, { flowix_favorited: false }),
+  setColors: (path: string, colors: MemoColor[], _expectedCacheId?: string) => setDocumentProperties(path, { flowix_colors: colors }),
 };
 
 export const notebookRepository = {

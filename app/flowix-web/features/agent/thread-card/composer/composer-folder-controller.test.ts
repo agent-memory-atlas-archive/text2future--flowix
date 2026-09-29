@@ -19,7 +19,8 @@ const TestNoteReference = TiptapNode.create({
   atom: true,
   addAttributes() {
     return {
-      memoId: { default: null },
+      notebookId: { default: null },
+      relativePath: { default: null },
       title: { default: "" },
     };
   },
@@ -28,7 +29,7 @@ const TestNoteReference = TiptapNode.create({
   },
   renderMarkdown(node) {
     const attrs = node.attrs ?? {};
-    return `[${String(attrs.title ?? "")}](flowix://memo/${String(attrs.memoId ?? "")})`;
+    return `[${String(attrs.title ?? "")}](flowix://open?notebookId=${encodeURIComponent(String(attrs.notebookId ?? ""))}&relativePath=${encodeURIComponent(String(attrs.relativePath ?? ""))})`;
   },
 });
 import {
@@ -163,7 +164,7 @@ describe("ComposerFolderController", () => {
 
   it("searches project notes across notebooks and inserts a note reference", async () => {
     const note: MentionNoteItem = {
-      id: "p0berhgt",
+      relativePath: "多维表格实现.md",
       filename: "多维表格实现.md",
       title: "多维表格实现",
       updatedAt: 1,
@@ -190,7 +191,7 @@ describe("ComposerFolderController", () => {
       .not.toContain("/Users/rop/Desktop/Notes/开发任务管理/多维表格实现.md");
 
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(editor.getMarkdown()).toContain("flowix://memo/p0berhgt");
+    expect(editor.getMarkdown()).toContain("flowix://open?notebookId=nb-flowix&relativePath=");
     expect(editor.getJSON().content?.[0]?.content?.some((item) => item.type === "noteReference"))
       .toBe(true);
 

@@ -1,20 +1,4 @@
-// `flowix://memo/<id>` 行内卡片节点。
-//
-// Markdown 形态: `[title](flowix://memo/vex4v9)`
-// 兼容读取旧形态:
-// `<note id="vex4v9" notebook="nb_173..." path="/Users/.../foo.md">notebookName/title</note>`
-//
-// 设计来源:
-//   - 用户从外部 (Finder / 终端) 粘贴一份笔记的绝对路径到编辑器
-//   - `MarkdownPaste.handlePaste` 顶部命中分支识别到这是当前 notebook 列表中某条
-//     memo 的路径, 转成 noteReference 节点 (见 ./memo-resolver.ts)
-//
-//
-// id-as-truth: 卡片显示文本 `notebookName/title` 是给人看的, 真正用来定位笔记的
-// 是 attrs.memoId。memoId 是 noteReference 的"第一公民":
-//   - 缺失 (parse/paste 时未拿到) → mount 立即落 stale 视觉 (无需等用户双击).
-//   - 双击优先用 memoId 反查 (flowix://memo/<id> 深链), 跨改名 / 跨笔记本移动不断链.
-//   - memoId 反查失败且 originalPath 也失效 → 落 stale 视觉 + 写回 doc attrs.
+// Markdown form: [title](flowix://open?b=...&f=...).
 
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { NodeView as ProseMirrorNodeView, EditorView } from '@tiptap/pm/view';
@@ -23,19 +7,26 @@ import { Node, nodeInputRule, nodePasteRule, type InputRuleMatch, type JSONConte
 import { NodeSelection, Plugin, PluginKey, type EditorState } from '@tiptap/pm/state';
 
 import { readMarkdownLinkDestination } from '@features/editor/extensions/shared/markdown-link-destination';
-import { noteLinkForIndexedPath, openNoteByMemoId, openNoteByPhysicalPath, resolveMemoById, resolveMemoByObsidianTarget, resolveMemoByPath } from '@features/editor/extensions/note-link/memo-resolver';
-import { escapeHtml, parseBooleanAttr, pickAttr, splitDisplay, stripMdSuffix, unescapeHtml } from '@features/editor/extensions/note-link/markdown';
+import { noteLinkForIndexedPath, openNoteByNotebookPath, openNoteByPhysicalPath } from '@features/editor/extensions/note-link/memo-resolver';
+import { queryMentionNotes } from '@features/editor/extensions/note-mention/note-mention-data';
+import { parseBooleanAttr, pickAttr, splitDisplay, stripMdSuffix, unescapeHtml } from '@features/editor/extensions/note-link/markdown';
 import { translate, type I18nKey } from '@/lib/i18n';
 import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
 import { createTerminalInlineAtomCaretDecorations } from '@features/editor/extensions/shared/terminal-inline-atom-caret';
 import { navigateToHeadingAnchor } from '@features/editor/components/heading-anchor-navigation';
 import GithubSlugger from 'github-slugger';
+import { memos as memosClient } from '@platform/tauri/client';
+import { useMemoStore } from '@features/memo/store/memo-store';
+import { joinNotebookMemoPath } from '@/lib/path';
+import { buildNoteOpenLink } from '@platform/open-target/path-link';
+import { displayTitleFromFilename } from '@/lib/utils';
 
 // ─── Attrs ────────────────────────────────────────────────────────────────────
 
 export interface NoteReferenceAttrs {
   memoId: string | null;
   notebookId: string | null;
+  relativePath?: string | null;
   notebookName: string;
   title: string;
   originalPath: string | null;
@@ -47,10 +38,20 @@ export interface NoteReferenceAttrs {
   stale: boolean;
 }
 
+function noteReferenceDisplayTitle(attrs: NoteReferenceAttrs): string {
+  if (attrs.relativePath) return displayTitleFromFilename(attrs.relativePath);
+  if (attrs.linkTarget?.startsWith('flowix://open?')) {
+    try {
+      const url = new URL(attrs.linkTarget);
+      const file = url.searchParams.get('f') ?? url.searchParams.get('file') ?? url.searchParams.get('relativePath') ?? url.searchParams.get('path');
+      if (file) return displayTitleFromFilename(file);
+    } catch { /* Keep the authored label for malformed links. */ }
+  }
+  if (attrs.originalPath) return displayTitleFromFilename(attrs.originalPath);
+  return stripMdSuffix(attrs.title || '');
+}
+
 const FLOWIX_MEMO_URL_RE = /^flowix:\/\/(?:memo\/|open\?)/i;
-const FLOWIX_MEMO_HREF_RE = /^flowix:\/\/memo\/([^?\s)]*)(?:\?[^)\s]*)?$/;
-const STRICT_FLOWIX_MEMO_HREF_RE = /^flowix:\/\/memo\/([0-9a-z]{6}|[0-9a-z]{8})(?:\?[^)\s]*)?$/;
-const VALID_MEMO_ID_RE = /^([0-9a-z]{6}|[0-9a-z]{8})$/;
 
 // NodeView 不在 React 树内, 不能用 useI18n, 走 user-settings-store 直读当前语言。
 function tKey(key: I18nKey, params?: Record<string, string | number>): string {
@@ -195,17 +196,7 @@ function findWikiNotePasteMatches(text: string): PasteRuleMatch[] {
 
 function parseFlowixMemoHrefForAttrs(href: string): { memoId: string | null; stale: boolean } {
   if (/^flowix:\/\/open\?/i.test(href)) return { memoId: null, stale: false };
-  if (!FLOWIX_MEMO_URL_RE.test(href)) return { memoId: null, stale: true };
-  const strict = href.match(STRICT_FLOWIX_MEMO_HREF_RE);
-  if (strict) return { memoId: strict[1], stale: false };
-
-  const match = href.match(FLOWIX_MEMO_HREF_RE);
-  const rawMemoId = match?.[1] ?? null;
-  if (!rawMemoId) return { memoId: null, stale: true };
-  return {
-    memoId: rawMemoId,
-    stale: !VALID_MEMO_ID_RE.test(rawMemoId),
-  };
+  return { memoId: null, stale: true };
 }
 
 function escapeMarkdownLinkText(text: string): string {
@@ -217,17 +208,6 @@ function escapeMarkdownLinkText(text: string): string {
 
 function unescapeMarkdownLinkText(text: string): string {
   return text.replace(/\\([\\\[\]])/g, '$1');
-}
-
-function serializeLegacyNoteReference(a: NoteReferenceAttrs): string {
-  const nb = escapeHtml(a.notebookId ?? '');
-  const pa = escapeHtml(a.originalPath ?? '');
-  const staleAttr = a.stale ? ' stale="true"' : '';
-  const idAttr = a.memoId ? ` id="${escapeHtml(a.memoId)}"` : '';
-  const display = a.notebookName
-    ? `${a.notebookName}/${stripMdSuffix(a.title || '')}`
-    : stripMdSuffix(a.title || '');
-  return `<note${idAttr} notebook="${nb}" path="${pa}"${staleAttr}>${escapeHtml(display)}</note>`;
 }
 
 function attrsFromMarkdownNoteLink(titleText: string, href: string): NoteReferenceAttrs {
@@ -246,14 +226,19 @@ function attrsFromMarkdownNoteLink(titleText: string, href: string): NoteReferen
     };
   }
   const parsed = parseFlowixMemoHrefForAttrs(href);
+  let pathTarget: URL | null = null;
+  if (/^flowix:\/\/open\?/i.test(href)) {
+    try { pathTarget = new URL(href); } catch { /* malformed link stays stale */ }
+  }
   return {
     memoId: parsed.memoId,
-    notebookId: null,
-    notebookName: '',
+    notebookId: pathTarget?.searchParams.get('notebookId') ?? null,
+    relativePath: pathTarget?.searchParams.get('f') ?? pathTarget?.searchParams.get('file') ?? pathTarget?.searchParams.get('relativePath') ?? null,
+    notebookName: pathTarget?.searchParams.get('b') ?? pathTarget?.searchParams.get('book') ?? '',
     title: unescapeMarkdownLinkText(titleText).trim(),
     originalPath: null,
     linkStyle: 'flowix',
-    linkTarget: /^flowix:\/\/open\?/i.test(href) ? href : null,
+    linkTarget: href,
     heading: null,
     stale: parsed.stale,
   };
@@ -358,7 +343,7 @@ class NoteReferenceView implements ProseMirrorNodeView {
   private createCard(): HTMLElement {
     // notebookName 不再用于渲染 (见下方 nameSpan 注释), 仍在 attrs 里保留;
     // 这里只解构 UI 需要的字段.
-    const { memoId, title, originalPath, stale } = this.node.attrs as NoteReferenceAttrs;
+    const { notebookId, relativePath, notebookName, memoId, originalPath, linkTarget, stale } = this.node.attrs as NoteReferenceAttrs;
 
     // 视觉 stale 判定:
     //   - 已 stale (applyAttrs 写入) → 视觉 stale
@@ -367,7 +352,9 @@ class NoteReferenceView implements ProseMirrorNodeView {
     //     同步拿到 id) → **不**先 stale, mount 时 refreshMemoAttrs 会
     //     用 originalPath 异步反查 memoId 并写回. 这样避免"刚粘贴的有效
     //     链接一出生就是灰卡"的问题.
-    const effectiveStale = stale || (!memoId && !originalPath && !this.node.attrs.linkTarget);
+    const hasTarget = Boolean((notebookId || notebookName) && relativePath)
+      || Boolean(memoId || originalPath || linkTarget);
+    const effectiveStale = stale || !hasTarget;
 
     // 外层 wrapper: 与 .editor-file-attachment 同结构 (display:inline),
     // 内部 __card 是真正的"卡片" — 拿 hover/selected 高亮
@@ -414,7 +401,7 @@ class NoteReferenceView implements ProseMirrorNodeView {
     nameSpan.className = 'editor-note-reference__name';
     const titleSpan = document.createElement('span');
     titleSpan.className = 'editor-note-reference__title';
-    titleSpan.textContent = stripMdSuffix(title) || tKey('editor.noteLink.untitled');
+    titleSpan.textContent = noteReferenceDisplayTitle(this.node.attrs as NoteReferenceAttrs) || tKey('editor.noteLink.untitled');
     nameSpan.appendChild(titleSpan);
 
     card.appendChild(icon);
@@ -467,50 +454,22 @@ class NoteReferenceView implements ProseMirrorNodeView {
       return;
     }
 
-    let attrs = this.node.attrs as NoteReferenceAttrs;
+    const attrs = this.node.attrs as NoteReferenceAttrs;
+    if (attrs.linkTarget && /^flowix:\/\/memo\//i.test(attrs.linkTarget)) {
+      this.applyAttrs({ stale: true });
+      return;
+    }
 
-    // memoId 是 memo 的稳定 id, 跨改名 / 跨笔记本移动都不变;
-    // 是 noteReference 卡片的第一公民 ── 必须保存, 缺失即视为无效链接.
-    if (!attrs.memoId) {
-      const resolved = attrs.linkTarget
-        ? /^flowix:\/\/open\?/i.test(attrs.linkTarget) ? await resolveMemoByPath(attrs.linkTarget) : await resolveMemoByObsidianTarget(attrs.linkTarget)
-        : attrs.originalPath
-          ? await resolveMemoByPath(attrs.originalPath)
-          : null;
-      if (!resolved) {
+    try {
+      if (attrs.notebookId && attrs.relativePath) {
+        await openNoteByNotebookPath(attrs.notebookId, attrs.relativePath);
+      } else if (attrs.originalPath) {
+        await openNoteByPhysicalPath(attrs.originalPath);
+      } else if (attrs.linkTarget) {
+        await openNoteByPhysicalPath(attrs.linkTarget);
+      } else {
         this.applyAttrs({ stale: true });
         return;
-      }
-      this.applyAttrs({
-        memoId: resolved.memoId,
-        notebookId: resolved.notebookId,
-        notebookName: resolved.notebookName,
-        originalPath: resolved.absolutePath,
-        stale: false,
-      });
-      attrs = { ...attrs, memoId: resolved.memoId, stale: false };
-    }
-    const memoId = attrs.memoId;
-    if (!memoId) return;
-
-    // 优先用 memoId 反查 (flowix://memo/<id> 深链), 后端走 memo index 扫
-    // 所有 notebook 找匹配 id 的 .md; 笔记改名 / 被搬都不会断链,
-    // 只要 memo 还在磁盘上就能打开.
-    //
-    // 只有 memoId 反查失败时, 才回退到 originalPath 兜底 (粘贴进来的卡片
-    // 历史数据里 memoId 已被解析过, originalPath 通常有效).
-    try {
-      const opened = attrs.linkTarget?.startsWith('flowix://open?')
-        ? (await openNoteByPhysicalPath(attrs.linkTarget), true)
-        : await openNoteByMemoId(memoId);
-      if (!opened) {
-        // memoId 反查失败 → 尝试用 originalPath 再开一次 (兜底)
-        if (attrs.originalPath) {
-          await openNoteByPhysicalPath(attrs.originalPath);
-        } else {
-          this.applyAttrs({ stale: true });
-          return;
-        }
       }
       if (attrs.stale) {
         this.applyAttrs({ stale: false });
@@ -604,50 +563,81 @@ class NoteReferenceView implements ProseMirrorNodeView {
 
     this.refreshPromise = (async () => {
       try {
-        const resolved = initialAttrs.memoId
-          ? await resolveMemoById(initialAttrs.memoId)
-          : initialAttrs.originalPath
-            ? await resolveMemoByPath(initialAttrs.originalPath)
-            : /^flowix:\/\/open\?/i.test(initialAttrs.linkTarget!)
-              ? await resolveMemoByPath(initialAttrs.linkTarget!)
-              : await resolveMemoByObsidianTarget(initialAttrs.linkTarget!);
-        // refresh 跑完前, 节点可能已经被销毁 / 替换; 用当前 this.node 取最新 attrs.
+        if (initialAttrs.linkTarget && /^flowix:\/\/memo\//i.test(initialAttrs.linkTarget)) {
+          if (!(this.node.attrs as NoteReferenceAttrs).stale) this.applyAttrs({ stale: true });
+          return;
+        }
+        if (initialAttrs.notebookName && initialAttrs.relativePath && !initialAttrs.notebookId) {
+          let notebooks = useMemoStore.getState().notebooks;
+          if (!notebooks.some((item) => item.name === initialAttrs.notebookName)) {
+            await useMemoStore.getState().loadNotebooks();
+            notebooks = useMemoStore.getState().notebooks;
+          }
+          const matches = notebooks.filter((item) => item.name === initialAttrs.notebookName);
+          const notebook = matches.length === 1 ? matches[0] : null;
+          const path = notebook ? joinNotebookMemoPath(notebook.path, initialAttrs.relativePath) : null;
+          const content = path ? await memosClient.readDocument(path) : null;
+          this.applyAttrs({ notebookId: notebook?.id ?? null, stale: content === null });
+          return;
+        }
+        if (initialAttrs.notebookId && initialAttrs.relativePath) {
+          let notebook = useMemoStore.getState().notebooks.find((item) => item.id === initialAttrs.notebookId);
+          if (!notebook) {
+            await useMemoStore.getState().loadNotebooks();
+            notebook = useMemoStore.getState().notebooks.find((item) => item.id === initialAttrs.notebookId);
+          }
+          const path = notebook ? joinNotebookMemoPath(notebook.path, initialAttrs.relativePath) : null;
+          const content = path ? await memosClient.readDocument(path) : null;
+          const stale = content === null;
+          const current = this.node.attrs as NoteReferenceAttrs;
+          if (current.stale !== stale || (notebook && current.notebookName !== notebook.name)) {
+            this.applyAttrs({ stale, ...(notebook ? { notebookName: notebook.name } : {}) });
+          }
+          return;
+        }
+        if (initialAttrs.originalPath) {
+          const content = await memosClient.readDocument(initialAttrs.originalPath);
+          const stale = content === null;
+          if ((this.node.attrs as NoteReferenceAttrs).stale !== stale) this.applyAttrs({ stale });
+          return;
+        }
+        if (initialAttrs.memoId) {
+          if (!(this.node.attrs as NoteReferenceAttrs).stale) this.applyAttrs({ stale: true });
+          return;
+        }
+        const target = initialAttrs.linkTarget!;
+        let notebookId: string | null = null;
+        let relativePath: string | null = null;
+        if (/^flowix:\/\/open\?/i.test(target)) {
+          const url = new URL(target);
+          notebookId = url.searchParams.get('notebookId');
+          relativePath = url.searchParams.get('f') ?? url.searchParams.get('file') ?? url.searchParams.get('relativePath');
+          if ((!notebookId || !relativePath) && url.searchParams.get('path')) {
+            const location = await memosClient.resolveMarkdownLocation(url.searchParams.get('path')!);
+            notebookId = location.notebookId;
+            relativePath = location.relativePath;
+          }
+        } else {
+          const basename = target.replace(/\\/g, '/').split('/').pop()?.replace(/\.md$/i, '') ?? target;
+          const matches = await queryMentionNotes(basename);
+          const normalized = target.replace(/\\/g, '/').toLocaleLowerCase();
+          const match = matches.find((item) => item.relativePath.toLocaleLowerCase() === normalized
+            || item.filename.toLocaleLowerCase() === `${normalized}.md`
+            || item.title.toLocaleLowerCase() === normalized)
+            ?? matches[0];
+          notebookId = match?.notebookId ?? null;
+          relativePath = match?.relativePath ?? null;
+        }
         const current = this.node.attrs as NoteReferenceAttrs;
-        if (!resolved) {
+        if (!notebookId || !relativePath) {
           if (!current.stale) {
             this.applyAttrs({ stale: true });
           }
           return;
         }
-        // 与磁盘最新值比对, 只在变化时写回 doc.
-        //
-        // title 故意不在这里写回:
-        //   - 链接 markdown `[标题](flowix://memo/<id>)` 里的 `[标题]` 就是 attrs.title
-        //     的真值来源, 用户在 markdown 里写下时即定; 渲染期间不该被后端 memoTitle
-        //     反向覆盖 — 否则刷新路径会跑一次 `applyAttrs({title}) → setNodeMarkup →
-        //     update() → createCard() → wrapper.replaceWith()`, NodeView 的 DOM 整棵
-        //     被换掉, 期间 caret 落点 / 点击命中点会出现一瞬抖动, 表现为"刷新后光标
-        //     无法落到卡片末尾 / 点选不稳定". 新增路径不抖, 是因为 attrs.title 一开始
-        //     就跟后端一致, refresh 比对全相同 → 不写回 → 不 replaceWith.
-        //   - 后端 memoTitle 改名后, 下次落盘由 `renderMarkdown` 用最新值序列化即可
-        //     (它读的是 attrs.title, 而 attrs.title 在用户重新触发笔记节点 attrs 写入
-        //      时会被更新; 这里只是不在 mount 异步阶段做主动覆盖).
-        //   - notebookName 同理但更弱 (UI 不展示, 仅 round-trip 旧格式用), 只在缺失
-        //     时补, 不主动覆盖.
         const patch: Partial<NoteReferenceAttrs> = {};
-        if (!current.notebookName && resolved.notebookName) {
-          patch.notebookName = resolved.notebookName;
-        }
-        if (current.notebookId !== resolved.notebookId) {
-          patch.notebookId = resolved.notebookId;
-        }
-        if (current.originalPath !== resolved.absolutePath) {
-          patch.originalPath = resolved.absolutePath;
-        }
-        // 物理路径粘贴场景: originalPath 反查成功 → 补回 memoId
-        if (current.memoId !== resolved.memoId) {
-          patch.memoId = resolved.memoId;
-        }
+        if (current.notebookId !== notebookId) patch.notebookId = notebookId;
+        if (current.relativePath !== relativePath) patch.relativePath = relativePath;
         if (current.stale) {
           patch.stale = false;
         }
@@ -704,6 +694,7 @@ export const NoteReference = Node.create({
   addAttributes() {
     return {
       memoId:        { default: null },
+      relativePath: { default: null },
       notebookId:   { default: null },
       notebookName: { default: '' },
       title:        { default: '' },
@@ -723,9 +714,10 @@ export const NoteReference = Node.create({
           const memoId        = el.getAttribute('id') || null;
           const notebookId   = el.getAttribute('notebook') || null;
           const originalPath = el.getAttribute('path') || null;
+          const relativePath = el.getAttribute('relativePath') || null;
           const stale        = parseBooleanAttr(el.getAttribute('stale'));
           const { notebookName, title } = splitDisplay(el.textContent ?? '');
-          return { memoId, notebookId, notebookName, title, originalPath, linkStyle: 'flowix', linkTarget: null, heading: null, stale };
+          return { memoId, notebookId, relativePath, notebookName, title, originalPath, linkStyle: 'flowix', linkTarget: null, heading: null, stale };
         },
       },
     ];
@@ -738,6 +730,7 @@ export const NoteReference = Node.create({
       {
         id: a.memoId ?? '',
         notebook: a.notebookId ?? '',
+        relativePath: a.relativePath ?? '',
         path: a.originalPath ?? '',
         ...(a.stale ? { stale: 'true' } : {}),
       },
@@ -813,6 +806,7 @@ export const NoteReference = Node.create({
       attrs: {
         memoId:        rawId && rawId.length > 0 ? rawId : null,
         notebookId:   pickAttr(attrsStr, 'notebook'),
+        relativePath: pickAttr(attrsStr, 'relativePath'),
         notebookName,
         title,
         originalPath: pickAttr(attrsStr, 'path'),
@@ -826,6 +820,7 @@ export const NoteReference = Node.create({
 
   renderMarkdown(node: JSONContent) {
     const a = (node?.attrs ?? {}) as NoteReferenceAttrs;
+    const displayTitle = escapeMarkdownLinkText(noteReferenceDisplayTitle(a));
     if (a.linkStyle === 'wiki' && a.linkTarget) {
       const target = `${a.linkTarget}${a.heading ? `#${a.heading}` : ''}`;
       const naturalTitle = a.linkTarget.split('/').pop()?.replace(/\.md$/i, '') ?? a.linkTarget;
@@ -835,25 +830,38 @@ export const NoteReference = Node.create({
       const target = `${a.linkTarget}${a.heading ? `#${a.heading}` : ''}`.replace(/ /g, '%20');
       return `[${escapeMarkdownLinkText(a.title || stripMdSuffix(a.linkTarget))}](${target})`;
     }
+    if (a.linkTarget && /^flowix:\/\/memo\//i.test(a.linkTarget)) {
+      return `[${displayTitle}](${a.linkTarget})`;
+    }
+    if (a.relativePath) {
+      const notebook = a.notebookId
+        ? useMemoStore.getState().notebooks.find((item) => item.id === a.notebookId)
+        : null;
+      const book = notebook?.name ?? a.notebookName;
+      if (book) {
+        const target = buildNoteOpenLink(book, a.relativePath);
+        return `[${displayTitle}](${target})`;
+      }
+      if (a.linkTarget) {
+        return `[${displayTitle}](${a.linkTarget})`;
+      }
+      if (a.notebookId) {
+        const target = `flowix://open?notebookId=${encodeURIComponent(a.notebookId)}&relativePath=${encodeURIComponent(a.relativePath)}`;
+        return `[${displayTitle}](${target})`;
+      }
+    }
     if (a.linkTarget?.startsWith('flowix://open?') && !a.originalPath) {
-      return `[${escapeMarkdownLinkText(stripMdSuffix(a.title || ''))}](${a.linkTarget})`;
+      return `[${displayTitle}](${a.linkTarget})`;
     }
     const pathLink = a.originalPath ? noteLinkForIndexedPath(a.originalPath) : null;
     if (pathLink) {
-      return `[${escapeMarkdownLinkText(stripMdSuffix(a.title || ''))}](${pathLink})`;
+      return `[${displayTitle}](${pathLink})`;
     }
     if (a.originalPath) {
       const fallback = `flowix://open?path=${encodeURIComponent(a.originalPath)}`;
-      return `[${escapeMarkdownLinkText(stripMdSuffix(a.title || ''))}](${fallback})`;
+      return `[${displayTitle}](${fallback})`;
     }
-    if (!a.memoId) {
-      // 物理路径粘贴刚生成、尚未异步反查出 memoId 时保留旧格式兜底,
-      // 避免保存时丢掉 originalPath。
-      return serializeLegacyNoteReference(a);
-    }
-
-    const title = stripMdSuffix(a.title || '');
-    return `[${escapeMarkdownLinkText(title)}](flowix://memo/${a.memoId})`;
+    return escapeMarkdownLinkText(stripMdSuffix(a.title || ''));
   },
 
   // ─── NodeView ─────────────────────────────────────────────────────────────

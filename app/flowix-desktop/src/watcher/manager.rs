@@ -12,11 +12,11 @@ use tauri::AppHandle;
 use crate::watcher::filter::{FileRevision, SelfWriteMap, SelfWriteMark, SELF_WRITE_TTL};
 use crate::watcher::tombstone::RemoveCoalescer;
 use crate::watcher::{
-    filter::PathFilter, normalize_for_compare, FsEventKind, MemoEventProcessor,
+    filter::PathFilter, normalize_for_compare, FsEventKind, PathNoteEventProcessor,
     NotebookWatchContext, RawFsEvent, WhitelistConfig,
 };
 use flowix_core::memo_file::{
-    is_ignored_notebook_relative_path, notebook_relative_path, MemoFile, NotebookConfig,
+    is_ignored_notebook_relative_path, MemoFile, NotebookConfig,
 };
 
 const REMOVE_TOMBSTONE_DELAY: Duration = Duration::from_millis(450);
@@ -192,7 +192,6 @@ impl MemoWatcher {
         let remove_coalescer_for_callback = remove_coalescer.clone();
         let app = app.clone();
         let recent_for_worker = self.recent_self_writes.clone();
-        let memo_file = self.memo_file.clone();
         let whitelist = self.whitelist.clone();
         let watched_roots = self.watched_roots.clone();
 
@@ -211,7 +210,6 @@ impl MemoWatcher {
                 };
                 let event = rename_tracker.correlate(event);
                 handle_notify_event(
-                    &memo_file,
                     &remove_coalescer_for_callback,
                     &whitelist,
                     &watched_roots,
@@ -266,14 +264,14 @@ impl MemoWatcher {
                     // 隔离 + 记录, 让 worker 继续处理后续事件。
                     if let Err(payload) =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            MemoEventProcessor::process(&raw, &worker_app, &worker_memo_file, &ctx)
+                            PathNoteEventProcessor::process(&raw, &worker_app, &worker_memo_file, &ctx)
                         }))
                     {
                         tracing::error!(
                             thread = "memo-watcher-processor",
                             path = %raw.path.display(),
                             kind = ?raw.kind,
-                            "MemoEventProcessor::process panicked; worker recovered. payload={:?}",
+                            "PathNoteEventProcessor::process panicked; worker recovered. payload={:?}",
                             payload
                         );
                     }
@@ -318,7 +316,6 @@ impl MemoWatcher {
 /// 1. `recent_self_writes` (�?��) —`mark_self_write` 在写盘前调用
 /// 2. `last_emit` (�?��) —150ms 内同�?��事件�? 处理 FSEvents 双触�?
 fn handle_notify_event(
-    memo_file: &Arc<std::sync::RwLock<MemoFile>>,
     remove_coalescer: &RemoveCoalescer,
     whitelist: &Arc<std::sync::RwLock<WhitelistConfig>>,
     watched_roots: &Arc<std::sync::RwLock<Vec<NotebookWatchContext>>>,
@@ -338,16 +335,46 @@ fn handle_notify_event(
     {
         let old = &event.paths[0];
         let new = &event.paths[1];
+        let old_context = context_for_path(watched_roots, old);
+        let new_context = context_for_path(watched_roots, new);
+        if old_context.as_ref().map(|ctx| &ctx.notebook_id)
+            != new_context.as_ref().map(|ctx| &ctx.notebook_id)
+        {
+            if let (Some(old_ctx), Some(new_ctx)) = (old_context.as_ref(), new_context.as_ref()) {
+                let mut rename = RawFsEvent::new(FsEventKind::Other, new.clone());
+                rename.rename_from = Some(old.clone());
+                rename.rename_from_notebook_id = Some(old_ctx.notebook_id.clone());
+                rename.rename_from_root = Some(old_ctx.root.clone());
+                let _ = worker_tx.send((rename, new_ctx.clone()));
+            }
+            for (path, context) in [(old, old_context), (new, new_context)] {
+                if let Some(ctx) = context {
+                    let _ = worker_tx.send((RawFsEvent::new(FsEventKind::DirectoryChange, path.clone()), ctx));
+                }
+            }
+            return;
+        }
         if let (Some(old_ctx), Some(ctx)) = (
             context_for_path(watched_roots, old),
             context_for_path(watched_roots, new),
         ) {
             if old_ctx.notebook_id == ctx.notebook_id {
-                let allowed = new
+                let new_allowed = new
                     .strip_prefix(&ctx.root)
                     .ok()
                     .is_some_and(|p| !is_ignored_notebook_relative_path(p));
-                if allowed {
+                let old_allowed = old
+                    .strip_prefix(&ctx.root)
+                    .ok()
+                    .is_some_and(|p| !is_ignored_notebook_relative_path(p));
+                let new_markdown = new.extension().is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
+                });
+                if old_allowed && !new_markdown && !new.is_dir() {
+                    let _ = worker_tx.send((RawFsEvent::new(FsEventKind::DirectoryChange, old.clone()), ctx));
+                    return;
+                }
+                if new_allowed || old_allowed {
                     remove_coalescer.cancel_path(old);
                     let mut raw = RawFsEvent::new(
                         if new.is_dir() {
@@ -358,7 +385,7 @@ fn handle_notify_event(
                         new.clone(),
                     );
                     raw.rename_from = Some(old.clone());
-                    if new.is_dir()
+                    if new.is_dir() || !new_allowed
                         || matches!(
                             crate::watcher::filter::run_pipeline(&raw, &path_filter),
                             crate::watcher::event::FilterDecision::Pass
@@ -391,16 +418,11 @@ fn handle_notify_event(
         // self-write suppression and dedup happen after the worker observes a
         // stable file snapshot.
         let mut fs_kind = FsEventKind::from_notify(&event.kind);
-        let relative_prefix = relative.to_string_lossy().replace('\\', "/");
-        let is_indexed_directory_prefix = matches!(fs_kind, FsEventKind::Remove)
-            && memo_file.read().ok().is_some_and(|memo_file| {
-                let prefix = format!("{}/", relative_prefix.trim_end_matches('/'));
-                memo_file
-                    .read_all_memos_for_notebook_id(Some(&ctx.notebook_id))
-                    .iter()
-                    .any(|memo| memo.relative_path.starts_with(&prefix))
+        let removed_non_markdown = matches!(fs_kind, FsEventKind::Remove)
+            && !path.extension().is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
             });
-        if path.is_dir() || is_indexed_directory_prefix {
+        if path.is_dir() || removed_non_markdown {
             fs_kind = FsEventKind::DirectoryChange;
         }
         if matches!(fs_kind, FsEventKind::Create | FsEventKind::Modify) {
@@ -443,9 +465,8 @@ fn handle_notify_event(
         // the path index and emits note events for accepted file changes.
         match fs_kind {
             FsEventKind::Remove => {
-                if schedule_pending_remove(remove_coalescer, memo_file, ctx.clone(), &path) {
-                    continue;
-                }
+                remove_coalescer.schedule(ctx.clone(), &path);
+                continue;
             }
             FsEventKind::Create | FsEventKind::Modify | FsEventKind::DirectoryChange => {}
             FsEventKind::Other => {}
@@ -522,30 +543,6 @@ fn context_for_path(
         })
         .max_by_key(|(depth, _)| *depth)
         .map(|(_, ctx)| ctx)
-}
-
-fn resolve_removed_memo_id(
-    memo_file: &Arc<std::sync::RwLock<MemoFile>>,
-    ctx: &NotebookWatchContext,
-    path: &Path,
-) -> Option<String> {
-    let relative_path = notebook_relative_path(&ctx.root, path).ok()?;
-    let mf = memo_file.read().ok()?;
-    mf.find_memo_by_relative_path_for_notebook_id(&ctx.notebook_id, &relative_path)
-        .map(|memo| memo.id)
-}
-
-fn schedule_pending_remove(
-    remove_coalescer: &RemoveCoalescer,
-    memo_file: &Arc<std::sync::RwLock<MemoFile>>,
-    ctx: NotebookWatchContext,
-    path: &Path,
-) -> bool {
-    let Some(id) = resolve_removed_memo_id(&memo_file, &ctx, path) else {
-        return false;
-    };
-    remove_coalescer.schedule(id, ctx, path);
-    true
 }
 
 #[cfg(test)]
@@ -736,10 +733,8 @@ mod tests {
                     .expect("classify observed MCP event");
                     assert!(matches!(
                         outcome,
-                        crate::watcher::processor::DispatchOutcome::Created {
-                            event: crate::memo_events::MemoEvent::Created { memo, .. },
-                            ..
-                        } if memo.id == created.id
+                        crate::watcher::processor::DispatchOutcome::PathIndexed { relative_path }
+                            if relative_path == created.relative_path
                     ));
                     return;
                 }

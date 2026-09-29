@@ -1,18 +1,6 @@
 import { create } from 'zustand';
 import { canonicalPath, fileLocatorKey } from '@/lib/path';
 import { canonicalUrl } from '@/lib/url';
-import type { PluginArtifactRendererId } from '@features/plugin/plugin-note';
-
-export type MemoHistoryEntry = {
-  kind: 'memo';
-  /** Optional Memo capability hint; file path remains the history locator. */
-  memoId?: string;
-  notebookId: string | null;
-  notebookPath: string | null;
-  path: string;
-  title?: string;
-  openedAt: number;
-};
 
 type ExternalHistoryEntry = {
   kind: 'external';
@@ -33,16 +21,6 @@ export type WebHistoryEntry = {
   openedAt: number;
 };
 
-export type ArtifactHistoryEntry = {
-  kind: 'artifact';
-  pointerMemoId: string;
-  notebookId: string | null;
-  notebookPath: string | null;
-  pluginId: string | null;
-  renderer: PluginArtifactRendererId | null;
-  openedAt: number;
-};
-
 export type MediaHistoryEntry = {
   kind: 'media';
   filePath: string;
@@ -53,11 +31,9 @@ export type MediaHistoryEntry = {
 };
 
 export type DocumentHistoryEntry =
-  | MemoHistoryEntry
   | ExternalHistoryEntry
   | AgentConversationHistoryEntry
   | WebHistoryEntry
-  | ArtifactHistoryEntry
   | MediaHistoryEntry;
 
 interface DocumentHistoryStore {
@@ -71,7 +47,6 @@ interface DocumentHistoryStore {
   commitForwardNavigation: (current: DocumentHistoryEntry | null, discardCount?: number) => void;
   recordNavigation: (current: DocumentHistoryEntry | null, next: DocumentHistoryEntry | null) => void;
   replaceFilePath: (previousPath: string, path: string) => void;
-  replaceMemoPath: (memoId: string, path: string) => void;
   clearForward: () => void;
   clear: () => void;
 }
@@ -80,13 +55,11 @@ const MAX_HISTORY_ENTRIES = 30;
 
 export function documentHistoryEntryKey(entry: DocumentHistoryEntry | null): string | null {
   if (!entry) return null;
-  if (entry.kind === 'memo') return fileLocatorKey(entry.path);
   if (entry.kind === 'agent-conversation') return `agent-conversation:${entry.instanceId}`;
   if (entry.kind === 'web') {
     const url = canonicalUrl(entry.url);
     return url ? `web:${url}` : null;
   }
-  if (entry.kind === 'artifact') return `artifact:${entry.pointerMemoId}`;
   if (entry.kind === 'media') return fileLocatorKey(entry.filePath);
   return fileLocatorKey(entry.path);
 }
@@ -148,7 +121,7 @@ export const useDocumentHistoryStore = create<DocumentHistoryStore>()((set, get)
     const next = canonicalPath(path);
     if (!previous || !next || previous === next) return state;
     const replace = (entry: DocumentHistoryEntry): DocumentHistoryEntry => {
-      if (entry.kind === 'memo' || entry.kind === 'external') {
+      if (entry.kind === 'external') {
         return canonicalPath(entry.path) === previous ? { ...entry, path: next } : entry;
       }
       if (entry.kind === 'media') {
@@ -156,17 +129,6 @@ export const useDocumentHistoryStore = create<DocumentHistoryStore>()((set, get)
       }
       return entry;
     };
-    return {
-      backStack: state.backStack.map(replace),
-      forwardStack: state.forwardStack.map(replace),
-    };
-  }),
-  replaceMemoPath: (memoId, path) => set((state) => {
-    const replace = (entry: DocumentHistoryEntry): DocumentHistoryEntry => (
-      entry.kind === 'memo' && entry.memoId === memoId
-        ? { ...entry, path }
-        : entry
-    );
     return {
       backStack: state.backStack.map(replace),
       forwardStack: state.forwardStack.map(replace),

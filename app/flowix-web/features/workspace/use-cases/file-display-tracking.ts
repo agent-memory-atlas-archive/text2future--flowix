@@ -17,11 +17,11 @@ function startFileDisplayTracking(): () => void {
       navigation.phase === 'loading' ? navigation.pendingTarget : null,
     ];
     for (const target of workTargets) {
-      if (target?.kind === 'memo' || target?.kind === 'external') addFile(target.path);
+      if (target?.kind === 'external') addFile(target.path);
       if (target?.kind === 'media') addFile(target.filePath);
     }
     for (const tab of useBrowserColumnStore.getState().tabs) {
-      if (tab.target.kind === 'memo' || tab.target.kind === 'media') addFile(tab.target.filePath);
+      if (tab.target.kind === 'media') addFile(tab.target.filePath);
       if (tab.target.kind === 'file-browser' && tab.target.activeFilePath) {
         addFile(tab.target.activeFilePath);
       }

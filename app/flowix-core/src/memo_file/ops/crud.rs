@@ -146,8 +146,8 @@ impl MemoFile {
             parent_relative_path.filter(|path| !path.is_empty()),
         )?;
 
-        // Markdown owns content and properties; cache IDs are never stamped into files.
-        let prepared_content = super::super::frontmatter::without_flowix_key(body);
+        // Preserve supplied Markdown; its legacy key is not used as the cache ID.
+        let prepared_content = body.to_string();
         let initial_content = match tag {
             Some(tag) if !tag.trim().is_empty() => {
                 let mut tags = extract_document_metadata(&prepared_content)

@@ -5,10 +5,6 @@ import { STORAGE_KEYS } from '@/lib/constants';
 import { canonicalPath } from '@/lib/path';
 import { displayTitleFromFilename } from '@/lib/utils';
 import {
-  normalizePluginArtifactRenderer,
-  type PluginArtifactRendererId,
-} from '@features/plugin/public/workspace-api';
-import {
   canonicalUrl,
   contentIdentityKey,
   type ContentIdentity,
@@ -16,13 +12,6 @@ import {
 import { useWorkspaceFocusStore } from './workspace-focus-store';
 
 export type BrowserColumnTarget =
-  | {
-      kind: 'memo';
-      memoId: string;
-      notebookId: string;
-      notebookPath: string;
-      filePath: string;
-    }
   | {
       kind: 'media';
       filePath: string;
@@ -34,11 +23,6 @@ export type BrowserColumnTarget =
   | {
       kind: 'web';
       url: string;
-    }
-  | {
-      kind: 'artifact';
-      pointerMemoId: string;
-      renderer: PluginArtifactRendererId | null;
     }
   | {
       kind: 'agent_conversation';
@@ -91,10 +75,9 @@ interface BrowserColumnState {
   closeOtherTabs: (tabId: string) => string | null;
   closeTabsToRight: (tabId: string) => string | null;
   closeAllTabs: () => void;
-  replaceMemoPath: (memoId: string, path: string) => void;
   replaceExternalPath: (previousPath: string, path: string) => void;
   clearExternalPath: (path: string) => void;
-  removeTabsByMemoId: (memoId: string) => string[];
+  removeTabsByFilePath: (path: string) => string[];
   reorderTab: (tabId: string, beforeTabId: string | null) => void;
   updateTabMetadata: (tabId: string, metadata: Partial<Pick<BrowserColumnTab, 'title' | 'icon'>>) => void;
   setWebRuntime: (tabId: string, runtime: BrowserColumnWebRuntime) => void;
@@ -119,13 +102,11 @@ export const BROWSER_COLUMN_FILE_TREE_MAX_WIDTH = 420;
 
 export function browserColumnTargetIdentity(target: BrowserColumnTarget): ContentIdentity {
   switch (target.kind) {
-    case 'memo': return { kind: 'memo', memoId: target.memoId, path: target.filePath };
     case 'media': return { kind: 'media', path: target.filePath };
     case 'file-browser': return target.activeFilePath
       ? { kind: 'external', path: target.activeFilePath }
       : { kind: 'file-browser', folderPath: target.folderPath ?? '' };
     case 'web': return { kind: 'web', url: target.url };
-    case 'artifact': return { kind: 'artifact', pointerMemoId: target.pointerMemoId };
     case 'agent_conversation': return {
       kind: 'agent-conversation',
       instanceId: target.instanceId,
@@ -145,7 +126,6 @@ function adjacentTabId(tabs: BrowserColumnTab[], closingTabId: string): string |
 
 const BROWSER_COLUMN_MIN_RATIO = 0.05;
 const BROWSER_COLUMN_MAX_RATIO = 0.95;
-const LEGACY_BROWSER_COLUMN_STORAGE_KEY = 'flowix-fourth-column-storage';
 const LEGACY_SPLIT_RATIO_STORAGE_KEY = 'flowix.workspace.fourth-column.split-ratio';
 
 function clampSplitRatio(splitRatio: number): number {
@@ -247,19 +227,6 @@ function parseBrowserColumnTarget(value: unknown): BrowserColumnTarget | null {
   if (!isRecord(value) || typeof value.kind !== 'string') return null;
 
   switch (value.kind) {
-    case 'memo':
-      return nonEmptyString(value.memoId)
-        && typeof value.notebookId === 'string'
-        && typeof value.notebookPath === 'string'
-        && nonEmptyString(value.filePath)
-        ? {
-            kind: 'memo',
-            memoId: value.memoId,
-            notebookId: value.notebookId,
-            notebookPath: value.notebookPath,
-            filePath: value.filePath,
-          }
-        : null;
     case 'media':
       return nonEmptyString(value.filePath)
         && typeof value.notebookId === 'string'
@@ -312,20 +279,6 @@ function parseBrowserColumnTarget(value: unknown): BrowserColumnTarget | null {
       const url = typeof value.url === 'string' ? canonicalUrl(value.url) : null;
       return url ? { kind: 'web', url } : null;
     }
-    case 'artifact':
-      {
-        const renderer = value.renderer === null
-          ? null
-          : normalizePluginArtifactRenderer(value.renderer);
-        return nonEmptyString(value.pointerMemoId)
-          && (value.renderer === null || renderer !== null)
-          ? {
-              kind: 'artifact',
-              pointerMemoId: value.pointerMemoId,
-              renderer,
-            }
-          : null;
-      }
     case 'agent_conversation':
       return nonEmptyString(value.instanceId)
         ? { kind: 'agent_conversation', instanceId: value.instanceId }
@@ -359,9 +312,7 @@ function normalizePersistedTabs(value: unknown, activeTabId: unknown): BrowserCo
   for (const candidate of value) {
     const tab = parseBrowserColumnTab(candidate);
     if (!tab || seenIds.has(tab.id)) continue;
-    const filePath = tab.target.kind === 'file-browser' || tab.target.kind === 'memo'
-      ? tab.target.kind === 'file-browser' ? tab.target.activeFilePath : tab.target.filePath
-      : null;
+    const filePath = tab.target.kind === 'file-browser' ? tab.target.activeFilePath : null;
     // Keep agent configuration out of automatic session restoration.
     if (filePath?.split(/[\\/]/).pop() === 'AGENTS.md') continue;
     const targetKey = browserColumnTargetKey(tab.target);
@@ -395,8 +346,7 @@ const browserColumnStorage = createJSONStorage(() => ({
   getItem: (name: string) => {
     if (typeof localStorage === 'undefined') return null;
     const current = localStorage.getItem(name);
-    if (current !== null || name !== STORAGE_KEYS.BROWSER_COLUMN) return current;
-    return localStorage.getItem(LEGACY_BROWSER_COLUMN_STORAGE_KEY);
+    return current;
   },
   setItem: (name: string, value: string) => {
     if (typeof localStorage !== 'undefined') localStorage.setItem(name, value);
@@ -603,19 +553,6 @@ export const useBrowserColumnStore = create<BrowserColumnState>()(
           webRuntimes: {},
         });
       },
-      replaceMemoPath: (memoId, path) => {
-        if (!memoId || !path) return;
-        const filename = path.split(/[\\/]/).pop() ?? path;
-        set((state) => ({
-          tabs: state.tabs.map((tab) => tab.target.kind === 'memo' && tab.target.memoId === memoId
-            ? {
-                ...tab,
-                title: displayTitleFromFilename(filename),
-                target: { ...tab.target, filePath: path },
-              }
-            : tab),
-        }));
-      },
       replaceExternalPath: (previousPath, path) => {
         const previous = canonicalPath(previousPath);
         const next = canonicalPath(path);
@@ -648,14 +585,14 @@ export const useBrowserColumnStore = create<BrowserColumnState>()(
             : tab),
         }));
       },
-      removeTabsByMemoId: (memoId) => {
-        if (!memoId) return [];
+      removeTabsByFilePath: (path) => {
+        const targetPath = canonicalPath(path);
+        if (!targetPath) return [];
         const state = get();
         const removedIds = state.tabs
-          .filter((tab) => (
-            (tab.target.kind === 'memo' && tab.target.memoId === memoId)
-            || (tab.target.kind === 'artifact' && tab.target.pointerMemoId === memoId)
-          ))
+          .filter((tab) => tab.target.kind === 'file-browser'
+            && tab.target.activeFilePath
+            && canonicalPath(tab.target.activeFilePath) === targetPath)
           .map((tab) => tab.id);
         if (removedIds.length === 0) return [];
 
@@ -846,7 +783,7 @@ export const useBrowserColumnStore = create<BrowserColumnState>()(
     }),
     {
       name: STORAGE_KEYS.BROWSER_COLUMN,
-      version: 3,
+      version: 4,
       migrate: (persisted) => persisted as PersistedBrowserColumnState,
       storage: browserColumnStorage,
       partialize: (state): PersistedBrowserColumnState => ({

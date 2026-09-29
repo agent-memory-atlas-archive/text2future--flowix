@@ -12,16 +12,12 @@ export async function upsertAgentThreadCardConversationInstance(options: {
   title: string;
   threadId: string;
   source: AgentConversationSource;
-  role: {
-    memoId: string | null;
-    name: string | null;
-  };
   runtimeConfig?: RuntimeConfig | null;
 }): Promise<{
   instanceId: string;
   instance: AgentConversationInstance;
 }> {
-  const { instanceId, agentType, title, threadId, source, role, runtimeConfig } = options;
+  const { instanceId, agentType, title, threadId, source, runtimeConfig } = options;
 
   // Read and update the canonical conversation registry.
   const session = useAgentSessionStore.getState();
@@ -30,7 +26,6 @@ export async function upsertAgentThreadCardConversationInstance(options: {
     title,
     threadId,
     source,
-    role,
     runtimeConfig,
   });
   return { instanceId, instance };

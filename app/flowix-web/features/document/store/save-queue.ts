@@ -4,20 +4,15 @@ import { findFileDisplayPath } from '@/lib/file-display-registry';
 /** Body persistence adapter for the shared per-document title/body coordinator.
  * The buffer owns revisions and CAS baselines; this module owns IPC receipts.
  */
-import { documentContentOperations } from '@features/document/use-cases/document-operations';
-import { markMemoCommitApplied } from '@features/document/store/memo-content-revision';
+import { localDocumentOperations } from '@features/document/use-cases/local-document-operations';
 
 export interface SaveContext {
   /** Stable queue key for this runtime Markdown identity (`md:<displayId>`). */
   queueKey: string;
   /** The document path this save targets. */
   path: string;
-  /** Indexed or standalone file persistence; both channels address by path. */
-  channel: 'internal' | 'external';
-  /** Authorized file-tree root for non-Markdown external text files. */
+  /** Authorized file-tree root for this file. */
   scopePath: string | null;
-  /** Optional legacy identity used only to correlate revision/event metadata. */
-  key: string | null;
   /** Immutable buffer revision represented by this save request. */
   revision: number;
   /**
@@ -64,8 +59,8 @@ async function runOne(ctx: SaveContext, content: string): Promise<boolean> {
   try {
     const displayId = ctx.queueKey.startsWith('md:') ? ctx.queueKey.slice(3) : null;
     const path = displayId ? findFileDisplayPath(displayId) ?? ctx.path : ctx.path;
-    const write = (target: string) => documentContentOperations(ctx.channel).write({
-      path: target, scopePath: ctx.scopePath, memoId: ctx.key, content, expectedContent: expected,
+    const write = (target: string) => localDocumentOperations.write({
+      path: target, scopePath: ctx.scopePath, content, expectedContent: expected,
     });
     let attemptedPath = path;
     let result = await write(attemptedPath);
@@ -76,7 +71,6 @@ async function runOne(ctx: SaveContext, content: string): Promise<boolean> {
       result = await write(attemptedPath);
     }
     if (result.status === 'saved') {
-      if (ctx.key) markMemoCommitApplied(ctx.key, result);
       const latestPath = displayId ? findFileDisplayPath(displayId) : null;
       const writtenPath = canonicalPath(result.path) === canonicalPath(attemptedPath) && latestPath ? latestPath : result.path;
       ctx.onSaved(writtenPath, result.content, ctx.revision);

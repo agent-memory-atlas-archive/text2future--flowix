@@ -23,8 +23,6 @@ export interface DispatchChatStreamArgs {
   permissionMode: AgentPermissionMode;
   codexModel: AgentCodexModel;
   codexReasoningEffort: AgentCodexReasoningEffort;
-  agentRoleMemoId?: string;
-  agentRoleName?: string;
   /** Runtime config snapshot from the conversation instance. */
   runtimeConfig?: RuntimeConfig;
   imagePaths?: string[];
@@ -50,8 +48,6 @@ export async function dispatchChatStream({
   permissionMode,
   codexModel,
   codexReasoningEffort,
-  agentRoleMemoId,
-  agentRoleName,
   runtimeConfig: instanceRuntimeConfig,
   imagePaths,
   conversationTitle,
@@ -84,8 +80,6 @@ export async function dispatchChatStream({
     systemReminderDocumentPath: userPayload.systemReminderDocumentPath,
     agentType,
     runtimeConfig,
-    agentRoleMemoId,
-    agentRoleName,
     imagePaths,
     conversationTitle,
   });

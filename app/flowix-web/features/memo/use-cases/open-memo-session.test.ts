@@ -1,171 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-import type { MemoItem } from '@/types/memo-item';
+import { describe, expect, it, vi } from 'vitest';
 import type { Notebook } from '@features/memo/store/memo-store';
 
-const testState = vi.hoisted(() => ({
-  selectedMemo: null as MemoItem | null,
-  selectedNotebook: null as Notebook | null,
-  activeMemoSession: null as { memoId: string; path: string } | null,
-  currentDocumentSource: null as 'memo' | 'external' | null,
-  setSelectedMemo: vi.fn((memo: MemoItem | null) => {
-    testState.selectedMemo = memo;
-  }),
-  openMemoDocument: vi.fn(async (input: { memoId: string; path: string | null }) => {
-    testState.activeMemoSession = {
-      memoId: input.memoId,
-      path: input.path ?? '',
-    };
-    testState.currentDocumentSource = 'memo';
-  }),
-  openExternalDocument: vi.fn(async (_path?: string, _options?: { history: 'skip'; scopePath: string }) => {
-    testState.currentDocumentSource = 'external';
-  }),
-  openMemoTarget: vi.fn((input: { memoId: string; path: string | null; memo?: MemoItem | null; notebook?: Notebook | null }) => {
-    const { memo: _memo, notebook: _notebook, ...documentInput } = input;
-    return testState.openMemoDocument(documentInput);
-  }),
-  openArtifactTarget: vi.fn(),
-  openExternalTarget: vi.fn((path: string, options: { history: 'skip'; scopePath: string }) => (
-    testState.openExternalDocument(path, options)
-  )),
-}));
+const openNotebookNote = vi.hoisted(() => vi.fn().mockResolvedValue({ host: 'main-third' }));
+vi.mock('./open-notebook-note', () => ({ openNotebookNote }));
 
-vi.mock('@features/memo/store/memo-store', () => ({
-  useMemoStore: {
-    getState: () => ({
-      selectedMemo: testState.selectedMemo,
-      selectedNotebook: testState.selectedNotebook,
-      setSelectedMemo: testState.setSelectedMemo,
-    }),
-  },
-}));
+import { openPathNoteSession } from './open-memo-session';
 
-vi.mock('@features/document/store/document-store', () => ({
-  useDocumentStore: {
-    getState: () => ({
-      activeMemoSession: testState.activeMemoSession,
-      currentDocumentSource: testState.currentDocumentSource,
-      openMemoDocument: testState.openMemoDocument,
-      openExternalDocument: testState.openExternalDocument,
-    }),
-  },
-}));
+const notebook = { id: 'notes', path: '/notes', name: 'Notes' } as Notebook;
 
-vi.mock('@features/workspace/use-cases/workspace-navigation', () => ({
-  openMemoTarget: testState.openMemoTarget,
-  openArtifactTarget: testState.openArtifactTarget,
-  openExternalTarget: testState.openExternalTarget,
-}));
-
-import {
-  openMemoSession,
-  restorePersistedMemoSession,
-} from '@features/memo/use-cases/open-memo-session';
-
-const memo: MemoItem = {
-  id: 'memo-1',
-  filename: 'Memo.md',
-  preview: '',
-  tags: [],
-  todos: [],
-  agents: [],
-  createdAt: 1,
-  updatedAt: 1,
-  favorited: false,
-  icon: null,
-  colors: [],
-  properties: {},
-};
-
-const notebook: Notebook = {
-  id: 'notebook-1',
-  name: 'Notebook',
-  path: '/notebook',
-  createdAt: 1,
-  updatedAt: 1,
-  isDefault: true,
-};
-
-describe('restorePersistedMemoSession', () => {
-  beforeEach(() => {
-    testState.selectedMemo = memo;
-    testState.selectedNotebook = notebook;
-    testState.activeMemoSession = null;
-    testState.currentDocumentSource = null;
-    testState.setSelectedMemo.mockClear();
-    testState.openMemoDocument.mockClear();
-    testState.openExternalDocument.mockClear();
-    testState.openMemoTarget.mockClear();
-    testState.openArtifactTarget.mockClear();
-    testState.openExternalTarget.mockClear();
-    testState.openMemoDocument.mockImplementation(async (input) => {
-      testState.activeMemoSession = {
-        memoId: input.memoId,
-        path: input.path ?? '',
-      };
-      testState.currentDocumentSource = 'memo';
-    });
+describe('path note opening', () => {
+  it('opens a current list item by notebook and relative path', async () => {
+    openNotebookNote.mockClear();
+    await openPathNoteSession({
+      notebookId: 'notes', relativePath: 'Folder/Note.md', properties: {},
+    } as Parameters<typeof openPathNoteSession>[0], notebook);
+    expect(openNotebookNote).toHaveBeenCalledWith('/notes/Folder/Note.md', notebook,
+      expect.objectContaining({ mayBePlugin: false }));
   });
-
-  it('opens a persisted memo once and then recognizes its active session', async () => {
-    await restorePersistedMemoSession();
-    await restorePersistedMemoSession();
-
-    expect(testState.openMemoDocument).toHaveBeenCalledOnce();
-    expect(testState.openMemoDocument).toHaveBeenCalledWith({
-      memoId: memo.id,
-      path: '/notebook/Memo.md',
-      notebookId: notebook.id,
-      notebookPath: notebook.path,
-    });
-  });
-
-  it('opens a pointer memo as an artifact target instead of an editable session', async () => {
-    testState.openArtifactTarget.mockResolvedValue(null);
-    const pointerMemo = {
-      ...memo,
-      properties: {
-        flowix_note_type: 'mindmap',
-        flowix_plugin: 'mindmap',
-        flowix_artifact: { renderer: 'markmap' },
-      },
-    };
-
-    await openMemoSession(pointerMemo, notebook);
-
-    expect(testState.openArtifactTarget).toHaveBeenCalledWith({
-      pointerMemoId: pointerMemo.id,
-      notebook,
-      pluginId: 'mindmap',
-      renderer: 'markmap',
-      memo: pointerMemo,
-    });
-    expect(testState.openMemoTarget).not.toHaveBeenCalled();
-  });
-
-  it('does not replace an external document session', async () => {
-    testState.currentDocumentSource = 'external';
-
-    await restorePersistedMemoSession();
-
-    expect(testState.openMemoDocument).not.toHaveBeenCalled();
-  });
-
-  it('coalesces concurrent restore attempts for the same memo', async () => {
-    let finishOpen: (() => void) | undefined;
-    testState.openMemoDocument.mockImplementation(
-      () => new Promise<void>((resolve) => {
-        finishOpen = resolve;
-      }),
-    );
-
-    const first = restorePersistedMemoSession();
-    const second = restorePersistedMemoSession();
-
-    expect(testState.openMemoDocument).toHaveBeenCalledOnce();
-    finishOpen?.();
-    await Promise.all([first, second]);
-  });
-
 });

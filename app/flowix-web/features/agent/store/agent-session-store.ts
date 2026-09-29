@@ -118,13 +118,10 @@ export interface AgentSessionStore
       instanceId?: string;
       conversationTitle?: string;
       currentNoteContent?: string;
-      agentRoleMemoId?: string;
-      agentRoleName?: string;
       isFirstMessage?: boolean;
       runtimeConfig?: RuntimeConfig | null;
       imagePaths?: string[];
       attachments?: AgentMessageAttachment[];
-      agentRoleBody?: string | null;
       runId?: string;
     },
   ) => Promise<void>;
@@ -314,9 +311,6 @@ export const useAgentSessionStore = create<AgentSessionStore>()(
             isFirstMessage,
             agentType: type.key,
             currentNoteContent: options?.currentNoteContent,
-            agentRoleMemoId: options?.agentRoleMemoId,
-            agentRoleName: options?.agentRoleName,
-            agentRoleBody: options?.agentRoleBody ?? null,
             systemReminderDirectory:
               options?.runtimeConfig?.workspaceSnapshot?.notebookPath,
             attachments:
@@ -394,8 +388,6 @@ export const useAgentSessionStore = create<AgentSessionStore>()(
               permissionMode: settings.agentPermissionMode,
               codexModel: settings.agentCodexModel,
               codexReasoningEffort: settings.agentCodexReasoningEffort,
-              agentRoleMemoId: options?.agentRoleMemoId,
-              agentRoleName: options?.agentRoleName,
               runtimeConfig: options?.runtimeConfig ?? undefined,
               imagePaths: options?.imagePaths,
               conversationTitle:

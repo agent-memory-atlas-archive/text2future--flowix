@@ -1,6 +1,6 @@
 //! Transport-neutral Flowix operations shared by CLI and MCP adapters.
 
-use crate::{errors::CliError, fmt, output, plugin, store};
+use crate::{errors::CliError, fmt, output, path_store, plugin, store};
 use serde_json::Value;
 
 #[derive(Debug, Clone)]
@@ -15,7 +15,7 @@ pub(crate) enum FlowixOperation {
         notebook: Option<String>,
     },
     Show {
-        id: String,
+        address: String,
     },
     Search {
         query: String,
@@ -28,17 +28,17 @@ pub(crate) enum FlowixOperation {
         content: String,
     },
     Edit {
-        id: String,
+        address: String,
         old: String,
         replacement: String,
         dry_run: bool,
     },
     Write {
-        id: String,
+        address: String,
         content: String,
     },
     Delete {
-        id: String,
+        address: String,
     },
     ArtifactList,
     ArtifactDescribe {
@@ -72,7 +72,7 @@ pub(crate) fn execute(operation: FlowixOperation) -> Result<Value, CliError> {
             offset,
         } => {
             let notebook = store::resolve_notebook_key(notebook.as_deref())?;
-            let entries = store::notes_list_entries(&notebook)?;
+            let entries = path_store::list(&notebook)?["notes"].as_array().cloned().unwrap_or_default();
             let total = entries.len();
             let notes = entries
                 .into_iter()
@@ -83,7 +83,7 @@ pub(crate) fn execute(operation: FlowixOperation) -> Result<Value, CliError> {
                 "ok": true,
                 "action": "list",
                 "notebook": notebook,
-                "notes": fmt::notes_to_json(&notes),
+                "notes": notes,
                 "total": total,
                 "offset": offset,
                 "limit": limit,
@@ -91,51 +91,32 @@ pub(crate) fn execute(operation: FlowixOperation) -> Result<Value, CliError> {
             }))
         }
         FlowixOperation::Tags { notebook } => store::notebook_tags(notebook.as_deref()),
-        FlowixOperation::Show { id } => Ok(store::note_show_data(&id)?.to_json()),
+        FlowixOperation::Show { address } => path_store::show(&address),
         FlowixOperation::Search {
             query,
             notebook,
             tag,
             limit,
         } => {
-            let results = store::search_hits(&query, notebook.as_deref(), tag.as_deref(), limit)?;
-            output::to_json_value(&store::search_results_to_value(
-                &query,
-                tag.as_deref(),
-                &results,
-            ))
+            path_store::search(&query, notebook.as_deref(), tag.as_deref(), limit)
         }
         FlowixOperation::Create { notebook, content } => {
             let notebook = store::resolve_notebook_key(notebook.as_deref())?;
-            let (mut memo_file, config) = store::open_in(&notebook)?;
-            output::to_json_value(&store::create_note(&mut memo_file, &config, &content)?)
+            path_store::create(&notebook, &content)
         }
         FlowixOperation::Edit {
-            id,
+            address,
             old,
             replacement,
             dry_run,
         } => {
-            let (mut memo_file, full_id) = store::resolve_id(&id)?;
-            let result = if dry_run {
-                store::preview_edit_note(&mut memo_file, &full_id, &old, &replacement)
-            } else {
-                store::edit_note(&mut memo_file, &full_id, &old, &replacement)
-            }?;
-            output::to_json_value(&result)
+            path_store::edit(&address, &old, &replacement, dry_run)
         }
-        FlowixOperation::Write { id, content } => {
-            let (mut memo_file, full_id) = store::resolve_id(&id)?;
-            output::to_json_value(&store::write_note(&mut memo_file, &full_id, &content)?)
+        FlowixOperation::Write { address, content } => {
+            path_store::write(&address, &content)
         }
-        FlowixOperation::Delete { id } => {
-            let (mut memo_file, full_id) = store::resolve_id(&id)?;
-            let path = memo_file.find_memo_file_path(&full_id);
-            output::to_json_value(&store::delete_note(
-                &mut memo_file,
-                &full_id,
-                path.as_deref(),
-            )?)
+        FlowixOperation::Delete { address } => {
+            path_store::delete(&address)
         }
         FlowixOperation::ArtifactList => output::to_json_value(&plugin::list_data()),
         FlowixOperation::ArtifactDescribe { plugin_id } => {

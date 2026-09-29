@@ -1,7 +1,6 @@
 import {
   initializeMemoLibrary,
   markMemoLibraryStartupError,
-  restorePersistedMemoSession,
 } from '@features/memo/public/app-api';
 import { waitForInitialDocumentLoad } from '@features/document/public/startup-api';
 import {
@@ -78,10 +77,7 @@ export async function initializeMainWindowStartup(): Promise<void> {
 }
 
 async function restoreDesiredTarget(target: PersistedWorkspaceTarget | null): Promise<void> {
-  if (!target || target.kind === 'memo') {
-    await restorePersistedMemoSession(target?.kind === 'memo' ? target.memoId : null);
-    return;
-  }
+  if (!target) return;
   if (target.kind === 'external') {
     await restoreExternalDocumentWorkspace(target);
     return;

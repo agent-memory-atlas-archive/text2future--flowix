@@ -3,7 +3,7 @@
 use super::ThreadManager;
 use crate::agent_session::error::ThreadError;
 use crate::agent_session::types::{
-    AgentConversationCursor, AgentConversationInstance, AgentConversationRole,
+    AgentConversationCursor, AgentConversationInstance,
     AgentConversationSource, AgentConversationTypeCount, UpsertAgentConversationInstance,
 };
 use rusqlite::{params, OptionalExtension};
@@ -26,6 +26,52 @@ fn sanitize_frontend_runtime_config(raw: Option<String>) -> Option<String> {
 }
 
 impl ThreadManager {
+    /// Rebase path-owned conversation sources after a note or folder moves,
+    /// including moves between notebooks.
+    pub fn rebase_agent_note_paths(
+        &self,
+        old_notebook_id: &str,
+        new_notebook_id: &str,
+        old_relative: &str,
+        new_relative: &str,
+        old_absolute: &str,
+        new_absolute: &str,
+    ) -> Result<(), ThreadError> {
+        let old_relative = old_relative.replace('\\', "/");
+        let new_relative = new_relative.replace('\\', "/");
+        let old_absolute = old_absolute.replace('\\', "/");
+        let new_absolute = new_absolute.replace('\\', "/");
+        if old_notebook_id == new_notebook_id && old_relative == new_relative && old_absolute == new_absolute { return Ok(()); }
+        let mut conn = self.lock_conn();
+        let tx = conn.transaction()?;
+        for (table, notebook_col, relative_col, document_col) in [
+            ("agent_instances", "notebook_id", "relative_path", "document_path"),
+            ("agent_conversation_instances", "source_notebook_id", "source_relative_path", "source_document_path"),
+        ] {
+            tx.execute(
+                &format!("UPDATE {table} SET
+                    {notebook_col} = ?5,
+                    {relative_col} = ?1 || substr({relative_col}, length(?2) + 1),
+                    {document_col} = ?3 || substr({relative_col}, length(?2) + 1)
+                  WHERE {notebook_col} = ?4 AND
+                    ({relative_col} = ?2 OR substr({relative_col}, 1, length(?2) + 1) = ?2 || '/')"),
+                params![new_relative, old_relative, new_absolute, old_notebook_id, new_notebook_id],
+            )?;
+            tx.execute(
+                &format!("UPDATE {table} SET
+                    {notebook_col} = ?5,
+                    {relative_col} = ?1 || substr(replace({document_col}, char(92), '/'), length(?2) + 1),
+                    {document_col} = ?3 || substr(replace({document_col}, char(92), '/'), length(?2) + 1)
+                  WHERE {notebook_col} = ?4 AND {relative_col} IS NULL AND
+                    (replace({document_col}, char(92), '/') = ?2 OR
+                     substr(replace({document_col}, char(92), '/'), 1, length(?2) + 1) = ?2 || '/')"),
+                params![new_relative, old_absolute, new_absolute, old_notebook_id, new_notebook_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub async fn list_agent_conversation_instances(
         self: &Arc<Self>,
     ) -> Result<Vec<AgentConversationInstance>, ThreadError> {
@@ -58,7 +104,7 @@ impl ThreadManager {
             "SELECT
                 i.id, i.agent, ti.title, ti.id, i.config_json,
                 legacy.frozen_cwd, i.source, i.document_path, i.memo_id,
-                i.role_memo_id, i.role_name, i.created_at, i.updated_at, i.notebook_id,
+                NULL, NULL, i.created_at, i.updated_at, i.notebook_id,
                 COALESCE(
                     CASE i.agent
                         WHEN 'codex' THEN (SELECT external_id FROM threads_codex WHERE thread_id = ti.id)
@@ -69,7 +115,7 @@ impl ThreadManager {
                     END,
                     (SELECT external_session_id FROM thread_external_sessions
                      WHERE thread_id = ti.id AND runtime = i.agent)
-                )
+                ), i.relative_path
              FROM agent_instances i
              LEFT JOIN threads_index ti ON ti.instance_id = i.id
              LEFT JOIN agent_conversation_instances legacy ON legacy.instance_id = i.id
@@ -141,7 +187,7 @@ impl ThreadManager {
             "SELECT
                 i.id, i.agent, ti.title, ti.id, i.config_json,
                 legacy.frozen_cwd, i.source, i.document_path, i.memo_id,
-                i.role_memo_id, i.role_name, i.created_at, i.updated_at, i.notebook_id,
+                NULL, NULL, i.created_at, i.updated_at, i.notebook_id,
                 COALESCE(
                     CASE i.agent
                         WHEN 'codex' THEN (SELECT external_id FROM threads_codex WHERE thread_id = ti.id)
@@ -152,7 +198,7 @@ impl ThreadManager {
                     END,
                     (SELECT external_session_id FROM thread_external_sessions
                      WHERE thread_id = ti.id AND runtime = i.agent)
-                )
+                ), i.relative_path
              FROM agent_instances i
              LEFT JOIN threads_index ti ON ti.instance_id = i.id
              LEFT JOIN agent_conversation_instances legacy ON legacy.instance_id = i.id
@@ -223,7 +269,7 @@ impl ThreadManager {
             "SELECT
                 i.id, i.agent, ti.title, ti.id, i.config_json,
                 legacy.frozen_cwd, i.source, i.document_path, i.memo_id,
-                i.role_memo_id, i.role_name, i.created_at, i.updated_at, i.notebook_id,
+                NULL, NULL, i.created_at, i.updated_at, i.notebook_id,
                 COALESCE(
                     CASE i.agent
                         WHEN 'codex' THEN (SELECT external_id FROM threads_codex WHERE thread_id = ti.id)
@@ -234,7 +280,7 @@ impl ThreadManager {
                     END,
                     (SELECT external_session_id FROM thread_external_sessions
                      WHERE thread_id = ti.id AND runtime = i.agent)
-                )
+                ), i.relative_path
              FROM agent_instances i
              LEFT JOIN threads_index ti ON ti.instance_id = i.id
              LEFT JOIN agent_conversation_instances legacy ON legacy.instance_id = i.id
@@ -264,7 +310,7 @@ impl ThreadManager {
             "SELECT
                 i.id, i.agent, ti.title, ti.id, i.config_json,
                 legacy.frozen_cwd, i.source, i.document_path, i.memo_id,
-                i.role_memo_id, i.role_name, i.created_at, i.updated_at, i.notebook_id,
+                NULL, NULL, i.created_at, i.updated_at, i.notebook_id,
                 COALESCE(
                     CASE i.agent
                         WHEN 'codex' THEN (SELECT external_id FROM threads_codex WHERE thread_id = ti.id)
@@ -275,7 +321,7 @@ impl ThreadManager {
                     END,
                     (SELECT external_session_id FROM thread_external_sessions
                      WHERE thread_id = ti.id AND runtime = i.agent)
-                )
+                ), i.relative_path
              FROM agent_instances i
              JOIN threads_index ti ON ti.instance_id = i.id
              LEFT JOIN agent_conversation_instances legacy ON legacy.instance_id = i.id
@@ -311,8 +357,6 @@ impl ThreadManager {
         } else {
             input.source.kind
         };
-        let role_memo_id = input.role.as_ref().and_then(|role| role.memo_id.clone());
-        let role_name = input.role.as_ref().and_then(|role| role.name.clone());
         let mut conn = self.lock_conn();
         let tx = conn.transaction()?;
         let previous_thread_id = tx
@@ -358,9 +402,9 @@ impl ThreadManager {
         tx.execute(
             "INSERT INTO agent_conversation_instances (
                 instance_id, agent_type, thread_id,
-                runtime_config, source_kind, source_document_path, source_memo_id, source_notebook_id,
-                role_memo_id, role_name, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                runtime_config, source_kind, source_document_path, source_memo_id, source_notebook_id, source_relative_path,
+                created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(instance_id) DO UPDATE SET
                 agent_type = excluded.agent_type,
                 thread_id = excluded.thread_id,
@@ -369,8 +413,7 @@ impl ThreadManager {
                 source_document_path = excluded.source_document_path,
                 source_memo_id = excluded.source_memo_id,
                 source_notebook_id = excluded.source_notebook_id,
-                role_memo_id = excluded.role_memo_id,
-                role_name = excluded.role_name,
+                source_relative_path = excluded.source_relative_path,
                 updated_at = excluded.updated_at
               WHERE excluded.updated_at >= agent_conversation_instances.updated_at",
             params![
@@ -380,10 +423,9 @@ impl ThreadManager {
                 runtime_config,
                 source_kind,
                 input.source.document_path,
-                input.source.memo_id,
+                Option::<String>::None,
                 input.source.notebook_id,
-                role_memo_id,
-                role_name,
+                input.source.relative_path,
                 created_at,
                 updated_at,
             ],
@@ -396,8 +438,8 @@ impl ThreadManager {
         tx.execute(
             "INSERT INTO agent_instances (
                 id, agent, config_json, source, document_path, memo_id,
-                notebook_id, role_memo_id, role_name, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                notebook_id, relative_path, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO UPDATE SET
                 agent = excluded.agent,
                 config_json = excluded.config_json,
@@ -405,8 +447,7 @@ impl ThreadManager {
                 document_path = excluded.document_path,
                 memo_id = excluded.memo_id,
                 notebook_id = excluded.notebook_id,
-                role_memo_id = excluded.role_memo_id,
-                role_name = excluded.role_name,
+                relative_path = excluded.relative_path,
                 updated_at = excluded.updated_at
               WHERE excluded.updated_at >= agent_instances.updated_at",
             params![
@@ -415,10 +456,9 @@ impl ThreadManager {
                 runtime_config,
                 source_kind,
                 input.source.document_path,
-                input.source.memo_id,
+                Option::<String>::None,
                 input.source.notebook_id,
-                role_memo_id,
-                role_name,
+                input.source.relative_path,
                 created_at,
                 updated_at,
             ],
@@ -480,7 +520,7 @@ impl ThreadManager {
                 "SELECT
                     i.id, i.agent, ti.title, ti.id, i.config_json,
                     legacy.frozen_cwd, i.source, i.document_path, i.memo_id,
-                    i.role_memo_id, i.role_name, i.created_at, i.updated_at, i.notebook_id,
+                    NULL, NULL, i.created_at, i.updated_at, i.notebook_id,
                     COALESCE(
                         CASE i.agent
                             WHEN 'codex' THEN (SELECT external_id FROM threads_codex WHERE thread_id = ti.id)
@@ -491,7 +531,7 @@ impl ThreadManager {
                         END,
                         (SELECT external_session_id FROM thread_external_sessions
                          WHERE thread_id = ti.id AND runtime = i.agent)
-                    )
+                    ), i.relative_path
                  FROM agent_instances i
                  LEFT JOIN threads_index ti ON ti.instance_id = i.id
                  LEFT JOIN agent_conversation_instances legacy ON legacy.instance_id = i.id
@@ -829,18 +869,8 @@ impl ThreadManager {
         let source = AgentConversationSource {
             kind: row.get(6)?,
             document_path: row.get(7)?,
-            memo_id: row.get(8)?,
+            relative_path: row.get(15)?,
             notebook_id: row.get(13)?,
-        };
-        let role_memo_id: Option<String> = row.get(9)?;
-        let role_name: Option<String> = row.get(10)?;
-        let role = if role_memo_id.is_some() || role_name.is_some() {
-            Some(AgentConversationRole {
-                memo_id: role_memo_id,
-                name: role_name,
-            })
-        } else {
-            None
         };
         Ok(AgentConversationInstance {
             instance_id: row.get(0)?,
@@ -851,7 +881,6 @@ impl ThreadManager {
             runtime_config: row.get(4)?,
             frozen_cwd: row.get(5)?,
             source,
-            role,
             created_at: row.get(11)?,
             updated_at: row.get(12)?,
         })

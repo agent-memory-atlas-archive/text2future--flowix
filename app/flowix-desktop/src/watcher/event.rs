@@ -42,6 +42,8 @@ pub struct RawFsEvent {
     pub kind: FsEventKind,
     pub path: PathBuf,
     pub rename_from: Option<PathBuf>,
+    pub rename_from_notebook_id: Option<String>,
+    pub rename_from_root: Option<PathBuf>,
     #[allow(dead_code)]
     pub time: Instant,
 }
@@ -53,6 +55,8 @@ impl RawFsEvent {
             kind,
             path,
             rename_from: None,
+            rename_from_notebook_id: None,
+            rename_from_root: None,
             time: Instant::now(),
         }
     }

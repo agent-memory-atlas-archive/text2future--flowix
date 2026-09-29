@@ -31,7 +31,7 @@ export function getAgentConversationPresentation(
   return {
     title: instance.title?.trim() || fallbackTitle,
     source,
-    hasSourceDocument: Boolean(source?.memoId || source?.documentPath),
+    hasSourceDocument: Boolean(source?.documentPath || (source?.notebookId && source?.relativePath)),
     runtimeCwd: getAgentConversationRuntimeCwd(instance),
   };
 }

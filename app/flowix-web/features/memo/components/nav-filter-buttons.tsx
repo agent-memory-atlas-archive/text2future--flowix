@@ -1,7 +1,7 @@
 'use client';
 
 import { Filter, Layers, ListTodo, Menu, MoreHorizontal } from 'lucide-react';
-import { useEffect, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 
 import { cn } from '@/lib/utils';
 import { useMemoStore } from '@features/memo/store/memo-store';
@@ -10,9 +10,11 @@ import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@shared/ui/dialog';
 import {
+  EMPTY_CUSTOM_FILTERS,
   useCustomFilterStore,
   type CustomFilter,
   type CustomFilterOperator,
+  type CustomViewDocumentType,
 } from '@features/memo/store/custom-filter-store';
 import {
   ContextMenu,
@@ -197,7 +199,12 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
   const [key, setKey] = useState('');
   const [operator, setOperator] = useState<CustomFilterOperator>('contains');
   const [value, setValue] = useState('');
-  const filters = useCustomFilterStore((s) => s.filters);
+  const [documentType, setDocumentType] = useState<CustomViewDocumentType>('note');
+  const [dialogNotebookId, setDialogNotebookId] = useState<string | null>(null);
+  const selectedNotebook = useMemoStore((s) => s.selectedNotebook);
+  const notebookId = selectedNotebook?.id ?? null;
+  const filters = useCustomFilterStore((s) => notebookId ? s.filtersByNotebook[notebookId] ?? EMPTY_CUSTOM_FILTERS : EMPTY_CUSTOM_FILTERS);
+  const loadNotebookFilters = useCustomFilterStore((s) => s.loadNotebookFilters);
   const addFilter = useCustomFilterStore((s) => s.addFilter);
   const updateFilter = useCustomFilterStore((s) => s.updateFilter);
   const removeFilter = useCustomFilterStore((s) => s.removeFilter);
@@ -206,46 +213,72 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
   const setActiveFilter = useMemoStore((s) => s.setActiveFilter);
   const triggerRefresh = useMemoStore((s) => s.triggerRefresh);
 
-  const reset = () => {
+  useEffect(() => {
+    if (notebookId) void loadNotebookFilters(notebookId);
+  }, [loadNotebookFilters, notebookId]);
+
+  const reset = useCallback(() => {
     setEditingFilter(null);
     setName('');
     setKey('');
     setOperator('contains');
     setValue('');
-  };
-
-  const openCreateDialog = () => {
-    reset();
-    setOpen(true);
-  };
-
-  useEffect(() => {
-    const handleCreateRequest = () => openCreateDialog();
-    window.addEventListener('flowix:open-custom-filter-create', handleCreateRequest);
-    return () => window.removeEventListener('flowix:open-custom-filter-create', handleCreateRequest);
+    setDocumentType('note');
   }, []);
 
-  const openEditDialog = (filter: CustomFilter) => {
+  useEffect(() => {
+    const handleCreateRequest = (event: Event) => {
+      const targetNotebookId = (event as CustomEvent<{ notebookId?: string }>).detail?.notebookId ?? notebookId;
+      if (!targetNotebookId) return;
+      void loadNotebookFilters(targetNotebookId).then(() => {
+        reset();
+        setDialogNotebookId(targetNotebookId);
+        setOpen(true);
+      });
+    };
+    window.addEventListener('flowix:open-custom-filter-create', handleCreateRequest);
+    return () => window.removeEventListener('flowix:open-custom-filter-create', handleCreateRequest);
+  }, [loadNotebookFilters, notebookId, reset]);
+
+  const openEditDialog = useCallback((filter: CustomFilter, targetNotebookId = notebookId) => {
     setEditingFilter(filter);
+    setDialogNotebookId(targetNotebookId);
     setName(filter.name);
     setKey(filter.key);
     setOperator(filter.operator);
     setValue(filter.value);
+    setDocumentType(filter.documentType ?? 'note');
     setOpen(true);
-  };
+  }, [notebookId]);
+
+  useEffect(() => {
+    const handleEditRequest = (event: Event) => {
+      const detail = (event as CustomEvent<{ filterId?: string; notebookId?: string }>).detail;
+      const targetNotebookId = detail?.notebookId ?? notebookId;
+      if (!targetNotebookId) return;
+      void loadNotebookFilters(targetNotebookId).then(() => {
+        const filter = useCustomFilterStore.getState().filtersByNotebook[targetNotebookId]
+          ?.find((item) => item.id === detail?.filterId);
+        if (filter) openEditDialog(filter, targetNotebookId);
+      });
+    };
+    window.addEventListener('flowix:open-custom-filter-edit', handleEditRequest);
+    return () => window.removeEventListener('flowix:open-custom-filter-edit', handleEditRequest);
+  }, [loadNotebookFilters, notebookId, openEditDialog]);
 
   const handleSubmit = () => {
     const nextName = name.trim();
     const nextKey = key.trim();
     const nextValue = value.trim();
-    if (!nextName || !nextKey || !nextValue) return;
-    const nextFilter = { name: nextName, key: nextKey, operator, value: nextValue };
+    const targetNotebookId = dialogNotebookId ?? notebookId;
+    if (!nextName || (documentType === 'note' && (!nextKey || !nextValue)) || !targetNotebookId) return;
+    const nextFilter = { name: nextName, documentType, key: documentType === 'note' ? nextKey : '', operator, value: documentType === 'note' ? nextValue : '' };
     if (editingFilter) {
-      updateFilter(editingFilter.id, nextFilter);
-      if (activeCustomFilterId === editingFilter.id) triggerRefresh();
+      updateFilter(targetNotebookId, editingFilter.id, nextFilter);
+      if (notebookId === targetNotebookId && activeCustomFilterId === editingFilter.id) triggerRefresh();
     } else {
-      const id = addFilter(nextFilter);
-      setActiveCustomFilter(id);
+      const id = addFilter(targetNotebookId, nextFilter);
+      if (notebookId === targetNotebookId) setActiveCustomFilter(id);
     }
     setOpen(false);
     reset();
@@ -253,7 +286,7 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
 
   const handleDelete = (filter: CustomFilter) => {
     if (activeCustomFilterId === filter.id) setActiveFilter('all');
-    removeFilter(filter.id);
+    if (notebookId) removeFilter(notebookId, filter.id);
   };
 
   return (
@@ -295,10 +328,10 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
           </div>
         </div>
       )}
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
+      <Dialog open={open} onOpenChange={(nextOpen) => { setOpen(nextOpen); if (!nextOpen) reset(); }}>
+        <DialogContent rightSide>
           <DialogHeader>
-            <DialogTitle>{t('memo.customFilter.title')}</DialogTitle>
+            <DialogTitle>{t(editingFilter ? 'memo.customFilter.editTitle' : 'memo.customFilter.title')}</DialogTitle>
             <DialogDescription>{t('memo.customFilter.description')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -307,29 +340,35 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
               <Input value={name} onChange={(event) => setName(event.target.value)} placeholder={t('memo.customFilter.namePlaceholder')} autoFocus />
             </label>
             <label className="block space-y-1 text-sm">
-              <span className="text-sm font-semibold text-[var(--foreground)]">{t('memo.customFilter.key')}</span>
-              <Input value={key} onChange={(event) => setKey(event.target.value)} placeholder={t('memo.customFilter.keyPlaceholder')} />
+              <span className="text-sm font-semibold text-[var(--foreground)]">{t('memo.customFilter.documentType')}</span>
+              <select value={documentType} onChange={(event) => setDocumentType(event.target.value as CustomViewDocumentType)} className="h-9 w-full rounded-lg border border-input bg-background px-2 text-sm outline-none focus:border-[var(--primary)]">
+                <option value="note">{t('memo.customFilter.typeNote')}</option>
+                <option value="image">{t('memo.customFilter.typeImage')}</option>
+                <option value="video">{t('memo.customFilter.typeVideo')}</option>
+              </select>
             </label>
-            <div className="grid grid-cols-[1fr_1.4fr] gap-2">
-              <label className="space-y-1 text-sm">
-                <span className="text-sm font-semibold text-[var(--foreground)]">{t('memo.customFilter.condition')}</span>
-                <select
-                  value={operator}
-                  onChange={(event) => setOperator(event.target.value as CustomFilterOperator)}
-                  className="h-8 w-full rounded-lg border border-input bg-background px-2 text-sm outline-none focus:border-[var(--primary)]"
-                >
-                  <option value="contains">{t('memo.customFilter.contains')}</option>
-                  <option value="equals">{t('memo.customFilter.equals')}</option>
-                </select>
+            {documentType === 'note' && <>
+              <label className="block space-y-1 text-sm">
+                <span className="text-sm font-semibold text-[var(--foreground)]">{t('memo.customFilter.key')}</span>
+                <Input value={key} onChange={(event) => setKey(event.target.value)} placeholder={t('memo.customFilter.keyPlaceholder')} />
               </label>
-              <label className="space-y-1 text-sm">
-                <span className="text-sm font-semibold text-[var(--foreground)]">{t('memo.customFilter.value')}</span>
-                <Input value={value} onChange={(event) => setValue(event.target.value)} placeholder={t('memo.customFilter.valuePlaceholder')} />
-              </label>
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
+              <div className="grid grid-cols-[1fr_1.4fr] gap-2">
+                <label className="space-y-1 text-sm">
+                  <span className="text-sm font-semibold text-[var(--foreground)]">{t('memo.customFilter.condition')}</span>
+                  <select value={operator} onChange={(event) => setOperator(event.target.value as CustomFilterOperator)} className="h-8 w-full rounded-lg border border-input bg-background px-2 text-sm outline-none focus:border-[var(--primary)]">
+                    <option value="contains">{t('memo.customFilter.contains')}</option>
+                    <option value="equals">{t('memo.customFilter.equals')}</option>
+                  </select>
+                </label>
+                <label className="space-y-1 text-sm">
+                  <span className="text-sm font-semibold text-[var(--foreground)]">{t('memo.customFilter.value')}</span>
+                  <Input value={value} onChange={(event) => setValue(event.target.value)} placeholder={t('memo.customFilter.valuePlaceholder')} />
+                </label>
+              </div>
+            </>}
+            <div className="flex justify-end gap-2 border-t border-[var(--border)] pt-4">
               <Button type="button" variant="ghost" onClick={() => setOpen(false)}>{t('memo.customFilter.cancel')}</Button>
-              <Button type="button" onClick={handleSubmit} disabled={!name.trim() || !key.trim() || !value.trim()}>{t('memo.customFilter.create')}</Button>
+              <Button type="button" onClick={handleSubmit} disabled={!name.trim() || (documentType === 'note' && (!key.trim() || !value.trim()))}>{t(editingFilter ? 'memo.customFilter.save' : 'memo.customFilter.create')}</Button>
             </div>
           </div>
         </DialogContent>

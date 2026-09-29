@@ -3,7 +3,6 @@ export { useAgentRuntimeStore } from '@features/agent/store/agent-runtime-store'
 export type {
   AgentConversationInstance,
   AgentConversationSource,
-  AgentConversationRole,
   AgentConversationMessageState,
   CreateAgentConversationInstanceInput,
 } from '@features/agent/store/agent-conversation-types';

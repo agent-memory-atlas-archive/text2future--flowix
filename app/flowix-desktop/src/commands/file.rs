@@ -707,6 +707,19 @@ fn rename_path_and_notify(
             },
         );
     }
+    let notebooks = mf.read_notebook_configs().unwrap_or_default();
+    let address_for = |path: &Path| notebooks.iter().find_map(|notebook| {
+        let relative = path.strip_prefix(Path::new(&notebook.path)).ok()?;
+        Some((notebook.id.clone(), relative.to_string_lossy().replace('\\', "/")))
+    });
+    let rebase = address_for(source).zip(address_for(target));
+    drop(mf);
+    if let Some(((old_notebook_id, old_relative), (new_notebook_id, new_relative))) = rebase {
+        state.thread_manager.rebase_agent_note_paths(
+            &old_notebook_id, &new_notebook_id, &old_relative, &new_relative,
+            &source.to_string_lossy(), &target.to_string_lossy(),
+        ).map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 

@@ -14,8 +14,6 @@ interface UseDocumentAutosaveOptions {
   isActive?: () => boolean;
   getCurrentFilePath?: () => string;
   identity: DocumentIdentity;
-  memoId: string | null;
-  isExternalDocument: boolean;
   externalScopePath: string | null;
   setState: React.Dispatch<React.SetStateAction<DocumentContainerState>>;
   reloadDocument: (path: string, options?: { preservePending?: boolean; showLoading?: boolean }) => Promise<void>;

@@ -1,14 +1,11 @@
 export {
   useDocumentStore,
-  type MemoDocumentSession,
 } from '@features/document/store/document-store';
 export {
   useDocumentHistoryStore,
-  type ArtifactHistoryEntry,
   type AgentConversationHistoryEntry,
   type DocumentHistoryEntry,
   type MediaHistoryEntry,
-  type MemoHistoryEntry,
   type WebHistoryEntry,
 } from '@features/document/store/document-history-store';
 export {

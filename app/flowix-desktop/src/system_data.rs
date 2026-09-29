@@ -21,6 +21,55 @@ pub struct SystemFile {
     /// Agent 空状态「添加常用笔记」的筛选条件 (笔记属性 key / 条件 / value)。
     #[serde(default)]
     pub featured_notes: FeaturedNotesSystemData,
+    /// User-defined note views, stored per notebook alongside other notebook metadata.
+    #[serde(default)]
+    pub custom_views: CustomViewsSystemData,
+    #[serde(default)]
+    pub file_tree: FileTreeSystemData,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTreeSystemData {
+    #[serde(default)]
+    pub notebooks: HashMap<String, NotebookFileTreePreferences>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotebookFileTreePreferences {
+    #[serde(default)]
+    pub section_order: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomViewsSystemData {
+    #[serde(default)]
+    pub notebooks: HashMap<String, NotebookCustomViewsData>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotebookCustomViewsData {
+    #[serde(default)]
+    pub filters: Vec<CustomViewFilterData>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomViewFilterData {
+    pub id: String,
+    pub name: String,
+    #[serde(default = "default_custom_view_document_type")]
+    pub document_type: String,
+    pub key: String,
+    pub operator: String,
+    pub value: String,
+}
+
+fn default_custom_view_document_type() -> String {
+    "note".to_string()
 }
 
 /// 常用笔记筛选配置, 按 notebook id 存放。
@@ -333,6 +382,7 @@ mod tests {
         let file = SystemFile {
             tag: TagSystemData { notebooks },
             featured_notes: Default::default(),
+            ..Default::default()
         };
         SystemData::write_notebook(&root, &file).unwrap();
         let loaded = SystemData::read_notebook(&root).unwrap().unwrap();
@@ -377,6 +427,7 @@ mod tests {
             featured_notes: FeaturedNotesSystemData {
                 notebooks: featured,
             },
+            ..Default::default()
         };
         SystemData::write_notebook(&root, &file).unwrap();
 

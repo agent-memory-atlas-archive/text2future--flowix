@@ -1,13 +1,21 @@
 'use client';
 
 import { CodeSurfaceFileBrowser } from './work-file-browser-view';
+import { DocumentListView } from './document-list-view';
 import {
   type ComponentType,
   type ReactNode,
   useLayoutEffect,
+  useEffect,
+  useState,
 } from 'react';
+import { memos } from '@platform/tauri/client';
+import { PluginArtifactRenderer } from '@features/plugin/plugin-artifact-renderer';
+import { normalizePluginArtifactRenderer, type PluginArtifactRendererId } from '@features/plugin/plugin-note';
 import { DocumentContainer, UnavailableFileView } from '@features/document/components/document-container';
 import { useDocumentStore } from '@features/document/store/document-store';
+import { documentIdentityFromFile } from '@features/document/store/document-identity';
+import { saveDocumentPath } from '@features/document/store/document-session-service';
 import { MediaResourceView } from './media-resource-view';
 import { LazyAgentConversationDetail } from '@features/agent/components/lazy-agent-conversation-detail';
 import {
@@ -23,7 +31,6 @@ import type {
   HtmlFileSurface,
   ImageFileSurface,
   MDSurface,
-  NoteSurface,
   MediaResourceSurface,
   UnavailableFileSurface,
   VideoFileSurface,
@@ -69,12 +76,56 @@ function defineSurface<K extends WorkColumnSurfaceKind>(
   });
 }
 
-function NoteSurfaceView({ surface }: { surface: NoteSurface }) {
-  return <DocumentContainer {...surface.props} fileIdentity={surface.fileIdentity} memoId={surface.memoId} />;
-}
-
 function MDSurfaceView({ surface }: { surface: MDSurface }) {
-  return <DocumentContainer {...surface.props} fileIdentity={surface.fileIdentity} externalEditorMode="markdown" />;
+  const [mindmapContent, setMindmapContent] = useState<string | null>(null);
+  const [pluginRenderer, setPluginRenderer] = useState<PluginArtifactRendererId | null>(null);
+  const [preview, setPreview] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setMindmapContent(null);
+    setPluginRenderer(null);
+    setPreview(false);
+    void memos.readDocument(surface.fileIdentity.path).then((content) => {
+      if (cancelled || !content) return;
+      const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+      const pluginId = frontmatter?.[1].match(/^flowix_plugin:\s*['"]?([^'"\r\n]+)['"]?\s*$/m)?.[1];
+      const rendererValue = frontmatter?.[1].match(/^flowix_renderer:\s*['"]?([^'"\r\n]+)['"]?\s*$/m)?.[1]
+        ?? (pluginId === 'mindmap' ? 'markmap' : null);
+      const renderer = normalizePluginArtifactRenderer(rendererValue);
+      if (frontmatter && pluginId && renderer) {
+        setPluginRenderer(renderer);
+        setMindmapContent(content.slice(frontmatter[0].length).trimStart());
+        setPreview(true);
+      }
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [surface.fileIdentity.path]);
+  return <div className="flex h-full min-h-0 flex-col">
+    {mindmapContent !== null && pluginRenderer && <div className="flex justify-end border-b border-[var(--divider)] px-3 py-1">
+      <button type="button" className="rounded px-3 py-1 text-sm hover:bg-[var(--muted)]"
+        onClick={() => {
+          if (!preview) {
+            const session = useDocumentStore.getState().activeExternalSession;
+            const scopePath = session?.fileIdentity.path === surface.fileIdentity.path ? session.scopePath : null;
+            void saveDocumentPath(documentIdentityFromFile(surface.fileIdentity), surface.fileIdentity.path, scopePath)
+              .then((saved) => saved ? memos.readDocument(surface.fileIdentity.path) : null)
+              .then((content) => {
+              const frontmatter = content?.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+              if (content && frontmatter) {
+                setMindmapContent(content.slice(frontmatter[0].length).trimStart());
+                setPreview(true);
+              }
+            }).catch(() => undefined);
+          } else {
+            setPreview(false);
+          }
+        }}>{preview ? '编辑 Markdown' : '预览思维导图'}</button>
+    </div>}
+    <div className="min-h-0 flex-1" style={{ display: preview ? 'none' : undefined }}>
+      <DocumentContainer {...surface.props} fileIdentity={surface.fileIdentity} externalEditorMode="markdown" />
+    </div>
+    {preview && mindmapContent !== null && pluginRenderer && <div className="min-h-0 flex-1"><PluginArtifactRenderer renderer={pluginRenderer} content={mindmapContent} /></div>}
+  </div>;
 }
 
 function CodeSurfaceView({ surface }: { surface: CodeSurface }) {
@@ -143,20 +194,6 @@ function WebSurfaceView({ surface }: { surface: WebSurface }) {
 const artifactBaseCapabilities = ['fullscreen'] as const;
 
 export const workColumnSurfaceRegistry = Object.freeze({
-  note: defineSurface('note', {
-    chrome: 'document',
-    capabilities: [
-      'edit',
-      'search',
-      'memo-colors',
-      'properties',
-      'copy-content',
-      'export-content',
-      'save-template',
-      'version-history',
-    ],
-    component: NoteSurfaceView,
-  }),
   md: defineSurface('md', {
     chrome: 'document',
     capabilities: ['edit', 'search', 'copy-content', 'export-content', 'save-template'],
@@ -226,6 +263,10 @@ export const workColumnSurfaceRegistry = Object.freeze({
   web: defineSurface('web', {
     chrome: 'document',
     component: WebSurfaceView,
+  }),
+  'document-list': defineSurface('document-list', {
+    chrome: 'document',
+    component: DocumentListView,
   }),
 } satisfies Record<WorkColumnSurfaceKind, WorkColumnSurfaceDefinition>);
 

@@ -235,6 +235,18 @@ pub async fn write_external_document(
                 match outcome {
                     Ok(FileWriteOutcome::Saved) => {
                         refresh_notebook_note_index(&memo_file, &path);
+                        if let Ok(notebooks) = memo_file.read_notebook_configs() {
+                            for notebook in notebooks {
+                                let root = Path::new(&notebook.path);
+                                if let Ok(relative) = path.strip_prefix(root) {
+                                    let relative_path = relative.to_string_lossy().replace('\\', "/");
+                                    if let Err(error) = memo_file.maybe_create_auto_path_version(&notebook.id, &relative_path, &content) {
+                                        tracing::warn!(path = %path.display(), "automatic path version failed: {error}");
+                                    }
+                                    break;
+                                }
+                            }
+                        }
                     }
                     Ok(FileWriteOutcome::Conflict { disk_content }) => {
                         return ExternalDocumentWriteOutcome::Conflict { disk_content };

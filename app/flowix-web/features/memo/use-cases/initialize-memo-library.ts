@@ -33,7 +33,6 @@ async function performInitialization(startupNotebookId?: string | null): Promise
 
     if (notebooks.length === 0) {
       latestStore.setSelectedNotebook(null);
-      latestStore.setSelectedMemo(null);
       latestStore.setMemos([]);
       latestStore.setStartupReady('');
       return;
@@ -44,7 +43,6 @@ async function performInitialization(startupNotebookId?: string | null): Promise
     ) ?? notebooks[0];
 
     if (selectedNotebook.id !== persistedNotebookId) {
-      latestStore.setSelectedMemo(null);
       latestStore.setMemos([]);
     }
     latestStore.setSelectedNotebook(selectedNotebook);

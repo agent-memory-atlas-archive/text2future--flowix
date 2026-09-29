@@ -4,7 +4,7 @@ import { useDocumentStore } from '@features/document/store/document-store';
 export function waitForInitialDocumentLoad(timeoutMs = 60_000): Promise<'settled' | 'skipped' | 'superseded' | 'timeout'> {
   const initial = useDocumentStore.getState();
   if (!initial.isDocumentTransitioning) {
-    return Promise.resolve(initial.activeMemoSession || initial.activeExternalSession ? 'settled' : 'skipped');
+    return Promise.resolve(initial.activeExternalSession ? 'settled' : 'skipped');
   }
   const transitionId = initial.documentTransitionId;
 

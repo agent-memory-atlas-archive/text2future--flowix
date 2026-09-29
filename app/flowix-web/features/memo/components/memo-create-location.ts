@@ -1,8 +1,8 @@
 import { canonicalPath } from '@/lib/path';
-import type { MemoDocumentSession } from '@features/document/store/document-store';
+import type { ExternalDocumentSession } from '@features/document/store/document-store';
 
 export function parentRelativePathForTreeCreate(
-  session: MemoDocumentSession | null,
+  session: ExternalDocumentSession | null,
   notebookId: string,
   notebookPath: string,
 ): string | undefined {

@@ -9,6 +9,22 @@
 	src: url('../assets/fonts/FlowixTagIcon.woff2') format('woff2');
 }
 
+/* Editable Windows tags use Consolas for their content. Match its Windows
+ * ascent/descent (1884/2048 and 514/2048), multiplied by the content's 92%
+ * font size: the prefix inherits 100%. Keep in sync with --document-tag-font-size.
+ * These overrides change the inline box, without scaling or moving the glyph.
+ * Keep this face separate so standalone tag icons retain their original metrics. */
+@font-face {
+	font-family: 'Flowix Tag Icon Consolas';
+	font-style: normal;
+	font-display: swap;
+	font-weight: 400;
+	src: url('../assets/fonts/FlowixTagIcon.woff2') format('woff2');
+	ascent-override: 84.6328125%;
+	descent-override: 23.08984375%;
+	line-gap-override: 0%;
+}
+
 .flowix-tag-icon {
 	display: inline-block;
 	font-family: 'Flowix Tag Icon', var(--app-font-family, var(--font-sans));

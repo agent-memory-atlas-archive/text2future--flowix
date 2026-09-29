@@ -77,7 +77,7 @@ vi.mock("@platform/tauri/client", () => ({
     getCodexDefaultModel: vi.fn(async () => "gpt-5.5"),
   },
   memos: {
-    listAgentRoleMemos: vi.fn(async () => []),
+    searchPathNotes: vi.fn(async () => []),
   },
   deepseekHarness: {
     get: vi.fn(async () => ({
@@ -397,7 +397,7 @@ describe("AgentThreadCard NodeView streaming", () => {
     const host = document.createElement("div");
     document.body.append(host);
     const source =
-      '<!-- flowix:agent-thread-card {"version":1,"instanceId":"comment-instance","threadId":"comment-thread","title":"Comment card","agentType":"codex","agentRoleMemoId":"","agentRoleName":"","collapsed":false,"fullscreen":false,"inputDraft":"","inputImages":[]} -->\n';
+      '<!-- flowix:agent-thread-card {"version":1,"instanceId":"comment-instance","threadId":"comment-thread","title":"Comment card","agentType":"codex","agentRoleAddress":"nb::Role.md","agentRoleName":"Role","collapsed":false,"fullscreen":false,"inputDraft":"","inputImages":[]} -->\n';
 
     editor = new Editor({
       element: host,
@@ -412,7 +412,7 @@ describe("AgentThreadCard NodeView streaming", () => {
       '<!-- flowix:agent-thread-card {"version":1,"instanceId":"comment-instance"',
     );
     expect(editor.getMarkdown()).not.toContain('"title":"Comment card"');
-    expect(editor.getMarkdown()).not.toContain('"agentRoleMemoId"');
+    expect(editor.getMarkdown()).not.toContain('"agentRoleAddress"');
     expect(editor.getMarkdown()).not.toContain('"agentRoleName"');
   });
 
@@ -1143,7 +1143,6 @@ describe("AgentThreadCard NodeView streaming", () => {
       title: "User renamed title",
       threadId: "thread-existing-title",
       source: { kind: "thread-card" },
-      role: { memoId: "role-old", name: "Old role" },
     });
 
     const result = await upsertAgentThreadCardConversationInstance({
@@ -1152,14 +1151,12 @@ describe("AgentThreadCard NodeView streaming", () => {
       title: "Prompt generated title",
       threadId: "thread-existing-title",
       source: { kind: "thread-card" },
-      role: { memoId: "role-new", name: "New role" },
     });
 
     const updated = useAgentConversationStore
       .getState()
       .getInstance(result.instanceId);
     expect(updated?.title).toBe("User renamed title");
-    expect(updated?.role).toEqual({ memoId: "role-new", name: "New role" });
   });
 
   it("renders each card's persisted title instead of the active Codex title", async () => {

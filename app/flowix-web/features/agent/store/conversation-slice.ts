@@ -4,7 +4,6 @@ import { stripSystemBlock } from "@features/agent/message";
 import { agentClient } from "@features/agent/store/agent-client";
 import type {
   AgentConversationInstance,
-  AgentConversationRole,
   AgentConversationSource,
   CreateAgentConversationInstanceInput,
 } from "@features/agent/store/agent-conversation-types";
@@ -182,7 +181,6 @@ export function normalizeBackendInstance(
     ...instance,
     title: threadTitle ?? "",
     runtimeConfig,
-    role: instance.role ?? undefined,
   };
 }
 
@@ -211,7 +209,6 @@ export interface ConversationSlice {
       agentType: AgentTypeKey;
       title: string;
       source: AgentConversationSource;
-      role?: AgentConversationRole | null;
       runtimeConfig?: RuntimeConfig | null;
     },
   ): Promise<AgentConversationInstance>;
@@ -292,7 +289,6 @@ export function createConversationSlice(
         threadId: input.threadId ?? null,
         runtimeConfig: input.runtimeConfig ?? null,
         source: input.source,
-        role: input.role,
         createdAt: now,
         updatedAt: now,
       };
@@ -326,7 +322,6 @@ export function createConversationSlice(
             ? patch.runtimeConfig
             : existing?.runtimeConfig ?? null,
         source: patch.source ?? existing?.source ?? { kind: "thread-card" },
-        role: patch.role ?? existing?.role,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       };
@@ -388,7 +383,6 @@ export function createConversationSlice(
         sessionId: existing?.sessionId ?? null,
         runtimeConfig: existing?.runtimeConfig ?? patch.runtimeConfig ?? null,
         source: patch.source,
-        role: patch.role ?? existing?.role,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       };

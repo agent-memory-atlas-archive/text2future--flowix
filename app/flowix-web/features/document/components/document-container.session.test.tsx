@@ -10,7 +10,7 @@ import '@features/shortcuts/actions';
 import { Toaster } from 'sonner';
 import { useMemoStore } from '@features/memo/store/memo-store';
 import { useWorkspaceFocusStore } from '@features/workspace/store/workspace-focus-store';
-import { ensureFileDisplayIdentity, reconcileFileDisplays, findFileDisplayPath } from '@/lib/file-display-registry';
+import { ensureFileDisplayIdentity, reconcileFileDisplays, findFileDisplayPath, rebaseFileDisplayPath } from '@/lib/file-display-registry';
 import { getDocumentSession } from '../store/document-runtime-session';
 import { getDocumentBuffer, captureLatestDocumentContent, stageDocumentSnapshot } from '../store/document-session-service';
 import { notifyDocumentBufferChanged } from '../store/buffer-registry';
@@ -21,9 +21,10 @@ vi.mock('./lazy-document-editor', async () => ({
   LazyDocumentEditor: (await import('@features/editor/markdown-editor')).MarkdownEditor,
   preloadDocumentEditor: () => {},
 }));
-vi.mock('../use-cases/document-operations', () => ({ documentContentOperations: () => ({ read: mocks.read, write: mocks.write }) }));
-vi.mock('../use-cases/memo-document-operations', () => ({ memoDocumentOperations: { renameTitle: mocks.rename } }));
-vi.mock('../use-cases/sync-memo-path-after-local-write', () => ({ syncMemoPathAfterLocalWrite: (_id: string, path: string) => mocks.publish(path) }));
+vi.mock('../use-cases/local-document-operations', () => ({ localDocumentOperations: { read: mocks.read, write: mocks.write, rename: mocks.rename } }));
+vi.mock('@features/workspace/use-cases/workspace-navigation', () => ({ replaceExternalDocumentPath: (displayId: string, oldPath: string, path: string) => {
+  rebaseFileDisplayPath(oldPath, path, displayId); mocks.publish(path);
+} }));
 vi.mock('../store/recovery-draft-store', () => ({
   persistRecoveryDraft: vi.fn().mockResolvedValue(true), readRecoveryDraft: mocks.recoveryRead,
   clearRecoveryDraftThrough: vi.fn().mockResolvedValue(undefined), rebaseRecoveryDraftPath: vi.fn(),
@@ -34,7 +35,7 @@ vi.mock('@platform/tauri/window', () => ({ getCurrentWindow: () => ({ label: 'ma
 let root: Root; let container: HTMLDivElement; let sequence = 0;
 const environment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
 function setup(initialBoth = true) {
-  const identity = { kind: 'md' as const, memoId: 'container-' + ++sequence, ...ensureFileDisplayIdentity('/container-' + sequence + '/A.md') };
+  const identity = { kind: 'md' as const, ...ensureFileDisplayIdentity('/container-' + ++sequence + '/A.md') };
   reconcileFileDisplays([identity]);
   let path = identity.path; let both = initialBoth; let mounts = 0;
   const editors: Record<string, Editor | null> = {};
@@ -42,13 +43,12 @@ function setup(initialBoth = true) {
   const leftReady = ready('left'); const rightReady = ready('right');
   const render = () => root.render(<I18nProvider language="en-US"><ShortcutsProvider overrides={{}}>
     <Toaster /><DocumentSaveNotifications />
-    <DocumentContainer fileIdentity={{ ...identity, path }} memoId={identity.memoId} onEditorReady={leftReady} />
-    {both && <DocumentContainer fileIdentity={{ ...identity, path }} memoId={identity.memoId}
-      documentSessionMode="isolated" onEditorReady={rightReady} />}
+    <DocumentContainer fileIdentity={{ ...identity, path }} isExternalDocument externalEditorMode="markdown" externalScopePath={path.replace(/\/[^/]+$/, '')} onEditorReady={leftReady} />
+    {both && <DocumentContainer fileIdentity={{ ...identity, path }}
+      isExternalDocument externalEditorMode="markdown" externalScopePath={path.replace(/\/[^/]+$/, '')} documentSessionMode="isolated" onEditorReady={rightReady} />}
   </ShortcutsProvider></I18nProvider>);
   mocks.publish.mockImplementation(next => { path = next; render(); });
-  mocks.rename.mockImplementation(async request => ({ path: path.replace(/[^/]+$/, request.title + '.md'),
-    memo: { id: identity.memoId, filename: request.title + '.md' } }));
+  mocks.rename.mockImplementation(async request => ({ path: path.replace(/[^/]+$/, request.name) }));
   return { identity, editors, render, mounts: () => mounts,
     openRight: () => { both = true; render(); },
     closeRight: () => { both = false; render(); },
@@ -69,27 +69,15 @@ describe('real document container session lifecycle', () => {
     expect(mocks.recoveryRead).not.toHaveBeenCalled();
     expect(doc.editors.left?.getMarkdown()).toBe('fresh body');
   });
-  it.each([
-    { draftCreatedAt: 100, draftMemoId: undefined },
-    { draftCreatedAt: 300, draftMemoId: 'replaced-note' },
-  ])('does not restore an older file draft into a new note: %j', async ({ draftCreatedAt, draftMemoId }) => {
+  it('ignores a recovery draft for a different path', async () => {
     const doc = setup(false);
-    const previous = useMemoStore.getState().selectedMemo;
-    useMemoStore.setState({ selectedMemo: {
-      id: doc.identity.memoId!, filename: 'A.md', preview: '', tags: [], todos: [], agents: [],
-      createdAt: 200, updatedAt: 200, favorited: false, icon: null, colors: [], properties: {},
-    } });
     mocks.recoveryRead.mockResolvedValue({
-      originalPath: doc.identity.path, memoId: draftMemoId,
-      createdAt: draftCreatedAt, updatedAt: 300, revision: 1, bodyRevision: 1,
+      originalPath: '/old/deleted.md',
+      createdAt: 100, updatedAt: 300, revision: 1, bodyRevision: 1,
       content: 'old deleted body', baseContent: 'Body',
     });
-    try {
-      await act(async () => { doc.render(); });
-      expect(doc.editors.left?.getMarkdown()).toBe('Body');
-    } finally {
-      useMemoStore.setState({ selectedMemo: previous });
-    }
+    await act(async () => { doc.render(); });
+    expect(doc.editors.left?.getMarkdown()).toBe('Body');
   });
   beforeEach(() => {
     vi.useFakeTimers(); environment.IS_REACT_ACT_ENVIRONMENT = true;

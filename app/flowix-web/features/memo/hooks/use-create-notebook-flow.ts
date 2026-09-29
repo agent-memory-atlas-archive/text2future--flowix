@@ -140,7 +140,6 @@ export function useCreateNotebookFlow({
         await clearWorkspaceDocument();
         memoStore.setNotebooks(nextNotebooks);
         memoStore.setSelectedNotebook(created);
-        memoStore.setSelectedMemo(null);
         memoStore.setMemos([]);
         useTagStore.getState().setSelectedTagId(null);
         onMemoListQueryReset();

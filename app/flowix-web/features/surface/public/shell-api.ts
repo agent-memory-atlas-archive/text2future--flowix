@@ -18,7 +18,6 @@ export type {
   HtmlFileSurface,
   ImageFileSurface,
   MDSurface,
-  NoteSurface,
   UnavailableFileSurface,
   VideoFileSurface,
   WorkColumnContentPresentation,

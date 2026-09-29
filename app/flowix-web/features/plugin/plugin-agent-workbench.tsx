@@ -13,14 +13,12 @@ import { AGENT_TYPES, isAgentTypeSelectable } from '@/lib/agent-types';
 import { canonicalPath } from '@/lib/path';
 import type { AgentTypeKey } from '@/types/agent';
 import { useMemoStore } from '@features/memo/store/memo-store';
-import { openArtifactTarget } from '@features/workspace/use-cases/workspace-navigation';
+import { openNotebookNote } from '@features/memo/use-cases/open-notebook-note';
 import {
-  memos,
   type PluginDescriptor,
   type PluginField,
 } from '@platform/tauri/client';
 import {
-  openBrowserColumnArtifact,
   openBrowserColumnMarkdown,
 } from '@features/workspace/use-cases/browser-column-navigation';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
@@ -34,7 +32,6 @@ import {
   PluginArtifactRenderer,
   type PluginArtifactRendererHandle,
 } from './plugin-artifact-renderer';
-import { normalizePluginArtifactRenderer } from './plugin-note';
 import {
   isEmptyPluginFieldValue,
   pluginFieldLabel,
@@ -103,12 +100,7 @@ export function AgentPluginWorkbench({
 
   const handleOpenArtifact = useCallback(() => {
     if (!artifact) return;
-    const opening = artifact.noteId
-      ? openBrowserColumnArtifact(
-          artifact.noteId,
-          normalizePluginArtifactRenderer(artifact.renderer),
-        )
-      : openBrowserColumnMarkdown(artifact.path);
+    const opening = openBrowserColumnMarkdown(artifact.path);
     void opening.catch((error) => {
       console.error('[AgentPluginWorkbench] Failed to open artifact', error);
     });
@@ -149,7 +141,7 @@ export function AgentPluginWorkbench({
         notebookPath,
         sourceNote: currentNotePath || undefined,
       });
-      if (next.noteId) {
+      if (next.path) {
         // Completion belongs to the run store. Only an explicit, still-active
         // workbench may opt into opening the produced pointer memo; switching
         // notebook, memo, conversation, or plugin while the run continues
@@ -163,20 +155,9 @@ export function AgentPluginWorkbench({
             && canonicalPath(currentNotebook.path) === canonicalPath(notebookPath);
         };
         if (!isCurrentWorkbenchContext()) return;
-        const note = await memos.readMemo(next.noteId);
-        if (!isCurrentWorkbenchContext()) return;
         const currentNotebook = useMemoStore.getState().selectedNotebook;
-        if (note && currentNotebook) {
-          // The run produces a durable pointer memo. Opening it changes only
-          // the workColumn target; the editable DocumentStore session is not
-          // replaced by a plugin-owned artifact session.
-          await openArtifactTarget({
-            pointerMemoId: note.id,
-            notebook: currentNotebook,
-            pluginId: next.pluginId,
-            renderer: normalizePluginArtifactRenderer(next.renderer),
-            memo: note,
-          });
+        if (currentNotebook && isCurrentWorkbenchContext()) {
+          await openNotebookNote(next.path, currentNotebook);
         }
       }
     } catch (runError) {

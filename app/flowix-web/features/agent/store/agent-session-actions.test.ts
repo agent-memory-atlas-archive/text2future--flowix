@@ -1500,7 +1500,6 @@ describe("chat-store Agent Thread Card streaming flow", () => {
       threadId: localThreadId,
       source: {
         kind: "thread-card",
-        memoId: "memo-running-session",
         documentPath: "/tmp/running-session.md",
       },
       runtimeConfig: {

@@ -8,10 +8,10 @@ import { findFileDisplayPath } from '@/lib/file-display-registry';
 import { captureLatestDocumentContent, getDocumentBuffer, protectDocumentDraft, saveDocumentContent, applyLoadedDocumentContent } from '../store/document-session-service';
 import { notifyDocumentBufferChanged, subscribeDocumentBufferChanges } from '../store/buffer-registry';
 import type { DocumentIdentity } from '../store/document-identity';
-import { documentContentOperations } from '../use-cases/document-operations';
+import { localDocumentOperations } from '../use-cases/local-document-operations';
 
-export function DocumentSaveStatus({ identity, external, scopePath }: {
-  identity: DocumentIdentity; external: boolean; scopePath: string | null;
+export function DocumentSaveStatus({ identity, scopePath }: {
+  identity: DocumentIdentity; scopePath: string | null;
 }) {
   const { t } = useI18n();
   const subscribe = useCallback((notify: () => void) => {
@@ -43,8 +43,8 @@ export function DocumentSaveStatus({ identity, external, scopePath }: {
       if (choice !== 'retry') {
         // Keep the local copy recoverable before an explicit conflict decision.
         if (!await protectDocumentDraft(identity, path, 'save-error')) return;
-        const disk = await documentContentOperations(external ? 'external' : 'internal').read({
-          path, scopePath, memoId: identity.memoId,
+        const disk = await localDocumentOperations.read({
+          path, scopePath,
         });
         if (disk === null) throw new Error(t('document.save.missing'));
         captureLatestDocumentContent(identity);
@@ -64,8 +64,7 @@ export function DocumentSaveStatus({ identity, external, scopePath }: {
         buffer.conflictContent = null;
       }
       buffer.saveError = null;
-      await saveDocumentContent({ identity, path, content: buffer.content,
-        channel: external ? 'external' : 'internal', key: identity.memoId, scopePath, force: true });
+      await saveDocumentContent({ identity, path, content: buffer.content, scopePath, force: true });
     } catch (error) {
       buffer.saveError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -107,6 +106,6 @@ export function DocumentSaveNotifications() {
   return <>{displayIds.map(displayId => {
     const session = findDocumentSession(displayId)!;
     return <DocumentSaveStatus key={displayId} identity={session.identity}
-      external={!session.identity.memoId} scopePath={session.retainedAdapter?.scopePath ?? null} />;
+      scopePath={session.retainedAdapter?.scopePath ?? null} />;
   })}</>;
 }

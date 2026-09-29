@@ -6,7 +6,7 @@ export function buildNoteOpenLink(book: string, relativeFile: string, heading?: 
   if (!book || !file || file.startsWith('/') || file.split('/').some((part) => !part || part === '.' || part === '..')) {
     throw new Error('Invalid notebook link target');
   }
-  const params = new URLSearchParams({ book, file });
+  const params = new URLSearchParams({ b: book, f: file });
   // Explicit heading also disambiguates filenames containing '#'.
   if (heading !== undefined || file.includes('#')) params.set('heading', heading ?? '');
   return `flowix://open?${params.toString()}`;

@@ -11,10 +11,13 @@ use tauri::State;
 
 use crate::app::state::AppState;
 use crate::system_data::{
-    NotebookFeaturedNotesData, NotebookTagSystemData, SystemFile, TagLayoutItem, TagSystemData,
+    NotebookCustomViewsData, NotebookFeaturedNotesData,
+    NotebookFileTreePreferences, NotebookTagSystemData, SystemFile, TagLayoutItem, TagSystemData,
 };
 
 const FEATURED_NOTES_ALLOWED_OPERATORS: [&str; 3] = ["equals", "contains", "excludes"];
+const CUSTOM_VIEW_ALLOWED_OPERATORS: [&str; 2] = ["equals", "contains"];
+const FILE_TREE_SECTIONS: [&str; 4] = ["agents", "pinned", "views", "files"];
 
 #[tauri::command]
 pub fn get_tag_system_metadata(
@@ -106,10 +109,82 @@ fn load_notebook_system(notebook_id: &str, state: &State<AppState>) -> Result<Sy
     let file = SystemFile {
         tag: TagSystemData { notebooks },
         featured_notes: Default::default(),
+        custom_views: Default::default(),
+        file_tree: Default::default(),
     };
     crate::system_data::SystemData::write_notebook(&root, &file)
         .map_err(|error| error.to_string())?;
     Ok(file)
+}
+
+/// Read notebook-scoped custom note views from `<notebook>/.flowix/system.json`.
+#[tauri::command]
+pub fn get_custom_views(
+    notebook_id: String,
+    state: State<AppState>,
+) -> Result<NotebookCustomViewsData, String> {
+    let file = load_notebook_system(&notebook_id, &state)?;
+    Ok(file
+        .custom_views
+        .notebooks
+        .get(&notebook_id)
+        .cloned()
+        .unwrap_or_default())
+}
+
+/// Replace a notebook's custom view list atomically with the rest of its metadata.
+#[tauri::command]
+pub fn set_custom_views(
+    notebook_id: String,
+    views: NotebookCustomViewsData,
+    state: State<AppState>,
+) -> Result<(), String> {
+    for filter in &views.filters {
+        if !CUSTOM_VIEW_ALLOWED_OPERATORS.contains(&filter.operator.as_str()) {
+            return Err(format!("unsupported custom view operator: {}", filter.operator));
+        }
+    }
+    let mut file = load_notebook_system(&notebook_id, &state)?;
+    file.custom_views
+        .notebooks
+        .insert(notebook_id.clone(), views);
+    persist_notebook_system(&notebook_id, &state, &file)
+}
+
+#[tauri::command]
+pub fn get_notebook_file_tree_preferences(
+    notebook_id: String,
+    state: State<AppState>,
+) -> Result<NotebookFileTreePreferences, String> {
+    let file = load_notebook_system(&notebook_id, &state)?;
+    Ok(file
+        .file_tree
+        .notebooks
+        .get(&notebook_id)
+        .cloned()
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+pub fn set_notebook_file_tree_section_order(
+    notebook_id: String,
+    section_order: Vec<String>,
+    state: State<AppState>,
+) -> Result<(), String> {
+    if section_order.len() != FILE_TREE_SECTIONS.len()
+        || section_order.iter().any(|section| !FILE_TREE_SECTIONS.contains(&section.as_str()))
+        || FILE_TREE_SECTIONS
+            .iter()
+            .any(|section| section_order.iter().filter(|item| item.as_str() == *section).count() != 1)
+    {
+        return Err("file tree section order must contain agents, pinned, views, and files once each".to_string());
+    }
+    let mut file = load_notebook_system(&notebook_id, &state)?;
+    file.file_tree.notebooks.insert(
+        notebook_id.clone(),
+        NotebookFileTreePreferences { section_order },
+    );
+    persist_notebook_system(&notebook_id, &state, &file)
 }
 
 fn persist_notebook_system(

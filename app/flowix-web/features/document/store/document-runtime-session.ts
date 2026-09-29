@@ -46,12 +46,11 @@ export function getDocumentSession(input: DocumentIdentity | string): DocumentRu
   let session = sessions.get(displayId);
   if (!session) {
     session = { fallbackPath: typeof input === 'string' ? '' : input.path,
-      identity: { kind: 'md', displayId, memoId: typeof input === 'string' ? null : input.memoId,
+      identity: { kind: 'md', displayId,
         get path() { return findFileDisplayPath(displayId) ?? sessions.get(displayId)?.fallbackPath ?? ''; } },
       loaded: false, capturing: false, recoveryRevision: 0, captures: new Set(), adapters: new Set() };
     sessions.set(displayId, session);
   } else if (typeof input !== 'string') {
-    if (input.memoId) session.identity.memoId = input.memoId;
     if (!session.fallbackPath) session.fallbackPath = input.path;
   }
   return session;

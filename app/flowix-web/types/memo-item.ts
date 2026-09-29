@@ -14,7 +14,7 @@ export const MEMO_COLORS: readonly MemoColor[] = [
 export interface AgentThreadItem {
   threadId: string;
   title: string;
-  // Agent Type key, kept separate from agentRole* persona fields.
+  // Runtime agent type associated with this thread.
   agentType: string;
 }
 
@@ -58,22 +58,16 @@ export interface PathNoteListItem {
   properties: Record<string, unknown>;
 }
 
-export type MemoListItem = MemoItem | PathNoteListItem;
-
-export function isPathNoteListItem(item: MemoListItem): item is PathNoteListItem {
-  return 'kind' in item && item.kind === 'path-note';
-}
+export type MemoListItem = PathNoteListItem;
 
 export function memoListItemKey(item: MemoListItem): string {
-  return isPathNoteListItem(item)
-    ? `path:${item.notebookId}:${item.relativePath}`
-    : `memo:${item.id}`;
+  return `path:${item.notebookId}:${item.relativePath}`;
 }
 
 export function memoListItemRelativePath(item: MemoListItem): string {
-  return item.relativePath?.trim() || item.filename;
+  return item.relativePath;
 }
 
 export function memoListItemTitle(item: MemoListItem): string {
-  return isPathNoteListItem(item) ? item.title : item.filename;
+  return item.title;
 }

@@ -22,7 +22,7 @@ export interface EnsureAgentConversationDetailThreadResult {
  * thread on its first send, then freeze the workspace snapshot.
  *
  * Mirrors the note-embedded thread card's first-send path, but reads the
- * conversation's own `source` / `role` instead of ProseMirror node attrs:
+ * conversation's own source instead of ProseMirror node attrs:
  * an independent conversation carries only its owning notebook, never a memo
  * or external document.
  */
@@ -52,7 +52,6 @@ export async function ensureAgentConversationDetailThread(input: {
     title: ensured.title,
     threadId: ensured.threadId,
     source: instance.source,
-    role: instance.role,
     runtimeConfig:
       instance.runtimeConfig ?? buildInitialInstanceRuntimeConfig(ensured.typeKey),
   });

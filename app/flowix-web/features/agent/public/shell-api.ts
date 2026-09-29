@@ -2,6 +2,7 @@ export { AgentConversationTitlebar } from '@features/agent/components/agent-conv
 export { AgentConversationList } from '@features/agent/components/agent-conversation-list';
 export { AgentConversationStatusBar } from '@features/agent/components/agent-conversation-status-bar';
 export { AgentIcon } from '@features/agent/components/agent-icon';
+export { AgentTasksSection } from '@features/agent/components/agent-tasks-section';
 
 import { buildInitialInstanceRuntimeConfig } from '@features/agent/store/initial-runtime-config';
 import { useAgentSessionStore } from '@features/agent/store/agent-session-store';
@@ -18,7 +19,6 @@ export function createAndOpenDshConversation(): void {
     source: {
       kind: 'dedicated',
       notebookId,
-      memoId: null,
       documentPath: null,
     },
     runtimeConfig: buildInitialInstanceRuntimeConfig('deepseek-harness'),

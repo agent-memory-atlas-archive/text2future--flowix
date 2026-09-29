@@ -74,15 +74,6 @@ pub fn plugin_prepare_prompt(
 }
 
 #[tauri::command]
-pub fn plugin_list_notes(
-    plugin_id: String,
-    notebook_id: String,
-    state: State<AppState>,
-) -> Result<Vec<flowix_core::memo_file::Memo>, String> {
-    plugin::list_notes(&plugin_id, &notebook_id, &state.memo_file)
-}
-
-#[tauri::command]
 pub fn plugin_resolve_note(
     memo_id: String,
     state: State<AppState>,

@@ -12,8 +12,8 @@ function fileIdentity(path: string) {
 
 function surface(kind: WorkColumnSurfaceKind): WorkColumnSurface {
   switch (kind) {
-    case 'note':
-      return { kind, memoId: 'memo-1', instanceKey: 'note:1', fileIdentity: fileIdentity('/note.md'), props: {} };
+    case 'document-list':
+      return { kind, instanceKey: 'folder:/notebook', folderPath: '/notebook', notebookPath: '/notebook', notebookId: 'notebook-1', filters: {} };
     case 'md':
       return { kind, instanceKey: 'md:1', fileIdentity: fileIdentity('/workspace/readme.md'), props: { isExternalDocument: true } };
     case 'code':
@@ -103,7 +103,6 @@ describe('workColumnSurfaceRegistry', () => {
       'md',
       'media',
       'mindmap',
-      'note',
       'plugin-artifact',
       'plugin-workbench',
       'text',
@@ -113,18 +112,16 @@ describe('workColumnSurfaceRegistry', () => {
     ]);
   });
 
-  it('keeps note content actions on the note surface', () => {
-    const markdown = surface('note');
-    const externalMarkdown = surface('md');
+  it('exposes Markdown editing actions on the path surface', () => {
+    const markdown = surface('md');
 
     expect(getWorkColumnSurfaceDefinition(markdown).chrome).toBe('document');
     expect(surfaceSupports(markdown, 'edit')).toBe(true);
     expect(surfaceSupports(markdown, 'search')).toBe(true);
     expect(surfaceSupports(markdown, 'copy-content')).toBe(true);
-    expect(surfaceSupports(markdown, 'memo-colors')).toBe(true);
+    expect(surfaceSupports(markdown, 'memo-colors')).toBe(false);
     expect(surfaceSupports(markdown, 'export-content')).toBe(true);
     expect(surfaceSupports(markdown, 'fit')).toBe(false);
-    expect(surfaceSupports(externalMarkdown, 'memo-colors')).toBe(false);
   });
 
   it('exposes canvas controls without leaking pointer-note editing actions', () => {

@@ -1,5 +1,8 @@
 'use client';
 
+import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
+import { AgentTasksSection } from '@features/agent/public/shell-api';
+
 import {
   useCallback,
   useEffect,
@@ -12,7 +15,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import { File } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronRight, File, ListFilter, MoreHorizontal, Plus } from 'lucide-react';
 import { FolderPlus } from 'lucide-react';
 
 import {
@@ -29,9 +32,19 @@ import { cn, displayTitleFromFilename } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { useComposingValue } from '@shared/hooks/use-composing-value';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@shared/ui/dropdown-menu';
 import { FileTypeIcon } from '@features/memo/components/file-type-icon';
 import { useMemoStore } from '@features/memo/store/memo-store';
-import { replaceActiveMemoPath } from '@features/workspace/use-cases/workspace-navigation';
+import { memoRepository } from '@features/memo/services/memo-repository';
+import { EMPTY_CUSTOM_FILTERS, useCustomFilterStore } from '@features/memo/store/custom-filter-store';
+import { updateNoteLinksAfterMove } from '@features/memo/services/note-link-rewriter';
+import { replaceExternalDocumentPath } from '@features/workspace/use-cases/workspace-navigation';
+import { findFileDisplayIdentity } from '@/lib/file-display-registry';
 import {
   elementFromExternalDropPosition,
   EXTERNAL_FILE_DROP_EVENT,
@@ -46,7 +59,7 @@ import {
   type FolderTreeController,
 } from '@features/memo/components/use-folder-tree';
 import { NotebookTreeRow } from '@features/memo/components/notebook-tree-row';
-import { files, type DocTreeItem, type DocTreeResourceKind } from '@platform/tauri/client';
+import { files, system, type DocTreeItem, type DocTreeResourceKind } from '@platform/tauri/client';
 import { resourceKindFromPath } from '@features/editor/code-file';
 import { useDynamicVirtualList } from '@features/memo/components/memo-list/use-dynamic-virtual-list';
 import {
@@ -61,7 +74,7 @@ const INDENT_PER_LEVEL = 20;
 const TREE_ROW_HEIGHT = 32;
 const TREE_ROW_GAP = 2;
 const TREE_ROW_SIZE = TREE_ROW_HEIGHT + TREE_ROW_GAP;
-const TREE_HEADER_HEIGHT = 24;
+const TREE_HEADER_HEIGHT = 30;
 const TREE_VIRTUAL_OVERSCAN = 10;
 const TREE_DRAG_SCROLL_EDGE = 40;
 const TREE_DRAG_SCROLL_MAX_STEP = 18;
@@ -69,6 +82,60 @@ const TREE_DRAG_EXPAND_DELAY_MS = 650;
 const logger = createLogger('notebook-file-tree');
 // Row gutter (6px) + inline padding (6px) + half of the 12px caret.
 const FOLDER_CARET_CENTER_OFFSET = 12;
+type NotebookTreeSection = 'agents' | 'pinned' | 'views' | 'files';
+
+const DEFAULT_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'files', 'views'];
+
+function normalizeTreeSectionOrder(value: unknown): NotebookTreeSection[] {
+  if (!Array.isArray(value)) return DEFAULT_TREE_SECTION_ORDER;
+  const order = value.filter((item, index, items): item is NotebookTreeSection => (
+    (item === 'agents' || item === 'pinned' || item === 'views' || item === 'files')
+    && items.indexOf(item) === index
+  ));
+  if (order.length === 4) return order;
+  const legacyOrder = order.filter((item): item is 'files' | 'views' => item === 'files' || item === 'views');
+  if (legacyOrder.length === 2) return ['agents', 'pinned', ...legacyOrder];
+  return [...DEFAULT_TREE_SECTION_ORDER.filter((item) => !order.includes(item)), ...order];
+}
+
+function TreeSectionMoreMenu({
+  canMoveUp,
+  canMoveDown,
+  onMoveUp,
+  onMoveDown,
+}: {
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+}) {
+  const { t } = useI18n();
+  const itemClassName = 'group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)] disabled:cursor-not-allowed disabled:opacity-40';
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] opacity-0 transition-[color,opacity] hover:text-[var(--foreground)] focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100"
+          aria-label={t('memo.fileTree.moreSectionActions')}
+          title={t('memo.fileTree.moreSectionActions')}
+        >
+          <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-[176px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
+        <DropdownMenuItem disabled={!canMoveUp} onClick={onMoveUp} className={itemClassName}>
+          <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
+          {t('memo.fileTree.moveSectionUp')}
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={!canMoveDown} onClick={onMoveDown} className={itemClassName}>
+          <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+          {t('memo.fileTree.moveSectionDown')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 function relativeFolderPath(notebookPath: string, folderPath: string): string {
   const root = canonicalDirectoryPath(notebookPath);
@@ -128,6 +195,7 @@ export interface NotebookMoveSource {
 }
 
 interface NotebookFileTreeProps {
+  notebookId?: string;
   notebookPath: string;
   notebookName: string;
   activeFilePath?: string | null;
@@ -136,6 +204,7 @@ interface NotebookFileTreeProps {
   createNoteRequest?: NotebookNoteCreateRequest | null;
   onCreateFolder?: () => void;
   onNoteSelect: (filePath: string) => void;
+  onFolderSelect?: (folderPath: string) => void;
   onNoteOpenInNewTab?: (filePath: string) => void;
   onCreateNote: (parentPath: string, title: string) => Promise<void> | void;
   onMoveNote: (
@@ -283,6 +352,7 @@ export function buildNotebookTreeRenderRows(
  * Notebook file tree with selection, pointer dragging, and external drops.
  */
 export function NotebookFileTree({
+  notebookId: notebookIdProp,
   notebookPath,
   notebookName,
   activeFilePath = null,
@@ -291,6 +361,7 @@ export function NotebookFileTree({
   createNoteRequest,
   onCreateFolder,
   onNoteSelect,
+  onFolderSelect,
   onNoteOpenInNewTab,
   onCreateNote,
   onMoveNote,
@@ -300,7 +371,24 @@ export function NotebookFileTree({
   onToggleListFolderVisibility,
 }: NotebookFileTreeProps) {
   const { t } = useI18n();
+  const selectedFolderPath = useWorkColumnStore((state) => state.navigation.target.kind === 'document-list' ? state.navigation.target.scope.path : null);
+  const selectedCustomFilterId = useWorkColumnStore((state) => state.navigation.target.kind === 'document-list' ? state.navigation.target.filters.customFilterId ?? null : null);
+  const refreshTrigger = useMemoStore((state) => state.refreshTrigger);
+  const notebookIdFromStore = useMemoStore((state) => (
+    state.notebooks.find((notebook) => samePath(notebook.path, notebookPath))?.id ?? null
+  ));
+  const notebookId = notebookIdProp ?? notebookIdFromStore;
+  const customFilters = useCustomFilterStore((state) => (
+    notebookId ? state.filtersByNotebook[notebookId] ?? EMPTY_CUSTOM_FILTERS : EMPTY_CUSTOM_FILTERS
+  ));
+  const loadNotebookFilters = useCustomFilterStore((state) => state.loadNotebookFilters);
   const [showScrollTopHint, setShowScrollTopHint] = useState(false);
+  const [pinnedItems, setPinnedItems] = useState<DocTreeItem[]>([]);
+  const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
+  const [viewsCollapsed, setViewsCollapsed] = useState(false);
+  const [filesCollapsed, setFilesCollapsed] = useState(false);
+  const [sectionOrder, setSectionOrder] = useState<NotebookTreeSection[]>(DEFAULT_TREE_SECTION_ORDER);
+  const [agentSectionHeight, setAgentSectionHeight] = useState(TREE_HEADER_HEIGHT + 12);
   const [draft, setDraft] = useState<NotebookTreeDraftState | null>(null);
   const [selectedFilePaths, setSelectedFilePaths] = useState<string[]>([]);
   const [focusedTreePath, setFocusedTreePath] = useState<string | null>(null);
@@ -317,6 +405,35 @@ export function NotebookFileTree({
     activeFilePath ? canonicalPath(activeFilePath) : null,
   );
   const externalDropSurfaceRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (notebookId) void loadNotebookFilters(notebookId);
+  }, [loadNotebookFilters, notebookId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSectionOrder(DEFAULT_TREE_SECTION_ORDER);
+    if (!notebookId) return () => { cancelled = true; };
+    void system.getNotebookFileTreePreferences(notebookId).then((preferences) => {
+      if (!cancelled) setSectionOrder(normalizeTreeSectionOrder(preferences.sectionOrder));
+    }).catch((error) => {
+      logger.warn('failed to load notebook file tree preferences', { error, notebookId });
+    });
+    return () => { cancelled = true; };
+  }, [notebookId]);
+
+  const moveTreeSection = useCallback((section: NotebookTreeSection, direction: -1 | 1) => {
+    if (!notebookId) return;
+    const index = sectionOrder.indexOf(section);
+    const targetIndex = index + direction;
+    if (index < 0 || targetIndex < 0 || targetIndex >= sectionOrder.length) return;
+    const next = [...sectionOrder];
+    [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+    setSectionOrder(next);
+    void system.setNotebookFileTreeSectionOrder(notebookId, next).catch((error) => {
+      logger.warn('failed to save notebook file tree section order', { error, notebookId });
+    });
+  }, [notebookId, sectionOrder]);
   const treeHeaderRef = useRef<HTMLDivElement | null>(null);
   const treeRootRef = useRef<HTMLDivElement | null>(null);
   const dragPreviewRef = useRef<HTMLDivElement | null>(null);
@@ -339,6 +456,47 @@ export function NotebookFileTree({
   } | null>(null);
   const [moveFeedback, setMoveFeedback] = useState<NotebookMoveFeedback | null>(null);
   const [keptAlivePaths, setKeptAlivePaths] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+    setPinnedItems([]);
+    if (!notebookId) return () => { cancelled = true; };
+    void memoRepository.listByPath({
+      notebookId,
+      filter: 'favorited',
+      sort: 'updatedAt',
+      limit: 100,
+    }).then((page) => {
+      if (cancelled) return;
+      setPinnedItems(page.notes.map((note) => {
+        const relativePath = note.relativePath.replace(/\\/g, '/');
+        const fullPath = pathInDirectory(notebookPath, relativePath);
+        return {
+          id: `pinned:${relativePath}`,
+          fullPath,
+          name: relativePath.split('/').pop() || relativePath,
+          type: 'document' as const,
+          parentId: null,
+          children: null,
+          sizeBytes: null,
+          modifiedMs: note.updatedAt,
+          createdMs: note.createdAt,
+          memoCreatedMs: note.createdAt,
+          resourceKind: 'note' as const,
+          memoMeta: {
+            id: relativePath,
+            icon: note.icon,
+            colors: note.colors,
+            favorited: true,
+          },
+        };
+      }));
+    }).catch((error) => {
+      logger.warn('failed to load pinned notes', { error, notebookPath });
+      if (!cancelled) setPinnedItems([]);
+    });
+    return () => { cancelled = true; };
+  }, [notebookId, notebookPath, refreshTrigger]);
 
   const clearMoveFeedbackTimer = useCallback(() => {
     if (moveFeedbackTimerRef.current === null) return;
@@ -365,6 +523,24 @@ export function NotebookFileTree({
     () => buildNotebookTreeRenderRows(visibleTreeItems, notebookPath, draft),
     [draft, notebookPath, visibleTreeItems],
   );
+  const pinnedSectionHeight = TREE_HEADER_HEIGHT
+    + (pinnedCollapsed ? 0 : pinnedItems.length * TREE_ROW_SIZE)
+    + 12;
+  const viewsSectionHeight = TREE_HEADER_HEIGHT
+    + (viewsCollapsed ? 0 : customFilters.length * TREE_ROW_SIZE)
+    + 12;
+  const sectionHeights: Record<NotebookTreeSection, number> = {
+    agents: notebookId ? agentSectionHeight : 0,
+    pinned: pinnedSectionHeight,
+    views: viewsSectionHeight,
+    files: TREE_HEADER_HEIGHT,
+  };
+  const treeContentOffset = TREE_HEADER_HEIGHT + sectionOrder
+    .slice(0, sectionOrder.indexOf('files'))
+    .reduce((height, section) => height + sectionHeights[section], 0);
+  const handleAgentSectionHeightChange = useCallback((height: number) => {
+    setAgentSectionHeight((current) => current === height ? current : height);
+  }, []);
   const getRenderRowKey = useCallback((row: NotebookTreeRenderRow) => row.key, []);
   const estimateRenderRowSize = useCallback(() => TREE_ROW_SIZE, []);
   const keepAliveKeys = useMemo(() => {
@@ -382,10 +558,11 @@ export function NotebookFileTree({
     getKey: getRenderRowKey,
     estimateSize: estimateRenderRowSize,
     scrollerRef: treeScrollerRef,
-    enabled: true,
+    enabled: !filesCollapsed,
     resetKey: notebookPath,
     overscan: TREE_VIRTUAL_OVERSCAN,
     keepAliveKeys,
+    scrollMargin: treeContentOffset,
   });
   const renderRowIndexByPath = useMemo(() => new Map(
     renderRows.flatMap((row, index) => row.kind === 'node'
@@ -397,13 +574,13 @@ export function NotebookFileTree({
     const index = renderRows.findIndex((row) => row.key === `draft:${draft.requestId}`);
     const scroller = treeScrollerRef.current;
     if (index < 0 || !scroller) return;
-    const rowTop = TREE_HEADER_HEIGHT + index * TREE_ROW_SIZE;
+    const rowTop = treeContentOffset + index * TREE_ROW_SIZE;
     const rowBottom = rowTop + TREE_ROW_HEIGHT;
     if (rowTop < scroller.scrollTop) scroller.scrollTop = rowTop;
     else if (rowBottom > scroller.scrollTop + scroller.clientHeight) {
       scroller.scrollTop = Math.max(0, rowBottom - scroller.clientHeight);
     }
-  }, [draft, renderRows]);
+  }, [draft, renderRows, treeContentOffset]);
   useEffect(() => {
     const activePath = activeFilePath ? canonicalPath(activeFilePath) : null;
     pendingActiveFileScrollPathRef.current = activePath;
@@ -417,14 +594,14 @@ export function NotebookFileTree({
     const index = renderRowIndexByPath.get(activePath);
     const scroller = treeScrollerRef.current;
     if (index === undefined || !scroller) return;
-    const rowTop = TREE_HEADER_HEIGHT + index * TREE_ROW_SIZE;
+    const rowTop = treeContentOffset + index * TREE_ROW_SIZE;
     const rowBottom = rowTop + TREE_ROW_HEIGHT;
     if (rowTop < scroller.scrollTop) scroller.scrollTop = rowTop;
     else if (rowBottom > scroller.scrollTop + scroller.clientHeight) {
       scroller.scrollTop = Math.max(0, rowBottom - scroller.clientHeight);
     }
     pendingActiveFileScrollPathRef.current = null;
-  }, [activeFilePath, renderRowIndexByPath]);
+  }, [activeFilePath, renderRowIndexByPath, treeContentOffset]);
   const visibleDocumentPaths = useMemo(
     () => visibleTreeItems
       .filter(({ item }) => item.type === 'document')
@@ -485,14 +662,14 @@ export function NotebookFileTree({
     const index = renderRowIndexByPath.get(canonicalPath(path));
     const scroller = treeScrollerRef.current;
     if (index === undefined || !scroller) return;
-    const rowTop = TREE_HEADER_HEIGHT + index * TREE_ROW_SIZE;
+    const rowTop = treeContentOffset + index * TREE_ROW_SIZE;
     const rowBottom = rowTop + TREE_ROW_HEIGHT;
     if (rowTop < scroller.scrollTop) scroller.scrollTop = rowTop;
     else if (rowBottom > scroller.scrollTop + scroller.clientHeight) {
       scroller.scrollTop = Math.max(0, rowBottom - scroller.clientHeight);
     }
     window.requestAnimationFrame(() => { focusMountedRow(); });
-  }, [renderRowIndexByPath]);
+  }, [renderRowIndexByPath, treeContentOffset]);
   const handleTreeItemKeyDown = useCallback((
     path: string,
     event: ReactKeyboardEvent<HTMLDivElement>,
@@ -685,7 +862,8 @@ export function NotebookFileTree({
 
     try {
       if (item.type === 'folder') {
-        await files.renameFolder(item.fullPath, trimmed, notebookPath);
+        const renamedPath = await files.renameFolder(item.fullPath, trimmed, notebookPath);
+        updateNoteLinksAfterMove(item.fullPath, renamedPath, true);
       } else {
         if (isNote) {
           const expectedContent = await memoDocumentOperations.read({
@@ -699,10 +877,9 @@ export function NotebookFileTree({
             expectedFilename: item.name,
             expectedContent,
           });
-          if (result.memo) {
-            useMemoStore.getState().handleMemoUpdated(result.memo);
-            replaceActiveMemoPath(result.memo.id, result.path);
-          }
+          if (result.memo) useMemoStore.getState().handleMemoUpdated(result.memo);
+          const fileIdentity = findFileDisplayIdentity(item.fullPath);
+          if (fileIdentity) replaceExternalDocumentPath(fileIdentity.displayId, item.fullPath, result.path);
         } else {
           const extension = isNote ? item.name.match(/\.(md|markdown)$/i)?.[0] ?? '' : '';
           await localDocumentOperations.rename({
@@ -867,11 +1044,13 @@ export function NotebookFileTree({
           setSize={setSize}
           depth={depth}
           expanded={expanded}
-          active={item.type === 'document' && Boolean(activeFilePath)
-            && canonicalPath(item.fullPath) === canonicalPath(activeFilePath!)}
+          active={item.type === 'folder'
+            ? Boolean(selectedFolderPath) && canonicalPath(item.fullPath) === canonicalPath(selectedFolderPath!)
+            : !selectedFolderPath && Boolean(activeFilePath) && canonicalPath(item.fullPath) === canonicalPath(activeFilePath!)}
           selected={item.type === 'document' && selectedFilePathSet.has(canonicalPath(item.fullPath))}
           moveStatus={moveStatus}
           onToggle={handleTogglePath}
+          onSelectFolder={onFolderSelect}
           onOpen={handleOpenPath}
           onOpenInNewTab={onNoteOpenInNewTab ? handleOpenPathInNewTab : undefined}
           onCreateNote={handleCreateNoteAtPath}
@@ -1197,7 +1376,7 @@ export function NotebookFileTree({
       <div className="relative min-h-0 flex-1">
         <OverlayScrollbar
           className="h-full"
-          scrollerClassName="h-full overflow-y-auto pb-1"
+          scrollerClassName="h-full overflow-y-auto pt-3 pb-1"
           scrollerRef={treeScrollerRef}
           onScroll={(event) => {
             onVirtualTreeScroll(event);
@@ -1206,38 +1385,212 @@ export function NotebookFileTree({
         >
           <ContextMenu>
             <ContextMenuTrigger asChild>
-              <div className="min-h-full">
+              <div className="flex min-h-full flex-col">
+          {notebookId && (
+            <AgentTasksSection
+              notebookId={notebookId}
+              edgeGutter={TREE_EDGE_GUTTER}
+              order={sectionOrder.indexOf('agents') + 1}
+              onHeightChange={handleAgentSectionHeightChange}
+              sectionActions={(
+                <TreeSectionMoreMenu
+                  canMoveUp={sectionOrder.indexOf('agents') > 0}
+                  canMoveDown={sectionOrder.indexOf('agents') < sectionOrder.length - 1}
+                  onMoveUp={() => moveTreeSection('agents', -1)}
+                  onMoveDown={() => moveTreeSection('agents', 1)}
+                />
+              )}
+            />
+          )}
+          <section
+            className="pb-3"
+            aria-label={t('memo.fileTree.pinnedSectionTitle')}
+            data-notebook-pinned-section="true"
+            style={{ order: sectionOrder.indexOf('pinned') + 1 }}
+          >
+              <div
+                className="group mb-0.5 flex h-7 items-center rounded-lg px-1.5 transition-colors hover:bg-[var(--muted)]"
+                style={{
+                  marginLeft: TREE_EDGE_GUTTER,
+                  width: `calc(100% - ${TREE_EDGE_GUTTER * 2}px)`,
+                }}
+              >
+                <button
+                  type="button"
+                  className="flex h-full items-center gap-0.5 text-[0.82rem] font-medium text-[var(--muted-foreground)] opacity-90 hover:text-[var(--foreground)] focus-visible:outline-none"
+                  aria-label={t(pinnedCollapsed ? 'memo.fileTree.expandPinned' : 'memo.fileTree.collapsePinned')}
+                  title={t(pinnedCollapsed ? 'memo.fileTree.expandPinned' : 'memo.fileTree.collapsePinned')}
+                  onClick={() => setPinnedCollapsed((collapsed) => !collapsed)}
+                >
+                  <span>{t('memo.fileTree.pinnedSectionTitle')}</span>
+                  <ChevronRight className={cn('h-3.5 w-3.5 opacity-0 transition-[opacity,transform] group-hover:opacity-100 group-focus-within:opacity-100', !pinnedCollapsed && 'rotate-90')} />
+                </button>
+                <div className="ml-auto flex items-center">
+                  <TreeSectionMoreMenu
+                    canMoveUp={sectionOrder.indexOf('pinned') > 0}
+                    canMoveDown={sectionOrder.indexOf('pinned') < sectionOrder.length - 1}
+                    onMoveUp={() => moveTreeSection('pinned', -1)}
+                    onMoveDown={() => moveTreeSection('pinned', 1)}
+                  />
+                </div>
+              </div>
+              {!pinnedCollapsed && pinnedItems.map((item) => (
+                <NotebookTreeRow
+                  key={item.fullPath}
+                  item={item}
+                  parentPath={parentDirectoryPath(item.fullPath, notebookPath)}
+                  depth={0}
+                  expanded={false}
+                  active={!selectedFolderPath && Boolean(activeFilePath) && samePath(item.fullPath, activeFilePath!)}
+                  selected={selectedFilePathSet.has(canonicalPath(item.fullPath))}
+                  onToggle={handleTogglePath}
+                  onOpen={handleOpenPath}
+                  onOpenInNewTab={onNoteOpenInNewTab ? handleOpenPathInNewTab : undefined}
+                  onCreateNote={handleCreateNoteAtPath}
+                  onCreateFolder={handleCreateFolderAtPath}
+                  onRename={handleRename}
+                  onDeleteResource={onDeleteResource}
+                  onPointerDown={() => {}}
+                  onFocus={handleFocusPath}
+                  onKeepAliveChange={handleRowKeepAliveChange}
+                  tabIndex={0}
+                />
+              ))}
+          </section>
+          <section
+            className="pb-3"
+            aria-label={t('memo.fileTree.viewsSectionTitle')}
+            data-notebook-views-section="true"
+            style={{ order: sectionOrder.indexOf('views') + 1 }}
+          >
+            <div
+              className="group mb-0.5 flex h-7 items-center rounded-lg px-1.5 transition-colors hover:bg-[var(--muted)]"
+              style={{
+                marginLeft: TREE_EDGE_GUTTER,
+                width: `calc(100% - ${TREE_EDGE_GUTTER * 2}px)`,
+              }}
+            >
+              <button
+                type="button"
+                className="flex h-full items-center gap-0.5 text-[0.82rem] font-medium text-[var(--muted-foreground)] opacity-90 hover:text-[var(--foreground)] focus-visible:outline-none"
+                aria-label={t(viewsCollapsed ? 'memo.fileTree.expandViews' : 'memo.fileTree.collapseViews')}
+                title={t(viewsCollapsed ? 'memo.fileTree.expandViews' : 'memo.fileTree.collapseViews')}
+                onClick={() => setViewsCollapsed((collapsed) => !collapsed)}
+              >
+                <span>{t('memo.fileTree.viewsSectionTitle')}</span>
+                <ChevronRight className={cn('h-3.5 w-3.5 opacity-0 transition-[opacity,transform] group-hover:opacity-100 group-focus-within:opacity-100', !viewsCollapsed && 'rotate-90')} />
+              </button>
+              <div className="ml-auto flex items-center">
+                <button
+                  type="button"
+                  className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] opacity-0 transition-[color,opacity] hover:text-[var(--foreground)] focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100"
+                  aria-label={t('memo.customFilter.button')}
+                  title={t('memo.customFilter.button')}
+                  onClick={() => window.dispatchEvent(new CustomEvent('flowix:open-custom-filter-create', {
+                    detail: { notebookId },
+                  }))}
+                >
+                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+                <TreeSectionMoreMenu
+                  canMoveUp={sectionOrder.indexOf('views') > 0}
+                  canMoveDown={sectionOrder.indexOf('views') < sectionOrder.length - 1}
+                  onMoveUp={() => moveTreeSection('views', -1)}
+                  onMoveDown={() => moveTreeSection('views', 1)}
+                />
+              </div>
+            </div>
+            {!viewsCollapsed && customFilters.map((filter) => (
+              <button
+                key={filter.id}
+                type="button"
+                className={cn(
+                  'flex h-8 items-center rounded-lg px-1.5 text-sm transition-colors hover:bg-[var(--muted)]',
+                  selectedCustomFilterId === filter.id && 'bg-[var(--muted)] font-medium',
+                )}
+                style={{
+                  marginLeft: TREE_EDGE_GUTTER,
+                  width: `calc(100% - ${TREE_EDGE_GUTTER * 2}px)`,
+                }}
+                onClick={() => {
+                  const target = {
+                    kind: 'document-list' as const,
+                    scope: {
+                      kind: 'folder' as const,
+                      path: notebookPath,
+                      notebookPath,
+                      notebookId,
+                    },
+                    filters: { customFilterId: filter.id },
+                  };
+                  const store = useWorkColumnStore.getState();
+                  store.commitNavigation(store.beginNavigation(target, null, false, false), target);
+                }}
+              >
+                <ListFilter className="mr-1.5 h-[15px] w-[15px] shrink-0 text-[var(--muted-foreground)]" aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate text-left">{filter.name}</span>
+              </button>
+            ))}
+          </section>
+          <section
+            className="flex min-h-0 flex-col pb-3"
+            aria-label={t('memo.fileTree.sectionTitle')}
+            data-notebook-files-section="true"
+            style={{
+              order: sectionOrder.indexOf('files') + 1,
+              flexGrow: sectionOrder[sectionOrder.length - 1] === 'files' ? 1 : 0,
+            }}
+          >
           <div
             ref={treeHeaderRef}
             className={cn(
-              'flex h-6 shrink-0 items-center gap-1 rounded-lg px-3 transition-colors duration-150',
+              'group mb-0.5 flex h-7 shrink-0 items-center gap-1 rounded-lg px-1.5 transition-colors duration-150 hover:bg-[var(--muted)]',
               isRootDropTarget && 'bg-[color-mix(in_oklch,var(--brand)_10%,transparent)]',
             )}
+            style={{
+              marginLeft: TREE_EDGE_GUTTER,
+              width: `calc(100% - ${TREE_EDGE_GUTTER * 2}px)`,
+            }}
           >
-            <h3 className="text-xs font-medium leading-6 text-[var(--muted-foreground)] opacity-90">
-              {t('memo.fileTree.sectionTitle')}
-            </h3>
-            {onCreateFolder && (
-              <button
-                type="button"
-                onClick={onCreateFolder}
-                aria-label={t('memo.fileTree.newFolder')}
-                title={t('memo.fileTree.newFolder')}
-                className="ml-auto flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--brand)]"
-              >
-                <FolderPlus className="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
-            )}
+            <button
+              type="button"
+              className="flex h-full items-center gap-0.5 text-[0.82rem] font-medium text-[var(--muted-foreground)] opacity-90 hover:text-[var(--foreground)] focus-visible:outline-none"
+              aria-label={t(filesCollapsed ? 'memo.fileTree.expandFiles' : 'memo.fileTree.collapseFiles')}
+              title={t(filesCollapsed ? 'memo.fileTree.expandFiles' : 'memo.fileTree.collapseFiles')}
+              onClick={() => setFilesCollapsed((collapsed) => !collapsed)}
+            >
+              <span>{t('memo.fileTree.sectionTitle')}</span>
+              <ChevronRight className={cn('h-3.5 w-3.5 opacity-0 transition-[opacity,transform] group-hover:opacity-100 group-focus-within:opacity-100', !filesCollapsed && 'rotate-90')} />
+            </button>
+            <div className="ml-auto flex items-center">
+              {onCreateFolder && (
+                <button
+                  type="button"
+                  onClick={onCreateFolder}
+                  aria-label={t('memo.fileTree.newFolder')}
+                  title={t('memo.fileTree.newFolder')}
+                  className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] opacity-0 transition-[color,opacity] hover:text-[var(--foreground)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--brand)] group-hover:opacity-100"
+                >
+                  <FolderPlus className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              )}
+              <TreeSectionMoreMenu
+                canMoveUp={sectionOrder.indexOf('files') > 0}
+                canMoveDown={sectionOrder.indexOf('files') < sectionOrder.length - 1}
+                onMoveUp={() => moveTreeSection('files', -1)}
+                onMoveDown={() => moveTreeSection('files', 1)}
+              />
+            </div>
           </div>
-              <div
+              {!filesCollapsed && <div
             ref={treeRootRef}
             role="tree"
             aria-multiselectable="true"
             aria-label={notebookName}
             data-notebook-tree-root="true"
-            style={{ minHeight: `calc(100% - ${TREE_HEADER_HEIGHT}px)` }}
+            style={{ minHeight: virtualTreeSize || TREE_ROW_HEIGHT }}
             className={cn(
-              'relative rounded-lg transition-colors duration-150',
+              'relative min-h-0 flex-1 rounded-lg transition-colors duration-150',
               isRootDropTarget && 'bg-[color-mix(in_oklch,var(--brand)_10%,transparent)]',
             )}
             onPointerMove={(event) => {
@@ -1335,7 +1688,8 @@ export function NotebookFileTree({
                 </div>
               ))}
             </div>
-          </div>
+          </div>}
+          </section>
               </div>
             </ContextMenuTrigger>
             <ContextMenuContent className="w-[180px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
@@ -1419,7 +1773,7 @@ function NotebookTreeDraft({
         aria-hidden="true"
         data-notebook-tree-draft-icon={draft.kind}
         className={cn(
-          'relative flex h-[15px] w-[15px] shrink-0 items-center justify-center',
+          'relative flex h-[18px] w-[18px] shrink-0 items-center justify-center',
           draft.kind === 'folder'
             ? 'text-[var(--brand)]'
             : 'text-[color-mix(in_oklch,var(--foreground)_90%,white_10%)]',
@@ -1431,7 +1785,7 @@ function NotebookTreeDraft({
             dangerouslySetInnerHTML={{ __html: folderIcon }}
           />
         ) : (
-          <File className="h-[15px] w-[15px]" strokeWidth={1.3} />
+          <File className="h-[18px] w-[18px]" strokeWidth={1.3} />
         )}
       </span>
       <input

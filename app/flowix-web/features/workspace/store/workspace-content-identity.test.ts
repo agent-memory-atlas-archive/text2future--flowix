@@ -9,13 +9,12 @@ describe('workspace content identity', () => {
     );
   });
 
-  it('keeps different content models in separate identity namespaces', () => {
-    expect(contentIdentityKey({ kind: 'memo', memoId: 'same-id' })).toBe('memo:same-id');
-    expect(contentIdentityKey({ kind: 'external', path: '/notes/same-id' })).toBe(
-      'file:/notes/same-id',
+  it('uses the same path identity for notebook notes and external files', () => {
+    expect(contentIdentityKey({ kind: 'external', path: '/notes/same-id.md' })).toBe(
+      'file:/notes/same-id.md',
     );
-    expect(contentIdentityKey({ kind: 'artifact', pointerMemoId: 'same-id' })).toBe(
-      'artifact:same-id',
+    expect(contentIdentityKey({ kind: 'media', path: '/notes/same-id.md' })).toBe(
+      'file:/notes/same-id.md',
     );
   });
 });

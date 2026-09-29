@@ -7,7 +7,7 @@ import {
   useDocumentEditorViewStore,
 } from './document-editor-view-store';
 
-const memoIdentity = { kind: 'md' as const, memoId: 'memo-1', path: '/memo-1.md', displayId: 'display-1' };
+const memoIdentity = { kind: 'md' as const, path: '/memo-1.md', displayId: 'display-1' };
 
 describe('document editor view store', () => {
   afterEach(() => {
@@ -23,7 +23,7 @@ describe('document editor view store', () => {
 
     expect(getDocumentEditorMode('main-third', memoIdentity)).toBe('source');
     expect(getDocumentEditorMode('browser-column', memoIdentity)).toBe('rich');
-    expect(getDocumentEditorMode('main-third', { kind: 'md', memoId: 'memo-2', path: '/memo-2.md', displayId: 'display-2' })).toBe('rich');
+    expect(getDocumentEditorMode('main-third', { kind: 'md', path: '/memo-2.md', displayId: 'display-2' })).toBe('rich');
   });
 
   it('uses stable keys for equivalent identity objects', () => {

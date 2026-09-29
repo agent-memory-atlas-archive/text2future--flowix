@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import type { MemoDocumentSession } from '@features/document/store/document-store';
+import type { ExternalDocumentSession } from '@features/document/store/document-store';
 import { parentRelativePathForTreeCreate } from './memo-create-location';
 
-function session(path: string, notebookId = 'work'): MemoDocumentSession {
+function session(path: string, notebookId = 'work'): ExternalDocumentSession {
   return {
-    fileIdentity: { displayId: 'display-session', path }, memoId: 'memo', notebookId,
-    notebookPath: '/notes/work', openedAt: 0, transitionId: 0,
+    fileIdentity: { displayId: 'display-session', path }, notebookId,
+    notebookPath: '/notes/work', scopePath: '/notes/work', openedAt: 0, transitionId: 0,
   };
 }
 

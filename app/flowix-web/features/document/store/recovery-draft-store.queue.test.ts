@@ -6,7 +6,7 @@ vi.mock('@platform/tauri/client/recovery', () => ({ recoveryDrafts: mocks }));
 let seq = 0;
 function input(revision = 1) {
   const path = '/checkpoint-' + ++seq + '.md';
-  return { identity: { kind: 'md' as const, memoId: null, ...ensureFileDisplayIdentity(path) }, originalPath: path,
+  return { identity: { kind: 'md' as const, ...ensureFileDisplayIdentity(path) }, originalPath: path,
     revision, content: 'draft', baseContent: 'base', reason: 'autosave' as const,
     title: { draft: 'new title', filename: 'old.md', revision } };
 }

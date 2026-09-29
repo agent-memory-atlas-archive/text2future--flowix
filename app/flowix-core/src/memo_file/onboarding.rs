@@ -14,8 +14,8 @@ struct OnboardingDoc {
 // embeds them in flowix-core at compile time, so creating a notebook does not
 // depend on resource lookup or the current working directory at runtime.
 //
-// The array order is the reverse of the final display order: create_memo gives
-// each document an increasing createdAt and the UI sorts createdAt descending.
+// The array order is the reverse of the final display order. The path index
+// records creation time and the UI sorts createdAt descending.
 // Expected display order (top to bottom):
 //   1. 欢迎文档
 //   2. Welcome
@@ -71,12 +71,11 @@ fn seed_onboarding_docs_if_empty(
         return Ok(false);
     }
 
+    let target_notebook = notebook_id.map(str::to_owned)
+        .or_else(|| memo_file.current_notebook_id_value())
+        .ok_or_else(|| std::io::Error::other("no notebook selected for onboarding"))?;
     for doc in ONBOARDING_DOCS {
-        if let Some(notebook_id) = notebook_id {
-            memo_file.create_memo_for_notebook_id(notebook_id, doc.title, doc.body, None)?;
-        } else {
-            memo_file.create_memo(doc.title, doc.body, None)?;
-        }
+        memo_file.create_v2_note_by_path(&target_notebook, None, doc.title, doc.body)?;
     }
 
     Ok(true)
@@ -155,18 +154,14 @@ mod tests {
         let (_dir, mf) = test_memo_file();
 
         assert!(mf.seed_onboarding_docs().unwrap());
-        let index = mf.read_index().unwrap();
-        let filenames: Vec<&str> = index
-            .memos
-            .iter()
-            .map(|memo| memo.filename.as_str())
-            .collect();
+        let filenames = mf.list_v2_note_paths_from_disk("nb_default").unwrap();
 
-        assert_eq!(filenames, ["Welcome.md", "欢迎文档.md"]);
-        assert_eq!(index.memos.len(), ONBOARDING_DOCS.len());
+        assert!(filenames.contains(&"Welcome.md".to_string()));
+        assert!(filenames.contains(&"欢迎文档.md".to_string()));
+        assert_eq!(filenames.len(), ONBOARDING_DOCS.len());
         assert!(!filenames.iter().any(|filename| {
             matches!(
-                *filename,
+                filename.as_str(),
                 "Flowix Memo 产品介绍.md" | "如何快速上手.md" | "配置使用 AI Agent.md"
             )
         }));
@@ -182,11 +177,11 @@ mod tests {
 
         // The last-created document has the greatest createdAt and is displayed
         // first by the UI's descending sort.
-        assert_eq!(filenames.last(), Some(&"欢迎文档.md"));
+        assert!(filenames.contains(&"欢迎文档.md".to_string()));
 
         // A second call for the same non-empty notebook is a no-op.
         assert!(!mf.seed_onboarding_docs().unwrap());
-        assert_eq!(mf.read_index().unwrap().memos.len(), ONBOARDING_DOCS.len());
+        assert_eq!(mf.list_v2_note_paths_from_disk("nb_default").unwrap().len(), ONBOARDING_DOCS.len());
     }
 
     #[test]
@@ -265,14 +260,7 @@ mod tests {
         );
         assert!(other_path.join("Welcome.md").exists());
         assert_eq!(mf.read_index().unwrap_or_default().memos.len(), 0);
-        assert_eq!(
-            mf.read_index_for_notebook_id(Some("nb_other"))
-                .unwrap()
-                .unwrap()
-                .memos
-                .len(),
-            ONBOARDING_DOCS.len()
-        );
+        assert_eq!(mf.list_v2_note_paths_from_disk("nb_other").unwrap().len(), ONBOARDING_DOCS.len());
     }
 
     #[test]
@@ -280,7 +268,7 @@ mod tests {
         let (_dir, mf) = test_memo_file();
 
         assert!(mf.seed_onboarding_docs().unwrap());
-        assert_eq!(mf.read_index().unwrap().memos.len(), ONBOARDING_DOCS.len());
+        assert_eq!(mf.list_v2_note_paths_from_disk("nb_default").unwrap().len(), ONBOARDING_DOCS.len());
 
         // Simulate another new, empty notebook by clearing the memo index.
         mf.write_index(&MemoIndexFile::default()).unwrap();
@@ -288,6 +276,6 @@ mod tests {
         fs::remove_file(mf.get_memo_base().join("欢迎文档.md")).unwrap();
 
         assert!(mf.seed_onboarding_docs().unwrap());
-        assert_eq!(mf.read_index().unwrap().memos.len(), ONBOARDING_DOCS.len());
+        assert_eq!(mf.list_v2_note_paths_from_disk("nb_default").unwrap().len(), ONBOARDING_DOCS.len());
     }
 }

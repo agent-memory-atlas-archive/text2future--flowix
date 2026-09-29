@@ -54,7 +54,7 @@ pub fn cmd_create(
     if json {
         print_pretty_json(&created)
     } else {
-        println!("created plugin document: {}", created.note_id);
+        println!("created plugin document: {}", created.note_path);
         println!("  plugin:    {}", created.plugin_id);
         println!("  notebook:  {}", created.notebook);
         println!("  title:     {}", created.title);

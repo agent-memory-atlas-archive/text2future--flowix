@@ -2,7 +2,6 @@
 
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { displayTitleFromFilename } from '@/lib/utils';
 import { useShortcutScope, pushHandler } from '@features/shortcuts';
 import { useI18n, type I18nParams } from '@/lib/i18n';
 import { useShallow } from 'zustand/react/shallow';
@@ -19,14 +18,12 @@ import { useTauriRpc } from '@platform/tauri/use-tauri-rpc';
 import { cloudSyncErrorMessage, isInvalidRefreshTokenError } from '@platform/tauri/errors';
 import { useCreateNotebookFlow } from '@features/memo/hooks/use-create-notebook-flow';
 import { memoRepository, notebookRepository } from '@features/memo/services/memo-repository';
-import { getVisibleCreateFilter, useMemoStore, useTagStore, type MemoItem, type MemoListItem, type Notebook } from '@features/memo/store';
-import { isPathNoteListItem, memoListItemRelativePath } from '@/types/memo-item';
+import { getVisibleCreateFilter, useMemoStore, useTagStore, type MemoListItem, type Notebook } from '@features/memo/store';
+import { memoListItemRelativePath } from '@/types/memo-item';
 import { getNotebookIconOption } from '@features/memo/components/notebook-icon';
-import { openMemoSession } from '@features/memo/use-cases/open-memo-session';
+import { openNotebookNote } from '@features/memo/use-cases/open-notebook-note';
 import { clearWorkspaceDocument } from '@features/workspace/use-cases/workspace-navigation';
 import {
-  flushBrowserColumnMemo,
-  removeBrowserColumnTabsByMemoId,
   removeBrowserColumnTabsByPath,
 } from '@features/workspace/use-cases/browser-column-navigation';
 import { toast } from '@/lib/toast';
@@ -38,10 +35,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from '@shared/ui/sel
 import { LazyGlobalSearchCommand } from '@features/memo/components/lazy-global-search-command';
 import { subscribe } from '@platform/tauri/event-bus';
 import { externalDocuments } from '@platform/tauri/client';
-import { openNoteByTarget, resolveMemoById } from '@features/memo/use-cases/open-by-target';
 import {
   openBrowserColumnMarkdown,
-  openBrowserColumnMemoById,
 } from '@features/workspace/use-cases/browser-column-navigation';
 import { openExternalTarget } from '@features/workspace/use-cases/workspace-navigation';
 import { documentIdentityFromFile, flushWorkspaceDocumentPath } from '@features/document/public/workspace-api';
@@ -188,21 +183,20 @@ function ExternalMarkdownOpenDialog() {
     if (!request || !notebookId) return;
     setOpening(true);
     try {
-      const imported: Array<{ id: string; resolved: NonNullable<Awaited<ReturnType<typeof resolveMemoById>>> }> = [];
+      const imported: string[] = [];
       for (const filePath of request.filePaths) {
         const content = await externalDocuments.read(filePath, null);
-        const memo = await memos.importExternalDocumentToMemo(filePath, content, notebookId);
-        if (!memo) throw new Error('Import returned no note');
-        const resolved = await resolveMemoById(memo.id);
-        if (!resolved) throw new Error('Imported note could not be opened');
-        imported.push({ id: memo.id, resolved });
+        const created = await memos.importExternalDocumentByPath(filePath, content, notebookId);
+        imported.push(created.path);
       }
+      await useMemoStore.getState().loadPathNotes({ notebookId });
       setRequest(null);
       if (request.destination === 'browser-column') {
         await setCurrentWorkspaceNotebook(notebookId);
-        for (const memo of imported) await openBrowserColumnMemoById(memo.id);
+        for (const path of imported) await openBrowserColumnMarkdown(path);
       } else {
-        await openNoteByTarget(imported[imported.length - 1].resolved);
+        const notebook = useMemoStore.getState().notebooks.find((item) => item.id === notebookId);
+        if (notebook) await openNotebookNote(imported[imported.length - 1], notebook);
       }
     } catch (error) {
       toast.error(`${t('memo.externalOpen.failed')}: ${String(error)}`);
@@ -296,7 +290,6 @@ export function MemoListServicesHost({
 }) {
   const { request } = useTauriRpc();
   const { t } = useI18n();
-  const selectedMemo = useMemoStore((state) => state.selectedMemo);
   const selectedNotebook = useMemoStore((state) => state.selectedNotebook);
   const notebooks = useMemoStore((state) => state.notebooks);
   const activeFilter = useMemoStore((state) => state.activeFilter);
@@ -304,20 +297,16 @@ export function MemoListServicesHost({
   const selectedTagId = useTagStore((state) => state.selectedTagId);
   const setSelectedTagId = useTagStore((state) => state.setSelectedTagId);
   const {
-    setSelectedMemo,
     setSelectedNotebook,
     setNotebooks,
     setActiveFilter,
     triggerRefresh,
-    handleMemoCreated,
   } = useMemoStore(
     useShallow((state) => ({
-      setSelectedMemo: state.setSelectedMemo,
       setSelectedNotebook: state.setSelectedNotebook,
       setNotebooks: state.setNotebooks,
       setActiveFilter: state.setActiveFilter,
       triggerRefresh: state.triggerRefresh,
-      handleMemoCreated: state.handleMemoCreated,
     })),
   );
 
@@ -525,24 +514,23 @@ export function MemoListServicesHost({
       setActiveFilter(createFilter);
     }
     const tagId = createFilter === 'tagged' ? selectedTagId : null;
-    let created: { memo: MemoItem; initialContent: string };
+    let created: Awaited<ReturnType<typeof memoRepository.create>>;
     try {
       created = await memoRepository.create(tagId ?? undefined, selectedNotebook.id);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
       return;
     }
-    handleMemoCreated(created.memo, { select: false });
+    await useMemoStore.getState().loadPathNotes({ notebookId: selectedNotebook.id, filter: createFilter });
     const shouldSelectNewMemo =
       createFilter === 'all' ||
       (createFilter === 'tagged' && Boolean(tagId)) ||
       createFilter === 'thisWeek' ||
       createFilter === 'thisMonth';
     if (shouldSelectNewMemo) {
-      void openMemoSession({ ...created.memo, isOpen: true }, selectedNotebook,
-        { initialFocus: 'title', initialContent: created.initialContent });
+      void openNotebookNote(created.path, selectedNotebook, { initialFocus: 'title' });
     }
-  }, [activeFilter, handleMemoCreated, selectedNotebook, selectedTagId, setActiveFilter, setSelectedMemo, setSelectedTagId]);
+  }, [activeFilter, selectedNotebook, selectedTagId, setActiveFilter, setSelectedTagId]);
 
   useEffect(() => {
     const handleRequest = () => void handleCreateMemo();
@@ -559,37 +547,27 @@ export function MemoListServicesHost({
         ? joinNotebookMemoPath(selectedNotebook.path, memoListItemRelativePath(memo))
         : null;
       if (!path) return;
-      const flushed = isPathNoteListItem(memo)
-        ? await flushWorkspaceDocumentPath(
-            documentIdentityFromFile(ensureFileDisplayIdentity(path)),
-            path,
-            selectedNotebook?.path ?? null,
-          )
-        : await flushBrowserColumnMemo(memo.id);
+      const flushed = await flushWorkspaceDocumentPath(
+        documentIdentityFromFile(ensureFileDisplayIdentity(path)),
+        path,
+        selectedNotebook?.path ?? null,
+      );
       if (flushed === false) {
         toast.error(t('document.save.failed', { message: '当前页签保存失败，未删除笔记' }));
         return;
       }
       if (!await memoRepository.delete(path)) return;
-      if (isPathNoteListItem(memo)) {
-        removeBrowserColumnTabsByPath(path);
-        const selected = useMemoStore.getState().selectedPathNote;
-        if (selected?.notebookId === memo.notebookId && selected.relativePath === memo.relativePath) {
-          useMemoStore.getState().setSelectedPathNote(null);
-          await clearWorkspaceDocument();
-        }
-      } else {
-        removeBrowserColumnTabsByMemoId(memo.id);
-        if (selectedMemo?.id === memo.id) {
-          setSelectedMemo(null);
-          await clearWorkspaceDocument();
-        }
+      removeBrowserColumnTabsByPath(path);
+      const selected = useMemoStore.getState().selectedPathNote;
+      if (selected?.notebookId === memo.notebookId && selected.relativePath === memo.relativePath) {
+        useMemoStore.getState().setSelectedPathNote(null);
+        await clearWorkspaceDocument();
       }
       triggerRefresh();
     })().catch((error) => {
       toast.error(error instanceof Error ? error.message : String(error));
     });
-  }, [deleteMemo, selectedMemo, setSelectedMemo, t, triggerRefresh]);
+  }, [deleteMemo, t, triggerRefresh]);
 
   const handleMediaDeleteConfirm = useCallback(() => {
     if (!deleteMedia) return;
@@ -753,7 +731,7 @@ export function MemoListServicesHost({
           <DialogHeader>
             <DialogTitle>{t('memo.delete.title')}</DialogTitle>
             <DialogDescription>
-              {t('memo.delete.description', { name: deleteMemo && isPathNoteListItem(deleteMemo) ? deleteMemo.title : displayTitleFromFilename(deleteMemo?.filename) } satisfies I18nParams)}
+              {t('memo.delete.description', { name: deleteMemo?.title ?? '' } satisfies I18nParams)}
             </DialogDescription>
           </DialogHeader>
           <div className="mt-4 flex justify-end gap-2">

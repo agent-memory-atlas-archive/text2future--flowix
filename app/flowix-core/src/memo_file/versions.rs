@@ -43,6 +43,124 @@ pub struct MemoVersionManifest {
     pub versions: Vec<MemoVersionMeta>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PathVersionMeta {
+    pub id: String,
+    pub created_at: i64,
+    pub source: MemoVersionSource,
+    pub size: u64,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PathVersionManifest {
+    version: u32,
+    notebook_id: String,
+    relative_path: String,
+    versions: Vec<PathVersionMeta>,
+}
+
+impl MemoFile {
+    pub(super) fn move_path_archive(&self, notebook_id: &str, old_relative: &str, new_relative: &str) -> std::io::Result<()> {
+        let Some(notebook) = self.get_notebook_config_by_id(notebook_id) else { return Ok(()); };
+        let root = PathBuf::from(notebook.path).join(".flowix").join("archives");
+        let key = |path: &str| format!("{:x}", Sha256::digest(path.replace('\\', "/").as_bytes()));
+        let source = root.join(key(old_relative));
+        if !source.exists() { return Ok(()); }
+        let destination = root.join(key(new_relative));
+        if destination.exists() {
+            return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "destination already has an archive"));
+        }
+        let json = fs::read_to_string(source.join("manifest.json"))?;
+        let mut manifest: PathVersionManifest = serde_json::from_str(&json)?;
+        if manifest.notebook_id != notebook_id || manifest.relative_path != old_relative {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "archive identity mismatch"));
+        }
+        fs::rename(&source, &destination)?;
+        manifest.relative_path = new_relative.to_string();
+        atomic_write_bytes(&destination.join("manifest.json"), &serde_json::to_vec_pretty(&manifest)?)
+    }
+
+    fn path_archive_location(&self, notebook_id: &str, relative_path: &str) -> Option<(PathBuf, PathBuf)> {
+        let relative = Path::new(relative_path);
+        if relative.is_absolute() || !relative_path.ends_with(".md") || relative.components().any(|part| {
+            !matches!(part, std::path::Component::Normal(_))
+        }) {
+            return None;
+        }
+        let notebook = self.get_notebook_config_by_id(notebook_id)?;
+        let root = PathBuf::from(notebook.path).canonicalize().ok()?;
+        let document = root.join(relative);
+        let canonical_document = document.canonicalize().ok()?;
+        if !canonical_document.starts_with(&root) || !canonical_document.is_file() {
+            return None;
+        }
+        let key = format!("{:x}", Sha256::digest(relative_path.replace('\\', "/").as_bytes()));
+        let archive = root.join(".flowix").join("archives").join(key);
+        Some((canonical_document, archive))
+    }
+
+    fn read_path_manifest(&self, notebook_id: &str, relative_path: &str) -> Option<(PathBuf, PathVersionManifest)> {
+        let (_, archive) = self.path_archive_location(notebook_id, relative_path)?;
+        let manifest = fs::read_to_string(archive.join("manifest.json"))
+            .ok()
+            .and_then(|json| serde_json::from_str::<PathVersionManifest>(&json).ok())
+            .filter(|manifest| manifest.notebook_id == notebook_id && manifest.relative_path == relative_path)
+            .unwrap_or_else(|| PathVersionManifest {
+                version: 1,
+                notebook_id: notebook_id.to_string(),
+                relative_path: relative_path.to_string(),
+                versions: Vec::new(),
+            });
+        Some((archive, manifest))
+    }
+
+    pub fn list_path_versions(&self, notebook_id: &str, relative_path: &str) -> Vec<PathVersionMeta> {
+        self.read_path_manifest(notebook_id, relative_path)
+            .map(|(_, mut manifest)| {
+                manifest.versions.sort_by_key(|version| std::cmp::Reverse(version.created_at));
+                manifest.versions
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn read_path_version(&self, notebook_id: &str, relative_path: &str, version_id: &str) -> Option<String> {
+        if !is_safe_version_id(version_id) { return None; }
+        let (archive, manifest) = self.read_path_manifest(notebook_id, relative_path)?;
+        if !manifest.versions.iter().any(|version| version.id == version_id) { return None; }
+        fs::read_to_string(archive.join(format!("{version_id}.md"))).ok()
+    }
+
+    pub fn create_path_version(&self, notebook_id: &str, relative_path: &str, content: &str, source: MemoVersionSource) -> std::io::Result<Option<PathVersionMeta>> {
+        let Some((archive, mut manifest)) = self.read_path_manifest(notebook_id, relative_path) else { return Ok(None); };
+        let content_hash = sha256_hex(content);
+        if manifest.versions.iter().any(|version| version.content_hash == content_hash) { return Ok(None); }
+        let now = chrono::Utc::now();
+        let id = format!("v_{}_{}", now.format("%Y%m%d_%H%M%S"), nanoid::nanoid!(6, &super::MEMO_ID_ALPHABET));
+        let meta = PathVersionMeta { id: id.clone(), created_at: now.timestamp_millis(), source, size: content.len() as u64, content_hash };
+        fs::create_dir_all(&archive)?;
+        atomic_write_bytes(&archive.join(format!("{id}.md")), content.as_bytes())?;
+        manifest.versions.push(meta.clone());
+        manifest.versions.sort_by_key(|version| std::cmp::Reverse(version.created_at));
+        let keep = MEMO_VERSION_LIMIT.min(manifest.versions.len());
+        for removed in manifest.versions.drain(keep..) {
+            let _ = fs::remove_file(archive.join(format!("{}.md", removed.id)));
+        }
+        atomic_write_bytes(&archive.join("manifest.json"), &serde_json::to_vec_pretty(&manifest)?)?;
+        Ok(Some(meta))
+    }
+
+    pub fn maybe_create_auto_path_version(&self, notebook_id: &str, relative_path: &str, content: &str) -> std::io::Result<Option<PathVersionMeta>> {
+        let Some((_, manifest)) = self.read_path_manifest(notebook_id, relative_path) else { return Ok(None); };
+        let now = chrono::Utc::now().timestamp_millis();
+        if manifest.versions.iter().filter(|version| version.source == MemoVersionSource::Auto)
+            .any(|version| now - version.created_at < MEMO_AUTO_VERSION_INTERVAL_MS) { return Ok(None); }
+        self.create_path_version(notebook_id, relative_path, content, MemoVersionSource::Auto)
+    }
+}
+
 impl MemoVersionManifest {
     fn empty(memo_id: &str) -> Self {
         Self {
@@ -427,4 +545,34 @@ fn sha256_hex(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+#[cfg(test)]
+mod path_version_tests {
+    use super::*;
+    use crate::memo_file::NotebookConfig;
+
+    #[test]
+    fn archives_markdown_by_notebook_and_relative_path_without_memo_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("notebook");
+        fs::create_dir_all(root.join("Projects")).unwrap();
+        fs::write(root.join("Projects/Plan.md"), "# Plan").unwrap();
+        let store = MemoFile::new(temp.path().join("config"));
+        store.write_notebook_configs(&[NotebookConfig {
+            id: "work".into(), name: "Work".into(), icon: None,
+            path: root.to_string_lossy().to_string(), is_default: true,
+            sort: 0, created_at: 1, updated_at: 1,
+        }]).unwrap();
+        let version = store.create_path_version("work", "Projects/Plan.md", "# Plan", MemoVersionSource::Manual)
+            .unwrap().unwrap();
+        assert_eq!(store.list_path_versions("work", "Projects/Plan.md").len(), 1);
+        assert_eq!(store.read_path_version("work", "Projects/Plan.md", &version.id).as_deref(), Some("# Plan"));
+        assert!(store.create_path_version("work", "../Plan.md", "bad", MemoVersionSource::Manual).unwrap().is_none());
+        assert!(root.join(".flowix/archives").is_dir());
+        let renamed = store.rename_v2_note_by_path("work", "Projects/Plan.md", "Renamed", None).unwrap();
+        assert_eq!(renamed, "Projects/Renamed.md");
+        assert!(store.list_path_versions("work", "Projects/Plan.md").is_empty());
+        assert_eq!(store.read_path_version("work", &renamed, &version.id).as_deref(), Some("# Plan"));
+    }
 }

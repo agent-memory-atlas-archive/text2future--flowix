@@ -164,7 +164,7 @@ fn switch_notebook(
 
     if prev == notebook_id && idx_nb == notebook_id && idx_loaded {
         if let Some(notebook_id) = notebook_id.as_deref() {
-            let (notebook_path, moved_legacy_files) = {
+            {
                 let memo_file = read_lock(&state.memo_file, "memo_file");
                 let report = memo_file
                     .ensure_notebook_migrations(notebook_id)
@@ -175,22 +175,7 @@ fn switch_notebook(
                     rebuilt_tags = report.rebuilt_tags,
                     "notebook migrations checked"
                 );
-                (
-                    memo_file
-                        .get_notebook_config_by_id(notebook_id)
-                        .map(|notebook| notebook.path),
-                    report.moved_files > 0,
-                )
             };
-            if let Some(notebook_path) = notebook_path {
-                crate::plugin::migrate_notebook_data(
-                    notebook_id,
-                    Path::new(&notebook_path),
-                    &state.memo_file,
-                    Some(app),
-                    moved_legacy_files,
-                )?;
-            }
         }
         return Ok(());
     }
@@ -205,7 +190,7 @@ fn switch_notebook(
         .set_current_notebook(notebook_id.clone());
 
     if let Some(notebook_id) = notebook_id.as_deref() {
-        let (notebook_path, moved_legacy_files) = {
+        {
             let memo_file = read_lock(&state.memo_file, "memo_file");
             let report = memo_file
                 .ensure_notebook_migrations(notebook_id)
@@ -218,22 +203,7 @@ fn switch_notebook(
                     "notebook migrations completed"
                 );
             }
-            (
-                memo_file
-                    .get_notebook_config_by_id(notebook_id)
-                    .map(|notebook| notebook.path),
-                report.moved_files > 0,
-            )
         };
-        if let Some(notebook_path) = notebook_path {
-            crate::plugin::migrate_notebook_data(
-                notebook_id,
-                Path::new(&notebook_path),
-                &state.memo_file,
-                Some(app),
-                moved_legacy_files,
-            )?;
-        }
     }
 
     write_lock(&state.search, "search").mark_unloaded();

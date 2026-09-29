@@ -6,7 +6,10 @@ import { waitForInitialDocumentLoad } from '@features/document/public/startup-ap
 
 const mocks = vi.hoisted(() => ({
   initializeMemoLibrary: vi.fn(),
-  restorePersistedMemoSession: vi.fn(),
+  captureWorkspaceRestoreTarget: vi.fn(),
+  restoreExternalDocumentWorkspace: vi.fn(),
+  restoreMediaWorkspace: vi.fn(),
+  setWorkspaceRestoreStatus: vi.fn(),
   restoreAgentConversationWorkspace: vi.fn(),
   calls: [] as string[],
 }));
@@ -14,10 +17,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@features/memo/use-cases/initialize-memo-library', () => ({
   initializeMemoLibrary: mocks.initializeMemoLibrary,
 }));
-vi.mock('@features/memo/use-cases/open-memo-session', () => ({
-  restorePersistedMemoSession: mocks.restorePersistedMemoSession,
-}));
-vi.mock('@features/workspace/use-cases/agent-conversation-navigation', () => ({
+vi.mock('@features/workspace/public/startup-api', () => ({
+  captureWorkspaceRestoreTarget: mocks.captureWorkspaceRestoreTarget,
+  restoreExternalDocumentWorkspace: mocks.restoreExternalDocumentWorkspace,
+  restoreMediaWorkspace: mocks.restoreMediaWorkspace,
+  setWorkspaceRestoreStatus: mocks.setWorkspaceRestoreStatus,
   restoreAgentConversationWorkspace: mocks.restoreAgentConversationWorkspace,
 }));
 
@@ -33,9 +37,10 @@ describe('initializeMainWindowStartup', () => {
     mocks.initializeMemoLibrary.mockReset().mockImplementation(async () => {
       mocks.calls.push('memo-library');
     });
-    mocks.restorePersistedMemoSession.mockReset().mockImplementation(async () => {
-      mocks.calls.push('memo-session');
-    });
+    mocks.captureWorkspaceRestoreTarget.mockReset().mockReturnValue(null);
+    mocks.restoreExternalDocumentWorkspace.mockReset();
+    mocks.restoreMediaWorkspace.mockReset();
+    mocks.setWorkspaceRestoreStatus.mockReset();
     mocks.restoreAgentConversationWorkspace.mockReset().mockImplementation(async () => {
       mocks.calls.push('agent-workspace');
     });
@@ -46,7 +51,6 @@ describe('initializeMainWindowStartup', () => {
 
     expect(mocks.calls).toEqual([
       'memo-library',
-      'memo-session',
     ]);
   });
 
@@ -54,7 +58,7 @@ describe('initializeMainWindowStartup', () => {
     mocks.initializeMemoLibrary.mockRejectedValueOnce(new Error('backend unavailable'));
 
     await expect(initializeMainWindowStartup()).rejects.toThrow('backend unavailable');
-    expect(mocks.restorePersistedMemoSession).not.toHaveBeenCalled();
+    expect(mocks.restoreExternalDocumentWorkspace).not.toHaveBeenCalled();
     expect(mocks.restoreAgentConversationWorkspace).not.toHaveBeenCalled();
   });
 
@@ -85,7 +89,8 @@ describe('initializeMainWindowStartup', () => {
       callback(0);
       return 1;
     });
-    mocks.restorePersistedMemoSession.mockImplementationOnce(async () => {
+    mocks.captureWorkspaceRestoreTarget.mockReturnValue({ kind: 'external', path: '/notes/active.md', scopePath: '/notes' });
+    mocks.restoreExternalDocumentWorkspace.mockImplementationOnce(async () => {
       useDocumentStore.setState({ isDocumentTransitioning: true, documentTransitionId: 1 });
     });
 

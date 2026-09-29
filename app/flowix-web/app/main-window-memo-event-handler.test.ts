@@ -37,16 +37,14 @@ function createActions(selectedNotebookId = 'notebook-a'): MainWindowMemoEventAc
   return {
     getSelectedNotebookId: vi.fn(() => selectedNotebookId),
     invalidateMentionCaches: vi.fn(),
-    openMemoInBrowserColumn: vi.fn().mockResolvedValue(undefined),
+    openPathInBrowserColumn: vi.fn().mockResolvedValue(undefined),
     reportOpenFailure: vi.fn(),
     handleMemoCreated: vi.fn(),
     handleMemoUpdated: vi.fn(),
     handleMemoDeleted: vi.fn(),
-    removeBrowserColumnTabsByMemoId: vi.fn(),
+    removeBrowserColumnTabsByPath: vi.fn(),
     handleTagsRenamed: vi.fn(),
     handleTagsDeleted: vi.fn(),
-    replaceActiveMemoPath: vi.fn(),
-    replaceBrowserColumnMemoPath: vi.fn(),
     refreshSelectedNotebookMetadata: vi.fn(),
     refreshBackgroundTodoCount: vi.fn(),
   };
@@ -58,7 +56,7 @@ describe('handleMainWindowMemoEvent', () => {
 
     handleMainWindowMemoEvent(createdEvent(), actions);
 
-    expect(actions.openMemoInBrowserColumn).toHaveBeenCalledWith('memo-b');
+    expect(actions.openPathInBrowserColumn).toHaveBeenCalledWith('notebook-b', 'Created.md');
     expect(actions.handleMemoCreated).not.toHaveBeenCalled();
     expect(actions.refreshSelectedNotebookMetadata).not.toHaveBeenCalled();
     expect(actions.invalidateMentionCaches).toHaveBeenCalledOnce();
@@ -69,7 +67,7 @@ describe('handleMainWindowMemoEvent', () => {
 
     handleMainWindowMemoEvent(createdEvent(), actions);
 
-    expect(actions.openMemoInBrowserColumn).toHaveBeenCalledWith('memo-b');
+    expect(actions.openPathInBrowserColumn).toHaveBeenCalledWith('notebook-b', 'Created.md');
     expect(actions.handleMemoCreated).not.toHaveBeenCalled();
     expect(actions.refreshSelectedNotebookMetadata).not.toHaveBeenCalled();
   });
@@ -77,7 +75,7 @@ describe('handleMainWindowMemoEvent', () => {
   it('does not auto-open AGENTS.md when the watcher reports it as a new note', () => {
     const actions = createActions('notebook-a');
     handleMainWindowMemoEvent(createdEvent({ memo: { ...memo, filename: 'AGENTS.md' } }), actions);
-    expect(actions.openMemoInBrowserColumn).not.toHaveBeenCalled();
+    expect(actions.openPathInBrowserColumn).not.toHaveBeenCalled();
   });
 
   it('refreshes only the notebook-keyed todo count for a background notebook', () => {
@@ -98,7 +96,7 @@ describe('handleMainWindowMemoEvent', () => {
 
     handleMainWindowMemoEvent(event, actions);
 
-    expect(actions.openMemoInBrowserColumn).not.toHaveBeenCalled();
+    expect(actions.openPathInBrowserColumn).not.toHaveBeenCalled();
     expect(actions.handleMemoCreated).toHaveBeenCalledWith(memo);
     expect(actions.refreshSelectedNotebookMetadata).toHaveBeenCalledWith(event);
   });
@@ -109,7 +107,7 @@ describe('handleMainWindowMemoEvent', () => {
 
     handleMainWindowMemoEvent(event, actions);
 
-    expect(actions.openMemoInBrowserColumn).toHaveBeenCalledWith('memo-b');
+    expect(actions.openPathInBrowserColumn).toHaveBeenCalledWith('notebook-b', 'Created.md');
     expect(actions.handleMemoCreated).not.toHaveBeenCalled();
     expect(actions.refreshSelectedNotebookMetadata).not.toHaveBeenCalled();
   });
@@ -120,7 +118,7 @@ describe('handleMainWindowMemoEvent', () => {
 
     handleMainWindowMemoEvent(event, actions);
 
-    expect(actions.openMemoInBrowserColumn).toHaveBeenCalledWith('memo-b');
+    expect(actions.openPathInBrowserColumn).toHaveBeenCalledWith('notebook-b', 'Created.md');
   });
 
   it('does not auto-open a template note from a background notebook', () => {
@@ -129,7 +127,7 @@ describe('handleMainWindowMemoEvent', () => {
 
     handleMainWindowMemoEvent(event, actions);
 
-    expect(actions.openMemoInBrowserColumn).not.toHaveBeenCalled();
+    expect(actions.openPathInBrowserColumn).not.toHaveBeenCalled();
     expect(actions.invalidateMentionCaches).toHaveBeenCalledOnce();
   });
 
@@ -148,15 +146,13 @@ describe('handleMainWindowMemoEvent', () => {
     handleMainWindowMemoEvent(event, actions);
 
     expect(actions.handleMemoUpdated).toHaveBeenCalledWith(event.memo);
-    expect(actions.replaceActiveMemoPath).toHaveBeenCalledWith(memo.id, event.path);
-    expect(actions.replaceBrowserColumnMemoPath).toHaveBeenCalledWith(memo.id, event.path);
-    expect(actions.openMemoInBrowserColumn).not.toHaveBeenCalled();
+    expect(actions.openPathInBrowserColumn).not.toHaveBeenCalled();
   });
 
   it('reports automatic window-open failures', async () => {
     const error = new Error('window unavailable');
     const actions = createActions('notebook-a');
-    vi.mocked(actions.openMemoInBrowserColumn).mockRejectedValue(error);
+    vi.mocked(actions.openPathInBrowserColumn).mockRejectedValue(error);
 
     handleMainWindowMemoEvent(createdEvent(), actions);
 
@@ -164,17 +160,11 @@ describe('handleMainWindowMemoEvent', () => {
   });
 
   it('routes tags_renamed to handleTagsRenamed and bypasses memo/replace/refresh paths', () => {
-    // tags_renamed 是 metadata 事件, 不是单条 memo 写入 ── 即使
-    // notebookId 跟当前选中 notebook 匹配, 也**不**走 handleMemoUpdated /
-    // replaceActiveMemoPath / refreshSelectedNotebookMetadata, 避免触发
-    // loadData + loadMemos 全量重拉 (选中与重命名无关的标签时, 列表
-    // 也会闪烁)。 同样, notebookId 失配也不应该丢到 background todo
-    // count 路径 (rename 不改 todos)。
     const actions = createActions('notebook-b');
     const event: MemoEvent = {
       kind: 'tags_renamed',
       notebookId: 'notebook-b',
-      renamedTags: [['中国', '华']],
+      renamedTags: [['old', 'new']],
       affectedMemoIds: ['memo-1', 'memo-2'],
     };
 
@@ -184,18 +174,14 @@ describe('handleMainWindowMemoEvent', () => {
     expect(actions.handleMemoUpdated).not.toHaveBeenCalled();
     expect(actions.handleMemoCreated).not.toHaveBeenCalled();
     expect(actions.handleMemoDeleted).not.toHaveBeenCalled();
-    expect(actions.removeBrowserColumnTabsByMemoId).not.toHaveBeenCalled();
-    expect(actions.replaceActiveMemoPath).not.toHaveBeenCalled();
+    expect(actions.removeBrowserColumnTabsByPath).not.toHaveBeenCalled();
     expect(actions.refreshSelectedNotebookMetadata).not.toHaveBeenCalled();
     expect(actions.refreshBackgroundTodoCount).not.toHaveBeenCalled();
-    expect(actions.openMemoInBrowserColumn).not.toHaveBeenCalled();
+    expect(actions.openPathInBrowserColumn).not.toHaveBeenCalled();
     expect(actions.invalidateMentionCaches).toHaveBeenCalledOnce();
   });
 
   it('routes tags_renamed to handleTagsRenamed even for background notebooks', () => {
-    // 即使用户选中的 notebook 跟事件 notebookId 不匹配, 也照样 patch
-    // memos 数组 (切回时不能看到 stale tag token)。 但不调 background
-    // todo count ── rename 不改 todos。
     const actions = createActions('notebook-a');
     const event: MemoEvent = {
       kind: 'tags_renamed',
@@ -212,14 +198,11 @@ describe('handleMainWindowMemoEvent', () => {
   });
 
   it('routes tags_deleted to handleTagsDeleted and bypasses memo/replace/refresh paths', () => {
-    // tags_deleted 是 metadata 事件, 跟 tags_renamed 同形 ── 直接走
-    // handleTagsDeleted, 不走 handleMemoUpdated / replaceActiveMemoPath
-    // / refreshSelectedNotebookMetadata / refreshBackgroundTodoCount。
     const actions = createActions('notebook-b');
     const event: MemoEvent = {
       kind: 'tags_deleted',
       notebookId: 'notebook-b',
-      deletedTags: ['中国', '中国/湖南'],
+      deletedTags: ['old', 'old/child'],
       affectedMemoIds: ['memo-1'],
     };
 
@@ -229,11 +212,10 @@ describe('handleMainWindowMemoEvent', () => {
     expect(actions.handleMemoUpdated).not.toHaveBeenCalled();
     expect(actions.handleMemoCreated).not.toHaveBeenCalled();
     expect(actions.handleMemoDeleted).not.toHaveBeenCalled();
-    expect(actions.removeBrowserColumnTabsByMemoId).not.toHaveBeenCalled();
-    expect(actions.replaceActiveMemoPath).not.toHaveBeenCalled();
+    expect(actions.removeBrowserColumnTabsByPath).not.toHaveBeenCalled();
     expect(actions.refreshSelectedNotebookMetadata).not.toHaveBeenCalled();
     expect(actions.refreshBackgroundTodoCount).not.toHaveBeenCalled();
-    expect(actions.openMemoInBrowserColumn).not.toHaveBeenCalled();
+    expect(actions.openPathInBrowserColumn).not.toHaveBeenCalled();
     expect(actions.invalidateMentionCaches).toHaveBeenCalledOnce();
   });
 

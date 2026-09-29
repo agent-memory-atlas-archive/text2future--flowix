@@ -24,7 +24,6 @@ mod events;
 mod lock_utils;
 mod maintenance;
 mod memo_events;
-mod open_target;
 mod plugin;
 mod process_window;
 mod runtime_log;

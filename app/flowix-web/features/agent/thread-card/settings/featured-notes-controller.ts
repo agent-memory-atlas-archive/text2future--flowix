@@ -1,6 +1,6 @@
 import type { I18nKey, I18nParams } from '@/lib/i18n';
 import { memos as memosClient } from '@platform/tauri/client';
-import { openNoteByMemoId } from '@features/memo/use-cases/open-by-target';
+import { openNoteByNotebookPath } from '@features/memo/use-cases/open-by-target';
 import { applyPopoverPosition, calculateAnchoredPopoverPosition } from '../popover/popover-position';
 import { createCheckIcon, createChevronIcon, createPlusIcon, createTrashIcon } from '../agent-thread-card-icons';
 import {
@@ -10,7 +10,7 @@ import {
   appendFeaturedNoteIconContent,
   getFeaturedNotePage,
   getFeaturedNotePageCountForSize,
-  loadAllFeaturedNoteCards,
+  getFeaturedPathNoteCards,
   normalizeFeaturedNoteFilterConfig,
   readFeaturedNoteFilter,
   writeFeaturedNoteFilter,
@@ -30,7 +30,7 @@ interface FeaturedNotesOptions {
   getNotebookId: () => string | null;
   t: (key: I18nKey, params?: I18nParams) => string;
   isDestroyed: () => boolean;
-  onSelectFeaturedNote?: (ref: { id: string; filename: string; title: string }) => void;
+  onSelectFeaturedNote?: (ref: { id: string; filename: string; title: string; notebookId?: string; relativePath?: string }) => void;
 }
 
 /** Owns note queries, filtering UI and its detached popover lifecycle. */
@@ -59,17 +59,8 @@ export class FeaturedNotesController {
     const config = await readFeaturedNoteFilter(notebookId);
     if (this.isDestroyed() || requestId !== this.featuredNotesRequestId) return;
     try {
-      const notes = await loadAllFeaturedNoteCards(
-        (cursor) => memosClient.getMemos({
-          notebookId,
-          filter: "all",
-          sort: "updatedAt",
-          cursor,
-          limit: 100,
-        }),
-        () => !this.isDestroyed() && requestId === this.featuredNotesRequestId,
-        config,
-      );
+      const indexed = await memosClient.listNotesByPath(notebookId);
+      const notes = getFeaturedPathNoteCards(indexed, config);
       if (this.isDestroyed() || requestId !== this.featuredNotesRequestId || !empty.isConnected) return;
 
       let panel: HTMLElement;
@@ -187,7 +178,7 @@ export class FeaturedNotesController {
       list.replaceChildren();
       list.dataset.cardCount = String(pageNotes.length);
       for (const note of pageNotes) {
-        list.append(this.createFeaturedNoteCard(note));
+        list.append(this.createFeaturedNoteCard(note, notebookId));
       }
       previousButton.disabled = currentPage === 0;
       nextButton.disabled = currentPage >= pageCount - 1;
@@ -509,7 +500,7 @@ export class FeaturedNotesController {
     return button;
   }
 
-  private createFeaturedNoteCard(note: FeaturedNoteCard): HTMLButtonElement {
+  private createFeaturedNoteCard(note: FeaturedNoteCard, notebookId: string): HTMLButtonElement {
     const card = document.createElement("button");
     card.type = "button";
     card.className = "agent-thread-card__featured-note";
@@ -541,10 +532,12 @@ export class FeaturedNotesController {
           id: note.id,
           filename: note.title,
           title: note.title,
+          notebookId,
+          relativePath: note.id,
         });
         return;
       }
-      void openNoteByMemoId(note.id);
+      void openNoteByNotebookPath(notebookId, note.id);
     });
     card.addEventListener("mousedown", (event) => event.stopPropagation());
     return card;

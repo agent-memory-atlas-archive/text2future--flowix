@@ -6,7 +6,6 @@ import type {
   PluginWorkbenchProps,
 } from '@features/plugin/public/surface-api';
 import type { PluginArtifactRendererId } from '@features/plugin/plugin-note';
-import type { MemoItem } from '@/types/memo-item';
 import type { PluginDescriptor } from '@platform/tauri/client';
 import type { WorkColumnNavigationState } from '@features/workspace/store/work-column-target';
 import type { FileDisplayIdentity } from '@/lib/file-display-registry';
@@ -51,15 +50,7 @@ export type ExternalDocumentProps = Omit<ComponentProps<typeof DocumentContainer
   isExternalDocument: true;
 };
 
-export interface NoteSurface extends FileSurfaceBase {
-  kind: 'note';
-  memoId: string;
-  props: Omit<ComponentProps<typeof DocumentContainer>, 'isExternalDocument' | 'memoId' | 'fileIdentity'> & {
-    isExternalDocument?: false;
-  };
-}
-
-/** Markdown files opened as external documents, outside the memo model. */
+/** Markdown documents opened through their file path, including notebook notes. */
 export interface MDSurface extends FileSurfaceBase {
   kind: 'md';
   props: ExternalDocumentProps;
@@ -145,8 +136,15 @@ export interface WebSurface extends SurfaceBase {
   url: string;
 }
 
+export interface DocumentListSurface extends SurfaceBase {
+  kind: 'document-list';
+  folderPath: string;
+  notebookPath: string;
+  notebookId: string | null;
+  filters: { resourceKinds?: string[]; tags?: string[]; customFilterId?: string };
+}
+
 export type WorkColumnSurface =
-  | NoteSurface
   | MDSurface
   | CodeSurface
   | ImageFileSurface
@@ -161,6 +159,7 @@ export type WorkColumnSurface =
   | PluginArtifactSurface
   | AgentConversationSurface
   | PluginWorkbenchSurface
+  | DocumentListSurface
   | WebSurface;
 
 export type WorkColumnSurfaceKind = WorkColumnSurface['kind'];
@@ -178,34 +177,20 @@ export type WorkColumnContentPresentation =
     };
 
 export type DocumentSurfaceIdentity =
-  | {
-      kind: 'memo';
-      memoId: string;
-      fileIdentity: FileDisplayIdentity;
-      notebookId: string | null;
-      notebookPath: string | null;
-      transitionId: number | null;
-    }
-  | {
+  {
       kind: 'external';
       fileIdentity: FileDisplayIdentity;
       scopePath: string | null;
+      indexable?: boolean;
       transitionId: number | null;
     };
 
 /** A document session contributes the surface matching its business identity. */
 export type DocumentSurfaceContext =
-  | {
+  {
       /** Identity captured from the document session, independent of props. */
-      identity: Extract<DocumentSurfaceIdentity, { kind: 'memo' }>;
-      memo: MemoItem | null;
-      surface: NoteSurface;
-    }
-  | {
-      /** Identity captured from the document session, independent of props. */
-      identity: Extract<DocumentSurfaceIdentity, { kind: 'external' }>;
+      identity: DocumentSurfaceIdentity;
       instanceKey: string;
-      memo: null;
       documentProps: ExternalDocumentProps;
     };
 

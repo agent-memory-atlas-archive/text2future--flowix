@@ -3,6 +3,7 @@ import { useMemoStore } from '@features/memo/store/memo-store';
 import { useTagStore } from '@features/memo/store/tag-store';
 import { useTodoCountStore } from '@features/memo/store/todo-count-store';
 import { rebaseSelectedTagId } from '@features/memo/services/memo-list-metadata-service';
+export { resumePendingNoteLinkUpdates } from '@features/memo/services/note-link-rewriter';
 export {
   mountOpenTargetListener,
   unmountOpenTargetListener,
@@ -10,7 +11,6 @@ export {
 export {
   initializeMemoLibrary,
 } from '@features/memo/use-cases/initialize-memo-library';
-export { restorePersistedMemoSession } from '@features/memo/use-cases/open-memo-session';
 
 export function markMemoLibraryStartupError(error: unknown): void {
   useMemoStore.getState().setStartupPhase(
@@ -23,8 +23,13 @@ export function getAppSelectedNotebookId(): string | null {
   return useMemoStore.getState().selectedNotebook?.id ?? null;
 }
 
-export function hasAppMemoWithFilename(memoId: string): boolean {
-  return Boolean(useMemoStore.getState().memos.find(memo => memo.id === memoId)?.filename);
+export async function getAppNotebookPath(notebookId: string): Promise<string | null> {
+  let notebook = useMemoStore.getState().notebooks.find((item) => item.id === notebookId);
+  if (!notebook) {
+    await useMemoStore.getState().loadNotebooks();
+    notebook = useMemoStore.getState().notebooks.find((item) => item.id === notebookId);
+  }
+  return notebook?.path ?? null;
 }
 
 export function applyAppMemoCreated(memo: Parameters<ReturnType<typeof useMemoStore.getState>['handleMemoCreated']>[0]): void {
@@ -41,6 +46,15 @@ export function applyAppMemoDeleted(memoId: string): void {
 
 export function refreshAppTodoCount(notebookId: string): void {
   void useTodoCountStore.getState().loadTodoCount(notebookId);
+}
+
+/** Refresh derived data after a filesystem path changes without a memo ID event. */
+export function refreshAppPathNoteMetadata(notebookId: string): void {
+  if (getAppSelectedNotebookId() === notebookId) {
+    void useTagStore.getState().loadTags(notebookId);
+    useTagStore.getState().triggerMetadataRefresh();
+  }
+  refreshAppTodoCount(notebookId);
 }
 
 export function refreshAppDerivedMetadata(event: MemoDerivedRefresh): void {

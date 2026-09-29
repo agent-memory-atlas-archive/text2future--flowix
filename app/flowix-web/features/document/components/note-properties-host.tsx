@@ -20,7 +20,6 @@ import type { DocumentIdentity } from '@features/document/store/document-identit
 import { ensureFileDisplayIdentity } from '@/lib/file-display-registry';
 
 interface NotePropertiesTarget {
-  memoId: string | null;
   path: string;
   scopePath: string | null;
   identity: DocumentIdentity;
@@ -49,32 +48,24 @@ export function NotePropertiesHost() {
   }, []);
 
   const handleOpen = useCallback((event: Event) => {
-    const detail = (event as CustomEvent<{ memoId?: string; path?: string; scopePath?: string | null }>).detail;
-    const memoId = detail?.memoId?.trim() || null;
+    const detail = (event as CustomEvent<{ path?: string; scopePath?: string | null }>).detail;
     const path = detail?.path?.trim() || null;
-    if (!memoId && !path) return;
+    if (!path) return;
 
     const sequence = ++requestSequence.current;
     setTarget(null);
 
     void (async () => {
       try {
-        const session = memoId ? await memos.openMemoSession(memoId) : null;
         if (sequence !== requestSequence.current) return;
-        if (memoId && !session) {
-          toast.error(t('document.load.failed'));
-          return;
-        }
-        const targetPath = path ?? session?.path;
-        if (!targetPath) return;
-        const content = session?.content ?? await memos.readDocument(targetPath);
+        const targetPath = path;
+        const content = await memos.readDocument(targetPath);
         if (content === null) {
           toast.error(t('document.load.failed'));
           return;
         }
         const identity = documentIdentityFromFile(
           ensureFileDisplayIdentity(targetPath),
-          memoId,
         );
         // Resolve the memo's current path first, then publish any live editor
         // bytes through the same path-based identity used by its surfaces.
@@ -83,12 +74,11 @@ export function NotePropertiesHost() {
         const hasDraft = hasDocumentUnsavedChanges(identity);
         const buffer = hasDraft ? getDocumentBuffer(identity) : null;
         setTarget({
-          memoId,
           identity,
           content: buffer?.content ?? content,
           expectedContent: buffer?.lastSavedContent ?? content,
           path: targetPath,
-          scopePath: detail?.scopePath ?? session?.notebookPath ?? null,
+          scopePath: detail?.scopePath ?? null,
         });
       } catch (error) {
         if (sequence !== requestSequence.current) return;
@@ -110,7 +100,6 @@ export function NotePropertiesHost() {
     try {
       // Persist through the document's notebook path and expected-content CAS.
       result = await memoDocumentOperations.write({
-        memoId: target.memoId,
         path: target.path,
         scopePath: target.scopePath,
         content: nextContent,

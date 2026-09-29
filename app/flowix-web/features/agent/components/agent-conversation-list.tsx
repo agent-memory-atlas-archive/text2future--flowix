@@ -589,7 +589,7 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
     }
   }, [favoriteIds, openConversationInBrowserColumn, removeConversation, renameConversation, t, toggleFavorite]);
 
-  // 独立对话: 无文档 (memoId / documentPath 均为 null), 但归属当前选中的
+  // 独立对话没有文档来源，但归属当前选中的
   // notebook。notebook 未选中时不可新建 (cwd 无法解析到笔记本路径)。
   const createConversation = useCallback(
     (typeKey: AgentTypeKey) => {
@@ -601,10 +601,8 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
         source: {
           kind: 'dedicated',
           notebookId: currentNotebookId,
-          memoId: null,
           documentPath: null,
         },
-        role: undefined,
         runtimeConfig: buildInitialInstanceRuntimeConfig(typeKey),
       });
       void selectAndOpenAgentConversation(instance.instanceId);

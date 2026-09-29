@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { scheduleSave } from './save-queue';
 import { ensureFileDisplayIdentity, rebaseFileDisplayPath } from '@/lib/file-display-registry';
 const mocks = vi.hoisted(() => ({ write: vi.fn() }));
-vi.mock('../use-cases/document-operations', () => ({ documentContentOperations: () => ({ write: mocks.write }) }));
+vi.mock('../use-cases/local-document-operations', () => ({ localDocumentOperations: { write: mocks.write } }));
 
 it('resolves a queued save against the current path after a rename', async () => {
   const identity = ensureFileDisplayIdentity('C:/queue/Old.md');
@@ -11,8 +11,8 @@ it('resolves a queued save against the current path after a rename', async () =>
     .mockImplementationOnce(async request => ({ status: 'saved', path: request.path, content: request.content }));
   let expected = 'initial';
   const saved = vi.fn((_path: string, content: string) => { expected = content; });
-  const context = { queueKey: 'md:' + identity.displayId, path: identity.path, channel: 'internal' as const,
-    key: null, scopePath: null, revision: 1, readExpected: () => expected,
+  const context = { queueKey: 'md:' + identity.displayId, path: identity.path,
+    scopePath: null, revision: 1, readExpected: () => expected,
     onSaved: saved, onCasRefused: vi.fn(), onError: vi.fn() };
   const first = scheduleSave(context, 'first');
   const second = scheduleSave({ ...context, revision: 2 }, 'second');
@@ -33,12 +33,12 @@ it('retries a refused in-flight save only after a confirmed path rebase', async 
     .mockImplementationOnce(async request => ({ status: 'saved', path: request.path, content: request.content }));
   const onSaved = vi.fn(); const onCasRefused = vi.fn();
   const pending = scheduleSave({ queueKey: 'md:' + identity.displayId, path: identity.path,
-    channel: 'internal', key: 'cache-guard', scopePath: null, revision: 1,
+    scopePath: null, revision: 1,
     readExpected: () => 'old content', onSaved, onCasRefused, onError: vi.fn() }, 'unsaved edit');
   rebaseFileDisplayPath(identity.path, '/retry/After.md', identity.displayId);
   refuse({ status: 'refused' });
   expect(await pending).toBe(true);
-  expect(mocks.write.mock.calls[1][0]).toMatchObject({ path: '/retry/After.md', memoId: 'cache-guard', expectedContent: 'old content' });
+  expect(mocks.write.mock.calls[1][0]).toMatchObject({ path: '/retry/After.md', expectedContent: 'old content' });
   expect(onCasRefused).not.toHaveBeenCalled();
   expect(onSaved).toHaveBeenCalledWith('/retry/After.md', 'unsaved edit', 1);
 });

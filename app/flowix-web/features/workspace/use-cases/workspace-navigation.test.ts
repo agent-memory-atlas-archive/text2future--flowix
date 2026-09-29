@@ -11,7 +11,6 @@ function pluginWorkbenchTarget(id: string): Extract<WorkColumnTarget, { kind: 'p
 
 const mocks = vi.hoisted(() => ({
   clearDocument: vi.fn(),
-  openMemoDocument: vi.fn(),
   openExternalDocument: vi.fn(),
   openAgentConversation: vi.fn(),
   replaceActiveMemoPath: vi.fn(),
@@ -25,23 +24,22 @@ const mocks = vi.hoisted(() => ({
   isCurrentNavigation: vi.fn().mockReturnValue(true),
   navigationTarget: pluginWorkbenchTarget('plugin-a') as WorkColumnTarget,
   memoState: {
-    selectedMemo: null,
-    selectedMemoId: null,
     selectedNotebook: null as { id: string; path: string } | null,
     selectedNotebookId: null as string | null,
+    selectedPathNote: null,
     notebooks: [],
     upsertMemo: vi.fn(),
-    setSelectedMemo: vi.fn(),
     setSelectedNotebook: vi.fn(),
+    setSelectedPathNote: vi.fn(),
     setActiveFilter: vi.fn(),
     setActivePluginId: vi.fn(),
     setNotebooks: vi.fn(),
     setMemos: vi.fn(),
     loadNotebooks: vi.fn(),
     loadMemos: vi.fn(),
+    loadPathNotes: vi.fn(),
   },
   documentState: {
-    activeMemoSession: null as { fileIdentity: { displayId: string; path: string }; memoId: string; notebookId: string | null; notebookPath: string | null; transitionId: number } | null,
     activeExternalSession: null as { fileIdentity: { displayId: string; path: string }; scopePath: string | null; transitionId: number } | null,
     activeAgentConversationId: null as string | null,
   },
@@ -51,7 +49,6 @@ vi.mock('@features/document/store/document-store', () => ({
   useDocumentStore: {
     getState: () => ({
       clearDocument: mocks.clearDocument,
-      openMemoDocument: mocks.openMemoDocument,
       openExternalDocument: mocks.openExternalDocument,
       openAgentConversation: mocks.openAgentConversation,
       replaceActiveMemoPath: mocks.replaceActiveMemoPath,
@@ -68,6 +65,7 @@ vi.mock('@features/document/store/document-session-service', () => ({
 
 vi.mock('@platform/tauri/client', () => ({
   agent: {},
+  memos: { resolveMarkdownLocation: vi.fn().mockResolvedValue(null) },
   notebooks: { setCurrent: mocks.setCurrentNotebook },
 }));
 
@@ -91,33 +89,25 @@ vi.mock('@features/memo/store/memo-store', () => ({
 
 import {
   closePluginWorkbench,
-  flushWorkspaceDocument,
-  openArtifactTarget,
   openPluginWorkbench,
-  selectNotebook,
 } from './workspace-navigation';
 
 describe('workspace navigation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.clearDocument.mockResolvedValue(undefined);
-    mocks.openMemoDocument.mockResolvedValue(undefined);
     mocks.openExternalDocument.mockResolvedValue(undefined);
     mocks.openAgentConversation.mockResolvedValue(undefined);
     mocks.discardMemoDocument.mockResolvedValue(undefined);
     mocks.flushDocumentPath.mockResolvedValue(true);
     mocks.setCurrentNotebook.mockResolvedValue(undefined);
     mocks.navigationTarget = pluginWorkbenchTarget('plugin-a');
-    mocks.documentState.activeMemoSession = null;
     mocks.documentState.activeExternalSession = null;
     mocks.documentState.activeAgentConversationId = null;
-    mocks.memoState.selectedMemo = null;
-    mocks.memoState.selectedMemoId = null;
     mocks.memoState.selectedNotebook = null;
     mocks.memoState.selectedNotebookId = null;
     mocks.memoState.notebooks = [];
     mocks.memoState.upsertMemo.mockClear();
-    mocks.memoState.setSelectedMemo.mockClear();
     mocks.memoState.setSelectedNotebook.mockClear();
     mocks.memoState.setActiveFilter.mockClear();
     mocks.memoState.setActivePluginId.mockClear();
@@ -125,34 +115,6 @@ describe('workspace navigation', () => {
     mocks.memoState.setMemos.mockClear();
     mocks.memoState.loadNotebooks.mockResolvedValue(undefined);
     mocks.memoState.loadMemos.mockResolvedValue(undefined);
-  });
-
-  it('publishes the committed memo session as the workspace target', async () => {
-    mocks.openMemoDocument.mockImplementationOnce(async () => {
-      mocks.documentState.activeMemoSession = {
-        fileIdentity: { displayId: 'display-test-memo', path: '/notes/note.md' },
-        memoId: 'memo-1',
-        notebookId: 'notebook-1',
-        notebookPath: '/notes',
-        transitionId: 4,
-      };
-    });
-
-    await import('./workspace-navigation').then(({ openMemoTarget }) => openMemoTarget({
-      memoId: 'memo-1',
-      path: '/notes\\note.md',
-      notebookId: 'notebook-1',
-      notebookPath: '/notes',
-    }));
-
-    expect(mocks.commitNavigation).toHaveBeenCalledWith(1, {
-      kind: 'memo',
-      memoId: 'memo-1',
-      path: '/notes/note.md',
-      notebookId: 'notebook-1',
-      notebookPath: '/notes',
-      transitionId: 4,
-    });
   });
 
   it('opens a plugin workbench after the document has been cleared', async () => {
@@ -163,30 +125,8 @@ describe('workspace navigation', () => {
       kind: 'plugin-workbench',
       plugin: { manifest: { id: 'plugin-b' } },
     });
-    expect(mocks.memoState.setSelectedMemo).toHaveBeenCalledWith(null);
     expect(mocks.memoState.setActiveFilter).toHaveBeenCalledWith('all');
     expect(mocks.memoState.setActivePluginId).toHaveBeenCalledWith('plugin-b');
-  });
-
-  it('opens an artifact target without creating or clearing a document session', async () => {
-    await openArtifactTarget({
-      pointerMemoId: 'pointer-1',
-      notebookId: 'notebook-1',
-      notebookPath: '/notes',
-      pluginId: 'mindmap',
-      renderer: 'markmap',
-    });
-
-    expect(mocks.clearDocument).not.toHaveBeenCalled();
-    expect(mocks.openMemoDocument).not.toHaveBeenCalled();
-    expect(mocks.commitNavigation).toHaveBeenCalledWith(1, {
-      kind: 'artifact',
-      pointerMemoId: 'pointer-1',
-      notebookId: 'notebook-1',
-      notebookPath: '/notes',
-      pluginId: 'mindmap',
-      renderer: 'markmap',
-    });
   });
 
   it('restores the workbench target when closing cannot flush the document', async () => {
@@ -195,93 +135,5 @@ describe('workspace navigation', () => {
 
     await expect(closePluginWorkbench()).rejects.toBe(failure);
     expect(mocks.failNavigation).toHaveBeenCalledWith(1, failure);
-  });
-
-  it('flushes the active memo without clearing its document session', async () => {
-    mocks.documentState.activeMemoSession = {
-      fileIdentity: { displayId: 'display-memo-1', path: '/notes/memo-1.md' },
-      memoId: 'memo-1',
-      notebookId: 'notebook-1',
-      notebookPath: '/notes',
-      transitionId: 4,
-    };
-    await flushWorkspaceDocument();
-
-    expect(mocks.flushDocumentPath).toHaveBeenCalledWith(
-      { kind: 'md', memoId: 'memo-1', path: '/notes/memo-1.md', displayId: 'display-memo-1' },
-      '/notes/memo-1.md',
-      undefined,
-    );
-    expect(mocks.clearDocument).not.toHaveBeenCalled();
-  });
-
-  it('clears the work-column memo from the previous notebook after switching', async () => {
-    const previousNotebook = { id: 'notebook-1', path: '/notes/one' };
-    const nextNotebook = {
-      id: 'notebook-2',
-      name: 'Notebook Two',
-      path: '/notes/two',
-      createdAt: 0,
-      updatedAt: 0,
-      isDefault: false,
-    };
-    mocks.memoState.selectedNotebook = previousNotebook;
-    mocks.memoState.selectedNotebookId = previousNotebook.id;
-    mocks.documentState.activeMemoSession = {
-      fileIdentity: { displayId: 'display-memo-1', path: '/notes/one/memo-1.md' },
-      memoId: 'memo-1',
-      notebookId: previousNotebook.id,
-      notebookPath: previousNotebook.path,
-      transitionId: 4,
-    };
-    mocks.navigationTarget = {
-      kind: 'memo',
-      memoId: 'memo-1',
-      path: '/notes/one/memo-1.md',
-      notebookId: previousNotebook.id,
-      notebookPath: previousNotebook.path,
-      transitionId: 4,
-    };
-
-    await selectNotebook(nextNotebook);
-
-    expect(mocks.flushDocumentPath).toHaveBeenCalledWith(
-      { kind: 'md', memoId: 'memo-1', path: '/notes/one/memo-1.md', displayId: 'display-memo-1' },
-      '/notes/one/memo-1.md',
-      undefined,
-    );
-    expect(mocks.clearDocument).toHaveBeenCalledOnce();
-    expect(mocks.setCurrentNotebook).toHaveBeenCalledWith(nextNotebook.id);
-    expect(mocks.memoState.setSelectedMemo).toHaveBeenCalledWith(null);
-    expect(mocks.commitNavigation).toHaveBeenCalledWith(1, { kind: 'empty' });
-  });
-
-  it('clears an artifact target owned by the previous notebook', async () => {
-    const previousNotebook = { id: 'notebook-1', path: '/notes/one' };
-    const nextNotebook = {
-      id: 'notebook-2',
-      name: 'Notebook Two',
-      path: '/notes/two',
-      createdAt: 0,
-      updatedAt: 0,
-      isDefault: false,
-    };
-    mocks.memoState.selectedNotebook = previousNotebook;
-    mocks.memoState.selectedNotebookId = previousNotebook.id;
-    mocks.navigationTarget = {
-      kind: 'artifact',
-      pointerMemoId: 'pointer-1',
-      notebookId: previousNotebook.id,
-      notebookPath: previousNotebook.path,
-      pluginId: 'mindmap',
-      renderer: 'markmap',
-    };
-
-    await selectNotebook(nextNotebook);
-
-    expect(mocks.clearDocument).toHaveBeenCalledOnce();
-    expect(mocks.setCurrentNotebook).toHaveBeenCalledWith(nextNotebook.id);
-    expect(mocks.memoState.setSelectedMemo).toHaveBeenCalledWith(null);
-    expect(mocks.commitNavigation).toHaveBeenCalledWith(1, { kind: 'empty' });
   });
 });

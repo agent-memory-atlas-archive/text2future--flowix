@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from "react";
+import { subscribe } from '@platform/tauri/event-bus';
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useI18n } from "@/lib/i18n";
 import { subscribeAppActiveAgentConversation } from "@features/document/public/app-api";
@@ -11,8 +12,9 @@ import {
   applyAppTagsDeleted,
   applyAppTagsRenamed,
   getAppSelectedNotebookId,
-  hasAppMemoWithFilename,
+  getAppNotebookPath,
   refreshAppDerivedMetadata,
+  refreshAppPathNoteMetadata,
   refreshAppTodoCount,
 } from "@features/memo/public/app-api";
 import { invalidateMentionNotes } from "@features/editor/extensions/note-mention";
@@ -29,12 +31,13 @@ import {
 } from "@features/memo/public/app-api";
 import { initializeMainWindowStartup } from './main-window-startup';
 import { createLogger } from '@/lib/logger';
+import { joinNotebookMemoPath } from '@/lib/path';
+import { resumePendingNoteLinkUpdates } from '@features/memo/public/app-api';
+import { subscribeWorkspaceDocumentSaves } from '@features/document/public/workspace-api';
 import {
   syncAppAgentConversationRestore,
-  replaceActiveMemoPath,
-  openBrowserColumnMemoById,
-  removeBrowserColumnTabsByMemoId,
-  replaceBrowserColumnMemoPath,
+  openBrowserColumnNotebookNote,
+  removeBrowserColumnTabsByPath,
 } from '@features/workspace/public/app-api';
 
 const logger = createLogger('main-window-effects');
@@ -42,6 +45,11 @@ const logger = createLogger('main-window-effects');
 export function MainWindowEffects() {
   const { t } = useI18n();
   const mainWindowTitle = t("window.main.title");
+
+  useEffect(() => {
+    resumePendingNoteLinkUpdates();
+    return subscribeWorkspaceDocumentSaves(resumePendingNoteLinkUpdates);
+  }, []);
 
   useEffect(() => {
     setNotebookIdProvider(
@@ -54,18 +62,6 @@ export function MainWindowEffects() {
 
   useEffect(() => {
     return subscribeAppActiveAgentConversation(syncAppAgentConversationRestore);
-  }, []);
-
-  useEffect(() => {
-    const handleNavigateToMemo = (event: Event) => {
-      const memoId = (event as CustomEvent<{ memoId: string }>).detail?.memoId;
-      if (memoId && hasAppMemoWithFilename(memoId)) {
-        window.location.hash = `/memo/${memoId}`;
-      }
-    };
-
-    document.addEventListener('navigate-to-memo', handleNavigateToMemo);
-    return () => document.removeEventListener('navigate-to-memo', handleNavigateToMemo);
   }, []);
 
   useEffect(() => {
@@ -84,6 +80,23 @@ export function MainWindowEffects() {
       // Browser preview or unavailable Tauri window API.
     });
   }, [mainWindowTitle]);
+
+  useEffect(() => {
+    return subscribe<{ notebookId: string; relativePath: string; deleted?: boolean }>(
+      'flowix:path-note-changed',
+      ({ notebookId, relativePath, deleted }) => {
+        invalidateMentionNotes();
+        invalidateMentionTags();
+        refreshAppPathNoteMetadata(notebookId);
+        if (deleted && relativePath) {
+          void getAppNotebookPath(notebookId).then((notebookPath) => {
+            const path = notebookPath && joinNotebookMemoPath(notebookPath, relativePath);
+            if (path) removeBrowserColumnTabsByPath(path);
+          }).catch((error) => logger.warn('resolve deleted note path failed', { error, notebookId, relativePath }));
+        }
+      },
+    );
+  }, []);
 
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
@@ -108,8 +121,11 @@ export function MainWindowEffects() {
             invalidateMentionNotes();
             invalidateMentionTags();
           },
-          openMemoInBrowserColumn: async (memoId) => {
-            await openBrowserColumnMemoById(memoId);
+          openPathInBrowserColumn: async (notebookId, relativePath) => {
+            const notebookPath = await getAppNotebookPath(notebookId);
+            const path = notebookPath && joinNotebookMemoPath(notebookPath, relativePath);
+            if (!path) throw new Error('Created note path is unavailable');
+            await openBrowserColumnNotebookNote(path, notebookId, notebookPath);
           },
           reportOpenFailure: (error) => {
             logger.warn('open created note in browser column failed', { error });
@@ -118,15 +134,9 @@ export function MainWindowEffects() {
           handleMemoCreated: applyAppMemoCreated,
           handleMemoUpdated: applyAppMemoUpdated,
           handleMemoDeleted: applyAppMemoDeleted,
-          removeBrowserColumnTabsByMemoId: (memoId) => removeBrowserColumnTabsByMemoId(memoId),
+          removeBrowserColumnTabsByPath: (path) => removeBrowserColumnTabsByPath(path),
           handleTagsRenamed: applyAppTagsRenamed,
           handleTagsDeleted: applyAppTagsDeleted,
-          replaceActiveMemoPath: (memoId, path) => {
-            replaceActiveMemoPath(memoId, path);
-          },
-          replaceBrowserColumnMemoPath: (memoId, path) => {
-            replaceBrowserColumnMemoPath(memoId, path);
-          },
           refreshSelectedNotebookMetadata,
           refreshBackgroundTodoCount: refreshAppTodoCount,
         });

@@ -12,12 +12,22 @@ function tab(id: string, memoId = id) {
     title: `${id}.md`,
     icon: null,
     target: {
-      kind: 'memo' as const,
-      memoId,
+      kind: 'file-browser' as const,
       notebookId: 'notebook-1',
-      notebookPath: '/notes',
-      filePath: `/notes/${memoId}.md`,
+      folderPath: '/notes',
+      scopePath: '/notes',
+      fileTreeVisible: true,
+      fileTreeWidth: 220,
+      activeFilePath: `/notes/${memoId}.md`,
     },
+  };
+}
+
+function pathTab(id: string, file: string) {
+  return {
+    id, title: file, icon: null,
+    target: { kind: 'file-browser' as const, folderPath: '/notes', notebookId: 'notebook-1',
+      scopePath: '/notes', fileTreeVisible: true, fileTreeWidth: 220, activeFilePath: `/notes/${file}` },
   };
 }
 
@@ -148,10 +158,10 @@ describe('browser column store', () => {
 
   it('persists and rehydrates the visible tabs and active tab', async () => {
     const store = useBrowserColumnStore.getState();
-    store.openTab(tab('memo:a', 'a'));
-    store.openTab(tab('memo:b', 'b'));
-    store.commitTab('memo:a');
-    store.reorderTab('memo:b', 'memo:a');
+    store.openTab(pathTab('path:a', 'a.md'));
+    store.openTab(pathTab('path:b', 'b.md'));
+    store.commitTab('path:a');
+    store.reorderTab('path:b', 'path:a');
     store.setSplitRatio(0.7);
 
     const persisted = localStorage.getItem('flowix-browser-column-storage');
@@ -164,14 +174,14 @@ describe('browser column store', () => {
     expect(useBrowserColumnStore.getState()).toMatchObject({
       visible: true,
       splitRatio: 0.7,
-      tabs: [tab('memo:b', 'b'), tab('memo:a', 'a')],
-      activeTabId: 'memo:a',
+      tabs: [pathTab('path:b', 'b.md'), pathTab('path:a', 'a.md')],
+      activeTabId: 'path:a',
     });
   });
 
   it('does not restore an AGENTS.md tab after reload', async () => {
     const store = useBrowserColumnStore.getState();
-    store.openTab(tab('memo:a', 'a'));
+    store.openTab(pathTab('path:a', 'a.md'));
     store.openTab({
       id: 'file:/notes/AGENTS.md',
       title: 'AGENTS',
@@ -182,8 +192,8 @@ describe('browser column store', () => {
     store.reset();
     localStorage.setItem('flowix-browser-column-storage', persisted!);
     await useBrowserColumnStore.persist.rehydrate();
-    expect(useBrowserColumnStore.getState().tabs.map((item) => item.id)).toEqual(['memo:a']);
-    expect(useBrowserColumnStore.getState().activeTabId).toBe('memo:a');
+    expect(useBrowserColumnStore.getState().tabs.map((item) => item.id)).toEqual(['path:a']);
+    expect(useBrowserColumnStore.getState().activeTabId).toBe('path:a');
   });
 
   it('keeps web navigation runtime separate from the durable tab target', () => {
@@ -219,35 +229,17 @@ describe('browser column store', () => {
     expect(useBrowserColumnStore.getState().webRuntimes['web:flowix'].reloadToken).toBe(5);
   });
 
-  it('updates memo tab paths after a backend rename', () => {
+  it('removes a file tab by path when the note is deleted', () => {
     const store = useBrowserColumnStore.getState();
     store.openTab(tab('memo:a', 'a'));
-
-    store.replaceMemoPath('a', '/notes/Renamed.md');
-
-    expect(useBrowserColumnStore.getState().tabs[0]).toMatchObject({
-      title: 'Renamed',
-      target: { kind: 'memo', memoId: 'a', filePath: '/notes/Renamed.md' },
-    });
-  });
-
-  it('removes memo and artifact tabs together when a pointer memo is deleted', () => {
-    const store = useBrowserColumnStore.getState();
-    store.openTab(tab('memo:a', 'a'));
-    store.openTab({
-      id: 'artifact:a',
-      title: 'Artifact',
-      icon: null,
-      target: { kind: 'artifact', pointerMemoId: 'a', renderer: 'markmap' },
-    });
     store.openTab(tab('memo:b', 'b'));
 
-    expect(store.removeTabsByMemoId('a')).toEqual(['memo:a', 'artifact:a']);
+    expect(store.removeTabsByFilePath('/notes/a.md')).toEqual(['memo:a']);
     expect(useBrowserColumnStore.getState().tabs.map((item) => item.id)).toEqual(['memo:b']);
     expect(useBrowserColumnStore.getState().activeTabId).toBe('memo:b');
   });
 
-  it('migrates legacy external targets from the fourth-column storage key', async () => {
+  it('does not restore obsolete fourth-column storage', async () => {
     const legacyState = {
       visible: true,
       splitRatio: 0.6,
@@ -275,21 +267,7 @@ describe('browser column store', () => {
 
     await useBrowserColumnStore.persist.rehydrate();
 
-    expect(useBrowserColumnStore.getState()).toMatchObject({
-      visible: true,
-      splitRatio: 0.6,
-      activeTabId: 'legacy-web',
-      tabs: [
-        {
-          id: 'legacy-markdown',
-          target: { kind: 'file-browser', folderPath: null, notebookId: null, fileTreeVisible: true, fileTreeWidth: 220, activeFilePath: '/notes/README.md', scopePath: null },
-        },
-        {
-          id: 'legacy-web',
-          target: { kind: 'web', url: 'https://example.com/docs' },
-        },
-      ],
-    });
+    expect(useBrowserColumnStore.getState()).toMatchObject({ visible: false, tabs: [], activeTabId: null });
     expect(useBrowserColumnStore.getState().webRuntimes).toEqual({});
   });
 });

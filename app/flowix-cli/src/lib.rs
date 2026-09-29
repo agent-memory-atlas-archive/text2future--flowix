@@ -8,6 +8,7 @@ pub mod fmt;
 pub mod mcp;
 pub(crate) mod operation;
 pub(crate) mod output;
+pub(crate) mod path_store;
 pub mod paths;
 pub mod plugin;
 pub mod store;

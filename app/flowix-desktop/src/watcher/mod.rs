@@ -14,6 +14,6 @@ pub mod whitelist;
 pub use event::{FsEventKind, RawFsEvent};
 pub use manager::MemoWatcher;
 pub use path::normalize_for_compare;
-pub use processor::{MemoEventProcessor, NotebookWatchContext};
+pub use processor::{NotebookWatchContext, PathNoteEventProcessor};
 pub use runtime::current_watcher;
 pub use whitelist::WhitelistConfig;

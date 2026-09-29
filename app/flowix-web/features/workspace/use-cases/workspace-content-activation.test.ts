@@ -34,16 +34,14 @@ describe('workspace content activation', () => {
 
   it('focuses the third column when the memo is already its active target', () => {
     commitWorkColumnTarget({
-      kind: 'memo',
-      memoId: 'memo-a',
+      kind: 'external',
       path: '/notes/a.md',
-      notebookId: 'notebook-a',
-      notebookPath: '/notes',
+      scopePath: '/notes',
       transitionId: 1,
     });
     useWorkspaceFocusStore.getState().focusHost('browser-column');
 
-    expect(activateExistingWorkspaceContent({ kind: 'memo', memoId: 'memo-a' })).toEqual({
+    expect(activateExistingWorkspaceContent({ kind: 'external', path: '/notes/a.md' })).toEqual({
       host: 'main-third',
       state: 'active',
     });
@@ -57,11 +55,10 @@ describe('workspace content activation', () => {
       title: 'B',
       icon: null,
       target: {
-        kind: 'memo',
-        memoId: 'b',
+        kind: 'file-browser',
         notebookId: 'notebook-a',
-        notebookPath: '/notes',
-        filePath: '/notes/b.md',
+        folderPath: '/notes', scopePath: '/notes', fileTreeVisible: true, fileTreeWidth: 220,
+        activeFilePath: '/notes/b.md',
       },
     });
     browserColumn.openTab({
@@ -69,17 +66,16 @@ describe('workspace content activation', () => {
       title: 'A',
       icon: null,
       target: {
-        kind: 'memo',
-        memoId: 'a',
+        kind: 'file-browser',
         notebookId: 'notebook-a',
-        notebookPath: '/notes',
-        filePath: '/notes/a.md',
+        folderPath: '/notes', scopePath: '/notes', fileTreeVisible: true, fileTreeWidth: 220,
+        activeFilePath: '/notes/a.md',
       },
     });
     browserColumn.commitTab('memo:b');
     browserColumn.setVisible(false);
 
-    expect(activateExistingWorkspaceContent({ kind: 'memo', memoId: 'a' })).toEqual({
+    expect(activateExistingWorkspaceContent({ kind: 'external', path: '/notes/a.md' })).toEqual({
       host: 'browser-column',
       tabId: 'memo:a',
     });
@@ -128,17 +124,15 @@ describe('workspace content activation', () => {
 
   it('treats a pending work-column open as existing content', () => {
     useWorkColumnStore.getState().beginNavigation({
-      kind: 'memo',
-      memoId: 'memo-pending',
+      kind: 'external',
       path: '/notes/pending.md',
-      notebookId: 'notebook-a',
-      notebookPath: '/notes',
+      scopePath: '/notes',
       transitionId: null,
     }, null);
 
     expect(activateExistingWorkspaceContent({
-      kind: 'memo',
-      memoId: 'memo-pending',
+      kind: 'external',
+      path: '/notes/pending.md',
     })).toEqual({ host: 'main-third', state: 'pending' });
     expect(useBrowserColumnStore.getState().tabs).toEqual([]);
     expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('main-third');

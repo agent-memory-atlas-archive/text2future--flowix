@@ -17,12 +17,12 @@ import {
   type NotebookMoveSource,
 } from '@features/memo/components/notebook-file-tree';
 import { useFolderTree } from '@features/memo/components/use-folder-tree';
-import { resolveMemoByPath } from '@features/memo/use-cases/open-by-target';
-import { openMemoSession } from '@features/memo/use-cases/open-memo-session';
+import { updateNoteLinksAfterMove } from '@features/memo/services/note-link-rewriter';
+import { openNotebookNote } from '@features/memo/use-cases/open-notebook-note';
 import {
   openBrowserColumnFileBrowser,
   openBrowserColumnMedia,
-  openBrowserColumnMemoById,
+  openBrowserColumnText,
 } from '@features/workspace/use-cases/browser-column-navigation';
 import {
   openExternalTarget,
@@ -38,7 +38,7 @@ import {
   type FileBrowserDirectoriesChangedEvent,
 } from '@platform/tauri/client';
 import { subscribe } from '@platform/tauri/event-bus';
-import { useMemoStore, type Notebook } from '@features/memo/store';
+import { type Notebook } from '@features/memo/store';
 import type { SortType } from '@features/memo/services';
 
 const FILE_BROWSER_DIRECTORIES_CHANGED_EVENT = 'file-browser-directories-changed';
@@ -73,25 +73,6 @@ export function isNotebookTreeItemVisible(
   return true;
 }
 
-function memoPath(notebookPath: string, memo: { filename: string; relativePath?: string }): string {
-  const relative = memo.relativePath?.trim() || memo.filename;
-  return canonicalPath(`${notebookPath.replace(/[\\/]+$/, '')}/${relative.replace(/^[/\\]+/, '')}`);
-}
-
-export function filterNotebookTreeItems(
-  items: DocTreeItem[],
-  visibleMemoPaths: Set<string> | null,
-  showAgentsFile = false,
-): DocTreeItem[] {
-  if (!visibleMemoPaths) return items;
-  return items.filter((item) => (
-    item.type === 'folder'
-      || (item.resourceKind ?? resourceKindFromPath(item.name)) !== 'note'
-      || (showAgentsFile && item.name === 'AGENTS.md')
-      || visibleMemoPaths.has(canonicalPath(item.fullPath))
-  ));
-}
-
 export function sortNotebookTreeItems(items: DocTreeItem[], sort: SortType): DocTreeItem[] {
   const timestamp = (item: DocTreeItem) => (
     sort === 'updatedAt'
@@ -117,7 +98,6 @@ export function NotebookFolderView({
   onCreateFolder,
   sort,
   onCreateNote,
-  visibleMemos,
   hiddenListFolders = [],
   onToggleListFolderVisibility,
   isActive = true,
@@ -128,7 +108,6 @@ export function NotebookFolderView({
   onCreateFolder?: () => void;
   sort: SortType;
   onCreateNote?: (parentPath: string, title: string) => Promise<void> | void;
-  visibleMemos?: Array<{ filename: string; relativePath?: string }> | null;
   hiddenListFolders?: string[];
   onToggleListFolderVisibility?: (folderPath: string) => void;
   isActive?: boolean;
@@ -140,25 +119,17 @@ export function NotebookFolderView({
     includeHiddenDirectories: showHiddenNotebookFiles,
     showAgentsFile,
   });
-  const visibleMemoPaths = useMemo(() => {
-    if (!isActive || visibleMemos == null) return null;
-    return new Set(visibleMemos.map((memo) => memoPath(notebook.path, memo)));
-  }, [isActive, notebook.path, visibleMemos]);
   const noteTree = useMemo(() => {
     if (!isActive) return tree;
     return {
       ...tree,
       rootChildren: sortNotebookTreeItems(
-        filterNotebookTreeItems(
-          tree.rootChildren.filter((item) => isNotebookTreeItemVisible(
-            item,
-            notebook.path,
-            showHiddenNotebookFiles,
-            showAgentsFile,
-          )),
-          visibleMemoPaths,
+        tree.rootChildren.filter((item) => isNotebookTreeItemVisible(
+          item,
+          notebook.path,
+          showHiddenNotebookFiles,
           showAgentsFile,
-        ),
+        )),
         sort,
       ),
       nodes: new Map([...tree.nodes].map(([path, item]) => [
@@ -167,16 +138,12 @@ export function NotebookFolderView({
           ? {
               ...item,
               children: sortNotebookTreeItems(
-                filterNotebookTreeItems(
-                  item.children.filter((child) => isNotebookTreeItemVisible(
-                    child,
-                    notebook.path,
-                    showHiddenNotebookFiles,
-                    showAgentsFile,
-                  )),
-                  visibleMemoPaths,
+                item.children.filter((child) => isNotebookTreeItemVisible(
+                  child,
+                  notebook.path,
+                  showHiddenNotebookFiles,
                   showAgentsFile,
-                ),
+                )),
                 sort,
               ),
             }
@@ -189,7 +156,6 @@ export function NotebookFolderView({
     showHiddenNotebookFiles,
     showAgentsFile,
     sort,
-    visibleMemoPaths,
     tree.rootChildren,
     tree.nodes,
     tree.expanded,
@@ -264,28 +230,10 @@ export function NotebookFolderView({
         }
         return;
       }
-      const indexedId = tree.nodes.get(canonicalPath(filePath))?.memoMeta?.id;
-      const cachedMemo = indexedId
-        ? useMemoStore.getState().memos.find((candidate) => candidate.id === indexedId)
-        : null;
-      if (cachedMemo) {
-        console.info('[perf:file-tree-open] cached memo resolved', { elapsedMs: performance.now() - startedAt, memoId: indexedId });
-        await openMemoSession(cachedMemo, notebook);
-        return;
-      }
-      const memo = await resolveMemoByPath(filePath);
-      console.info('[perf:file-tree-open] backend memo resolved', { elapsedMs: performance.now() - startedAt, memoId: memo?.memoId });
-      if (memo?.notebookId === notebook.id) {
-        // Keep the file-tree entry point aligned with the memo list. Plugin
-        // pointer notes (for example mindmaps) must open their artifact
-        // renderer instead of the pointer Markdown source.
-        await openMemoSession(memo.memo, notebook);
-        return;
-      }
-      await openExternalTarget(filePath, {
-        scopePath: notebook.path,
+      await openNotebookNote(filePath, notebook, {
         destination: 'main-third',
       });
+      console.info('[perf:file-tree-open] path opened', { elapsedMs: performance.now() - startedAt });
     } catch (error) {
       logger.warn('opening notebook tree file failed', { error, filePath });
       toast.error(t('memo.fileTree.openFailed'));
@@ -303,14 +251,7 @@ export function NotebookFolderView({
         }
         return;
       }
-      const memo = await resolveMemoByPath(filePath);
-      if (memo?.notebookId === notebook.id) {
-        // The file-tree action explicitly targets the right column. Do not
-        // reuse the same memo already active in the main column.
-        await openBrowserColumnMemoById(memo.memoId, 'open-in-column');
-        return;
-      }
-      await openBrowserColumnFileBrowser(notebook.path, filePath);
+      await openBrowserColumnText(filePath, notebook.path);
     } catch (error) {
       logger.warn('opening notebook tree file in new tab failed', { error, filePath });
       toast.error(t('memo.fileTree.openFailed'));
@@ -341,6 +282,7 @@ export function NotebookFolderView({
         if (source.isFolder) {
           const movedPath = await files.moveFolder(sourcePath, target, notebook.path);
           movedPaths.push(movedPath);
+          updateNoteLinksAfterMove(sourcePath, movedPath, true);
           continue;
         }
         const isMarkdownNote = source.resourceKind === 'note'
@@ -352,6 +294,7 @@ export function NotebookFolderView({
             parentRelativePath,
           );
           movedPaths.push(moved.path);
+          if (moved.path !== sourcePath) updateNoteLinksAfterMove(sourcePath, moved.path);
         } else {
           const movedPath = await files.move(sourcePath, target, notebook.path);
           movedPaths.push(movedPath);
@@ -394,6 +337,7 @@ export function NotebookFolderView({
 
   return (
     <NotebookFileTree
+      notebookId={notebook.id}
       notebookName={notebook.name}
       notebookPath={notebook.path}
       activeFilePath={activeFilePath}
@@ -404,6 +348,11 @@ export function NotebookFolderView({
       createNoteRequest={createNoteRequest}
       onCreateFolder={onCreateFolder}
       onNoteSelect={(filePath) => { void openFile(filePath); }}
+      onFolderSelect={(folderPath) => {
+        const target = { kind: 'document-list' as const, scope: { kind: 'folder' as const, path: folderPath, notebookPath: notebook.path, notebookId: notebook.id }, filters: {} };
+        const store = useWorkColumnStore.getState();
+        store.commitNavigation(store.beginNavigation(target, null, false, false), target);
+      }}
       onNoteOpenInNewTab={(filePath) => { void openFileInNewTab(filePath); }}
       onCreateNote={(parentPath, title) => onCreateNote?.(parentPath, title)}
       onMoveNote={moveItem}

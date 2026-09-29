@@ -58,8 +58,6 @@ function enqueueRecoveryOperation<T>(identity: DocumentIdentity, operation: () =
 
 export interface RecoveryDraft {
   schemaVersion: 4;
-  /** Persistent index identity, used only to reject a draft from a replaced file. */
-  memoId?: string | null;
   title?: { draft: string; filename: string; revision: number };
   identity: DocumentLocator;
   originalPath: string;
@@ -114,20 +112,6 @@ function legacyExternalRecoveryKey(path: string): string {
   return `external:${canonicalPath(path)}`;
 }
 
-function recoveryDraftKey(
-  draft: StoredRecoveryDraft,
-): string {
-  if (draft.schemaVersion === 1) {
-    return draft.identity.kind === 'memo'
-      ? `memo:${draft.identity.id}`
-      : legacyExternalRecoveryKey(draft.identity.path);
-  }
-  if (draft.schemaVersion === 2 && draft.identity.memoId) {
-    return `memo:${draft.identity.memoId}`;
-  }
-  return fileLocatorKey(draft.identity.path);
-}
-
 async function readStoredDraft(key: string): Promise<RecoveryDraft | null> {
   return (await readStoredDraftEntry(key))?.draft ?? null;
 }
@@ -148,10 +132,7 @@ async function readStoredDraftEntry(key: string): Promise<{
 }
 
 function legacyRecoveryKeys(identity: DocumentIdentity): string[] {
-  return [
-    ...(identity.memoId ? [`memo:${identity.memoId}`] : []),
-    legacyExternalRecoveryKey(identity.path),
-  ];
+  return [legacyExternalRecoveryKey(identity.path)];
 }
 
 async function migrateDraft(
@@ -176,26 +157,6 @@ function isDraftNewer(left: RecoveryDraft, right: RecoveryDraft): boolean {
     || (left.updatedAt === right.updatedAt && left.revision > right.revision);
 }
 
-async function findLegacyMemoDraft(
-  memoId: string,
-): Promise<{ draft: RecoveryDraft; key: string; needsMigration: boolean } | null> {
-  const drafts = await recoveryDrafts.list<StoredRecoveryDraft>().catch(() => []);
-  const candidate = drafts.flatMap((stored) => {
-    const draft = normalizeRecoveryDraft(stored);
-    const storedMemoId = stored.schemaVersion === 1
-      ? (stored.identity.kind === 'memo' ? stored.identity.id : null)
-      : stored.schemaVersion === 2 || stored.schemaVersion === 3
-        ? stored.identity.memoId ?? null
-        : null;
-    if (!draft || storedMemoId !== memoId) return [];
-    return [{ draft, key: recoveryDraftKey(stored), needsMigration: true }];
-  }).sort((left, right) => (
-    right.draft.updatedAt - left.draft.updatedAt
-    || right.draft.revision - left.draft.revision
-  ))[0];
-  return candidate ?? null;
-}
-
 async function readDraftForIdentity(
   identity: DocumentIdentity,
 ): Promise<{ draft: RecoveryDraft; key: string; needsMigration: boolean } | null> {
@@ -209,9 +170,6 @@ async function readDraftForIdentity(
     if (legacy) return { ...legacy, key: legacyKey, needsMigration: true };
   }
 
-  // A memo rename changes the canonical path key. Use memoId only as a
-  // one-time migration hint for drafts written before that rename.
-  if (identity.memoId) return findLegacyMemoDraft(identity.memoId);
   return null;
 }
 
@@ -230,7 +188,6 @@ async function persistRecoverySnapshot(
     const written = await recoveryDrafts.write(key, {
       ...input,
       identity,
-      memoId: input.identity.memoId,
       schemaVersion: 4,
       createdAt,
       updatedAt: now,

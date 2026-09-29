@@ -46,7 +46,7 @@ export function useExternalDocumentChangeWatch({
   };
 
   useEffect(() => {
-    if (!filePath || identity.memoId) return;
+    if (!filePath) return;
 
     let disposed = false;
     let leaseId: string | null = null;

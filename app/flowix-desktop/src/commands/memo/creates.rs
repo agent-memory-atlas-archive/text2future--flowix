@@ -1,8 +1,7 @@
 // ==================== Creates and Imports ====================
 //
 // Covers creation, import, templates, and path-based moves:
-//   - new memo creation (add_document)
-//   - external document import (import_external_document_to_memo)
+//   - path-based note creation and import
 //   - memo templates (list / save / delete / create-from)
 // Metadata controls write the document YAML through the frontend save queue.
 
@@ -11,7 +10,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::lock_utils::read_lock;
 use crate::memo_events::{self, MemoChangeSource, MemoDerivedChanged, MemoEvent};
@@ -21,7 +20,6 @@ use flowix_core::memo_file::{
 };
 use flowix_core::MemoService;
 
-use crate::app::search_index::try_index_upsert;
 use crate::app::state::AppState;
 use crate::template_store;
 use crate::watcher::runtime::mark_self_write_for;
@@ -29,7 +27,7 @@ use crate::watcher::runtime::mark_self_write_for;
 use super::helpers::*;
 use super::*;
 
-/// Stable creation error shared by both desktop creation entrypoints.
+/// Stable path-document creation error.
 #[derive(Debug, serde::Serialize)]
 pub struct MemoCreateError {
     code: &'static str,
@@ -38,9 +36,40 @@ pub struct MemoCreateError {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CreatedDocumentResult {
-    memo: Memo,
+pub struct CreatedPathDocumentResult {
+    notebook_id: String,
+    relative_path: String,
+    path: String,
     initial_content: String,
+}
+
+#[tauri::command]
+pub async fn add_path_document(
+    tag: Option<String>,
+    title: Option<String>,
+    notebook_id: String,
+    parent_relative_path: Option<String>,
+    app: AppHandle,
+) -> Result<CreatedPathDocumentResult, MemoCreateError> {
+    let title = title.filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
+    crate::document_io::run("create_path_document", move || {
+        let state = app.state::<AppState>();
+        let body = match tag.as_deref() {
+            Some(tag) => flowix_core::memo_file::replace_frontmatter_tags("", &[tag.to_string()])
+                .map_err(|error| flowix_core::FlowixError::InvalidInput(error.to_string()))?,
+            None => String::new(),
+        };
+        let created = MemoService::new(&read_lock(&state.memo_file, "memo_file"))
+            .create_note_by_path(&notebook_id, parent_relative_path.as_deref(), &title, &body)?;
+        mark_self_write_for(&app, &created.path);
+        Ok::<_, MemoCreateError>(CreatedPathDocumentResult {
+            notebook_id: created.notebook.id,
+            relative_path: created.entry.relative_path,
+            path: created.path.to_string_lossy().to_string(),
+            initial_content: created.body,
+        })
+    }).await.map_err(|message| MemoCreateError { code: "INTERNAL_ERROR", message })?
 }
 
 impl From<flowix_core::FlowixError> for MemoCreateError {
@@ -60,123 +89,6 @@ impl From<flowix_core::FlowixError> for MemoCreateError {
             message: error.to_string(),
         }
     }
-}
-
-fn create_document(
-    state: &AppState,
-    app: &AppHandle,
-    notebook_id: Option<&str>,
-    parent_relative_path: Option<&str>,
-    title: &str,
-    content: &str,
-    tag: Option<&str>,
-) -> Result<Memo, MemoCreateError> {
-    let notebook_key = notebook_id
-        .map(str::to_owned)
-        .unwrap_or_else(|| current_notebook_id(state));
-    let initial_content = match tag {
-        Some(tag) => flowix_core::memo_file::replace_frontmatter_tags(content, &[tag.to_owned()])
-            .map_err(|error| flowix_core::FlowixError::InvalidInput(error.to_string()))?,
-        None => content.to_owned(),
-    };
-    let created = MemoService::new(&read_lock(&state.memo_file, "memo_file")).create_note_by_path(
-        &notebook_key,
-        parent_relative_path,
-        title,
-        &initial_content,
-    )?;
-    let memo = read_lock(&state.memo_file, "memo_file")
-        .register_existing_file_for_notebook_id(&created.notebook.id, &created.path)
-        .map_err(flowix_core::FlowixError::Internal)?;
-    crate::document_derived::schedule(app, &memo.id, None);
-    mark_self_write_for(app, &created.path);
-    memo_events::emit(
-        app,
-        MemoEvent::Created {
-            memo: memo.clone(),
-            notebook_id: created.notebook.id,
-            derived_changed: MemoDerivedChanged::from_memos(None, &memo),
-            source: MemoChangeSource::UserNew,
-        },
-    );
-    Ok(memo)
-}
-
-#[tauri::command]
-pub async fn add_document(
-    tag: Option<String>,
-    title: Option<String>,
-    notebook_id: Option<String>,
-    parent_relative_path: Option<String>,
-    app: AppHandle,
-) -> Result<CreatedDocumentResult, MemoCreateError> {
-    let title = title
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| chrono::Local::now().format("%Y-%m-%d").to_string());
-    let tag = tag.filter(|value| !value.trim().is_empty());
-    let initial_content = match tag.as_deref() {
-        Some(tag) => flowix_core::memo_file::replace_frontmatter_tags("", &[tag.to_string()])
-            .map_err(|error| MemoCreateError {
-                code: "INVALID_INPUT",
-                message: error.to_string(),
-            })?,
-        None => String::new(),
-    };
-    let memo = crate::document_io::run("create_document", move || {
-        let state = app.state::<AppState>();
-        create_document(
-            state.inner(),
-            &app,
-            notebook_id.as_deref(),
-            parent_relative_path.as_deref(),
-            &title,
-            "",
-            tag.as_deref(),
-        )
-    })
-    .await
-    .map_err(|message| MemoCreateError {
-        code: "INTERNAL_ERROR",
-        message,
-    })??;
-    Ok(CreatedDocumentResult {
-        memo,
-        initial_content,
-    })
-}
-
-#[tauri::command]
-pub async fn create_memo_with_content(
-    title: String,
-    content: String,
-    notebook_id: String,
-    parent_relative_path: Option<String>,
-    app: AppHandle,
-) -> Result<Memo, MemoCreateError> {
-    let title = title.trim().to_string();
-    if title.is_empty() || notebook_id.trim().is_empty() {
-        return Err(flowix_core::FlowixError::InvalidInput(
-            "title and notebook id are required".into(),
-        )
-        .into());
-    }
-    crate::document_io::run("create_memo_with_content", move || {
-        let state = app.state::<AppState>();
-        create_document(
-            state.inner(),
-            &app,
-            Some(&notebook_id),
-            parent_relative_path.as_deref(),
-            &title,
-            &content,
-            None,
-        )
-    })
-    .await
-    .map_err(|message| MemoCreateError {
-        code: "INTERNAL_ERROR",
-        message,
-    })?
 }
 
 fn memo_template_dir() -> Option<PathBuf> {
@@ -295,106 +207,54 @@ pub fn delete_memo_template(template_id: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn create_memo_from_template(
+pub fn create_path_from_template(
     template_id: String,
-    notebook_id: Option<String>,
+    notebook_id: String,
     state: State<AppState>,
     app: AppHandle,
-) -> Result<Memo, String> {
-    let template_name = Path::new(&template_id)
-        .file_name()
-        .and_then(|name| name.to_str())
+) -> Result<CreatedPathDocumentResult, String> {
+    let template_name = Path::new(&template_id).file_name().and_then(|name| name.to_str())
         .ok_or_else(|| "invalid template id".to_string())?;
-
-    if template_name != template_id {
-        return Err("invalid template id".to_string());
-    }
-
+    if template_name != template_id { return Err("invalid template id".to_string()); }
     let dir = memo_template_dir().ok_or_else(|| "template directory not available".to_string())?;
     let path = dir.join(template_name);
-    if !is_template_file(&path) {
-        return Err("template not found".to_string());
-    }
-
+    if !is_template_file(&path) { return Err("template not found".to_string()); }
     let content = fs::read_to_string(&path).map_err(|e| format!("read template failed: {e}"))?;
-    let body = extract_body_content(&content).to_string();
+    let body = extract_body_content(&content);
     let title = template_name_from_path(&path);
-
-    let abs = MemoService::new(&read_lock(&state.memo_file, "memo_file"))
-        .preview_create_path(notebook_id.as_deref(), &title)
-        .map_err(|e| format!("prepare memo from template failed: {e}"))?;
-    mark_self_write_for(&app, &abs);
-
-    let memo = MemoService::new(&read_lock(&state.memo_file, "memo_file"))
-        .create_memo_named(notebook_id.as_deref(), &title, &body)
-        .map_err(|e| format!("create memo from template failed: {e}"))?
-        .memo;
-
-    try_index_upsert(state.inner(), &memo.id);
-    if let Ok(resolved) =
-        MemoService::new(&read_lock(&state.memo_file, "memo_file")).resolve_memo(&memo.id)
-    {
-        mark_self_write_for(&app, &resolved.path);
-    }
-    memo_events::emit(
-        &app,
-        MemoEvent::Created {
-            memo: memo.clone(),
-            notebook_id: notebook_id_for_memo(state.inner(), &memo.id),
-            derived_changed: MemoDerivedChanged::from_memos(None, &memo),
-            source: MemoChangeSource::UserNew,
-        },
-    );
-
-    Ok(memo)
+    let created = MemoService::new(&read_lock(&state.memo_file, "memo_file"))
+        .create_note_by_path(&notebook_id, None, &title, body)
+        .map_err(|e| e.to_string())?;
+    mark_self_write_for(&app, &created.path);
+    Ok(CreatedPathDocumentResult {
+        notebook_id: created.notebook.id,
+        relative_path: created.entry.relative_path,
+        path: created.path.to_string_lossy().to_string(),
+        initial_content: created.body,
+    })
 }
 
 #[tauri::command]
 #[allow(non_snake_case)]
-pub fn import_external_document_to_memo(
+pub fn import_external_document_by_path(
     file_path: String,
     content: String,
-    notebook_id: Option<String>,
+    notebook_id: String,
     state: State<AppState>,
     app: AppHandle,
-) -> Result<Memo, String> {
-    let abs = std::path::PathBuf::from(&file_path);
-
-    // Import by creating a normal memo from the external file stem and content.
-    let title = std::path::Path::new(&file_path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("imported")
-        .to_string();
-    let body = if content.is_empty() {
-        String::new()
-    } else {
-        content.clone()
-    };
-
-    // Mark the likely new path before writing.
-    let abs_new = MemoService::new(&read_lock(&state.memo_file, "memo_file"))
-        .preview_create_path(notebook_id.as_deref(), &title)
-        .map_err(|e| format!("prepare imported memo failed: {e}"))?;
-    mark_self_write_for(&app, &abs_new);
-
-    let memo = MemoService::new(&read_lock(&state.memo_file, "memo_file"))
-        .create_memo_named(notebook_id.as_deref(), &title, &body)
-        .map_err(|e| format!("create_memo failed: {e}"))?
-        .memo;
-
-    try_index_upsert(state.inner(), &memo.id);
-    let _ = abs;
-    memo_events::emit(
-        &app,
-        MemoEvent::Created {
-            memo: memo.clone(),
-            notebook_id: notebook_id_for_memo(state.inner(), &memo.id),
-            derived_changed: MemoDerivedChanged::from_memos(None, &memo),
-            source: MemoChangeSource::UserImport,
-        },
-    );
-    Ok(memo)
+) -> Result<CreatedPathDocumentResult, String> {
+    let title = Path::new(&file_path).file_stem().and_then(|stem| stem.to_str())
+        .unwrap_or("imported");
+    let created = MemoService::new(&read_lock(&state.memo_file, "memo_file"))
+        .create_note_by_path(&notebook_id, None, title, &content)
+        .map_err(|error| error.to_string())?;
+    mark_self_write_for(&app, &created.path);
+    Ok(CreatedPathDocumentResult {
+        notebook_id: created.notebook.id,
+        relative_path: created.entry.relative_path,
+        path: created.path.to_string_lossy().to_string(),
+        initial_content: created.body,
+    })
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
@@ -1019,46 +879,10 @@ fn initialize_notebook_template_inner(
                 })?;
             let parent_relative =
                 parent_relative.map(|parent| parent.to_string_lossy().replace('\\', "/"));
-            let expected_path = MemoService::new(&read_lock(&state.memo_file, "memo_file"))
-                .preview_create_path_in_directory(
-                    Some(&notebook_id),
-                    parent_relative.as_deref(),
-                    title,
-                )
+            let created_note = MemoService::new(&read_lock(&state.memo_file, "memo_file"))
+                .create_note_by_path(&notebook_id, parent_relative.as_deref(), title, &file.content)
                 .map_err(|error| notebook_template_file_failure(&file.path, error))?;
-            mark_self_write_for(app, &expected_path);
-
-            let memo = MemoService::new(&read_lock(&state.memo_file, "memo_file"))
-                .create_memo_named_with_tag_in_directory(
-                    Some(&notebook_id),
-                    parent_relative.as_deref(),
-                    title,
-                    &file.content,
-                    None,
-                )
-                .map_err(|error| notebook_template_file_failure(&file.path, error))?
-                .memo;
-
-            mark_self_write_for(app, &notebook_root.join(&memo.relative_path));
-            // A template normally targets a new, inactive notebook. Its search
-            // index will load on demand; don't globally resolve every note just
-            // to discover that it does not belong to the active search index.
-            let index_is_target = {
-                let index = read_lock(&state.search, "search");
-                index.is_loaded() && index.current_notebook() == Some(notebook_id.as_str())
-            };
-            if index_is_target {
-                try_index_upsert(state.inner(), &memo.id);
-            }
-            memo_events::emit(
-                app,
-                MemoEvent::Created {
-                    memo: memo.clone(),
-                    notebook_id: notebook_id.clone(),
-                    derived_changed: MemoDerivedChanged::from_memos(None, &memo),
-                    source: MemoChangeSource::NotebookTemplate,
-                },
-            );
+            mark_self_write_for(app, &created_note.path);
         } else {
             mark_self_write_for(app, &target);
             atomic_write_bytes(&target, file.content.as_bytes())
@@ -1105,7 +929,7 @@ pub fn move_memo_to_directory(
     if !requested_path.is_absolute() {
         return Err("absolute document path required".into());
     }
-    let (moved, before, compatibility_memo) = {
+    let (moved, before, compatibility_memo, old_relative, old_path) = {
         let memo_file = read_lock(&state.memo_file, "memo_file");
         let (source_notebook_id, relative_path) =
             notebook_note_address(&memo_file, requested_path)?.ok_or_else(|| {
@@ -1135,8 +959,12 @@ pub fn move_memo_to_directory(
                 )
                 .ok()
         });
-        (moved, before, compatibility_memo)
+        (moved, before, compatibility_memo, relative_path, original.path)
     };
+    state.thread_manager.rebase_agent_note_paths(
+        &notebook_id, &notebook_id, &old_relative, &moved.entry.relative_path,
+        &old_path.to_string_lossy(), &moved.path.to_string_lossy(),
+    ).map_err(|error| error.to_string())?;
     if let Some(memo) = compatibility_memo.as_ref() {
         let derived_changed = MemoDerivedChanged::from_memos(before.as_ref(), memo);
         emit_updated_memo_event(
@@ -1200,7 +1028,7 @@ fn rename_memo_title_blocking(
     expected_content: Option<String>,
     state: State<AppState>,
     app: AppHandle,
-    window: tauri::WebviewWindow,
+    _window: tauri::WebviewWindow,
 ) -> Result<RenameMemoTitleResult, String> {
     let title = title.trim().trim_end_matches(".md").trim();
     if title.is_empty() {
@@ -1211,22 +1039,17 @@ fn rename_memo_title_blocking(
     if !requested_path.is_absolute() {
         return Err("absolute document path required".into());
     }
-    let (renamed, compatibility_memo, before) = {
+    let (renamed, old_relative, old_path) = {
         let memo_file = read_lock(&state.memo_file, "memo_file");
         let (notebook_id, relative_path) = notebook_note_address(&memo_file, requested_path)?
-            .ok_or_else(|| {
-                "document is not a Markdown note inside a registered notebook".to_string()
-            })?;
+            .ok_or_else(|| "document is not a Markdown note inside a registered notebook".to_string())?;
         if expected_filename.as_deref().is_some_and(|expected| {
             expected != relative_path.rsplit('/').next().unwrap_or(&relative_path)
         }) {
             return Err("note filename changed before rename".into());
         }
-        let before =
-            memo_file.find_memo_by_relative_path_for_notebook_id(&notebook_id, &relative_path);
         let mut service = MemoService::new(&memo_file);
-        let original = service
-            .get_note_by_path(&notebook_id, &relative_path)
+        let original = service.get_note_by_path(&notebook_id, &relative_path)
             .map_err(|error| error.to_string())?;
         if expected_content.as_deref().is_some_and(|expected| {
             !super::helpers::cas_content_matches(&original.body, expected, expected)
@@ -1234,60 +1057,23 @@ fn rename_memo_title_blocking(
             return Err("note changed before rename".into());
         }
         mark_self_write_for(&app, &original.path);
-        let renamed = service
-            .rename_note_by_path(
-                &notebook_id,
-                &relative_path,
-                title,
-                expected_content.as_deref(),
-            )
-            .map_err(|error| error.to_string())?;
-        drop(service);
+        let renamed = service.rename_note_by_path(
+            &notebook_id, &relative_path, title, expected_content.as_deref(),
+        ).map_err(|error| error.to_string())?;
         mark_self_write_for(&app, &renamed.path);
-        let compatibility_memo = if before.is_some() {
-            memo_file.rename_memo_file_for_notebook_id(&notebook_id, &original.path, &renamed.path)
-        } else {
-            memo_file.register_existing_file_for_notebook_id(&notebook_id, &renamed.path)
-        }
-        .ok();
-        (renamed, compatibility_memo, before)
+        (renamed, relative_path, original.path)
     };
-
+    state.thread_manager.rebase_agent_note_paths(
+        &renamed.notebook.id, &renamed.notebook.id, &old_relative, &renamed.entry.relative_path,
+        &old_path.to_string_lossy(), &renamed.path.to_string_lossy(),
+    ).map_err(|error| error.to_string())?;
     let path = renamed.path.to_string_lossy().into_owned();
-    if let Some(memo) = compatibility_memo.as_ref() {
-        let derived_changed = MemoDerivedChanged::from_memos(before.as_ref(), memo);
-        if before.is_some() {
-            emit_updated_memo_event(
-                &app,
-                &memo.id,
-                path.clone(),
-                memo.clone(),
-                renamed.notebook.id.clone(),
-                derived_changed,
-                MemoChangeSource::UserEdit,
-                Some(window.label()),
-            );
-        } else {
-            memo_events::emit(
-                &app,
-                MemoEvent::Created {
-                    memo: memo.clone(),
-                    notebook_id: renamed.notebook.id.clone(),
-                    derived_changed,
-                    source: MemoChangeSource::ExternalTool,
-                },
-            );
-        }
-    } else {
-        tracing::warn!(
-            notebook_id = %renamed.notebook.id,
-            relative_path = %renamed.entry.relative_path,
-            "path-based note rename succeeded; legacy memo projection could not be updated"
-        );
-    }
-
+    let _ = app.emit("flowix:path-note-changed", serde_json::json!({
+        "notebookId": renamed.notebook.id,
+        "relativePath": renamed.entry.relative_path,
+    }));
     Ok(RenameMemoTitleResult {
-        memo: compatibility_memo,
+        memo: None,
         path,
         filename: renamed
             .entry

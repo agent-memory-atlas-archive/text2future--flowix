@@ -35,6 +35,7 @@ import {
   type ViewUpdate,
   WidgetType,
   lineNumberWidgetMarker,
+  gutterWidgetClass,
 } from '@codemirror/view';
 import {
   closeSearchPanel,
@@ -130,6 +131,12 @@ class SourceHeaderGutterMarker extends GutterMarker {
 }
 
 const sourceHeaderGutterMarker = new SourceHeaderGutterMarker();
+
+class SourceHeaderGutterClass extends GutterMarker {
+  elementClass = 'cm-source-header-gutter-element';
+}
+
+const sourceHeaderGutterClass = new SourceHeaderGutterClass();
 
 const setSourceHeaderDecoration = StateEffect.define<DecorationSet>();
 
@@ -407,9 +414,16 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
       extensions: [
         basicSetup,
         codeEditorTheme,
-        sourceHeaderField,
+        // Install the block widget before CodeMirror's first viewport and
+        // gutter layout. Adding it after mount can leave the empty document's
+        // only line number at the old position until a text edit rebuilds it.
+        sourceHeaderField.init(() => hasScrollHeader
+          ? sourceHeaderDecoration(handleSourceHeaderMount)
+          : Decoration.none),
         lineNumberWidgetMarker.of((_view, widget) =>
           widget instanceof SourceHeaderWidget ? sourceHeaderGutterMarker : null),
+        gutterWidgetClass.of((_view, widget) =>
+          widget instanceof SourceHeaderWidget ? sourceHeaderGutterClass : null),
         ...(hasScrollHeader ? [rangeSelectionState] : []),
         ...(shikiLang
           ? [shikiHighlighting(shikiLang)]
@@ -526,6 +540,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
     const syncHeaderHeight = () => {
       const titleRow = headerMount.querySelector<HTMLElement>('.source-document-title-row') ?? headerMount;
       const headerRect = titleRow.getBoundingClientRect();
+      const blockRect = headerMount.getBoundingClientRect();
       const gutterRect = gutters.getBoundingClientRect();
       const height = headerRect.height;
       const top = headerRect.top - gutterRect.top;
@@ -535,6 +550,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
       } else {
         editorMount?.style.removeProperty('--code-editor-source-header-top');
         editorMount?.style.removeProperty('--code-editor-source-header-height');
+      }
+      if (blockRect.height > 0) {
+        editorMount?.style.setProperty('--code-editor-source-header-block-height', `${blockRect.height}px`);
+      } else {
+        editorMount?.style.removeProperty('--code-editor-source-header-block-height');
       }
     };
 
@@ -574,6 +594,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
         gutterBackground.remove();
         editorMount?.style.removeProperty('--code-editor-source-header-top');
         editorMount?.style.removeProperty('--code-editor-source-header-height');
+        editorMount?.style.removeProperty('--code-editor-source-header-block-height');
       };
     }
     const observer = new ResizeObserver(() => {
@@ -588,6 +609,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
       gutterBackground.remove();
       editorMount?.style.removeProperty('--code-editor-source-header-top');
       editorMount?.style.removeProperty('--code-editor-source-header-height');
+      editorMount?.style.removeProperty('--code-editor-source-header-block-height');
     };
   }, [hasScrollHeader, onToggleEditorMode, scrollHeaderMount, sourceModeToggleLabel]);
 

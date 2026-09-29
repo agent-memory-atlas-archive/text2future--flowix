@@ -7,12 +7,11 @@ import {
   TerminalWindowIcon,
   TreeStructureIcon,
 } from '@phosphor-icons/react';
-import type { MemoItem } from '@/types/memo-item';
+import { joinNotebookMemoPath } from '@/lib/path';
 import { useMemoStore } from '@features/memo/store/memo-store';
-import { openArtifactTarget } from '@features/workspace/use-cases/workspace-navigation';
-import { plugins, type PluginDescriptor } from '@platform/tauri/client';
+import { memos, type PluginDescriptor } from '@platform/tauri/client';
+import { openBrowserColumnMarkdown } from '@features/workspace/use-cases/browser-column-navigation';
 import { AgentPluginWorkbench } from './plugin-agent-workbench';
-import { getPluginNoteInfo } from './plugin-note';
 
 interface PluginWorkbenchProps {
   plugin: PluginDescriptor;
@@ -37,7 +36,7 @@ function ArtifactToolWorkbench({
   notebookPath,
 }: PluginWorkbenchProps) {
   const selectedNotebook = useMemoStore((state) => state.selectedNotebook);
-  const [notes, setNotes] = useState<MemoItem[]>([]);
+  const [documents, setDocuments] = useState<{ relativePath: string; title: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const command = plugin.manifest.tool?.command
@@ -48,7 +47,10 @@ function ArtifactToolWorkbench({
     setLoading(true);
     setError(null);
     try {
-      setNotes(await plugins.listNotes(plugin.manifest.id, selectedNotebook.id));
+      const indexed = await memos.listNotesByPath(selectedNotebook.id);
+      setDocuments(indexed.filter((note) => note.properties?.flowix_plugin === plugin.manifest.id
+        && !note.properties?.flowix_artifact)
+        .map((note) => ({ relativePath: note.relativePath, title: note.title })));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
@@ -109,33 +111,25 @@ function ArtifactToolWorkbench({
           <section>
             <div className="mb-2 flex items-center justify-between">
               <h2 className="text-xs font-medium uppercase tracking-wide text-[var(--muted-foreground)]">已生成文档</h2>
-              <span className="text-xs text-[var(--muted-foreground)]">{notes.length}</span>
+              <span className="text-xs text-[var(--muted-foreground)]">{documents.length}</span>
             </div>
             <div className="overflow-hidden rounded-xl border border-[var(--divider)] bg-[var(--card)]">
-              {notes.map((note) => (
-                <button
-                  key={note.id}
+              {documents.map((note) => (
+                <button key={note.relativePath}
                   className="flex w-full items-center gap-3 border-b border-[var(--divider)] px-4 py-3 text-left last:border-b-0 hover:bg-[var(--muted)]"
                   onClick={() => {
-                    const noteInfo = getPluginNoteInfo(note);
-                    void openArtifactTarget({
-                      pointerMemoId: note.id,
-                      notebook: selectedNotebook,
-                      pluginId: noteInfo?.pluginId ?? plugin.manifest.id,
-                      renderer: noteInfo?.renderer ?? null,
-                      memo: note,
-                    });
-                  }}
-                >
+                    const path = joinNotebookMemoPath(selectedNotebook.path, note.relativePath);
+                    if (path) void openBrowserColumnMarkdown(path);
+                  }}>
                   <TreeStructureIcon size={16} weight="bold" className="shrink-0 text-[var(--muted-foreground)]" />
-                  <span className="min-w-0 flex-1 truncate text-sm text-[var(--foreground)]">{note.filename.replace(/\.md$/i, '')}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm text-[var(--foreground)]">{note.title}</span>
                   <ArrowSquareOutIcon size={15} className="shrink-0 text-[var(--muted-foreground)]" />
                 </button>
               ))}
-              {!loading && notes.length === 0 && (
+              {!loading && documents.length === 0 && (
                 <p className="px-4 py-8 text-center text-sm text-[var(--muted-foreground)]">当前笔记本还没有{plugin.manifest.name}</p>
               )}
-              {loading && notes.length === 0 && (
+              {loading && documents.length === 0 && (
                 <p className="px-4 py-8 text-center text-sm text-[var(--muted-foreground)]">正在加载…</p>
               )}
             </div>

@@ -4,7 +4,7 @@
 //! restricted Flowix CLI command plus optional stdin content. Commands are parsed into
 //! argv and dispatched directly to the typed store layer; no system shell is spawned.
 
-use crate::{cli, errors::CliError, fmt, operation, output, plugin, store};
+use crate::{cli, errors::CliError, fmt, operation, output, path_store, plugin, store};
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, Write};
 
@@ -17,7 +17,7 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[
     LATEST_PROTOCOL_VERSION,
 ];
 
-pub const TOOL_DESCRIPTION: &str = "Search, read, create, edit, and delete Flowix memos using structured actions. Also supports declared artifacts. Prefer `action`; legacy `command`/`stdin` remains temporarily compatible. Delete is destructive.";
+pub const TOOL_DESCRIPTION: &str = "Search, read, create, edit, and delete Flowix Markdown notes by notebook ID and relative path. Also supports declared artifacts. Delete is destructive.";
 
 /// Run the MCP line-delimited JSON-RPC loop until stdin reaches EOF.
 pub fn run_mcp<R: BufRead, W: Write>(reader: R, mut writer: W) -> Result<(), CliError> {
@@ -158,7 +158,7 @@ fn validate_argument_keys(arguments: &Map<String, Value>) -> Result<(), CliError
     const KEYS: &[&str] = &[
         "action",
         "notebook",
-        "id",
+        "address",
         "query",
         "content",
         "old",
@@ -187,7 +187,7 @@ fn parse_structured_operation(
     let action = required_string(arguments, "action")?;
     let notebook = optional_string(arguments, "notebook")?;
     let content = || required_string(arguments, "content");
-    let id = || required_string(arguments, "id");
+    let address = || required_string(arguments, "address");
     let limit = integer(arguments, "limit", 50, 1, 200)?;
     let offset = integer(arguments, "offset", 0, 0, usize::MAX)?;
     let dry_run = boolean(arguments, "dryRun", false)?;
@@ -199,7 +199,7 @@ fn parse_structured_operation(
             offset,
         }),
         "tags" => Ok(FlowixOperation::Tags { notebook }),
-        "show" => Ok(FlowixOperation::Show { id: id()? }),
+        "show" => Ok(FlowixOperation::Show { address: address()? }),
         "search" => Ok(FlowixOperation::Search {
             query: required_string(arguments, "query")?,
             notebook,
@@ -211,16 +211,16 @@ fn parse_structured_operation(
             content: content()?,
         }),
         "edit" => Ok(FlowixOperation::Edit {
-            id: id()?,
+            address: address()?,
             old: required_string(arguments, "old")?,
             replacement: content()?,
             dry_run,
         }),
         "write" => Ok(FlowixOperation::Write {
-            id: id()?,
+            address: address()?,
             content: content()?,
         }),
-        "delete" => Ok(FlowixOperation::Delete { id: id()? }),
+        "delete" => Ok(FlowixOperation::Delete { address: address()? }),
         "artifact.list" => Ok(FlowixOperation::ArtifactList),
         "artifact.describe" => Ok(FlowixOperation::ArtifactDescribe {
             plugin_id: required_string(arguments, "pluginId")?,
@@ -326,7 +326,7 @@ fn execute_command(command: &str, stdin: Option<&str>) -> Result<Value, CliError
         cli::Cli::List { notebook, .. } => {
             reject_stdin(stdin)?;
             let notebook = store::resolve_notebook_key(notebook.as_deref())?;
-            Ok(fmt::notes_to_json(&store::notes_list_entries(&notebook)?))
+            Ok(path_store::list(&notebook)?["notes"].clone())
         }
         cli::Cli::Tags { notebook, .. } => {
             reject_stdin(stdin)?;
@@ -334,7 +334,7 @@ fn execute_command(command: &str, stdin: Option<&str>) -> Result<Value, CliError
         }
         cli::Cli::Show { id, .. } => {
             reject_stdin(stdin)?;
-            Ok(store::note_show_data(&id)?.to_json())
+            path_store::show(&id)
         }
         cli::Cli::Create { notebook, file, .. } => {
             if file.is_some() {
@@ -344,18 +344,11 @@ fn execute_command(command: &str, stdin: Option<&str>) -> Result<Value, CliError
             }
             let body = require_stdin(stdin, "create")?;
             let notebook = store::resolve_notebook_key(notebook.as_deref())?;
-            let (mut memo_file, notebook_config) = store::open_in(&notebook)?;
-            output::to_json_value(&store::create_note(&mut memo_file, &notebook_config, body)?)
+            path_store::create(&notebook, body)
         }
         cli::Cli::Delete { id, .. } => {
             reject_stdin(stdin)?;
-            let (mut memo_file, full_id) = store::resolve_id(&id)?;
-            let path = memo_file.find_memo_file_path(&full_id);
-            output::to_json_value(&store::delete_note(
-                &mut memo_file,
-                &full_id,
-                path.as_deref(),
-            )?)
+            path_store::delete(&id)
         }
         cli::Cli::Search {
             query,
@@ -365,12 +358,7 @@ fn execute_command(command: &str, stdin: Option<&str>) -> Result<Value, CliError
             ..
         } => {
             reject_stdin(stdin)?;
-            let results = store::search_hits(&query, notebook.as_deref(), tag.as_deref(), limit)?;
-            output::to_json_value(&store::search_results_to_value(
-                &query,
-                tag.as_deref(),
-                &results,
-            ))
+            path_store::search(&query, notebook.as_deref(), tag.as_deref(), limit)
         }
         cli::Cli::Edit {
             id,
@@ -396,13 +384,7 @@ fn execute_command(command: &str, stdin: Option<&str>) -> Result<Value, CliError
                     CliError::Usage("edit requires --new <text> or --new-stdin".into())
                 })?
             };
-            let (mut memo_file, full_id) = store::resolve_id(&id)?;
-            let result = if dry_run {
-                store::preview_edit_note(&mut memo_file, &full_id, &old, &new)
-            } else {
-                store::edit_note(&mut memo_file, &full_id, &old, &new)
-            }?;
-            output::to_json_value(&result)
+            path_store::edit(&id, &old, &new, dry_run)
         }
         cli::Cli::Write { id, file, .. } => {
             if file.is_some() {
@@ -411,8 +393,7 @@ fn execute_command(command: &str, stdin: Option<&str>) -> Result<Value, CliError
                 ));
             }
             let body = require_stdin(stdin, "write")?;
-            let (mut memo_file, full_id) = store::resolve_id(&id)?;
-            output::to_json_value(&store::write_note(&mut memo_file, &full_id, body)?)
+            path_store::write(&id, body)
         }
         cli::Cli::PluginList { .. } => {
             reject_stdin(stdin)?;
@@ -490,7 +471,7 @@ fn tool_result(data: Value, is_error: bool) -> Value {
             .and_then(Value::as_str)
             .unwrap_or("completed");
         let id = data
-            .get("id")
+            .get("address")
             .and_then(Value::as_str)
             .map(|id| format!(" ({id})"))
             .unwrap_or_default();

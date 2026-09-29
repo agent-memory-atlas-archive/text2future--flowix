@@ -19,7 +19,7 @@ interface MemoListWindowOptions {
   memos: MemoListItem[];
   activeFilter: string;
   colorFilter: ColorFilterValue;
-  selectedMemoId?: string;
+  selectedItemKey?: string;
   queryKey: string;
   loading: boolean;
   hasMorePages: boolean;
@@ -40,7 +40,7 @@ export function useMemoListWindow({
   memos,
   activeFilter,
   colorFilter,
-  selectedMemoId,
+  selectedItemKey,
   queryKey,
   loading,
   hasMorePages,
@@ -64,10 +64,10 @@ export function useMemoListWindow({
 
   const selectedIndex = useMemo(
     () =>
-      selectedMemoId
-        ? filteredMemos.findIndex((memo) => memoListItemKey(memo) === selectedMemoId)
+      selectedItemKey
+        ? filteredMemos.findIndex((memo) => memoListItemKey(memo) === selectedItemKey)
         : -1,
-    [filteredMemos, selectedMemoId],
+    [filteredMemos, selectedItemKey],
   );
   const minimumVisibleCount =
     selectedIndex >= 0

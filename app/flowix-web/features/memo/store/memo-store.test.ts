@@ -29,24 +29,6 @@ vi.mock('@features/memo/store/tag-store', () => ({
 }));
 
 import { useMemoStore } from '@features/memo/store/memo-store';
-import type { MemoItem } from '@/types/memo-item';
-
-function memo(id: string): MemoItem {
-  return {
-    id,
-    filename: `${id}.md`,
-    preview: '',
-    tags: [],
-    todos: [],
-    agents: [],
-    createdAt: 1,
-    updatedAt: 1,
-    favorited: false,
-    icon: null,
-    colors: [],
-    properties: {},
-  };
-}
 
 describe('memo store list loading', () => {
   beforeEach(() => {
@@ -55,7 +37,7 @@ describe('memo store list loading', () => {
     mocks.setSelectedTagId.mockReset();
     useMemoStore.setState({
       memos: [],
-      selectedMemo: memo('current'),
+      selectedPathNote: { notebookId: 'notebook-1', relativePath: 'current.md' },
       selectedNotebook: null,
       middleColumnView: 'notes',
       activeFilter: 'todos',
@@ -64,16 +46,20 @@ describe('memo store list loading', () => {
   });
 
   it('updates a filtered list without clearing the document selection', async () => {
-    const filteredMemo = memo('todo');
-    mocks.list.mockResolvedValue({ memos: [filteredMemo] });
+    const filteredNote = {
+      relativePath: 'todo.md', title: 'todo', preview: '', thumbnail: null,
+      tags: [], todos: [], agents: [], createdAt: 1, updatedAt: 1,
+      favorited: false, icon: null, colors: [], properties: {},
+    };
+    mocks.listByPath.mockResolvedValue({ notes: [filteredNote], nextCursor: null, hasMore: false });
 
-    await useMemoStore.getState().loadMemos({
+    await useMemoStore.getState().loadPathNotes({
       notebookId: 'notebook-1',
       filter: 'todos',
     });
 
-    expect(useMemoStore.getState().memos).toEqual([filteredMemo]);
-    expect(useMemoStore.getState().selectedMemo?.id).toBe('current');
+    expect(useMemoStore.getState().pathNotes[0].relativePath).toBe('todo.md');
+    expect(useMemoStore.getState().selectedPathNote?.relativePath).toBe('current.md');
   });
 
   it('loads the primary note list from path records without memo IDs', async () => {
@@ -158,60 +144,17 @@ describe('memo store list loading', () => {
     expect(useMemoStore.getState().memoListHasMore).toBe(false);
   });
 
-  it('ignores a stale response after a newer local list update', async () => {
-    let resolveList: ((value: { memos: MemoItem[] }) => void) | undefined;
-    mocks.list.mockImplementation(() => new Promise((resolve) => {
-      resolveList = resolve;
-    }));
+  it('ignores an older path response after a newer path load', async () => {
+    let resolveOld: ((value: { notes: never[]; nextCursor: null; hasMore: false }) => void) | undefined;
+    mocks.listByPath
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+      .mockResolvedValueOnce({ notes: [], nextCursor: null, hasMore: false });
 
-    const pendingLoad = useMemoStore.getState().loadMemos({
-      notebookId: 'notebook-1',
-      filter: 'all',
-    });
-    const freshMemo = memo('fresh');
-    useMemoStore.getState().setMemos([freshMemo]);
+    const older = useMemoStore.getState().loadPathNotes({ notebookId: 'notebook-1', filter: 'all' });
+    await useMemoStore.getState().loadPathNotes({ notebookId: 'notebook-1', filter: 'all' });
+    resolveOld?.({ notes: [], nextCursor: null, hasMore: false });
 
-    resolveList?.({ memos: [memo('stale')] });
-
-    await expect(pendingLoad).resolves.toBe(false);
-    expect(useMemoStore.getState().memos).toEqual([freshMemo]);
-  });
-
-  it('loads the first page and appends the next page without duplicates', async () => {
-    const first = memo('first');
-    const second = memo('second');
-    mocks.list
-      .mockResolvedValueOnce({ memos: [first], nextCursor: 'cursor-1', hasMore: true })
-      .mockResolvedValueOnce({ memos: [first, second], nextCursor: null, hasMore: false });
-    useMemoStore.setState({
-      selectedNotebook: {
-        id: 'notebook-1',
-        name: 'Notebook',
-        path: '/tmp/notebook',
-        createdAt: 1,
-        updatedAt: 1,
-        isDefault: true,
-      },
-      activeFilter: 'all',
-    });
-
-    await useMemoStore.getState().loadMemos({
-      notebookId: 'notebook-1',
-      filter: 'all',
-    });
-    await useMemoStore.getState().loadMoreMemos();
-
-    expect(mocks.list).toHaveBeenNthCalledWith(1, expect.objectContaining({
-      notebookId: 'notebook-1',
-      limit: 50,
-    }));
-    expect(mocks.list).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      notebookId: 'notebook-1',
-      limit: 50,
-      cursor: 'cursor-1',
-    }));
-    expect(useMemoStore.getState().memos).toEqual([first, second]);
-    expect(useMemoStore.getState().memoListHasMore).toBe(false);
+    await expect(older).resolves.toBe(false);
   });
 
   it('persists sidebar navigation and normalizes middle-column-only filters', () => {
@@ -220,7 +163,7 @@ describe('memo store list loading', () => {
     let persisted = JSON.parse(localStorage.getItem('test-memo-store') ?? '{}');
     expect(persisted.state.activeFilter).toBe('agents');
     expect(useMemoStore.getState().middleColumnView).toBe('conversations');
-    expect(persisted.state.selectedMemoId).toBe('current');
+    expect(persisted.state.selectedMemoId).toBeUndefined();
     expect(persisted.state.selectedMemo).toBeUndefined();
 
     useMemoStore.getState().setActiveFilter('color');
@@ -237,12 +180,31 @@ describe('memo store list loading', () => {
     });
 
     const persisted = JSON.parse(localStorage.getItem('test-memo-store') ?? '{}');
-    expect(useMemoStore.getState().selectedMemoId).toBeNull();
-    expect(persisted.state.selectedMemoId).toBeNull();
+    expect(useMemoStore.getState().selectedPathNote?.relativePath).toBe('folder/note.md');
+    expect(persisted.state.selectedMemoId).toBeUndefined();
     expect(persisted.state.selectedPathNote).toEqual({
       notebookId: 'notebook-1',
       relativePath: 'folder/note.md',
     });
+  });
+
+  it('drops legacy memo selection when rehydrating saved state', async () => {
+    localStorage.setItem('test-memo-store', JSON.stringify({
+      state: {
+        selectedMemoId: 'legacy-id',
+        selectedMemo: { id: 'legacy-id', filename: 'old.md' },
+        selectedNotebookId: 'notebook-1',
+        selectedPathNote: { notebookId: 'notebook-1', relativePath: 'folder/note.md' },
+        activeFilter: 'all',
+      },
+      version: 0,
+    }));
+    await useMemoStore.persist.rehydrate();
+
+    const state = useMemoStore.getState() as unknown as Record<string, unknown>;
+    expect(state).not.toHaveProperty('selectedMemoId');
+    expect(state).not.toHaveProperty('selectedMemo');
+    expect(state.selectedPathNote).toEqual({ notebookId: 'notebook-1', relativePath: 'folder/note.md' });
   });
 
   it('exits a plugin view when notes is already the active filter', () => {

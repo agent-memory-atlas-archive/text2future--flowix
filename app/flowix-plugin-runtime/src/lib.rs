@@ -5,12 +5,11 @@
 //! artifact, and creates the user-facing Flowix pointer note.
 
 use flowix_core::memo_file::{atomic_write_bytes, MemoFile, NotebookConfig};
-use flowix_core::MemoService;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 mod manifest;
 pub use manifest::*;
@@ -522,6 +521,7 @@ pub struct CreatedPluginArtifact {
     pub ok: bool,
     pub action: &'static str,
     pub plugin_id: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub note_id: String,
     pub notebook_id: String,
     pub notebook: String,
@@ -587,73 +587,67 @@ fn create_artifact_from_definition(
         return Err(format!("notebook path is unavailable: {}", notebook.path));
     }
 
-    let relative_output = Path::new(output_directory);
-    if !is_safe_relative_path(relative_output) {
-        return Err("plugin output directory is invalid".to_string());
+    // Mindmaps are ordinary, indexed Markdown documents. Their location is
+    // the identity; no pointer memo or hidden artifact is created.
+    if request.plugin_id == MINDMAP_PLUGIN_ID {
+        let output_dir = notebook_path.join("Mindmaps");
+        std::fs::create_dir_all(&output_dir)
+            .map_err(|error| format!("create mindmap directory: {error}"))?;
+        let artifact_path = output_file_path(&output_dir, &parsed.title, "md");
+        let document = serialize_artifact_document(
+            request.plugin_id, version, "markdown", &parsed.content,
+            request.producer, request.source_note,
+        );
+        atomic_write_bytes(&artifact_path, document.as_bytes())
+            .map_err(|error| format!("write mindmap document: {error}"))?;
+        let relative_path = artifact_path.strip_prefix(&notebook_path)
+            .map_err(|_| "mindmap escaped notebook root".to_string())?
+            .to_string_lossy().replace('\\', "/");
+        memo_file.refresh_v2_note_path(&notebook.id, &relative_path)
+            .map_err(|error| format!("index mindmap document: {error}"))?;
+        let note_path = artifact_path.to_string_lossy().to_string();
+        return Ok(CreatedPluginArtifact {
+            ok: true,
+            action: "pluginArtifactCreated",
+            plugin_id: request.plugin_id.to_string(),
+            note_id: String::new(),
+            notebook_id: notebook.id,
+            notebook: notebook.name,
+            title: parsed.title,
+            renderer: renderer.to_string(),
+            artifact_path: note_path.clone(),
+            note_path,
+        });
     }
-    let output_dir = notebook_path.join(relative_output);
+
+    let _ = (output_directory, extension, parser, note_type);
+    let output_dir = notebook_path.join("Plugins").join(request.plugin_id);
     std::fs::create_dir_all(&output_dir)
-        .map_err(|error| format!("create plugin output directory: {error}"))?;
-    let canonical_notebook = notebook_path
-        .canonicalize()
-        .map_err(|error| format!("resolve notebook path: {error}"))?;
-    let canonical_output = output_dir
-        .canonicalize()
-        .map_err(|error| format!("resolve plugin output directory: {error}"))?;
-    if !canonical_output.starts_with(&canonical_notebook) {
-        return Err("plugin output directory escaped notebook root".to_string());
-    }
-    let artifact_path = output_file_path(&output_dir, &parsed.title, extension);
-    let artifact_document = serialize_artifact_document(
-        request.plugin_id,
-        version,
-        format,
-        &parsed.content,
-        request.producer,
-        request.source_note,
+        .map_err(|error| format!("create plugin directory: {error}"))?;
+    let artifact_path = output_file_path(&output_dir, &parsed.title, "md");
+    let document = serialize_path_plugin_document(
+        request.plugin_id, version, format, renderer, &parsed.content,
+        request.producer, request.source_note,
     );
-    atomic_write_bytes(&artifact_path, artifact_document.as_bytes())
-        .map_err(|error| format!("write plugin artifact: {error}"))?;
-
-    let relative_path = artifact_path
-        .strip_prefix(&notebook_path)
-        .map_err(|_| "plugin artifact escaped notebook root".to_string())?
-        .to_string_lossy()
-        .replace('\\', "/");
-    let now = chrono::Local::now().to_rfc3339();
-    let pointer = PluginArtifactPointer {
-        path: relative_path,
-        format: format.to_string(),
-        parser: parser.to_string(),
-        renderer: renderer.to_string(),
-        title: parsed.title.clone(),
-        content_hash: artifact_content_hash(&parsed.content),
-        created_at: now,
-        source_note: request
-            .source_note
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-    };
-    let pointer_body = serialize_pointer_document(request.plugin_id, version, note_type, &pointer)?;
-    let created = MemoService::new(memo_file)
-        .create_external_memo_named(&notebook.id, &parsed.title, &pointer_body)
-        .map_err(|error| {
-            let _ = std::fs::remove_file(&artifact_path);
-            format!("create plugin document: {error}")
-        })?;
-
+    atomic_write_bytes(&artifact_path, document.as_bytes())
+        .map_err(|error| format!("write plugin document: {error}"))?;
+    let relative_path = artifact_path.strip_prefix(&notebook_path)
+        .map_err(|_| "plugin document escaped notebook root".to_string())?
+        .to_string_lossy().replace('\\', "/");
+    memo_file.refresh_v2_note_path(&notebook.id, &relative_path)
+        .map_err(|error| format!("index plugin document: {error}"))?;
+    let note_path = artifact_path.to_string_lossy().to_string();
     Ok(CreatedPluginArtifact {
         ok: true,
         action: "pluginArtifactCreated",
         plugin_id: request.plugin_id.to_string(),
-        note_id: created.memo.id,
+        note_id: String::new(),
         notebook_id: notebook.id,
         notebook: notebook.name,
         title: parsed.title,
         renderer: renderer.to_string(),
-        artifact_path: artifact_path.to_string_lossy().to_string(),
-        note_path: created.path.to_string_lossy().to_string(),
+        artifact_path: note_path.clone(),
+        note_path,
     })
 }
 
@@ -738,14 +732,6 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
     }
 }
 
-fn is_safe_relative_path(path: &Path) -> bool {
-    !path.as_os_str().is_empty()
-        && !path.is_absolute()
-        && path
-            .components()
-            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
-}
-
 fn output_file_path(output_dir: &Path, title: &str, extension: &str) -> PathBuf {
     let safe_title = title
         .chars()
@@ -789,6 +775,7 @@ pub fn serialize_artifact_document(
     #[derive(Serialize)]
     #[serde(rename_all = "camelCase")]
     struct ArtifactMetadata<'a> {
+        #[serde(rename = "flowix_plugin")]
         flowix_plugin: &'a str,
         plugin_version: &'a str,
         agent_type: &'a str,
@@ -811,6 +798,39 @@ pub fn serialize_artifact_document(
         source_note,
     };
     let yaml = serde_yaml::to_string(&metadata).expect("artifact metadata is serializable");
+    format!("---\n{yaml}---\n\n{content}")
+}
+
+pub fn serialize_path_plugin_document(
+    plugin_id: &str,
+    plugin_version: &str,
+    format: &str,
+    renderer: &str,
+    content: &str,
+    producer: &str,
+    source_note: Option<&str>,
+) -> String {
+    #[derive(Serialize)]
+    struct Metadata<'a> {
+        flowix_plugin: &'a str,
+        flowix_renderer: &'a str,
+        flowix_format: &'a str,
+        plugin_version: &'a str,
+        agent_type: &'a str,
+        created_at: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_note: Option<&'a str>,
+    }
+    let metadata = Metadata {
+        flowix_plugin: plugin_id,
+        flowix_renderer: renderer,
+        flowix_format: format,
+        plugin_version,
+        agent_type: producer,
+        created_at: chrono::Local::now().to_rfc3339(),
+        source_note: source_note.filter(|value| !value.trim().is_empty()),
+    };
+    let yaml = serde_yaml::to_string(&metadata).expect("plugin metadata is serializable");
     format!("---\n{yaml}---\n\n{content}")
 }
 
@@ -874,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn creates_artifact_and_external_pointer_note() {
+    fn creates_indexable_mindmap_without_pointer_note() {
         let temp = tempfile::tempdir().unwrap();
         let notebook_path = temp.path().join("notes");
         std::fs::create_dir_all(&notebook_path).unwrap();
@@ -907,15 +927,15 @@ mod tests {
         assert!(Path::new(&created.artifact_path).is_file());
         assert!(Path::new(&created.note_path).is_file());
         let artifact = std::fs::read_to_string(&created.artifact_path).unwrap();
-        assert!(artifact.contains("flowixPlugin: mindmap"));
+        assert!(artifact.contains("flowix_plugin: mindmap"));
         assert!(artifact.contains("agentType: codex"));
         assert!(artifact.contains("# Product Plan"));
-        let pointer = std::fs::read_to_string(&created.note_path).unwrap();
-        assert!(pointer.contains("flowix_note_type: mindmap"));
-        assert!(pointer.contains("renderer: markmap"));
+        assert_eq!(created.note_path, created.artifact_path);
+        assert!(created.artifact_path.contains("Mindmaps"));
+        assert!(created.note_id.is_empty());
         assert_eq!(
             memo_file.read_all_memos_for_notebook_id(Some("work")).len(),
-            1
+            0
         );
     }
 
@@ -986,7 +1006,7 @@ mod tests {
     }
 
     #[test]
-    fn creates_webpage_artifact_and_pointer_note() {
+    fn creates_webpage_as_path_document() {
         let temp = tempfile::tempdir().unwrap();
         let notebook_path = temp.path().join("notes");
         std::fs::create_dir_all(&notebook_path).unwrap();
@@ -1018,13 +1038,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(created.renderer, "webpage");
-        assert_eq!(
-            std::fs::read_to_string(&created.artifact_path).unwrap(),
-            html
-        );
-        let pointer = std::fs::read_to_string(&created.note_path).unwrap();
-        assert!(pointer.contains("flowix_note_type: webpage"));
-        assert!(pointer.contains("renderer: webpage"));
-        assert!(created.artifact_path.ends_with(".html"));
+        let document = std::fs::read_to_string(&created.artifact_path).unwrap();
+        assert!(document.contains("flowix_plugin: webpage"));
+        assert!(document.contains("flowix_renderer: webpage"));
+        assert!(document.contains(html));
+        assert_eq!(created.note_path, created.artifact_path);
+        assert!(created.artifact_path.ends_with(".md"));
+        assert!(created.note_id.is_empty());
     }
 }
