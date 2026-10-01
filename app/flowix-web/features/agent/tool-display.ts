@@ -276,6 +276,24 @@ function agentDisplay(
   );
 }
 
+function imageGenerationDisplay(
+  input: Record<string, unknown>,
+): AgentToolDisplay | undefined {
+  const promptKeys = [
+    "prompt",
+    "revisedPrompt",
+    "revised_prompt",
+    "input",
+    "text",
+    "description",
+  ] as const;
+  const prompt = stringField(input, promptKeys) ??
+    ["parameters", "args", "arguments", "input"]
+      .map((key) => deepStringField(input[key], promptKeys))
+      .find((value): value is string => Boolean(value));
+  return display(prompt ? truncate(prompt, 100) : undefined, "generic");
+}
+
 /* ════════════════════════════════════════════════════════════════════════
  *  DeepSeek Harness (DSH) 工具 formatter
  *
@@ -730,6 +748,8 @@ const FORMATTERS: Record<string, ToolDisplayFormatter> = {
   "*:command_execution": commandDisplay,
   "*:shell_command": commandDisplay,
   "codex:mcp_tool_call": mcpToolDisplay,
+  "codex:image_generation": imageGenerationDisplay,
+  "codex:image_generation_call": imageGenerationDisplay,
   "codex:file_change": fileChangeDisplay,
   "codex:view_image": viewImageDisplay,
   "*:load_skill": skillDisplay,
@@ -838,6 +858,13 @@ export function createAgentToolDisplay(
       input,
     });
     if (formatted) return formatted;
+  }
+
+  // Image-generation items contain protocol metadata such as `failure: null`.
+  // If no prompt field is available, let the message view model use its
+  // localized image-generation fallback instead of the generic first-key rule.
+  if (["image_generation", "image_generation_call"].includes(normalizedToolName)) {
+    return undefined;
   }
 
   const summary = getAgentToolInputSummary(normalized);

@@ -170,6 +170,9 @@ export function createAgentMessageViewModel(
   message: ChatMessage,
   language: AppLanguage = "zh-CN",
 ): AgentMessageViewModel {
+  const toolName = message.toolName?.toLowerCase();
+  const isImageGenerationTool =
+    toolName === "image_generation" || toolName === "image_generation_call";
   return {
     message,
     role: message.role,
@@ -182,7 +185,9 @@ export function createAgentMessageViewModel(
     ),
     toolSummary:
       message.toolDisplay?.summary ||
-      getAgentToolInputSummary(message.toolInput),
+      (isImageGenerationTool
+        ? translate(language, "agent.tool.imageGeneration.requestSummary")
+        : getAgentToolInputSummary(message.toolInput)),
     endTimeText: getAgentMessageEndTimeText(message, language),
   };
 }

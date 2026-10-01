@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Notebook } from '@features/memo/store/memo-store';
+import type { Notebook } from '@features/memo/store/note-store';
 
 const openNotebookNote = vi.hoisted(() => vi.fn().mockResolvedValue({ host: 'main-third' }));
 vi.mock('./open-notebook-note', () => ({ openNotebookNote }));

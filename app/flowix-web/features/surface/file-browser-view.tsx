@@ -3,8 +3,7 @@ import { ChevronRight, Trash2 } from 'lucide-react';
 import { CaretDownIcon, DotsThreeIcon, FolderSimpleIcon, PlusIcon } from '@phosphor-icons/react';
 import { FolderFileTree } from '@features/memo/components/folder-file-tree';
 import { useFolderTree } from '@features/memo/components/use-folder-tree';
-import { useShowHiddenNotebookFiles, useShowNotebookAgentsFile } from '@features/preferences/public/runtime-api';
-import { useMemoStore } from '@features/memo/store';
+import { useNoteStore } from '@features/memo/store';
 import type { FileBrowserContext } from '@features/workspace/store/file-browser-target';
 import { useAgentAccessStore } from '@features/agent/store/agent-access-store';
 import { resolveNotebookAgentFiles } from '@/lib/agent-access-defaults';
@@ -50,12 +49,7 @@ function BrowserBreadcrumbFolderTree({
   onFileSelect: (filePath: string) => void;
   onFileOpenInNewTab: (filePath: string) => void;
 }) {
-  const showHiddenFolders = useShowHiddenNotebookFiles();
-  const showAgentsFile = useShowNotebookAgentsFile();
-  const tree = useFolderTree(folderPath, {
-    includeHiddenDirectories: showHiddenFolders,
-    showAgentsFile,
-  });
+  const tree = useFolderTree(folderPath);
 
   return (
     <div className="w-[min(236px,calc(100vw-2rem))] overflow-hidden rounded-[inherit]">
@@ -131,7 +125,7 @@ export function FileBrowserView({ surface: input }: { surface: FileBrowserViewSu
   const notebookConfigs = useAgentAccessStore((state) => state.notebookConfigs);
   const addFolderFromPicker = useAgentAccessStore((state) => state.addFolderFromPicker);
   const setDefaultFiles = useAgentAccessStore((state) => state.setDefaultFiles);
-  const selectedNotebookId = useMemoStore((state) => state.selectedNotebookId ?? state.selectedNotebook?.id ?? null);
+  const selectedNotebookId = useNoteStore((state) => state.selectedNotebookId ?? state.selectedNotebook?.id ?? null);
   const legacyNotebookRef = useRef<string | null>(null);
   if (input.restoreNotebookContext && !legacyNotebookRef.current && selectedNotebookId) {
     legacyNotebookRef.current = selectedNotebookId;
@@ -387,12 +381,7 @@ function BrowserFileBrowserTreePane({
   onFileOpenInNewTab: (filePath: string) => void;
 }) {
   const setTreeWidth = surface.onTreeWidthChange;
-  const showHiddenFolders = useShowHiddenNotebookFiles();
-  const showAgentsFile = useShowNotebookAgentsFile();
-  const tree = useFolderTree(surface.folderPath, {
-    includeHiddenDirectories: showHiddenFolders,
-    showAgentsFile,
-  });
+  const tree = useFolderTree(surface.folderPath);
   const refreshDirectoriesRef = useRef(tree.refreshDirectories);
   refreshDirectoriesRef.current = tree.refreshDirectories;
   const [isResizing, setIsResizing] = useState(false);
@@ -414,10 +403,7 @@ function BrowserFileBrowserTreePane({
       },
     );
 
-    void files.watchRoot(surface.folderPath, {
-      ignoreHidden: !showHiddenFolders,
-      ignoreAgents: !showAgentsFile,
-    })
+    void files.watchRoot(surface.folderPath)
       .then((nextLeaseId) => {
         if (disposed) {
           void files.unwatchRoot(nextLeaseId).catch((error) => {
@@ -445,7 +431,7 @@ function BrowserFileBrowserTreePane({
         });
       }
     };
-  }, [surface.folderPath, showHiddenFolders, showAgentsFile]);
+  }, [surface.folderPath]);
 
   useEffect(() => {
     if (!isResizing) return;

@@ -5,19 +5,19 @@ import { FileText, Trash2 } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { useI18n } from '@/lib/i18n';
 import { SectionHeader } from '@features/preferences/sections/primitives';
-import { memos, type MemoTemplate } from '@platform/tauri/client';
+import { notes, type NoteTemplate } from '@platform/tauri/client';
 import { Button } from '@shared/ui/button';
 
 export function TemplatesSection() {
   const { t } = useI18n();
-  const [templates, setTemplates] = useState<MemoTemplate[]>([]);
+  const [templates, setTemplates] = useState<NoteTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const loadTemplates = useCallback(async () => {
     setLoading(true);
     try {
-      setTemplates(await memos.listTemplates());
+      setTemplates(await notes.listTemplates());
     } catch (error) {
       console.warn('[TemplatesSection] listTemplates failed:', error);
       toast.error(t('preferences.templates.loadFailed'));
@@ -30,7 +30,7 @@ export function TemplatesSection() {
     void loadTemplates();
   }, [loadTemplates]);
 
-  const handleDelete = async (template: MemoTemplate) => {
+  const handleDelete = async (template: NoteTemplate) => {
     const confirmed = window.confirm(
       t('preferences.templates.deleteConfirm').replace('{name}', template.name),
     );
@@ -38,7 +38,7 @@ export function TemplatesSection() {
 
     setDeletingId(template.id);
     try {
-      const deleted = await memos.deleteTemplate(template.id);
+      const deleted = await notes.deleteTemplate(template.id);
       if (deleted) {
         setTemplates((items) => items.filter((item) => item.id !== template.id));
         toast.success(t('preferences.templates.deleteSuccess'));

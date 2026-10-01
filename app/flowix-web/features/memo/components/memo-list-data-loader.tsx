@@ -2,15 +2,15 @@ import { useEffect } from 'react';
 import {
   type ColorFilterValue,
   type ExtendedFilterType,
-  type MemoLibraryStartupPhase,
-  type MemoStore,
-} from '@features/memo/store/memo-store';
+  type NoteLibraryStartupPhase,
+  type NoteLibraryStore,
+} from '@features/memo/store/note-store';
 import type { SortType } from '@features/memo/services';
 import { getMemoListQueryKey } from './memo-list-loading-state';
 
 export interface MemoListDataLoaderProps {
   dataLoadingEnabled: boolean;
-  startupPhase: MemoLibraryStartupPhase;
+  startupPhase: NoteLibraryStartupPhase;
   initialMemoQueryKey: string | null;
   memoListQueryKey: string | null;
   selectedNotebookId: string | undefined;
@@ -21,11 +21,12 @@ export interface MemoListDataLoaderProps {
   activePluginId: string | null;
   activeCustomFilterId?: string | null;
   refreshTrigger: number;
-  loadedMemoListQueryKey: string | null;
-  loadPathNotes: MemoStore['loadPathNotes'];
+  loadNotes: NoteLibraryStore['loadNotes'];
   setLoadedMemoListQueryKey: (queryKey: string | null) => void;
   setIsMemoListLoading: (loading: boolean) => void;
   onLoadError: (error: unknown) => void;
+  onLoadStart?: (queryKey: string) => void;
+  onLoadSuccess?: (queryKey: string) => void;
 }
 
 /**
@@ -46,11 +47,12 @@ export function MemoListDataLoader({
   activePluginId,
   activeCustomFilterId,
   refreshTrigger,
-  loadedMemoListQueryKey,
-  loadPathNotes,
+  loadNotes,
   setLoadedMemoListQueryKey,
   setIsMemoListLoading,
   onLoadError,
+  onLoadStart,
+  onLoadSuccess,
 }: MemoListDataLoaderProps) {
   useEffect(() => {
     let cancelled = false;
@@ -83,21 +85,19 @@ export function MemoListDataLoader({
       activePluginId,
       activeCustomFilterId,
     );
-    const shouldShowLoading = queryKey !== loadedMemoListQueryKey;
-
     async function loadMemoListOnly() {
+      onLoadStart?.(queryKey);
       // The startup orchestrator has already loaded this exact query. Mark it
       // as rendered locally without issuing a duplicate IPC request.
       if (initialMemoQueryKey === queryKey && memoListQueryKey === queryKey) {
         setLoadedMemoListQueryKey(queryKey);
         setIsMemoListLoading(false);
+        onLoadSuccess?.(queryKey);
         return;
       }
-      if (shouldShowLoading) {
-        setIsMemoListLoading(true);
-      }
+      setIsMemoListLoading(true);
       try {
-        const applied = await loadPathNotes({
+        const applied = await loadNotes({
           notebookId: selectedNotebookId,
           filter: activeFilter,
           sort: activeSort,
@@ -105,6 +105,7 @@ export function MemoListDataLoader({
         });
         if (cancelled || !applied) return;
         setLoadedMemoListQueryKey(queryKey);
+        onLoadSuccess?.(queryKey);
       } catch (error) {
         if (!cancelled) onLoadError(error);
       } finally {
@@ -128,9 +129,11 @@ export function MemoListDataLoader({
     colorFilter,
     dataLoadingEnabled,
     initialMemoQueryKey,
-    loadPathNotes,
+    loadNotes,
     memoListQueryKey,
     onLoadError,
+    onLoadStart,
+    onLoadSuccess,
     refreshTrigger,
     selectedNotebookId,
     setIsMemoListLoading,

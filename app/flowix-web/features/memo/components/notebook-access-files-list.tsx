@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
 import { Tooltip } from '@shared/ui/tooltip';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@shared/ui/context-menu';
 import { NotebookIcon } from '@features/memo/components/notebook-icon';
-import type { Notebook } from '@features/memo/store/memo-store';
+import type { Notebook } from '@features/memo/store/note-store';
 import { openBrowserColumnFileBrowser } from '@features/workspace/use-cases/browser-column-navigation';
 import { canUseNativeContextMenu, logNativeContextMenuError, popupNativeContextMenu } from '@platform/tauri/native-context-menu';
 import { loadNativeMenuIcons } from '@platform/tauri/native-menu-icons';

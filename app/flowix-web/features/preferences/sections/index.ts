@@ -3,6 +3,7 @@
 // dedicated Preferences window (`windows/preferences/preferences-view.tsx`)
 // import from here so there's a single source of truth for the tab content.
 export { GeneralSection } from '@features/preferences/sections/general';
+export { FileDisplayRulesSection } from '@features/preferences/sections/file-display-rules';
 export { FormatSection } from '@features/preferences/sections/format';
 export { ThemeSection } from '@features/preferences/sections/theme';
 export { NoteSettingsSection } from '@features/preferences/sections/note-settings';

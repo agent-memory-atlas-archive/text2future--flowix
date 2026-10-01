@@ -225,6 +225,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(crate::frame_scrollbar::init())
         .manage(crate::app_update::AppUpdateState::default())
         .manage(memo_watcher.clone())
         .on_webview_event(|webview, event| {
@@ -295,6 +296,7 @@ pub fn run() {
                 security_bookmarks: security_bookmarks_for_state.clone(),
                 plugin_runs: crate::plugin::PluginRunCoordinator::default(),
                 notebook_imports: Default::default(),
+                notebook_template_initializations: Default::default(),
                 notebook_transition: notebook_transition_for_state,
                 startup: startup_for_state,
             };
@@ -514,6 +516,8 @@ pub fn run() {
             commands::memo::reads::read_memo,
             commands::memo::reads::open_memo_session,
             commands::memo::reads::read_document,
+            commands::memo::reads::note_path_status,
+            commands::memo::reads::get_document_modified_at,
             commands::memo::reads::write_document,
             commands::document_operations::document_operation_status,
             commands::document_operations::acknowledge_document_operation,
@@ -532,6 +536,7 @@ pub fn run() {
             commands::memo::creates::add_path_document,
             commands::memo::creates::list_notebook_templates,
             commands::memo::creates::initialize_notebook_template,
+            commands::memo::creates::ensure_notebook_template_setup,
             commands::memo::creates::import_external_document_by_path,
             commands::memo::creates::rename_memo_title,
             commands::memo::creates::move_memo_to_directory,
@@ -547,6 +552,7 @@ pub fn run() {
             commands::memo::versions::create_memo_version,
             commands::memo::versions::restore_memo_version,
             commands::memo::deletes::delete_memo,
+            commands::memo::deletes::prune_missing_memo,
             commands::memo::deletes::clear_memos,
             commands::memo::versions::delete_memo_version,
             // tag
@@ -562,6 +568,8 @@ pub fn run() {
             commands::notebook::create_notebook,
             commands::notebook::create_notebook_from_cloud,
             commands::notebook::start_notebook_import,
+            commands::notebook::get_notebook_template_setup_status,
+            commands::notebook::start_notebook_template_setup,
             commands::notebook::get_notebook_import_status,
             commands::notebook::update_notebook,
             commands::notebook::delete_notebook,
@@ -571,7 +579,9 @@ pub fn run() {
             // file
             commands::file::get_file_tree,
             commands::file::get_dir_children,
+            commands::document_list::list_document_page,
             commands::file::get_notebook_view_preferences,
+            commands::file::get_file_management_candidates,
             commands::file::set_notebook_view_preferences,
             commands::file::read_file,
             commands::file::read_image_file,
@@ -855,6 +865,15 @@ fn run_startup_reconciliation(
         selected
     };
     tracing::info!(notebook = ?current_notebook_id, "[startup] selected notebook resolved");
+    let legacy_watcher = user_config_for_watcher.get_preference().watcher;
+    for notebook in initial_notebooks {
+        let root = Path::new(&notebook.path);
+        if root.is_dir() {
+            if let Err(error) = crate::commands::file::migrate_legacy_watcher_rules(root, &legacy_watcher) {
+                tracing::warn!(notebook = %notebook.id, %error, "legacy watcher rule migration deferred");
+            }
+        }
+    }
     runtime_log::record_event(
         "info",
         "startup.selection",
@@ -946,18 +965,18 @@ fn reconcile_startup_notebook(
 ) -> Result<(), String> {
     let started = Instant::now();
     let memo_file = crate::lock_utils::read_lock(memo_file, "memo_file");
-    match memo_file.migrate_v2_note_properties_for_notebook(&notebook.id) {
+    match memo_file.migrate_note_properties_for_notebook(&notebook.id) {
         Ok(report) if report.notes_written > 0 => tracing::info!(notebook = %notebook.id, notes = report.notes_written, "[startup] note properties migrated"),
         Err(error) => tracing::warn!(notebook = %notebook.id, %error, "[startup] note property migration will retry"),
         _ => {}
     }
-    match memo_file.migrate_v2_todo_metadata_for_notebook(&notebook.id) {
+    match memo_file.migrate_note_todo_metadata_for_notebook(&notebook.id) {
         Ok(report) if report.notes_written > 0 => tracing::info!(notebook = %notebook.id, notes = report.notes_written, "[startup] task metadata migrated"),
         Err(error) => tracing::warn!(notebook = %notebook.id, %error, "[startup] task migration will retry"),
         _ => {}
     }
     let report = memo_file
-        .reconcile_v2_note_index(&notebook.id)
+        .reconcile_note_index(&notebook.id)
         .map_err(|error| format!("notebook {} path reconciliation failed: {error}", notebook.id))?;
     tracing::info!(
         notebook = %notebook.id,

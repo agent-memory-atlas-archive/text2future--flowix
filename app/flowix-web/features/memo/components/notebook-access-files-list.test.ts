@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAgentAccessStore } from "@features/agent/store/agent-access-store";
 import { NotebookAccessFilesList } from "@features/memo/components/notebook-access-files-list";
-import type { Notebook } from "@features/memo/store/memo-store";
+import type { Notebook } from "@features/memo/store/note-store";
 import type { AgentAccessConfig, AgentAccessEntry } from "@/lib/types/agent-access";
 
 const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }));

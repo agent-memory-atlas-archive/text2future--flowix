@@ -6,7 +6,7 @@ describe('workspace restore store', () => {
   beforeEach(() => {
     localStorage.clear();
     useWorkspaceRestoreStore.setState({
-      version: 5,
+      version: 6,
       agentConversation: {
         selectedInstanceId: null,
         detailOpen: false,

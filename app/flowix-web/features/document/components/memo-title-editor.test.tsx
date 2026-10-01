@@ -10,7 +10,7 @@ const titleSession = vi.hoisted(() => ({
     error: null as string | null,
   },
   setDraft: vi.fn(),
-  commit: vi.fn(() => Promise.resolve()),
+  commit: vi.fn(() => Promise.resolve(true)),
   cancel: vi.fn(),
 }));
 const renameTitle = vi.fn(() => Promise.resolve('Original.md'));
@@ -67,7 +67,7 @@ describe('MemoTitleEditor IME handling', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    titleSession.commit.mockImplementation(() => Promise.resolve());
+    titleSession.commit.mockImplementation(() => Promise.resolve(true));
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -169,8 +169,9 @@ describe('MemoTitleEditor IME handling', () => {
     });
   });
 
-  it('accepts a body-to-title merge before the title rename finishes', () => {
-    titleSession.commit.mockImplementation(() => new Promise(() => {}));
+  it.each([true, false])('waits for the rename result (%s) before accepting a body-to-title merge', async (saved) => {
+    let finish!: (saved: boolean) => void;
+    titleSession.commit.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
     const editorRef = createRef<MemoTitleEditorHandle>();
     act(() => {
       root.render(createElement(MemoTitleEditor, {
@@ -183,12 +184,47 @@ describe('MemoTitleEditor IME handling', () => {
       }));
     });
 
-    let accepted = false;
-    act(() => { accepted = editorRef.current?.appendBodyLine('First line') ?? false; });
-
-    expect(accepted).toBe(true);
+    let accepted: boolean | undefined;
+    let merging!: Promise<boolean>;
+    act(() => {
+      merging = editorRef.current!.appendBodyLine('First line');
+      void merging.then(value => { accepted = value; });
+    });
+    expect(accepted).toBeUndefined();
     expect(titleSession.setDraft).toHaveBeenCalledWith('OriginalFirst line');
     expect(titleSession.commit).toHaveBeenCalledTimes(1);
+    await act(async () => { finish(saved); await merging; });
+    expect(accepted).toBe(saved);
+  });
+
+  it('coalesces repeated body-to-title merges while the rename is pending', async () => {
+    let finish!: (saved: boolean) => void;
+    titleSession.commit.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    const editorRef = createRef<MemoTitleEditorHandle>();
+    act(() => {
+      root.render(createElement(MemoTitleEditor, {
+        ref: editorRef,
+        displayId: 'display:title-test',
+        filename: 'Original.md',
+        renameTitle,
+        editable: true,
+        onMoveToBody,
+      }));
+    });
+
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
+    act(() => {
+      first = editorRef.current!.appendBodyLine('First line');
+      second = editorRef.current!.appendBodyLine('First line');
+    });
+
+    expect(titleSession.setDraft).toHaveBeenCalledTimes(1);
+    expect(titleSession.setDraft).toHaveBeenCalledWith('OriginalFirst line');
+    expect(titleSession.commit).toHaveBeenCalledTimes(1);
+    await act(async () => { finish(true); await Promise.all([first, second]); });
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
   });
 
   it('keeps title-to-body navigation available when read-only', async () => {

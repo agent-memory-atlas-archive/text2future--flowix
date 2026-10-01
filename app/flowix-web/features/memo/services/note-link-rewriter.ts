@@ -1,8 +1,8 @@
 import { canonicalPath } from '@/lib/path';
 import { buildNoteOpenLinkFromPath } from '@platform/open-target/path-link';
-import { externalDocuments, memos } from '@platform/tauri/client';
+import { externalDocuments, notes } from '@platform/tauri/client';
 import { files } from '@platform/tauri/client/desktop';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { displayTitleFromFilename } from '@/lib/utils';
 import { createLogger } from '@/lib/logger';
 
@@ -118,9 +118,9 @@ export async function rewriteNoteLinkMoves(jobs: MoveJob[], shouldYield: () => b
   // The save pipeline imports this scheduler. Load document sessions only when
   // executing a job, after their module-level subscriptions are initialized.
   const { acceptBackgroundDocumentContent, hasLiveUnsavedDocumentAtPath } = await import('@features/document/public/workspace-api');
-  const state = useMemoStore.getState();
+  const state = useNoteStore.getState();
   if (!state.notebooksInitialized) await state.loadNotebooks();
-  const notebooks: Notebook[] = useMemoStore.getState().notebooks;
+  const notebooks: Notebook[] = useNoteStore.getState().notebooks;
   const moves = jobs.flatMap(({ oldPath, newPath, folder }) => {
     const beforeLink = buildNoteOpenLinkFromPath(oldPath, notebooks);
     const afterLink = buildNoteOpenLinkFromPath(newPath, notebooks);
@@ -190,7 +190,7 @@ export async function rewriteNoteLinkMoves(jobs: MoveJob[], shouldYield: () => b
               }
               // Input may have arrived while the disk read was pending.
               if (hasLiveUnsavedDocumentAtPath(entry.fullPath)) { complete = false; break; }
-              const result = await memos.writeDocument({ filePath: entry.fullPath, content: updated, expectedContent: content });
+              const result = await notes.writeDocument({ filePath: entry.fullPath, content: updated, expectedContent: content });
               if (result) {
                 if (!acceptBackgroundDocumentContent(entry.fullPath, result.content)) complete = false;
                 break;

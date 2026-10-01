@@ -71,7 +71,6 @@ impl MemoFile {
             .notebook_data_migration_version(notebook_id, NOTEBOOK_INTERNAL_MIGRATION_KEY)?
             .unwrap_or_default()
             >= NOTEBOOK_INTERNAL_MIGRATION_VERSION
-            && is_missing_or_empty(&base.join(".metadata").join("versions"))
             && is_missing_or_empty(&base.join(".plugin-output"))
             && is_missing_or_empty(&flowix.join("artifacts"))
         {
@@ -79,12 +78,6 @@ impl MemoFile {
             return Ok(report);
         }
 
-        migrate_tree(
-            &base.join(".metadata").join("versions"),
-            &flowix.join("versions"),
-            &base,
-            &mut report,
-        );
         migrate_tree(
             &base.join(".plugin-output"),
             &flowix.join("plugin"),
@@ -98,12 +91,10 @@ impl MemoFile {
             &mut report,
         );
 
-        remove_empty_dir(&base.join(".metadata").join("versions"));
         remove_empty_dir(&base.join(".plugin-output"));
         remove_empty_dir(&flowix.join("artifacts"));
 
-        let sources_empty = is_missing_or_empty(&base.join(".metadata").join("versions"))
-            && is_missing_or_empty(&base.join(".plugin-output"))
+        let sources_empty = is_missing_or_empty(&base.join(".plugin-output"))
             && is_missing_or_empty(&flowix.join("artifacts"));
         report.completed = report.warnings.is_empty() && sources_empty;
         if report.completed {
@@ -365,28 +356,20 @@ mod tests {
     }
 
     #[test]
-    fn migrates_versions_and_plugin_outputs_and_records_marker() {
+    fn migrates_plugin_outputs_and_records_marker() {
         let (mf, temp) = fixture();
         let notebook = temp.path().join("notebook");
-        let old_version = notebook.join(".metadata/versions/memo123/v_1.md");
         let old_plugin = notebook.join(".plugin-output/mindmap/map.md");
-        fs::create_dir_all(old_version.parent().unwrap()).unwrap();
         fs::create_dir_all(old_plugin.parent().unwrap()).unwrap();
-        fs::write(&old_version, "version bytes").unwrap();
         fs::write(&old_plugin, "plugin bytes").unwrap();
 
         let report = mf.migrate_notebook_internal_data("nb_test").unwrap();
-        assert_eq!(report.moved_files, 2);
+        assert_eq!(report.moved_files, 1);
         assert!(report.completed);
-        assert_eq!(
-            fs::read(notebook.join(".flowix/versions/memo123/v_1.md")).unwrap(),
-            b"version bytes"
-        );
         assert_eq!(
             fs::read(notebook.join(".flowix/plugin/mindmap/map.md")).unwrap(),
             b"plugin bytes"
         );
-        assert!(!notebook.join(".metadata/versions").exists());
         assert!(!notebook.join(".plugin-output").exists());
         assert_eq!(
             mf.notebook_data_migration_version("nb_test", NOTEBOOK_INTERNAL_MIGRATION_KEY)
@@ -449,6 +432,5 @@ mod tests {
             .join(&memo.id)
             .join("manifest.json")
             .is_file());
-        assert!(!temp.path().join("notebook/.metadata/versions").exists());
     }
 }

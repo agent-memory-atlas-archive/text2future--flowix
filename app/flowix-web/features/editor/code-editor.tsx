@@ -200,7 +200,7 @@ const codeEditorTheme = EditorView.theme({
   },
   '.cm-scroller': {
     overflow: 'auto',
-    fontFamily: "ui-monospace, 'SFMono-Regular', Menlo, Monaco, Consolas, 'Liberation Mono', monospace, 'Inter', -apple-system, 'DengXian', '等线', 'Microsoft YaHei', '微软雅黑'",
+    fontFamily: 'var(--code-editor-font-family, var(--code-font-family, ui-monospace, monospace))',
     lineHeight: 'var(--code-editor-line-height, 1.65)',
     fontVariantLigatures: 'none',
     fontFeatureSettings: '"liga" 0, "clig" 0, "calt" 0',

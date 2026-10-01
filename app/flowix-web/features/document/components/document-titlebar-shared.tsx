@@ -28,13 +28,13 @@ import {
   DialogDescription,
 } from '@shared/ui/dialog';
 import {
-  MEMO_COLORS,
-  MEMO_COLOR_HEX,
-  useMemoStore,
-} from '@features/memo/store/memo-store';
+  NOTE_COLORS,
+  NOTE_COLOR_HEX,
+  useNoteStore,
+} from '@features/memo/store/note-store';
 import { setDocumentProperties } from '@features/document/public/path-properties';
 import { extractFrontmatter } from '@features/document/properties/frontmatter-model';
-import type { MemoColor } from '@/types/memo-item';
+import type { NoteColor } from '@/types/note-item';
 import { EditorFontSwitcher, useEditorFontSwitch } from '@features/document/components/editor-font-switcher';
 import {
   applyLoadedDocumentContent,
@@ -44,7 +44,7 @@ import {
 } from '@features/document/store/document-session-service';
 import { useDocumentStore } from '@features/document/store/document-store';
 import { documentIdentityFromFile } from '@features/document/store/document-identity';
-import { memos as memosClient, product, type MemoVersionMeta, type PathVersionMeta } from '@platform/tauri/client';
+import { notes as notesClient, product, type MemoVersionMeta, type PathVersionMeta } from '@platform/tauri/client';
 
 type VersionDisplay = MemoVersionMeta | PathVersionMeta;
 import { toast } from '@/lib/toast';
@@ -89,10 +89,6 @@ export interface DocumentTitlebarProps {
     onNavigateForward: () => void;
     visible?: boolean;
     title?: string | null;
-    documentListActions?: {
-      onCreate: () => void;
-      onEditFilter?: (anchor: HTMLButtonElement) => void;
-    };
   };
   contentCapabilities: {
     copyFullText: boolean;
@@ -115,34 +111,6 @@ export interface DocumentTitlebarProps {
     onRevealInFileManager: () => void;
     onRequestDelete: () => void;
   };
-}
-
-export function DocumentListTitlebarActions({
-  actions,
-}: {
-  actions: NonNullable<DocumentTitlebarProps['navigation']['documentListActions']>;
-}) {
-  const { t } = useI18n();
-  return (
-    <div className="flex shrink-0 items-center gap-2">
-      {actions.onEditFilter && (
-        <button
-          type="button"
-          onClick={(event) => actions.onEditFilter?.(event.currentTarget)}
-          className="h-7 rounded-lg border border-[var(--border)] px-2.5 text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] [-webkit-app-region:no-drag]"
-        >
-          {t('memo.customFilter.edit')}
-        </button>
-      )}
-      <button
-        type="button"
-        onClick={actions.onCreate}
-        className="h-7 rounded-lg bg-[var(--brand)] px-2.5 text-xs font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 [-webkit-app-region:no-drag]"
-      >
-        {t('memo.documentList.new')}
-      </button>
-    </div>
-  );
 }
 
 const AGENT_THREAD_CARD_FULLSCREEN_CHANGE_EVENT =
@@ -223,9 +191,9 @@ export function ExternalDocumentActions({
   const { t, language } = useI18n();
   const indexable = useDocumentStore((state) => state.activeExternalSession?.indexable ?? false);
   const session = useDocumentStore((state) => state.activeExternalSession);
-  const pathNote = useMemoStore((state) => state.pathNotes.find((note) =>
+  const pathNote = useNoteStore((state) => state.notes.find((note) =>
     note.notebookId === session?.notebookId && note.relativePath === session?.relativePath));
-  const [fileColors, setFileColors] = useState<MemoColor[]>([]);
+  const [fileColors, setFileColors] = useState<NoteColor[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmVersion, setConfirmVersion] = useState<VersionDisplay | null>(null);
   const [restoringVersionId, setRestoringVersionId] = useState<string | null>(null);
@@ -233,18 +201,18 @@ export function ExternalDocumentActions({
   const fontSwitch = useEditorFontSwitch();
   const itemClass = 'group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]';
 
-  const changePathColors = async (colors: MemoColor[]) => {
+  const changePathColors = async (colors: NoteColor[]) => {
     try {
       if (!await setDocumentProperties(filePath, { flowix_colors: colors })) {
         toast.error(t('media.properties.saveFailed'));
         return;
       }
-      useMemoStore.setState((state) => ({
-        pathNotes: state.pathNotes.map((note) => note.notebookId === session?.notebookId
+      useNoteStore.setState((state) => ({
+        notes: state.notes.map((note) => note.notebookId === session?.notebookId
           && note.relativePath === session?.relativePath ? { ...note, colors } : note),
       }));
       setFileColors(colors);
-      useMemoStore.getState().triggerRefresh();
+      useNoteStore.getState().triggerRefresh();
     } catch (error) {
       logger.error('save path note colors failed', { error, filePath });
       toast.error(t('media.properties.saveFailed'));
@@ -258,11 +226,11 @@ export function ExternalDocumentActions({
       return;
     }
     let cancelled = false;
-    void memosClient.readDocument(filePath).then((content) => {
+    void notesClient.readDocument(filePath).then((content) => {
       if (cancelled || content === null) return;
       const colors = extractFrontmatter(content).data.flowix_colors;
       setFileColors(Array.isArray(colors)
-        ? MEMO_COLORS.filter((color) => colors.includes(color))
+        ? NOTE_COLORS.filter((color) => colors.includes(color))
         : []);
     }).catch((error) => logger.warn('read path note colors failed', { error, filePath }));
     return () => { cancelled = true; };
@@ -281,7 +249,7 @@ export function ExternalDocumentActions({
         return;
       }
       const expectedContent = getDocumentBuffer(identity).lastSavedContent;
-      const content = await memosClient.restorePathVersion(session.notebookId, session.relativePath, version.id, expectedContent);
+      const content = await notesClient.restoreVersion(session.notebookId, session.relativePath, version.id, expectedContent);
       const restored = content === null ? null : { path: filePath, content };
       if (!restored) throw new Error('Version restore was refused');
       applyLoadedDocumentContent(identity, restored.path, restored.content, { preservePending: false });
@@ -299,7 +267,7 @@ export function ExternalDocumentActions({
   return (
     <>
     {canEditColors && (
-      <MemoColorPicker colors={fileColors} iconButtonClass={iconButtonClass}
+      <NoteColorPicker colors={fileColors} iconButtonClass={iconButtonClass}
         onChange={(colors) => { void changePathColors(colors); }} />
     )}
     <DropdownMenu>
@@ -365,7 +333,7 @@ export function ExternalDocumentActions({
               const identity = documentIdentityFromFile(current.fileIdentity);
               void saveDocumentPath(identity, filePath, current.scopePath).then(async (saved) => {
                 if (!saved) return;
-                await memosClient.createPathVersion(current.notebookId!, current.relativePath!);
+                await notesClient.createVersion(current.notebookId!, current.relativePath!);
                 setVersionRefreshKey((key) => key + 1);
               });
             }}><ClockIcon className="mr-2 h-4 w-4" /> 保存归档</DropdownMenuItem>
@@ -471,7 +439,7 @@ export function ExternalPathDisplay({ path }: { path: string }) {
 // 把整组新颜色走 `onChange` 一次性写回后端, 由 memo-event 链路回灌 store。
 // =====================================================================
 
-const COLOR_LABEL_KEYS: Record<MemoColor, I18nKey> = {
+const COLOR_LABEL_KEYS: Record<NoteColor, I18nKey> = {
   red: "document.color.red",
   orange: "document.color.orange",
   yellow: "document.color.yellow",
@@ -481,31 +449,31 @@ const COLOR_LABEL_KEYS: Record<MemoColor, I18nKey> = {
   gray: "document.color.gray",
 };
 
-function getColorLabel(color: MemoColor, language: AppLanguage): string {
+function getColorLabel(color: NoteColor, language: AppLanguage): string {
   return translate(language, COLOR_LABEL_KEYS[color]);
 }
 
-export function MemoColorPicker({
+export function NoteColorPicker({
   colors,
   iconButtonClass,
   onChange,
 }: {
-  colors: MemoColor[];
+  colors: NoteColor[];
   iconButtonClass: string;
-  onChange: (next: MemoColor[]) => void;
+  onChange: (next: NoteColor[]) => void;
 }) {
   const { t, language } = useI18n();
   const selected = new Set(colors);
 
-  const toggle = (c: MemoColor) => {
+  const toggle = (c: NoteColor) => {
     const next = new Set(selected);
     if (next.has(c)) {
       next.delete(c);
     } else {
       next.add(c);
     }
-    // 保持 MEMO_COLORS 声明顺序, 列表 / 触发按钮展示稳定。
-    onChange(MEMO_COLORS.filter((c) => next.has(c)));
+    // 保持 NOTE_COLORS 声明顺序, 列表 / 触发按钮展示稳定。
+    onChange(NOTE_COLORS.filter((c) => next.has(c)));
   };
 
   const clear = () => onChange([]);
@@ -526,7 +494,7 @@ export function MemoColorPicker({
                     key={c}
                     className="absolute h-2.5 w-2.5 rounded-full"
                     style={{
-                      backgroundColor: MEMO_COLOR_HEX[c],
+                      backgroundColor: NOTE_COLOR_HEX[c],
                       top: colors.length === 1 ? '2px' : `${(i % 2) * 4}px`,
                       left: colors.length === 1 ? '2px' : `${(i % 2) * 4}px`,
                       zIndex: 10 - i,
@@ -557,7 +525,7 @@ export function MemoColorPicker({
               }`}
             />
           </Tooltip>
-          {MEMO_COLORS.map((c) => {
+          {NOTE_COLORS.map((c) => {
             const isSelected = selected.has(c);
             return (
               <button
@@ -567,7 +535,7 @@ export function MemoColorPicker({
                 aria-pressed={isSelected}
                 onClick={() => toggle(c)}
                 className="relative h-7 w-7 rounded-md transition-transform hover:scale-110"
-                style={{ backgroundColor: MEMO_COLOR_HEX[c] }}
+                style={{ backgroundColor: NOTE_COLOR_HEX[c] }}
               >
                 {isSelected && (
                   <span
@@ -875,7 +843,7 @@ function VersionHistorySubmenu({
     const requestSeq = ++requestSeqRef.current;
     setLoading(true);
 
-    void memosClient.listPathVersions(notebookId, relativePath)
+    void notesClient.listVersions(notebookId, relativePath)
       .then((items) => {
         if (!mountedRef.current || requestSeqRef.current !== requestSeq) return;
         setVersions(items);

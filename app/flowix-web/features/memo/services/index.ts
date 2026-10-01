@@ -1,9 +1,9 @@
 export {
-  memoRepository,
+  noteRepository,
   notebookRepository,
   type FilterType,
   type SortType,
-} from '@features/memo/services/memo-repository';
+} from '@features/memo/services/note-repository';
 export {
   getNotebookTodoCount,
   loadMemoLibraryMetadata,

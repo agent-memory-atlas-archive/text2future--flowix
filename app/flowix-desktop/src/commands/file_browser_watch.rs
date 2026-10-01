@@ -31,8 +31,6 @@ const DEBOUNCE_DELAY: Duration = Duration::from_millis(180);
 struct WatchLease {
     window_label: String,
     root_path: PathBuf,
-    ignore_hidden: bool,
-    ignore_agents: bool,
 }
 
 #[derive(Debug, Default)]
@@ -92,8 +90,6 @@ impl FileBrowserWatchState {
         &self,
         window_label: &str,
         root_path: PathBuf,
-        ignore_hidden: bool,
-        ignore_agents: bool,
     ) -> Result<String, String> {
         let lease_id = format!(
             "file-browser-watch:{}:{}",
@@ -127,8 +123,6 @@ impl FileBrowserWatchState {
             WatchLease {
                 window_label: window_label.to_string(),
                 root_path: root_path.clone(),
-                ignore_hidden,
-                ignore_agents,
             },
         );
         tracing::info!(
@@ -216,8 +210,23 @@ fn is_agents_file(path: &Path) -> bool {
 }
 
 fn should_ignore_path(path: &Path, lease: &WatchLease) -> bool {
-    (lease.ignore_agents && is_agents_file(path))
-        || (lease.ignore_hidden && has_hidden_component(path, &lease.root_path))
+    if lease.root_path.join(".flowix").is_dir() {
+        return path.strip_prefix(&lease.root_path).is_ok_and(|relative| {
+            flowix_core::memo_file::FileManagementPolicy::from_notebook_root(&lease.root_path)
+                .is_ignored_at(&lease.root_path, relative)
+        });
+    }
+    is_internal_flowix_path(path, &lease.root_path)
+        || is_agents_file(path)
+        || has_hidden_component(path, &lease.root_path)
+}
+
+fn is_internal_flowix_path(path: &Path, root_path: &Path) -> bool {
+    let canonical_path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let canonical_root = dunce::canonicalize(root_path).unwrap_or_else(|_| root_path.to_path_buf());
+    canonical_path.strip_prefix(canonical_root).is_ok_and(|relative| relative.components().any(|component| {
+        matches!(component, Component::Normal(name) if name == ".flowix")
+    }))
 }
 
 /// Test hidden-directory membership relative to the watched root. Hidden
@@ -355,8 +364,6 @@ pub fn watch_file_browser_root(
     watches: tauri::State<'_, FileBrowserWatchState>,
     app_state: tauri::State<'_, AppState>,
     root_path: String,
-    ignore_hidden: Option<bool>,
-    ignore_agents: Option<bool>,
 ) -> Result<String, String> {
     let path = PathBuf::from(&root_path);
     start_security_bookmark_access(&app_state, &path);
@@ -369,12 +376,7 @@ pub fn watch_file_browser_root(
             path.display()
         ));
     }
-    watches.watch(
-        window.label(),
-        path,
-        ignore_hidden.unwrap_or(false),
-        ignore_agents.unwrap_or(true),
-    )
+    watches.watch(window.label(), path)
 }
 
 #[tauri::command]
@@ -481,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn hidden_path_filter_is_enabled_per_lease() {
+    fn hidden_paths_and_agents_are_ignored_for_unmanaged_roots() {
         let temp = tempdir().expect("create temp directory");
         let root = temp.path().join("notebook");
         let hidden = root.join(".agent").join("skills").join("skill.md");
@@ -491,20 +493,19 @@ mod tests {
         let notebook_lease = WatchLease {
             window_label: "notebook".to_string(),
             root_path: root.clone(),
-            ignore_hidden: true,
-            ignore_agents: true,
         };
         let browser_lease = WatchLease {
             window_label: "browser".to_string(),
             root_path: root,
-            ignore_hidden: false,
-            ignore_agents: false,
         };
 
         assert!(should_ignore_path(&hidden, &notebook_lease));
-        assert!(!should_ignore_path(&hidden, &browser_lease));
+        assert!(should_ignore_path(&hidden, &browser_lease));
+        let internal = browser_lease.root_path.join(".flowix").join("notebook.db");
+        assert!(should_ignore_path(&internal, &notebook_lease));
+        assert!(should_ignore_path(&internal, &browser_lease));
         let agents = temp.path().join("notebook").join("AGENTS.md");
         assert!(should_ignore_path(&agents, &notebook_lease));
-        assert!(!should_ignore_path(&agents, &browser_lease));
+        assert!(should_ignore_path(&agents, &browser_lease));
     }
 }

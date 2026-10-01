@@ -1,5 +1,5 @@
 import { captureFileBrowserContext } from './file-browser-context';
-import { memos as memosClient, type PluginDescriptor, type MarkdownLocation } from '@platform/tauri/client';
+import { notes as notesClient, type PluginDescriptor, type MarkdownLocation } from '@platform/tauri/client';
 import { canonicalPath } from '@/lib/path';
 import { resourceKindFromPath } from '@features/editor/public/code-file';
 import { canonicalUrl } from '@features/workspace/store/workspace-content-identity';
@@ -398,7 +398,7 @@ export async function selectNotebook(notebook: Notebook): Promise<void> {
         if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
 
         getWorkspaceMemoState().setSelectedNotebook(notebook);
-        await getWorkspaceMemoState().loadPathNotes({ notebookId: notebook.id });
+        await getWorkspaceMemoState().loadNotes({ notebookId: notebook.id });
         if (!useWorkColumnStore.getState().isCurrentNavigation(requestId)) return;
         if (clearPreviousTarget) {
           await getWorkspaceDocumentState().clearDocument();
@@ -454,7 +454,7 @@ export async function openExternalTarget(
   options?: OpenExternalTargetOptions,
 ): Promise<WorkspaceContentLocation | null> {
   const markdownLocation = path && /\.(md|markdown)$/i.test(path)
-    ? options?.markdownLocation ?? await memosClient.resolveMarkdownLocation(path)
+    ? options?.markdownLocation ?? await notesClient.resolveLocation(path)
     : null;
   const capturedFileBrowser = options?.fileBrowser ?? captureFileBrowserContext(path, options?.scopePath);
   const fileBrowser = markdownLocation?.notebookId
@@ -477,7 +477,7 @@ export async function openExternalTarget(
   }
 
   const previousNotebook = getWorkspaceMemoState().selectedNotebook;
-  const previousPathNote = getWorkspaceMemoState().selectedPathNote;
+  const previousPathNote = getWorkspaceMemoState().selectedNote;
   let switchedNotebook = false;
   const previousDocument = captureDocumentSnapshot();
   await runNavigation(
@@ -497,11 +497,11 @@ export async function openExternalTarget(
         }
         if (notebook) {
           getWorkspaceMemoState().setSelectedNotebook(notebook);
-          await getWorkspaceMemoState().loadPathNotes({ notebookId: notebook.id });
+          await getWorkspaceMemoState().loadNotes({ notebookId: notebook.id });
           if (!isCurrentNavigation(requestId)) return;
         }
       }
-      getWorkspaceMemoState().setSelectedPathNote(markdownLocation?.indexable && markdownLocation.relativePath && markdownLocation.notebookId
+      getWorkspaceMemoState().setSelectedNote(markdownLocation?.indexable && markdownLocation.relativePath && markdownLocation.notebookId
         ? { notebookId: markdownLocation.notebookId, relativePath: markdownLocation.relativePath }
         : null);
       if (!isCurrentNavigation(requestId)) return;
@@ -537,7 +537,7 @@ export async function openExternalTarget(
       if (!isCurrentNavigation(requestId)) return;
       await restoreDocumentSnapshot(previousDocument);
       if (!isCurrentNavigation(requestId)) return;
-      getWorkspaceMemoState().setSelectedPathNote(previousPathNote);
+      getWorkspaceMemoState().setSelectedNote(previousPathNote);
       if (switchedNotebook) {
         await setCurrentWorkspaceNotebook(previousNotebook?.id ?? null);
         getWorkspaceMemoState().setSelectedNotebook(previousNotebook);
@@ -702,7 +702,7 @@ export function replaceExternalDocumentPath(
 ): void {
   const previous = canonicalPath(previousPath);
   const next = canonicalPath(path);
-  const selectedPathNote = getWorkspaceMemoState().selectedPathNote;
+  const selectedNote = getWorkspaceMemoState().selectedNote;
   const activeExternal = getWorkspaceDocumentState().activeExternalSession;
 
   const resumeDisplayIdReconciliation = suspendFileDisplayReconciliation();
@@ -712,13 +712,13 @@ export function replaceExternalDocumentPath(
       path: previous,
       displayId,
     }, next);
-    if (activeExternal?.indexable && selectedPathNote
-      && selectedPathNote.notebookId === activeExternal.notebookId
-      && selectedPathNote.relativePath === activeExternal.relativePath) {
+    if (activeExternal?.indexable && selectedNote
+      && selectedNote.notebookId === activeExternal.notebookId
+      && selectedNote.relativePath === activeExternal.relativePath) {
       const updatedRelativePath = getWorkspaceDocumentState().activeExternalSession?.relativePath;
       if (updatedRelativePath) {
-        getWorkspaceMemoState().setSelectedPathNote({
-          notebookId: selectedPathNote.notebookId,
+        getWorkspaceMemoState().setSelectedNote({
+          notebookId: selectedNote.notebookId,
           relativePath: updatedRelativePath,
         });
       }
@@ -827,10 +827,9 @@ export async function reconcileDeletedNotebook(
 
       getWorkspaceMemoState().setSelectedNotebook(nextNotebook);
       if (nextNotebook) {
-        await getWorkspaceMemoState().loadPathNotes({ notebookId: nextNotebook.id });
+        await getWorkspaceMemoState().loadNotes({ notebookId: nextNotebook.id });
         if (!isCurrentNavigation(requestId)) return;
       } else {
-        getWorkspaceMemoState().setMemos([]);
       }
       commitNavigation(requestId, EMPTY_WORK_COLUMN_TARGET);
     },

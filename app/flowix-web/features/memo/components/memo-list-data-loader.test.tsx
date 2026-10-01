@@ -23,8 +23,7 @@ function renderLoader(overrides: Partial<ComponentProps<typeof MemoListDataLoade
     colorFilter: 'any',
     activePluginId: null,
     refreshTrigger: 0,
-    loadedMemoListQueryKey: null,
-    loadPathNotes: vi.fn().mockResolvedValue(true),
+    loadNotes: vi.fn().mockResolvedValue(true),
     setLoadedMemoListQueryKey: vi.fn(),
     setIsMemoListLoading: vi.fn(),
     onLoadError: vi.fn(),
@@ -49,7 +48,7 @@ describe('MemoListDataLoader', () => {
   });
 
   it('does not issue a duplicate request for the startup query', async () => {
-    const loadPathNotes = vi.fn().mockResolvedValue(true);
+    const loadNotes = vi.fn().mockResolvedValue(true);
     const setLoadedMemoListQueryKey = vi.fn();
     const setIsMemoListLoading = vi.fn();
 
@@ -57,25 +56,25 @@ describe('MemoListDataLoader', () => {
       renderLoader({
         initialMemoQueryKey: 'notebook-1:all:createdAt:::',
         memoListQueryKey: 'notebook-1:all:createdAt:::',
-        loadPathNotes,
+        loadNotes,
         setLoadedMemoListQueryKey,
         setIsMemoListLoading,
       });
     });
 
-    expect(loadPathNotes).not.toHaveBeenCalled();
+    expect(loadNotes).not.toHaveBeenCalled();
     expect(setLoadedMemoListQueryKey).toHaveBeenCalledWith('notebook-1:all:createdAt:::');
     expect(setIsMemoListLoading).toHaveBeenCalledWith(false);
   });
 
   it('reports a query failure and clears loading state', async () => {
     const error = new Error('list unavailable');
-    const loadPathNotes = vi.fn().mockRejectedValue(error);
+    const loadNotes = vi.fn().mockRejectedValue(error);
     const onLoadError = vi.fn();
     const setIsMemoListLoading = vi.fn();
 
     await act(async () => {
-      renderLoader({ loadPathNotes, onLoadError, setIsMemoListLoading });
+      renderLoader({ loadNotes, onLoadError, setIsMemoListLoading });
     });
 
     expect(onLoadError).toHaveBeenCalledWith(error);
@@ -83,19 +82,19 @@ describe('MemoListDataLoader', () => {
   });
 
   it('marks a successful interactive query once without reloading it', async () => {
-    const loadPathNotes = vi.fn().mockResolvedValue(true);
+    const loadNotes = vi.fn().mockResolvedValue(true);
     const setLoadedMemoListQueryKey = vi.fn();
 
     await act(async () => {
-      renderLoader({ loadPathNotes, setLoadedMemoListQueryKey });
+      renderLoader({ loadNotes, setLoadedMemoListQueryKey });
     });
 
-    expect(loadPathNotes).toHaveBeenCalledOnce();
+    expect(loadNotes).toHaveBeenCalledOnce();
     expect(setLoadedMemoListQueryKey).toHaveBeenCalledWith('notebook-1:all:createdAt:::');
   });
 
   it('reloads the initial all-notes query after switching away and back', async () => {
-    const loadPathNotes = vi.fn().mockResolvedValue(true);
+    const loadNotes = vi.fn().mockResolvedValue(true);
     const setLoadedMemoListQueryKey = vi.fn();
 
     await act(async () => {
@@ -103,26 +102,26 @@ describe('MemoListDataLoader', () => {
         initialMemoQueryKey: 'notebook-1:all:createdAt:::',
         memoListQueryKey: 'notebook-1:todos:createdAt:::',
         activeFilter: 'all',
-        loadPathNotes,
+        loadNotes,
         setLoadedMemoListQueryKey,
       });
     });
 
-    expect(loadPathNotes).toHaveBeenCalledWith(expect.objectContaining({
+    expect(loadNotes).toHaveBeenCalledWith(expect.objectContaining({
       filter: 'all',
     }));
     expect(setLoadedMemoListQueryKey).toHaveBeenCalledWith('notebook-1:all:createdAt:::');
   });
 
   it('does not mark a superseded query as loaded', async () => {
-    const loadPathNotes = vi.fn().mockResolvedValue(false);
+    const loadNotes = vi.fn().mockResolvedValue(false);
     const setLoadedMemoListQueryKey = vi.fn();
 
     await act(async () => {
-      renderLoader({ loadPathNotes, setLoadedMemoListQueryKey });
+      renderLoader({ loadNotes, setLoadedMemoListQueryKey });
     });
 
-    expect(loadPathNotes).toHaveBeenCalledOnce();
+    expect(loadNotes).toHaveBeenCalledOnce();
     expect(setLoadedMemoListQueryKey).not.toHaveBeenCalled();
   });
 });

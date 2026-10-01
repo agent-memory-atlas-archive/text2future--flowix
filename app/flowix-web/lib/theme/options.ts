@@ -47,12 +47,6 @@ export const THEME_OPTIONS: ThemeOption[] = [
     preview: { background: '#fbfaf4', surface: '#fffefb', primary: '#55524d', accent: '#f5f3ed' },
   },
   {
-    id: 'mist',
-    labelKey: 'theme.mist.label',
-    descriptionKey: 'theme.mist.description',
-    preview: { background: '#FDFBF7', surface: '#FFFEFC', primary: '#508210', accent: '#F8F5F1' },
-  },
-  {
     id: 'ember',
     labelKey: 'theme.ember.label',
     descriptionKey: 'theme.ember.description',

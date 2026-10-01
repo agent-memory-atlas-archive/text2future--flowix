@@ -4,7 +4,7 @@ const repository = vi.hoisted(() => ({
   create: vi.fn(), ensureDefaultPath: vi.fn(), getDefaultPath: vi.fn(),
   list: vi.fn(), getImportStatus: vi.fn(),
 }));
-vi.mock('@features/memo/services/memo-repository', () => ({ notebookRepository: repository }));
+vi.mock('@features/memo/services/note-repository', () => ({ notebookRepository: repository }));
 import { createNotebookRegistration } from './notebook-creation-service';
 
 describe('notebook registration critical path', () => {

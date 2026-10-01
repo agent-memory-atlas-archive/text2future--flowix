@@ -12,7 +12,7 @@ import {
 } from '@shared/ui/dropdown-menu';
 import { notebooks as notebooksClient } from '@platform/tauri/client';
 import { NotebookIcon } from '@features/memo/components/notebook-icon';
-import { useMemoStore, type Notebook } from '@features/memo/store/memo-store';
+import { useNoteStore, type Notebook } from '@features/memo/store/note-store';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useI18n } from '@/lib/i18n';
@@ -107,7 +107,7 @@ export function NotebookSelectorPopup({
   sideOffset = 6,
 }: NotebookSelectorPopupProps) {
   const { t } = useI18n();
-  const reorderNotebooks = useMemoStore((state) => state.reorderNotebooks);
+  const reorderNotebooks = useNoteStore((state) => state.reorderNotebooks);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const previousCardRectsRef = useRef(new Map<string, DOMRect>());
   const cardAnimationsRef = useRef(new Map<string, Animation>());

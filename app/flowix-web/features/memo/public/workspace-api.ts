@@ -1,38 +1,34 @@
 import { useShallow } from 'zustand/react/shallow';
 import { notebooks as notebooksClient } from '@platform/tauri/client';
 import {
-  useMemoStore,
-  type MemoStore,
+  useNoteStore,
+  type NoteLibraryStore,
   type Notebook,
-} from '@features/memo/store/memo-store';
-import type { MemoItem } from '@/types/memo-item';
+} from '@features/memo/store/note-store';
 
 /** Memo-list and notebook-selection capabilities required by workspace flows. */
 export type WorkspaceMemoState = Pick<
-  MemoStore,
-  | 'memos'
+  NoteLibraryStore,
   | 'notebooks'
   | 'selectedNotebook'
   | 'selectedNotebookId'
-  | 'selectedPathNote'
-  | 'setMemos'
+  | 'selectedNote'
   | 'setNotebooks'
   | 'setSelectedNotebook'
-  | 'setSelectedPathNote'
+  | 'setSelectedNote'
   | 'setActiveFilter'
   | 'setActivePluginId'
-  | 'upsertMemo'
-  | 'loadPathNotes'
+  | 'loadNotes'
   | 'loadNotebooks'
 >;
 
 export function getWorkspaceMemoState(): WorkspaceMemoState {
-  return useMemoStore.getState();
+  return useNoteStore.getState();
 }
 
 /** Reactive workspace selectors for app-level notebook navigation. */
 export function useWorkspaceMemoViewModel() {
-  return useMemoStore(useShallow((state) => ({
+  return useNoteStore(useShallow((state) => ({
     selectedNotebook: state.selectedNotebook,
     startupPhase: state.startupPhase,
     setActiveFilter: state.setActiveFilter,
@@ -42,7 +38,7 @@ export function useWorkspaceMemoViewModel() {
 }
 
 export function getSelectedWorkspaceNotebookId(): string | null {
-  const state = useMemoStore.getState();
+  const state = useNoteStore.getState();
   return state.selectedNotebookId ?? state.selectedNotebook?.id ?? null;
 }
 
@@ -64,4 +60,4 @@ export async function setCurrentWorkspaceNotebook(
   lastPersistedWorkspaceNotebookId = notebookId;
 }
 
-export type { MemoItem, Notebook };
+export type { Notebook };

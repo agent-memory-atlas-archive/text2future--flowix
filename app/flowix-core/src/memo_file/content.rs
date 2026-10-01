@@ -2,7 +2,7 @@
 //!
 //! Current-notebook methods support watcher and legacy reconciliation flows.
 //! Global memo-ID lookups remain for compatibility callers. Normal notebook
-//! lists and path-based document operations use the V2 projection instead.
+//! lists and path-based document operations use the Note projection instead.
 
 use std::collections::HashSet;
 use std::fs;
@@ -54,37 +54,43 @@ impl MemoFile {
     /// 读 memo index 全表, 转 `Memo`, 按 `created_at` 倒序。
     pub fn read_all_memos(&self) -> Vec<Memo> {
         let notebook_id = self.current_notebook_id_for_index();
-        if let Ok(Some(entries)) = self.v2_list_entries_with_legacy_ids(&notebook_id) {
+        let policy = self.file_management_policy(&notebook_id);
+        let root = self.get_memo_base();
+        if let Ok(Some(entries)) = self.list_note_entries_with_legacy_ids(&notebook_id) {
             return Self::memos_from_index(super::types::MemoIndexFile {
                 version: 2,
                 last_updated: chrono::Utc::now().timestamp_millis(),
                 memos: entries,
-            });
+            }, &policy, &root);
         }
         let list = match self.read_index() {
             Some(l) => l,
             None => return Vec::new(),
         };
-        Self::memos_from_index(list)
+        Self::memos_from_index(list, &policy, &root)
     }
 
     pub fn read_all_memos_for_notebook_id(&self, notebook_id: Option<&str>) -> Vec<Memo> {
         let resolved_id = self.notebook_id_for_index(notebook_id);
-        if let Ok(Some(entries)) = self.v2_list_entries_with_legacy_ids(&resolved_id) {
+        let policy = self.file_management_policy(&resolved_id);
+        let root = self.get_notebook_config_by_id(&resolved_id)
+            .map(|config| std::path::PathBuf::from(config.path))
+            .unwrap_or_default();
+        if let Ok(Some(entries)) = self.list_note_entries_with_legacy_ids(&resolved_id) {
             return Self::memos_from_index(super::types::MemoIndexFile {
                 version: 2,
                 last_updated: chrono::Utc::now().timestamp_millis(),
                 memos: entries,
-            });
+            }, &policy, &root);
         }
         let list = match self.read_index_for_notebook_id(notebook_id) {
             Ok(Some(list)) => list,
             _ => return Vec::new(),
         };
-        Self::memos_from_index(list)
+        Self::memos_from_index(list, &policy, &root)
     }
 
-    fn memos_from_index(list: super::types::MemoIndexFile) -> Vec<Memo> {
+    fn memos_from_index(list: super::types::MemoIndexFile, policy: &super::FileManagementPolicy, root: &std::path::Path) -> Vec<Memo> {
         let mut memos: Vec<Memo> = list
             .memos
             .iter()
@@ -95,7 +101,7 @@ impl MemoFile {
                 } else {
                     &entry.relative_path
                 };
-                !super::ops::is_ignored_notebook_relative_path(std::path::Path::new(relative_path))
+                !policy.is_ignored_at(root, std::path::Path::new(relative_path))
             })
             .map(MemoFile::index_entry_to_memo)
             .collect();

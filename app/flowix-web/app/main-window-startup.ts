@@ -1,5 +1,5 @@
 import {
-  initializeMemoLibrary,
+  initializeNotebookContext,
   markMemoLibraryStartupError,
 } from '@features/memo/public/app-api';
 import { waitForInitialDocumentLoad } from '@features/document/public/startup-api';
@@ -19,10 +19,9 @@ let startupAttemptSequence = 0;
 /**
  * Run the main-window startup stages in one failure-aware transaction.
  *
- * Memo library initialization is the prerequisite for restoring a persisted
- * memo session. Keeping the stages together means a retry follows the same
- * order as the initial boot and never restores a document against stale
- * notebook state.
+ * Notebook identity is resolved before workspace restoration. The cards query
+ * then loads independently inside its view, so it cannot block folders or
+ * conversations.
  */
 export async function initializeMainWindowStartup(): Promise<void> {
   const startedAt = performance.now();
@@ -48,8 +47,8 @@ export async function initializeMainWindowStartup(): Promise<void> {
         throw error;
       }
     }
-    await initializeMemoLibrary(startupNotebookId);
-    logStage('first-memo-query-ready');
+    await initializeNotebookContext(startupNotebookId);
+    logStage('notebook-context-ready');
     const desiredTarget = captureWorkspaceRestoreTarget();
     setWorkspaceRestoreStatus('restoring');
     try {

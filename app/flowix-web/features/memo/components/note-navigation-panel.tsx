@@ -5,23 +5,16 @@ import { useCallback, useState } from 'react';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
 import { NoteNavigationPanelHeaderMac } from '@features/memo/components/note-navigation-panel-header-mac';
 import { NoteNavigationPanelHeaderWin } from '@features/memo/components/note-navigation-panel-header-win';
-import { NotebookAccessFilesList } from '@features/memo/components/notebook-access-files-list';
-import { NotebookList } from '@features/memo/components/notebook-list';
-import { CustomFilterFooter, CustomFilterList, NavFilterButtons } from '@features/memo/components/nav-filter-buttons';
+import { CustomFilterList, NavFilterButtons } from '@features/memo/components/nav-filter-buttons';
 import { TagTree } from '@features/memo/components/tag-tree';
-import { type Notebook } from '@features/memo/store/memo-store';
+import { type Notebook } from '@features/memo/store/note-store';
 import { cn } from '@/lib/utils';
 import { isWindowsPlatform } from '@/lib/shortcuts/platform';
 import { PluginNavItems } from '@features/plugin/public/shell-api';
 import type { PluginDescriptor } from '@platform/tauri/client';
 
 interface NoteNavigationPanelProps {
-  notebooks: Notebook[];
   selectedNotebook: Notebook | null;
-  onSelectNotebook: (notebook: Notebook) => void;
-  onEditNotebook: (notebook: Notebook) => void;
-  onDeleteNotebook: (notebook: Notebook) => void;
-  onCreateNotebook: () => void;
   onTogglePanel: () => void;
   onOpenPreferences: (tab?: string) => void;
   activePluginId: string | null;
@@ -32,33 +25,22 @@ interface NoteNavigationPanelProps {
 
 interface NavCounts {
   total: number;
-  agent: number;
   todo: number;
 }
 
-// 导航栏 ── 最左侧导航区域的组合根。拆分为四个独立子组件 + 共享 useDragReorder:
-//   - NotebookList          笔记本列表 (拖拽重排 + 折叠)
-//   - NavFilterButtons      顶部过滤器 (全部/待办)
+// 导航栏 ── 最左侧导航区域的组合根。笔记本切换和仓库列表不在此抽屉展示。
 //   - TagTree               标签树 (拖拽重排 + reparent + 行内重命名 + 删除)
-//   - NotebookAccessFilesList  选中笔记本的可访问文件夹 (已独立组件)
-// 本组件只负责布局编排 + counts 中转: TagTree 的 loadTags 上抛 counts,
-// 经此传给 NavFilterButtons 展示。header 仍按 Mac/Win 差分。
+// 本组件只负责布局编排。筛选项和筛选管理入口不放在导航抽屉中。
 export function NoteNavigationPanel({
-  notebooks,
   selectedNotebook,
-  onSelectNotebook,
-  onEditNotebook,
-  onDeleteNotebook,
-  onCreateNotebook,
   onTogglePanel,
   onOpenPreferences,
   activePluginId,
   onOpenPlugin,
   transparentSurface = false,
 }: NoteNavigationPanelProps) {
-  const [counts, setCounts] = useState<NavCounts>({ total: 0, agent: 0, todo: 0 });
+  const [counts, setCounts] = useState<NavCounts>({ total: 0, todo: 0 });
   const [showScrollTopHint, setShowScrollTopHint] = useState(false);
-
   const handleCountsChange = useCallback((next: NavCounts) => {
     setCounts(next);
   }, []);
@@ -90,15 +72,7 @@ export function NoteNavigationPanel({
           }}
         >
           <div className="flex min-h-full flex-col">
-            {/* 笔记本与筛选器、标签、资料共用同一个滚动容器。 */}
-            <NotebookList
-              notebooks={notebooks}
-              selectedNotebook={selectedNotebook}
-              onSelectNotebook={onSelectNotebook}
-              onEditNotebook={onEditNotebook}
-              onDeleteNotebook={onDeleteNotebook}
-              onCreateNotebook={onCreateNotebook}
-            />
+            {/* 筛选器、插件和标签共用同一个滚动容器。 */}
             <NavFilterButtons
               totalMemoCount={counts.total}
               todoMemoCount={counts.todo}
@@ -108,25 +82,14 @@ export function NoteNavigationPanel({
               activePluginId={activePluginId}
               onOpenPlugin={onOpenPlugin}
             />
-            <CustomFilterList onSelectItem={onTogglePanel} />
+            {/* Keep the editor host for requests from the file-tree view; the
+                filter list and its management controls stay out of this drawer. */}
+            <CustomFilterList showFilterRows={false} />
             <TagTree
               selectedNotebook={selectedNotebook}
               onCountsChange={handleCountsChange}
               onSelectTag={() => onTogglePanel()}
             />
-            {/* 标签组与资料组之间的分割线 ── my-1 上下各 4px 留白; 下方 4px 与资料组容器 pt-1 (padding, 不与 margin 折叠) 叠加, 分隔线到资料标题实际间距 8px。 */}
-            <div className="my-1 border-t border-[var(--muted-foreground)]/30" />
-
-            {/* 选中笔记本的可访问文件夹 (文件) ── 与标签同处一个滚动容器, 文件在标签
-                下方。 展示该 notebook 自己的默认 folders (不 fallback 全局), 主空间行
-                标角标; 空时显示「添加资料」按钮。 编辑入口走右键菜单
-                (设为主空间 / 取消主空间 / 删除); 显式取消主空间后 effectiveWorkspace
-                fallback 到 notebook.path。 */}
-            <NotebookAccessFilesList
-              notebook={selectedNotebook ?? undefined}
-              onOpenFile={() => onTogglePanel()}
-            />
-            <CustomFilterFooter />
           </div>
         </OverlayScrollbar>
         <div

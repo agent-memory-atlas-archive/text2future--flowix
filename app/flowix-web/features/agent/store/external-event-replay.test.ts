@@ -52,8 +52,8 @@ vi.mock("@platform/tauri/client", () => ({
   listenToAgentStream: vi.fn(),
 }));
 
-vi.mock("@features/memo/store/memo-store", () => ({
-  useMemoStore: {
+vi.mock("@features/memo/store/note-store", () => ({
+  useNoteStore: {
     getState: () => ({
       selectedNotebook: null,
       selectedMemo: null,

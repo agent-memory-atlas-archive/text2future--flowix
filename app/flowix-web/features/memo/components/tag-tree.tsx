@@ -20,11 +20,11 @@ import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@shared/ui/select';
 import {
-  useMemoStore,
-} from '@features/memo/store/memo-store';
+  useNoteStore,
+} from '@features/memo/store/note-store';
 import { useMemoLibraryMetadataStore } from '@features/memo/store/memo-library-metadata-store';
 import { useTagStore } from '@features/memo/store/tag-store';
-import type { Notebook } from '@features/memo/store/memo-store';
+import type { Notebook } from '@features/memo/store/note-store';
 import {
   persistTagLayout,
   rebaseSelectedTagId,
@@ -47,15 +47,14 @@ import {
   type TagDropPosition,
 } from '@features/memo/components/tag-reorder';
 import { markTagsCollapsedByAncestor } from '@features/memo/components/tag-collapse';
-import { agent, system } from '@platform/tauri/client';
+import { system } from '@platform/tauri/client';
 import { canUseNativeContextMenu, logNativeContextMenuError, popupNativeContextMenu } from '@platform/tauri/native-context-menu';
 import { loadNativeMenuIcons } from '@platform/tauri/native-menu-icons';
 import { TagSvgIcon } from '@shared/ui/tag-icon';
 
 interface TagTreeProps {
   selectedNotebook: Notebook | null;
-  /** loadTags 完成时上抛 (total/agent/todo) 计数, 供 NavFilterButtons 展示。 */
-  onCountsChange: (counts: { total: number; agent: number; todo: number }) => void;
+  onCountsChange?: (counts: { total: number; todo: number }) => void;
   /** Optional callback for lightweight consumers such as the memo-list drawer. */
   onSelectTag?: (tagId: string) => void;
   /** Hide the selected row treatment when rendered as a list-navigation drawer. */
@@ -95,11 +94,10 @@ function writePersistedCollapsedTagIds(notebookId: string, ids: string[]): void 
 }
 
 // 标签树 ── 从 NoteNavigationPanel 拆出。自持:
-//   - loadTags effect (selectedNotebook 变化时拉 metadata, 上抛 counts)
+//   - loadTags effect (selectedNotebook 变化时拉 metadata 并提供笔记/待办数量)
 //   - tag 状态 (tagOptions/tagLayout/hiddenTagIds/collapsedTagIds/编辑/删除)
 //   - 拖拽重排 + reparent (useDragReorder, 替代原内联 tag 状态机)
 //   - 行内重命名 / 右键删除确认弹窗 / drag ghost
-// 与父级的唯一耦合是 onCountsChange (counts 上抛给 NavFilterButtons)。
 // 落点位置 / 子树 / 同级重排 / segment 树重建等纯逻辑见 tag-reorder.ts。
 export function TagTree({
   selectedNotebook,
@@ -109,8 +107,8 @@ export function TagTree({
   hideSectionHeader = false,
 }: TagTreeProps) {
   const { t } = useI18n();
-  const activeFilter = useMemoStore((s) => s.activeFilter);
-  const setActiveFilter = useMemoStore((s) => s.setActiveFilter);
+  const activeFilter = useNoteStore((s) => s.activeFilter);
+  const setActiveFilter = useNoteStore((s) => s.setActiveFilter);
   const selectedTagId = useTagStore((s) => s.selectedTagId);
   const setSelectedTagId = useTagStore((s) => s.setSelectedTagId);
   const tagMetadataRefreshVersion = useTagStore((s) => s.metadataRefreshVersion);
@@ -172,18 +170,8 @@ export function TagTree({
         setTagLayout(metadata.tagLayout);
         setHiddenTagIds(metadata.hiddenTagIds);
         setPinnedByParent(metadata.pinnedByParent);
-        // 「对话」计数走 agent conversation 实例表 (按 source_notebook_id 圈定),
-        // 而非 memo 索引里的"含对话笔记数" —— 与中间列对话列表同口径。
-        const conversationCount = await agent
-          .countConversationInstancesByNotebook(notebook.id)
-          .catch((error) => {
-            logger.warn('failed to count conversations', { error });
-            return 0;
-          });
-        if (cancelled) return;
-        onCountsChange({
+        onCountsChange?.({
           total: metadata.totalMemoCount,
-          agent: conversationCount,
           todo: metadata.todoMemoCount,
         });
         if (selectedNotebook) {
@@ -208,7 +196,7 @@ export function TagTree({
           setHiddenTagIds([]);
           setPinnedByParent({});
           setCollapsedTagIds([]);
-          onCountsChange({ total: 0, agent: 0, todo: 0 });
+          onCountsChange?.({ total: 0, todo: 0 });
         }
       }
     };
@@ -220,7 +208,7 @@ export function TagTree({
       setPinnedByParent({});
       setCollapsedTagIds([]);
       setBatchMode(false);
-      onCountsChange({ total: 0, agent: 0, todo: 0 });
+      onCountsChange?.({ total: 0, todo: 0 });
       clearLibraryMetadata();
       return;
     }
@@ -344,7 +332,7 @@ export function TagTree({
    */
   const pinTag = useCallback(
     async (tag: MemoTagTreeItem) => {
-      const notebookId = useMemoStore.getState().selectedNotebook?.id;
+      const notebookId = useNoteStore.getState().selectedNotebook?.id;
       if (!notebookId) return;
       const parentKey = tag.parentId ?? '';
       const current = pinnedByParent[parentKey] ?? [];
@@ -395,7 +383,7 @@ export function TagTree({
         setEditingTagId(null);
         return;
       }
-      const notebookId = useMemoStore.getState().selectedNotebook?.id;
+      const notebookId = useNoteStore.getState().selectedNotebook?.id;
       if (!notebookId) {
         setEditingTagId(null);
         return;
@@ -465,7 +453,7 @@ export function TagTree({
    */
   const confirmDeleteTag = useCallback(
     async (tag: MemoTagTreeItem) => {
-      const notebookId = useMemoStore.getState().selectedNotebook?.id;
+      const notebookId = useNoteStore.getState().selectedNotebook?.id;
       if (!notebookId) return;
       // 记下删除前的 selectedTagId ── 同 commitRename 的 beforeSelected
       // 模式: IPC 期间 memo-event 触发 metadata 重载, 旧 selectedTagId
@@ -515,7 +503,7 @@ export function TagTree({
   );
 
   const handleTagCollapseToggle = useCallback((tagId: string) => {
-    const notebookId = useMemoStore.getState().selectedNotebook?.id;
+    const notebookId = useNoteStore.getState().selectedNotebook?.id;
     setCollapsedTagIds((current) => {
       const next = current.includes(tagId)
         ? current.filter((id) => id !== tagId)
@@ -546,7 +534,7 @@ export function TagTree({
       const sourceTag = tagOptions.find((tag) => tag.id === sourceId);
       if (!sourceTag) return;
 
-      const notebookId = useMemoStore.getState().selectedNotebook?.id;
+      const notebookId = useNoteStore.getState().selectedNotebook?.id;
       if (!notebookId) return;
 
       // **inside**: 真正的 reparent ── 通过 `move_memo_tag` IPC 把

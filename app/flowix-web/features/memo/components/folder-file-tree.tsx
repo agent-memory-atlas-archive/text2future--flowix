@@ -1,7 +1,7 @@
 'use client';
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
-import { ChevronRight, FoldVertical, MoreHorizontal } from 'lucide-react';
+import { ChevronRight, FoldVertical, Loader2, MoreHorizontal } from 'lucide-react';
 import { CaretRightIcon, FolderOpenIcon, FolderSimpleIcon, TrashSimpleIcon } from '@phosphor-icons/react';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -215,6 +215,8 @@ export function FolderFileTree({
     const itemKey = canonicalPath(item.fullPath);
     const isExpanded = tree.expanded.has(itemKey);
     const children = isFolder ? (tree.nodes.get(itemKey)?.children ?? []) : [];
+    const isDirectoryLoading = isFolder && tree.loadingDirectories.has(itemKey);
+    const directoryError = isFolder && tree.directoryErrors.has(itemKey);
     const openable = !isFolder;
     const isActive = !isFolder && !!activeFilePath
       && canonicalPath(activeFilePath) === canonicalPath(item.fullPath);
@@ -356,6 +358,9 @@ export function FolderFileTree({
                   <span className="ml-1.5 min-w-0 flex-1 truncate">
                     {item.name}
                   </span>
+                  {isDirectoryLoading && (
+                    <Loader2 className="mr-1 h-3.5 w-3.5 shrink-0 animate-spin text-[var(--muted-foreground)]" aria-label={t('memo.list.loadingLibrary')} />
+                  )}
                   <DropdownMenu
                     open={openMenuId === item.id}
                     onOpenChange={(open) => setOpenMenuId(open ? item.id : null)}
@@ -492,7 +497,7 @@ export function FolderFileTree({
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
-        {isFolder && children.length > 0 && (
+        {isFolder && isExpanded && (children.length > 0 || directoryError || isDirectoryLoading) && (
           <div
             className="folder-file-tree__subtree"
             data-expanded={isExpanded}
@@ -503,6 +508,21 @@ export function FolderFileTree({
           >
             <div className="folder-file-tree__subtree-inner">
               <div className="folder-file-tree__subtree-items">
+                {directoryError && (
+                  <div className="flex min-h-7 items-center gap-2 px-2 text-xs text-[var(--muted-foreground)]" style={{ marginLeft: depth * INDENT_PER_LEVEL }} role="alert">
+                    <span className="min-w-0 flex-1 truncate">{t('memo.fileTree.unreadableHint')}</span>
+                    <button
+                      type="button"
+                      className="shrink-0 rounded px-1.5 py-0.5 text-[var(--foreground)] hover:bg-[var(--muted)]"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void tree.retryDirectory(item.fullPath);
+                      }}
+                    >
+                      {t('error.retry')}
+                    </button>
+                  </div>
+                )}
                 {isExpanded ? renderTreeItems(children, depth + 1) : null}
               </div>
             </div>
@@ -573,9 +593,21 @@ export function FolderFileTree({
           )}
           onScroll={(event) => setShowScrollTopHint(event.currentTarget.scrollTop > 0)}
         >
-          {visibleNodes.length === 0 && !tree.loading && (
+          {tree.error && (
+            <div className="flex items-center justify-center gap-2 px-4 py-4 text-center text-xs text-[var(--muted-foreground)]" role="alert">
+              <span>{t('memo.fileTree.unreadableHint')}</span>
+              <button
+                type="button"
+                className="shrink-0 rounded px-1.5 py-0.5 text-[var(--foreground)] hover:bg-[var(--muted)]"
+                onClick={() => void tree.reload()}
+              >
+                {t('error.retry')}
+              </button>
+            </div>
+          )}
+          {visibleNodes.length === 0 && !tree.loading && !tree.error && (
             <div className="px-4 py-6 text-center text-xs text-[var(--muted-foreground)]">
-              {tree.error ? t('memo.fileTree.unreadableHint') : t('memo.fileTree.empty')}
+              {t('memo.fileTree.empty')}
             </div>
           )}
           <div className="folder-file-tree__items">

@@ -22,7 +22,9 @@ export function CodeSurfaceFileBrowser({ surface }: { surface: CodeSurface }) {
   if (target.kind !== 'external') return <CodeSurfaceView props={props} fileTree={null} />;
   const context = target.fileBrowser ?? {
     notebookId: null, restoreNotebookContext: true, folderPath: null,
-    scopePath: target.scopePath, fileTreeVisible: true, fileTreeWidth: 220,
+    scopePath: target.scopePath,
+    fileTreeVisible: externalFileViewKind(target.path) !== 'code',
+    fileTreeWidth: 220,
   };
   const updateView = (patch: Partial<FileBrowserContext>) => useWorkColumnStore.setState((state) => ({
     navigation: state.navigation.target === target ? {

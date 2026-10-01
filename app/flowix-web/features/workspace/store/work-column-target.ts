@@ -49,7 +49,7 @@ export function createDocumentListTarget(
 /**
  * The stable target currently owned by the workColumn.
  *
- * The selected notebook remains in MemoStore; folder-list destinations are
+ * The selected notebook remains in NoteLibraryStore; folder-list destinations are
  * explicit targets so they can be restored independently of that selection.
  */
 export type WorkColumnTarget =

@@ -3,8 +3,8 @@ import type { EditorView, NodeView } from '@tiptap/pm/view';
 import { createElement as createReactElement, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { translate, type I18nKey } from '@/lib/i18n';
-import { MEMO_COLORS, MEMO_COLOR_HEX } from '@features/memo/store/memo-store';
-import type { MemoColor } from '@/types/memo-item';
+import { NOTE_COLORS, NOTE_COLOR_HEX } from '@features/memo/store/note-store';
+import type { NoteColor } from '@/types/note-item';
 import {
   deleteVisibleFrontmatterProperty,
   FrontmatterPropertyError,
@@ -75,7 +75,7 @@ const PROPERTY_EDIT_KIND_LABEL_KEYS = {
   Color: 'document.properties.type.color',
 } as const;
 
-const FLOWIX_COLOR_LABEL_KEYS: Record<MemoColor, I18nKey> = {
+const FLOWIX_COLOR_LABEL_KEYS: Record<NoteColor, I18nKey> = {
   red: 'document.color.red',
   orange: 'document.color.orange',
   yellow: 'document.color.yellow',
@@ -171,38 +171,35 @@ function createBooleanPropertySvgIcon(): SVGSVGElement {
   svg.setAttribute('focusable', 'false');
   svg.classList.add('frontmatter-property__svg-icon');
 
-  const outer = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  outer.setAttribute('d', 'M7.5 5h9a2.5 2.5 0 0 1 2.5 2.5v9a2.5 2.5 0 0 1-2.5 2.5h-9A2.5 2.5 0 0 1 5 16.5v-9A2.5 2.5 0 0 1 7.5 5z');
+  const lines = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  lines.setAttribute('d', 'M13 7h8M13 17h8');
 
   const check = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  check.setAttribute('d', 'M8 12.5l3 3 5-6');
-  check.setAttribute('stroke-width', '1.8');
+  check.setAttribute('d', 'm3 17 2 2 4-4');
 
-  svg.append(outer, check);
+  const box = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  box.setAttribute('x', '3');
+  box.setAttribute('y', '4');
+  box.setAttribute('width', '6');
+  box.setAttribute('height', '6');
+  box.setAttribute('rx', '1');
+
+  svg.append(lines, check, box);
   return svg;
 }
 
 function createColorPropertySvgIcon(): SVGSVGElement {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('viewBox', '0 0 256 256');
   svg.setAttribute('aria-hidden', 'true');
   svg.setAttribute('focusable', 'false');
   svg.classList.add('frontmatter-property__svg-icon', 'frontmatter-property__svg-icon--color');
 
-  const createCircle = (cx: string, cy: string, radius: string, opacity: string) => {
-    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    circle.setAttribute('cx', cx);
-    circle.setAttribute('cy', cy);
-    circle.setAttribute('r', radius);
-    circle.setAttribute('fill', 'none');
-    circle.setAttribute('stroke', 'currentColor');
-    circle.setAttribute('stroke-width', '1.8');
-    circle.setAttribute('stroke-linecap', 'round');
-    circle.setAttribute('opacity', opacity);
-    return circle;
-  };
-
-  svg.append(createCircle('9', '9', '4.5', '0.48'), createCircle('14.5', '14.5', '5.8', '0.9'));
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('fill', 'currentColor');
+  path.setAttribute('stroke', 'none');
+  path.setAttribute('d', 'M200.77,53.89A103.27,103.27,0,0,0,128,24h-1.07A104,104,0,0,0,24,128c0,43,26.58,79.06,69.36,94.17A32,32,0,0,0,136,192a16,16,0,0,1,16-16h46.21a31.81,31.81,0,0,0,31.2-24.88,104.43,104.43,0,0,0,2.59-24A103.28,103.28,0,0,0,200.77,53.89Zm13,93.71A15.89,15.89,0,0,1,198.21,160H152a32,32,0,0,0-32,32,16,16,0,0,1-21.31,15.07C62.49,194.3,40,164,40,128a88,88,0,0,1,87.09-88h.9a88.35,88.35,0,0,1,88,87.25A88.86,88.86,0,0,1,213.81,147.6ZM140,76a12,12,0,1,1-12-12A12,12,0,0,1,140,76ZM96,100A12,12,0,1,1,84,88,12,12,0,0,1,96,100Zm0,56a12,12,0,1,1-12-12A12,12,0,0,1,96,156Zm88-56a12,12,0,1,1-12-12A12,12,0,0,1,184,100Z');
+  svg.append(path);
   return svg;
 }
 
@@ -213,12 +210,7 @@ function createNumberPropertySvgIcon(): SVGSVGElement {
   svg.setAttribute('focusable', 'false');
   svg.classList.add('frontmatter-property__svg-icon', 'frontmatter-property__svg-icon--number');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  // A compact 12 mark makes this type distinct from the text/array icons while
-  // remaining legible at the small size used by each property row.
-  path.setAttribute(
-    'd',
-    'M5.5 8 7.5 6h1v12M5.5 18h4M12.5 8a2.5 2.5 0 1 1 4.5 1.5l-4.5 9h5',
-  );
+  path.setAttribute('d', 'M6.8 19V6.4c0-1.25 1.35-1.6 2-.6L15 18.2c.7 1 2 .7 2-.6V5.1');
   svg.append(path);
   return svg;
 }
@@ -254,8 +246,15 @@ function createTextValue(value: unknown): HTMLElement {
   return text;
 }
 
-function getPropertyEditValue(value: unknown): string {
+function getPropertyEditValue(value: unknown, propertyKey?: string): string {
   if (value === null || value === undefined) return '';
+  if (
+    propertyKey === 'flowix_plugin'
+    && typeof value === 'object'
+    && !Array.isArray(value)
+  ) {
+    return JSON.stringify(value);
+  }
   if (Array.isArray(value)) {
     return value.map(String).join(', ');
   }
@@ -498,7 +497,7 @@ export class FrontmatterPropertyNodeView implements NodeView {
         String(this.node.attrs.yamlContent ?? ''),
         property.key,
         nextKey,
-        getPropertyEditValue(property.value),
+        getPropertyEditValue(property.value, property.key),
         preset?.kind,
       );
       const pos = this.getPos();
@@ -1062,7 +1061,7 @@ export class FrontmatterPropertyNodeView implements NodeView {
       ? nextInputValue.trim()
       : activeEdit.target === 'value'
         ? nextInputValue
-        : getPropertyEditValue(activeEdit.property.value);
+        : getPropertyEditValue(activeEdit.property.value, activeEdit.property.key);
     const kind = activeEdit.target === 'value' ? activeEdit.kind : undefined;
     const storageKind = activeEdit.target === 'value'
       ? activeEdit.control.storageKind
@@ -1146,7 +1145,7 @@ export class FrontmatterPropertyNodeView implements NodeView {
       : undefined;
     const initialValue = target === 'key'
       ? property.key
-      : getPropertyEditValue(property.value);
+      : getPropertyEditValue(property.value, property.key);
 
     popover.style.position = 'fixed';
     popover.style.left = `${anchorRect.left}px`;
@@ -1476,11 +1475,11 @@ export class FrontmatterPropertyNodeView implements NodeView {
         colorControl.tabIndex = 0;
         colorControl.setAttribute('role', 'group');
         colorControl.setAttribute('aria-label', this.t('document.color.button'));
-        const selected = new Set<MemoColor>(
+        const selected = new Set<NoteColor>(
           value
             .split(',')
             .map((item) => item.trim())
-            .filter((item): item is MemoColor => MEMO_COLORS.includes(item as MemoColor)),
+            .filter((item): item is NoteColor => NOTE_COLORS.includes(item as NoteColor)),
         );
 
         const renderColors = () => {
@@ -1495,7 +1494,7 @@ export class FrontmatterPropertyNodeView implements NodeView {
           });
           colorControl.append(clear);
 
-          MEMO_COLORS.forEach((color) => {
+          NOTE_COLORS.forEach((color) => {
             const option = createElement(
               'button',
               'frontmatter-property__edit-color-option',
@@ -1507,7 +1506,7 @@ export class FrontmatterPropertyNodeView implements NodeView {
             option.setAttribute('aria-pressed', String(isSelected));
             option.title = this.t(FLOWIX_COLOR_LABEL_KEYS[color]);
             option.append(createElement('span', 'frontmatter-property__edit-color-swatch'));
-            option.style.setProperty('--frontmatter-edit-color', MEMO_COLOR_HEX[color]);
+            option.style.setProperty('--frontmatter-edit-color', NOTE_COLOR_HEX[color]);
             if (isSelected) option.dataset.selected = 'true';
             option.addEventListener('click', () => {
               if (selected.has(color)) selected.delete(color);
@@ -1523,7 +1522,7 @@ export class FrontmatterPropertyNodeView implements NodeView {
         return {
           dom: colorControl,
           focusTarget: colorControl,
-          getValue: () => MEMO_COLORS.filter((color) => selected.has(color)).join(', '),
+          getValue: () => NOTE_COLORS.filter((color) => selected.has(color)).join(', '),
           storageKind: 'Color',
         };
       }
@@ -1890,6 +1889,15 @@ export class FrontmatterPropertyNodeView implements NodeView {
       return valueContainer;
     }
 
+    if (
+      property.key === 'flowix_plugin'
+      && typeof property.value === 'object'
+      && !Array.isArray(property.value)
+    ) {
+      valueContainer.append(createTextValue(JSON.stringify(property.value)));
+      return valueContainer;
+    }
+
     if (kind === 'boolean') {
       const checkbox = createElement('input', 'frontmatter-property__value-checkbox');
       checkbox.type = 'checkbox';
@@ -1921,14 +1929,14 @@ export class FrontmatterPropertyNodeView implements NodeView {
         const colorDots = createElement('div', 'frontmatter-property__value-color-dots');
         values.forEach((item) => {
           const color = String(item).trim();
-          if (!MEMO_COLORS.includes(color as MemoColor)) return;
+          if (!NOTE_COLORS.includes(color as NoteColor)) return;
           const dot = createElement('span', 'frontmatter-property__value-color-dot');
-          const label = this.t(FLOWIX_COLOR_LABEL_KEYS[color as MemoColor]);
+          const label = this.t(FLOWIX_COLOR_LABEL_KEYS[color as NoteColor]);
           dot.dataset.value = color;
           dot.setAttribute('role', 'img');
           dot.setAttribute('aria-label', label);
           dot.title = label;
-          dot.style.setProperty('--frontmatter-color', MEMO_COLOR_HEX[color as MemoColor]);
+          dot.style.setProperty('--frontmatter-color', NOTE_COLOR_HEX[color as NoteColor]);
           colorDots.append(dot);
         });
         valueContainer.append(colorDots);
@@ -2055,10 +2063,13 @@ export class FrontmatterPropertyNodeView implements NodeView {
       getPropertyFieldPreferences(),
       (labelKey) => this.t(labelKey),
     );
+    const propertyLabel = property.key === 'flowix_plugin'
+      ? this.t('document.properties.commonKey.plugin')
+      : preset?.label ?? property.key;
     key.append(createElement(
       'span',
       'frontmatter-property__key',
-      preset?.label ?? property.key,
+      propertyLabel,
     ));
     const value = this.renderPropertyValue(property, isFlowSequence);
 

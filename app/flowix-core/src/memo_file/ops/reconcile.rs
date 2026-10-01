@@ -68,7 +68,8 @@ impl MemoFile {
             return Ok(0);
         }
         let mut markdown_paths = Vec::new();
-        let _ = collect_markdown_paths(&base, &base, &mut markdown_paths)?;
+        let policy = super::super::FileManagementPolicy::from_notebook_root(&base);
+        let _ = collect_markdown_paths(&base, &base, &mut markdown_paths, &policy)?;
 
         let known_paths: std::collections::HashSet<String> = self
             .read_index()
@@ -138,9 +139,10 @@ impl MemoFile {
             return Ok(ReconcileReport::default());
         }
 
-        // 1. 单次 read_dir: 收齐磁盘上所有 .md 文件名 (跳过 `.metadata/`)
+        // 1. 单次 read_dir: 收齐磁盘上所有 .md 文件名
         let mut markdown_paths = Vec::new();
-        let scan_complete = collect_markdown_paths(&base, &base, &mut markdown_paths)?;
+        let policy = super::super::FileManagementPolicy::from_notebook_root(&base);
+        let scan_complete = collect_markdown_paths(&base, &base, &mut markdown_paths, &policy)?;
         if !scan_complete {
             return Err("notebook scan incomplete; refusing to prune memo index".to_string());
         }
@@ -255,7 +257,8 @@ impl MemoFile {
         }
 
         let mut markdown_paths = Vec::new();
-        let scan_complete = collect_markdown_paths(&base, &base, &mut markdown_paths)?;
+        let policy = super::super::FileManagementPolicy::from_notebook_root(&base);
+        let scan_complete = collect_markdown_paths(&base, &base, &mut markdown_paths, &policy)?;
         if !scan_complete {
             return Err("notebook scan incomplete; refusing to prune memo index".to_string());
         }
@@ -352,7 +355,8 @@ impl MemoFile {
         }
 
         let mut markdown_paths = Vec::new();
-        let scan_complete = collect_markdown_paths(&base, &base, &mut markdown_paths)?;
+        let policy = super::super::FileManagementPolicy::from_notebook_root(&base);
+        let scan_complete = collect_markdown_paths(&base, &base, &mut markdown_paths, &policy)?;
         if !scan_complete {
             return Err("notebook scan incomplete; refusing to prune memo index".to_string());
         }
@@ -909,7 +913,7 @@ impl MemoFile {
             )
         };
         if !parent_relative_path.trim().is_empty()
-            && is_internal_notebook_path(Path::new(parent_relative_path))
+            && super::super::FileManagementPolicy::from_notebook_root(&base).is_ignored_at(&base, Path::new(parent_relative_path))
         {
             return Err("memo destination is an internal notebook directory".to_string());
         }
@@ -989,14 +993,11 @@ impl MemoFile {
     }
 }
 
-fn is_internal_notebook_path(path: &Path) -> bool {
-    is_ignored_notebook_relative_path(path)
-}
-
 fn collect_markdown_paths(
     base: &Path,
     directory: &Path,
     output: &mut Vec<PathBuf>,
+    policy: &super::super::FileManagementPolicy,
 ) -> Result<bool, String> {
     let entries = fs::read_dir(directory).map_err(|e| format!("read_dir failed: {e}"))?;
     let mut complete = true;
@@ -1014,7 +1015,7 @@ fn collect_markdown_paths(
             }
         };
         let path = entry.path();
-        if is_internal_notebook_path(path.strip_prefix(base).unwrap_or(&path)) {
+        if policy.is_ignored_at(base, path.strip_prefix(base).unwrap_or(&path)) {
             continue;
         }
         let file_type = match entry.file_type() {
@@ -1026,7 +1027,7 @@ fn collect_markdown_paths(
             }
         };
         if file_type.is_dir() {
-            match collect_markdown_paths(base, &path, output) {
+            match collect_markdown_paths(base, &path, output, policy) {
                 Ok(child_complete) => complete &= child_complete,
                 Err(error) => {
                     complete = false;

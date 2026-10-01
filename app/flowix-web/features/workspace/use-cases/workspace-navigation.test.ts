@@ -26,18 +26,18 @@ const mocks = vi.hoisted(() => ({
   memoState: {
     selectedNotebook: null as { id: string; path: string } | null,
     selectedNotebookId: null as string | null,
-    selectedPathNote: null,
+    selectedNote: null,
     notebooks: [],
     upsertMemo: vi.fn(),
     setSelectedNotebook: vi.fn(),
-    setSelectedPathNote: vi.fn(),
+    setSelectedNote: vi.fn(),
     setActiveFilter: vi.fn(),
     setActivePluginId: vi.fn(),
     setNotebooks: vi.fn(),
     setMemos: vi.fn(),
     loadNotebooks: vi.fn(),
     loadMemos: vi.fn(),
-    loadPathNotes: vi.fn(),
+    loadNotes: vi.fn(),
   },
   documentState: {
     activeExternalSession: null as { fileIdentity: { displayId: string; path: string }; scopePath: string | null; transitionId: number } | null,
@@ -65,7 +65,7 @@ vi.mock('@features/document/store/document-session-service', () => ({
 
 vi.mock('@platform/tauri/client', () => ({
   agent: {},
-  memos: { resolveMarkdownLocation: vi.fn().mockResolvedValue(null) },
+  notes: { resolveLocation: vi.fn().mockResolvedValue(null) },
   notebooks: { setCurrent: mocks.setCurrentNotebook },
 }));
 
@@ -81,8 +81,8 @@ vi.mock('@features/workspace/store/work-column-store', () => ({
   },
 }));
 
-vi.mock('@features/memo/store/memo-store', () => ({
-  useMemoStore: {
+vi.mock('@features/memo/store/note-store', () => ({
+  useNoteStore: {
     getState: () => mocks.memoState,
   },
 }));

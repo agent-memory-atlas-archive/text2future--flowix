@@ -1,22 +1,22 @@
-import { memos } from '@platform/tauri/client';
+import { notes } from '@platform/tauri/client';
 import { updateNoteLinksAfterMove } from '@features/memo/services/note-link-rewriter';
 import type { DocumentPathRequest, DocumentWriteOutcome, DocumentWriteRequest, EditableDocumentOperations } from './editable-document-operations';
 
 /** Resolve notebook-relative note addresses from file paths for Markdown CRUD. */
 export const memoDocumentOperations = {
-  read: ({ path }: DocumentPathRequest) => memos.readDocument(path),
+  read: ({ path }: DocumentPathRequest) => notes.readDocument(path),
   write: async ({
     path,
     content,
     expectedContent,
   }: DocumentWriteRequest): Promise<DocumentWriteOutcome> => {
-    const result = await memos.writeDocument({ filePath: path, content, expectedContent });
+    const result = await notes.writeDocument({ filePath: path, content, expectedContent });
     return result
       ? { status: 'saved', ...result }
       : { status: 'refused' };
   },
   renameTitle: async (request: { path: string; title: string; expectedFilename: string; expectedContent: string }) => {
-    const result = await memos.renameMemoTitle({
+    const result = await notes.renameTitle({
       filePath: request.path,
       title: request.title,
       expectedFilename: request.expectedFilename,
@@ -26,5 +26,5 @@ export const memoDocumentOperations = {
     return result;
   },
 } satisfies Pick<EditableDocumentOperations, 'read' | 'write'> & {
-  renameTitle: (request: { path: string; title: string; expectedFilename: string; expectedContent: string }) => ReturnType<typeof memos.renameMemoTitle>;
+  renameTitle: (request: { path: string; title: string; expectedFilename: string; expectedContent: string }) => ReturnType<typeof notes.renameTitle>;
 };

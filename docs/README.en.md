@@ -97,6 +97,7 @@ Development requires Node.js 20+, Rust 1.75+, and Tauri v2. The desktop app supp
 
 Issues and pull requests are welcome.
 
+- Notebook storage and index lifecycle: [NOTEBOOK-STORAGE.md](./NOTEBOOK-STORAGE.md)
 - Website: [https://flowix-memo.com/](https://flowix-memo.com/)
 - Documentation: [https://flowix-memo.com/docs/](https://flowix-memo.com/docs/)
 - GitHub: [https://github.com/text2future/flowix](https://github.com/text2future/flowix)

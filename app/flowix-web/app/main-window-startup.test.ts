@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { boot } from '@platform/tauri/client';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { useDocumentStore } from '@features/document/store/document-store';
 import { waitForInitialDocumentLoad } from '@features/document/public/startup-api';
 
 const mocks = vi.hoisted(() => ({
-  initializeMemoLibrary: vi.fn(),
+  initializeNoteLibrary: vi.fn(),
   captureWorkspaceRestoreTarget: vi.fn(),
   restoreExternalDocumentWorkspace: vi.fn(),
   restoreMediaWorkspace: vi.fn(),
@@ -14,8 +14,9 @@ const mocks = vi.hoisted(() => ({
   calls: [] as string[],
 }));
 
-vi.mock('@features/memo/use-cases/initialize-memo-library', () => ({
-  initializeMemoLibrary: mocks.initializeMemoLibrary,
+vi.mock('@features/memo/public/app-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@features/memo/public/app-api')>()),
+  initializeNotebookContext: mocks.initializeNoteLibrary,
 }));
 vi.mock('@features/workspace/public/startup-api', () => ({
   captureWorkspaceRestoreTarget: mocks.captureWorkspaceRestoreTarget,
@@ -31,10 +32,10 @@ describe('initializeMainWindowStartup', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
-    useMemoStore.getState().setStartupPhase('idle');
+    useNoteStore.getState().setStartupPhase('idle');
     useDocumentStore.setState({ isDocumentTransitioning: false, documentTransitionId: 0 });
     mocks.calls.length = 0;
-    mocks.initializeMemoLibrary.mockReset().mockImplementation(async () => {
+    mocks.initializeNoteLibrary.mockReset().mockImplementation(async () => {
       mocks.calls.push('memo-library');
     });
     mocks.captureWorkspaceRestoreTarget.mockReset().mockReturnValue(null);
@@ -55,7 +56,7 @@ describe('initializeMainWindowStartup', () => {
   });
 
   it('stops dependent restoration when library initialization fails', async () => {
-    mocks.initializeMemoLibrary.mockRejectedValueOnce(new Error('backend unavailable'));
+    mocks.initializeNoteLibrary.mockRejectedValueOnce(new Error('backend unavailable'));
 
     await expect(initializeMainWindowStartup()).rejects.toThrow('backend unavailable');
     expect(mocks.restoreExternalDocumentWorkspace).not.toHaveBeenCalled();
@@ -74,8 +75,8 @@ describe('initializeMainWindowStartup', () => {
 
     await expect(initializeMainWindowStartup()).rejects.toThrow('notebook identity unavailable');
 
-    expect(mocks.initializeMemoLibrary).not.toHaveBeenCalled();
-    expect(useMemoStore.getState().startupPhase).toBe('error');
+    expect(mocks.initializeNoteLibrary).not.toHaveBeenCalled();
+    expect(useNoteStore.getState().startupPhase).toBe('error');
     expect(notifyInteractive).toHaveBeenCalledOnce();
   });
 

@@ -75,7 +75,7 @@ fn seed_onboarding_docs_if_empty(
         .or_else(|| memo_file.current_notebook_id_value())
         .ok_or_else(|| std::io::Error::other("no notebook selected for onboarding"))?;
     for doc in ONBOARDING_DOCS {
-        memo_file.create_v2_note_by_path(&target_notebook, None, doc.title, doc.body)?;
+        memo_file.create_note_by_path(&target_notebook, None, doc.title, doc.body)?;
     }
 
     Ok(true)
@@ -86,17 +86,18 @@ fn contains_markdown_files(base: &Path) -> std::io::Result<bool> {
         return Ok(false);
     }
 
-    fn visit(base: &Path, directory: &Path) -> std::io::Result<bool> {
+    let policy = super::FileManagementPolicy::from_notebook_root(base);
+    fn visit(base: &Path, directory: &Path, policy: &super::FileManagementPolicy) -> std::io::Result<bool> {
         for entry in fs::read_dir(directory)? {
             let entry = entry?;
             let path = entry.path();
             let relative = path.strip_prefix(base).unwrap_or(&path);
-            if super::ops::is_ignored_notebook_relative_path(relative) {
+            if policy.is_ignored_at(base, relative) {
                 continue;
             }
             let file_type = entry.file_type()?;
             if file_type.is_dir() {
-                if visit(base, &path)? {
+                if visit(base, &path, policy)? {
                     return Ok(true);
                 }
             } else if file_type.is_file()
@@ -114,7 +115,7 @@ fn contains_markdown_files(base: &Path) -> std::io::Result<bool> {
         Ok(false)
     }
 
-    visit(base, base)
+    visit(base, base, &policy)
 }
 
 #[cfg(test)]
@@ -154,7 +155,7 @@ mod tests {
         let (_dir, mf) = test_memo_file();
 
         assert!(mf.seed_onboarding_docs().unwrap());
-        let filenames = mf.list_v2_note_paths_from_disk("nb_default").unwrap();
+        let filenames = mf.list_note_paths_from_disk("nb_default").unwrap();
 
         assert!(filenames.contains(&"Welcome.md".to_string()));
         assert!(filenames.contains(&"欢迎文档.md".to_string()));
@@ -181,7 +182,7 @@ mod tests {
 
         // A second call for the same non-empty notebook is a no-op.
         assert!(!mf.seed_onboarding_docs().unwrap());
-        assert_eq!(mf.list_v2_note_paths_from_disk("nb_default").unwrap().len(), ONBOARDING_DOCS.len());
+        assert_eq!(mf.list_note_paths_from_disk("nb_default").unwrap().len(), ONBOARDING_DOCS.len());
     }
 
     #[test]
@@ -260,7 +261,7 @@ mod tests {
         );
         assert!(other_path.join("Welcome.md").exists());
         assert_eq!(mf.read_index().unwrap_or_default().memos.len(), 0);
-        assert_eq!(mf.list_v2_note_paths_from_disk("nb_other").unwrap().len(), ONBOARDING_DOCS.len());
+        assert_eq!(mf.list_note_paths_from_disk("nb_other").unwrap().len(), ONBOARDING_DOCS.len());
     }
 
     #[test]
@@ -268,7 +269,7 @@ mod tests {
         let (_dir, mf) = test_memo_file();
 
         assert!(mf.seed_onboarding_docs().unwrap());
-        assert_eq!(mf.list_v2_note_paths_from_disk("nb_default").unwrap().len(), ONBOARDING_DOCS.len());
+        assert_eq!(mf.list_note_paths_from_disk("nb_default").unwrap().len(), ONBOARDING_DOCS.len());
 
         // Simulate another new, empty notebook by clearing the memo index.
         mf.write_index(&MemoIndexFile::default()).unwrap();
@@ -276,6 +277,6 @@ mod tests {
         fs::remove_file(mf.get_memo_base().join("欢迎文档.md")).unwrap();
 
         assert!(mf.seed_onboarding_docs().unwrap());
-        assert_eq!(mf.list_v2_note_paths_from_disk("nb_default").unwrap().len(), ONBOARDING_DOCS.len());
+        assert_eq!(mf.list_note_paths_from_disk("nb_default").unwrap().len(), ONBOARDING_DOCS.len());
     }
 }

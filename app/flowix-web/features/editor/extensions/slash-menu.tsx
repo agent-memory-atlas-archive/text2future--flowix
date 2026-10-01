@@ -2,7 +2,7 @@ import { Extension, type Editor } from '@tiptap/core';
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import { createRoot, type Root } from 'react-dom/client';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { openNoteMention, invalidateMentionNotes } from '@features/editor/extensions/note-mention';
 import {
   SLASH_MENU_ITEMS,
@@ -471,7 +471,7 @@ function memoTitleFromFilename(filename: string): string {
 }
 
 async function createChildNoteReference(editor: Editor): Promise<void> {
-  const store = useMemoStore.getState();
+  const store = useNoteStore.getState();
   const notebook = store.selectedNotebook;
   if (!notebook || !editor.schema.nodes.noteReference) return;
 
@@ -480,7 +480,7 @@ async function createChildNoteReference(editor: Editor): Promise<void> {
   closeMenu();
 
   try {
-    const created = await store.createMemo(undefined, notebook.id);
+    const created = await store.createNote(undefined, notebook.id);
     invalidateMentionNotes();
     editor
       .chain()

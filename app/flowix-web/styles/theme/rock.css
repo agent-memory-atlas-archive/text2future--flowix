@@ -1,6 +1,5 @@
 [data-theme="rock"] {
-	/* Rock follows the same light-mode contrast ladder as mist:
-	 * near-white warm stone surfaces, shallow neutral layers, and one chromatic
+	/* Rock uses near-white warm stone surfaces, shallow neutral layers, and one chromatic
 	 * heat-source accent for links, selection, and semantic emphasis.
 	 */
 	--neutral-hue: 92;
@@ -13,12 +12,12 @@
 	--brand: oklch(0.550 var(--brand-chroma) var(--brand-hue));
 	--text-hint: #0F8C25;
 
-	/* Same lightness structure as mist, shifted to rock's olive-gray axis. */
+	/* Lightness structure on rock's olive-gray axis. */
 	--background: oklch(0.988 0.006 var(--neutral-hue));
 	--frame-bg: #F4F3F1;
 	--foreground: oklch(0.300 0.009 var(--neutral-hue));
 	--card: #ffffff;
-	--list-bg: var(--card);
+	--list-bg: #f9f8f7;
 
 	--popover: oklch(1 0 0);
 	--popover-foreground: var(--foreground);
@@ -35,7 +34,7 @@
 	--border: oklch(0.946 0.006 var(--neutral-hue));
 	--border-popup: oklch(0.880 0.006 var(--neutral-hue));
 	--input: var(--border);
-	/* 分割线: 与 light / mist 同档 (L=0.932, 比 --border 深 0.014)
+	/* 分割线: 与 light 同档 (L=0.932, 比 --border 深 0.014)
 	 * ── 跨主题切换时分割线权重一致, 在暖橄榄灰中性轴上 ΔL vs bg
 	 * ≈ 0.056. */
 	--divider: oklch(0.932 0.006 var(--neutral-hue));
@@ -53,7 +52,7 @@
 	--document-highlight-bg: oklch(0.940 0.060 84);
 	--document-tag-bg: oklch(0.900 0 0);
 	--document-tag-foreground: var(--foreground);
-	/* Match mist's perceived color weight; only rock-specific warm hues change. */
+	/* Keep memo colors muted while using rock-specific warm hues. */
 	--memo-color-red:    oklch(64% 0.140 22);
 	--memo-color-orange: oklch(70% 0.130 48);
 	--memo-color-yellow: oklch(78% 0.115 86);

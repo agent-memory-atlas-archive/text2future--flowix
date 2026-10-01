@@ -1,5 +1,5 @@
-import type { MemoColor, MemoListItem } from '@/types/memo-item';
-import { MEMO_COLORS } from '@features/memo/store/memo-store';
+import type { NoteColor, NoteListItem } from '@/types/note-item';
+import { NOTE_COLORS } from '@features/memo/store/note-store';
 import type { NativeContextMenuItems } from '@platform/tauri/native-context-menu';
 import type { NativeMenuIconImage } from '@platform/tauri/native-menu-icons';
 
@@ -14,7 +14,7 @@ export interface MemoCardContextMenuLabels {
   colorGroup: string;
   clearColor: string;
   delete: string;
-  colors: Record<MemoColor, string>;
+  colors: Record<NoteColor, string>;
 }
 
 export function buildMemoCardContextMenuItems({
@@ -30,7 +30,7 @@ export function buildMemoCardContextMenuItems({
   onColorsChange,
   onDelete,
 }: {
-  memo: MemoListItem;
+  memo: NoteListItem;
   labels: MemoCardContextMenuLabels;
   icons: {
     split: NativeMenuIconImage;
@@ -49,7 +49,7 @@ export function buildMemoCardContextMenuItems({
   onCopyLink: () => void;
   onCopyFullText: () => void;
   onReveal: () => void;
-  onColorsChange?: (colors: MemoColor[]) => void;
+  onColorsChange?: (colors: NoteColor[]) => void;
   onDelete: () => void;
 }): NativeContextMenuItems {
   const selected = new Set(memo.colors);
@@ -62,7 +62,7 @@ export function buildMemoCardContextMenuItems({
       action: () => onColorsChange?.([]),
     },
     { item: 'Separator' as const },
-    ...MEMO_COLORS.map((color) => ({
+    ...NOTE_COLORS.map((color) => ({
       text: labels.colors[color],
       checked: selected.has(color),
       enabled: canChangeColors,
@@ -71,7 +71,7 @@ export function buildMemoCardContextMenuItems({
         const next = new Set(selected);
         if (next.has(color)) next.delete(color);
         else next.add(color);
-        onColorsChange(MEMO_COLORS.filter((value) => next.has(value)));
+        onColorsChange(NOTE_COLORS.filter((value) => next.has(value)));
       },
     })),
   ];

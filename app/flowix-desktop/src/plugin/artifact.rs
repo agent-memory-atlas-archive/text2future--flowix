@@ -90,22 +90,6 @@ pub(super) fn output_file_path(output_dir: &Path, title: &str, extension: &str) 
     ))
 }
 
-pub(super) fn artifact_document(
-    plugin: &PluginDescriptor,
-    clean: &str,
-    agent_type: &str,
-    source_note: Option<&str>,
-) -> String {
-    flowix_plugin_runtime::serialize_artifact_document(
-        &plugin.manifest.id,
-        &plugin.manifest.version,
-        &plugin.manifest.output.format,
-        clean,
-        agent_type,
-        source_note,
-    )
-}
-
 pub(super) fn pointer_document(
     plugin: &PluginDescriptor,
     pointer: &PluginArtifactPointer,

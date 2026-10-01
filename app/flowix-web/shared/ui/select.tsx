@@ -188,10 +188,18 @@ function SelectContent({
 					0,
 					window.innerHeight - rect.bottom - gap - viewportPadding,
 				);
-				// Keep the menu below its trigger. Long lists stay within the
-				// viewport by scrolling inside the menu instead of covering the
-				// trigger or opening over the form above it.
-				nextPosition.maxHeight = `${Math.min(availableBelow, maxHeight ?? availableBelow)}px`;
+				const availableAbove = Math.max(0, rect.top - gap - viewportPadding);
+				const preferredHeight = Math.min(
+					maxHeight ?? Number.POSITIVE_INFINITY,
+					contentRef.current?.scrollHeight ?? Number.POSITIVE_INFINITY,
+				);
+				const openAbove = availableBelow < preferredHeight && availableAbove > availableBelow;
+				const available = openAbove ? availableAbove : availableBelow;
+				if (openAbove) {
+					delete nextPosition.top;
+					nextPosition.bottom = window.innerHeight - rect.top + gap;
+				}
+				nextPosition.maxHeight = `${Math.min(available, preferredHeight)}px`;
 			}
 
 			if (align === "start") {

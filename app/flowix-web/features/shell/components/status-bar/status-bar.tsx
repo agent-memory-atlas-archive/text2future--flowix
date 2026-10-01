@@ -5,7 +5,7 @@ import { ListTodo } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import mcpPluginIcon from '@/assets/mcp-plugin.svg';
 import { Tooltip } from '@shared/ui/tooltip';
-import type { Notebook } from '@features/memo/store/memo-store';
+import type { Notebook } from '@features/memo/store/note-store';
 import { NotebookSelectorPopup } from '@features/shell/components/status-bar/notebook-selector-popup';
 import { ProductUpdatePill } from '@features/shell/components/status-bar/product-update-pill';
 import {
@@ -17,7 +17,7 @@ import { useAgentRuntimeStore } from '@features/agent/store/agent-runtime-store'
 import { normalizeAgentRuntimeStatus } from '@features/agent/runtime/agent-runtime-status';
 import { useI18n } from '@/lib/i18n';
 import { useDocumentMetricsStore } from '@features/document/store/document-metrics-store';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { CloudStatusIcon } from '@shared/icons/cloud-status-icon';
 import { TagSvgIcon } from '@shared/ui/tag-icon';
 import {
@@ -159,9 +159,9 @@ export function StatusBar({
     () => new Set(),
   );
   const [cloudSyncAvailable, setCloudSyncAvailable] = useState(false);
-  const notebooks = useMemoStore((state) => state.notebooks);
-  const selectedNotebook = useMemoStore((state) => state.selectedNotebook);
-  const setNotebooks = useMemoStore((state) => state.setNotebooks);
+  const notebooks = useNoteStore((state) => state.notebooks);
+  const selectedNotebook = useNoteStore((state) => state.selectedNotebook);
+  const setNotebooks = useNoteStore((state) => state.setNotebooks);
   const charCount = useDocumentMetricsStore((state) => state.charCount);
 
   useEffect(() => {

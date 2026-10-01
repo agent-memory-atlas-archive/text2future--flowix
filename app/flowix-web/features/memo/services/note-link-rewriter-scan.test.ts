@@ -12,10 +12,10 @@ const { hasLiveUnsavedDocumentAtPath, acceptBackgroundDocumentContent, notebooks
 }));
 
 vi.mock('@platform/tauri/client/desktop', () => ({ files: { getDirChildren } }));
-vi.mock('@platform/tauri/client', () => ({ externalDocuments: { read: readDocument }, memos: { writeDocument } }));
+vi.mock('@platform/tauri/client', () => ({ externalDocuments: { read: readDocument }, notes: { writeDocument } }));
 vi.mock('@features/document/public/workspace-api', () => ({ hasLiveUnsavedDocumentAtPath, acceptBackgroundDocumentContent }));
-vi.mock('@features/memo/store/memo-store', () => ({
-  useMemoStore: { getState: () => ({
+vi.mock('@features/memo/store/note-store', () => ({
+  useNoteStore: { getState: () => ({
     notebooksInitialized: true,
     notebooks,
   }) },

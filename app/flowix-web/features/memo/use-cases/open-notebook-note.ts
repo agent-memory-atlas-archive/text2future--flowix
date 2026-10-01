@@ -1,6 +1,6 @@
 import { openExternalTarget } from '@features/workspace/use-cases/workspace-navigation';
 import type { WorkspaceContentLocation } from '@features/workspace/use-cases/workspace-content-activation';
-import type { Notebook } from '@features/memo/store/memo-store';
+import type { Notebook } from '@features/memo/store/note-store';
 
 /** Open notebook Markdown through the shared path document surface. */
 export async function openNotebookNote(

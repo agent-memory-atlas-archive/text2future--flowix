@@ -33,7 +33,7 @@ export const STORAGE_KEYS = {
   AGENT_CONVERSATIONS: 'flowix-agent-conversations',
   SETTINGS: 'flowix-settings',
   TAG: 'flowix-tag',
-  MEMO: 'flowix-memo-storage',
+  NOTE: 'flowix-note-storage',
   CUSTOM_FILTER: 'flowix-custom-filter-storage',
   BROWSER_COLUMN: 'flowix-browser-column-storage',
   WORKSPACE_RESTORE: 'flowix-workspace-restore-storage',
@@ -116,12 +116,8 @@ export interface UserSettings {
    * 时保持一致)。 与 `language` 同生命周期。
    */
   region: Region;
-  /** Whether the memo list is rendered as a detailed list or as the notebook file tree. */
+  /** Whether notes are shown as cards or in the notebook file tree. */
   memoListView: MemoListView;
-  /** Whether the notebook file tree includes hidden directories and their Markdown files. */
-  showHiddenNotebookFiles: boolean;
-  /** Whether notebook file views include the project-local AGENTS.md file. */
-  showNotebookAgentsFile: boolean;
   /** Whether newly created notes are automatically opened in the Browser Column. */
   autoOpenCreatedNotesInBrowser: boolean;
   /**
@@ -257,8 +253,6 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   // 让大陆特性 (MiniMax / GLM 等) 在 SSR / IPC 还没回来时也可见。
   region: 'mainland',
   memoListView: 'detailed',
-  showHiddenNotebookFiles: true,
-  showNotebookAgentsFile: false,
   autoOpenCreatedNotesInBrowser: true,
   // 启动时无任何用户覆盖, 所有 action 走 ActionDefinition.defaultBinding。
   shortcuts: {},

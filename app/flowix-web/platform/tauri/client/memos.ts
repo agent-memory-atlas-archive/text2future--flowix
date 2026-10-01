@@ -1,57 +1,44 @@
 import { invokeDocumentMutation } from './document-mutation';
 import { invoke } from '@tauri-apps/api/core';
-import type { MemoColor, MemoItem } from '@/types/memo-item';
+import type { MemoItem } from '@/types/memo-item';
 import type { MemoContentCommit } from '@/types/memo';
 import type { NotebookImportStatus } from './agent';
+import { notes } from './notes';
+import type {
+  FilterType,
+  MatchField,
+  NoteColorFilter,
+  NoteDeleteOutcome,
+  NotePathStatus,
+  NoteVersionSource,
+  PruneMissingNoteOutcome,
+  SortType,
+} from './notes';
 
-export type FilterType = 'all' | 'todos' | 'agents' | 'favorited' | 'tagged' | 'thisWeek' | 'thisMonth';
-export type SortType = 'createdAt' | 'updatedAt' | 'filenameAsc' | 'filenameDesc';
-export type MemoColorFilter = 'any' | 'none' | MemoColor;
+export { notes };
+export type {
+  CreatedNoteDocument,
+  FilterType,
+  MarkdownLocation,
+  MatchField,
+  NoteColorFilter,
+  NoteDeleteOutcome,
+  NoteEntry,
+  NoteListPage,
+  NotePathStatus,
+  NoteSearchHit,
+  NoteTemplate,
+  NoteVersionSource,
+  PathVersionMeta,
+  PruneMissingNoteOutcome,
+  SortType,
+} from './notes';
 
 export interface MemoListPage {
   memos: MemoItem[];
   nextCursor: string | null;
   hasMore: boolean;
 }
-
-export interface PathNoteEntry {
-  relativePath: string;
-  title: string;
-  preview: string;
-  thumbnail: string | null;
-  tags: string[];
-  todos: { id: string; content: string; status: string }[];
-  agents: { threadId: string; title: string; agentType: string }[];
-  createdAt: number;
-  updatedAt: number;
-  favorited: boolean;
-  icon: string | null;
-  colors: MemoColor[];
-  properties: Record<string, unknown>;
-}
-
-export interface CreatedPathDocument {
-  notebookId: string;
-  relativePath: string;
-  path: string;
-  initialContent: string;
-}
-
-export interface MarkdownLocation {
-  path: string;
-  notebookId: string | null;
-  relativePath: string | null;
-  notebookPath: string | null;
-  indexable: boolean;
-}
-
-export interface PathNoteListPage {
-  notes: PathNoteEntry[];
-  nextCursor: string | null;
-  hasMore: boolean;
-}
-
-export type MatchField = 'title' | 'tag' | 'body';
 
 export interface MemoSearchHit {
   id: string;
@@ -60,19 +47,6 @@ export interface MemoSearchHit {
   matchedIn: MatchField;
   score: number;
   updatedAt: number;
-}
-
-export interface PathNoteSearchHit {
-  notebookId: string;
-  relativePath: string;
-  title: string;
-  snippet: string;
-  matchedIn: MatchField;
-}
-
-export interface MemoTemplate {
-  id: string;
-  name: string;
 }
 
 export interface NotebookTemplateRecord {
@@ -94,23 +68,13 @@ export interface MentionNoteSearchItem {
   originalPath: string | null;
 }
 
-type MemoVersionSource = 'auto' | 'manual' | 'restore_backup';
-
 export interface MemoVersionMeta {
   id: string;
   memoId: string;
   createdAt: number;
-  source: MemoVersionSource;
+  source: NoteVersionSource;
   filename: string;
   title: string;
-  size: number;
-  contentHash: string;
-}
-
-export interface PathVersionMeta {
-  id: string;
-  createdAt: number;
-  source: MemoVersionSource;
   size: number;
   contentHash: string;
 }
@@ -123,15 +87,17 @@ export interface OpenMemoSession {
   content: string;
 }
 
+/** Legacy Memo-ID operations and compatibility IPC. */
 export const memos = {
+  /** @deprecated Use `notes.resolveLocation`. */
   resolveMarkdownLocation: (filePath: string) =>
-    invoke<MarkdownLocation>('resolve_markdown_location', { filePath }),
+    notes.resolveLocation(filePath),
   getMemos: (params?: {
     notebookId?: string;
     filter?: FilterType;
     sort?: SortType;
     tagId?: string;
-    color?: MemoColorFilter;
+    color?: NoteColorFilter;
     cursor?: string;
     limit?: number;
   }) => invoke<MemoListPage>('get_memos', {
@@ -143,25 +109,18 @@ export const memos = {
     cursor: params?.cursor,
     limit: params?.limit,
   }),
-  listNotesByPath: (notebookId: string) =>
-    invoke<PathNoteEntry[]>('list_notes_by_path', { notebookId }),
+  /** @deprecated Use `notes.list`. */
+  listNotesByPath: notes.list,
+  /** @deprecated Use `notes.getPage`. */
   getPathNotes: (params: {
     notebookId: string;
     filter?: FilterType;
     sort?: SortType;
     tagId?: string;
-    color?: MemoColorFilter;
+    color?: NoteColorFilter;
     cursor?: string;
     limit?: number;
-  }) => invoke<PathNoteListPage>('get_path_notes', {
-    notebookId: params.notebookId,
-    filter: params.filter || 'all',
-    sort: params.sort || 'createdAt',
-    tagId: params.tagId,
-    color: params.color,
-    cursor: params.cursor,
-    limit: params.limit,
-  }),
+  }) => notes.getPage(params),
   searchMentionNotes: (query?: string, limit?: number) =>
     invoke<MentionNoteSearchItem[]>('search_mention_notes', {
       query,
@@ -180,24 +139,21 @@ export const memos = {
   readMemo: (id: string) => invoke<MemoItem | null>('read_memo', { id }),
   openMemoSession: (id: string) =>
     invoke<OpenMemoSession | null>('open_memo_session', { id }),
-  readDocument: (filePath: string) => invoke<string | null>('read_document', { filePath }),
+  /** @deprecated Use `notes.readDocument`. */
+  readDocument: notes.readDocument,
+  /** @deprecated Use `notes.pathStatus`. */
+  notePathStatus: (filePath: string) => invoke<NotePathStatus>('note_path_status', { filePath }),
+  /** @deprecated Use `notes.modifiedAt`. */
+  getDocumentModifiedAt: notes.modifiedAt,
   // Save by notebook path with content CAS. Memo IDs are not part of note writes.
-  writeDocument: (params: {
-    filePath: string;
-    content: string;
-    expectedContent?: string;
-  }) => invokeDocumentMutation<({ path: string; content: string } & MemoContentCommit) | null>('write_document', {
-    filePath: params.filePath,
-    content: params.content,
-    expectedContent: params.expectedContent,
-  }),
+  /** @deprecated Use `notes.writeDocument`. */
+  writeDocument: notes.writeDocument,
   getLaunchOpenFiles: () => invoke<string[]>('get_launch_open_files'),
-  addPathDocument: (notebookId: string, tag?: string, parentRelativePath?: string, title?: string) =>
-    invoke<CreatedPathDocument>('add_path_document', { tag, notebookId, parentRelativePath, title }),
-  moveMemoToDirectory: (filePath: string, notebookId: string, parentRelativePath: string) =>
-    invoke<{
-      path: string;
-    }>('move_memo_to_directory', { filePath, notebookId, parentRelativePath }),
+  /** @deprecated Use `notes.create`. */
+  addPathDocument: notes.create,
+  /** @deprecated Use `notes.moveToDirectory`. */
+  moveMemoToDirectory: notes.moveToDirectory,
+  /** @deprecated Use `notes.renameTitle`. */
   renameMemoTitle: (params: { filePath: string; title: string; expectedFilename?: string; expectedContent: string }) =>
     invokeDocumentMutation<{ memo: MemoItem | null; path: string; filename: string }>('rename_memo_title', {
       filePath: params.filePath,
@@ -205,25 +161,27 @@ export const memos = {
       expectedFilename: params.expectedFilename,
       expectedContent: params.expectedContent,
     }),
-  listTemplates: () => invoke<MemoTemplate[]>('list_memo_templates'),
-  saveTemplate: (title: string, content: string) =>
-    invoke<MemoTemplate>('save_memo_template', { title, content }),
-  deleteTemplate: (templateId: string) =>
-    invoke<boolean>('delete_memo_template', { templateId }),
-  createPathFromTemplate: (templateId: string, notebookId: string) =>
-    invoke<CreatedPathDocument>('create_path_from_template', { templateId, notebookId }),
-  importExternalDocumentByPath: (filePath: string, content: string, notebookId: string) =>
-    invoke<CreatedPathDocument>('import_external_document_by_path', { filePath, content, notebookId }),
-  deleteMemo: (filePath: string) => invoke<boolean>('delete_memo', { filePath }),
+  /** @deprecated Use `notes.listTemplates`. */
+  listTemplates: notes.listTemplates,
+  /** @deprecated Use `notes.saveTemplate`. */
+  saveTemplate: notes.saveTemplate,
+  /** @deprecated Use `notes.deleteTemplate`. */
+  deleteTemplate: notes.deleteTemplate,
+  /** @deprecated Use `notes.createFromTemplate`. */
+  createPathFromTemplate: notes.createFromTemplate,
+  /** @deprecated Use `notes.importDocument`. */
+  importExternalDocumentByPath: notes.importDocument,
+  deleteMemo: (filePath: string) => invoke<NoteDeleteOutcome>('delete_memo', { filePath }),
+  pruneMissingMemo: (filePath: string) => invoke<PruneMissingNoteOutcome>('prune_missing_memo', { filePath }),
   clearMemos: (notebookId?: string) => invoke<boolean>('clear_memos', { notebookId }),
   listVersions: (id: string) =>
     invoke<MemoVersionMeta[]>('list_memo_versions', { id }),
-  listPathVersions: (notebookId: string, relativePath: string) =>
-    invoke<PathVersionMeta[]>('list_path_versions', { notebookId, relativePath }),
-  createPathVersion: (notebookId: string, relativePath: string) =>
-    invoke<PathVersionMeta | null>('create_path_version', { notebookId, relativePath, source: 'manual' }),
-  restorePathVersion: (notebookId: string, relativePath: string, versionId: string, expectedContent?: string) =>
-    invoke<string | null>('restore_path_version', { notebookId, relativePath, versionId, expectedContent }),
+  /** @deprecated Use `notes.listVersions`. */
+  listPathVersions: notes.listVersions,
+  /** @deprecated Use `notes.createVersion`. */
+  createPathVersion: notes.createVersion,
+  /** @deprecated Use `notes.restoreVersion`. */
+  restorePathVersion: notes.restoreVersion,
   restoreVersion: (id: string, filePath: string, versionId: string, expectedContent?: string) =>
     invoke<({ path: string; content: string } & MemoContentCommit) | null>('restore_memo_version', {
       id,
@@ -237,8 +195,8 @@ export const memos = {
       query,
       limit,
     }),
-  searchPathNotes: (notebookId: string, query: string, limit?: number) =>
-    invoke<PathNoteSearchHit[]>('search_path_notes', { notebookId, query, limit }),
+  /** @deprecated Use `notes.search`. */
+  searchPathNotes: notes.search,
   // 鍏ㄥ眬"閫氳繃閾炬帴鎵撳紑绗旇"鍏ュ彛 鈹€鈹€ 鎺ユ敹浠绘剰褰㈠紡鐨?`flowix://` URL / 鐗╃悊璺緞,
   // 鍚庣璧?parser + resolver, 杩斿洖 ResolvedOpenTarget銆?null 琛ㄧず瑙ｆ瀽澶辫触
   // (id 涓嶅瓨鍦?/ 璺緞涓嶅湪 notebook 鍐?/ 鐗╃悊璺緞鎸囧悜宸插垹绗旇)銆?閰嶅悎
@@ -326,6 +284,29 @@ export interface NotebookRecord {
   missing?: boolean;
 }
 
+export type NotebookSetupJobStatus = 'pending' | 'running' | 'completed' | 'partial' | 'failed';
+
+export interface NotebookSetupReport {
+  totalFiles: number;
+  writtenFiles: number;
+  skippedExistingFiles: number;
+  failedFiles: number;
+  firstFailurePath: string | null;
+  firstFailureReason: string | null;
+}
+
+export interface NotebookSetupJob {
+  notebookId: string;
+  templateId: string | null;
+  status: NotebookSetupJobStatus;
+  stage: string;
+  completedFiles: number;
+  totalFiles: number;
+  message: string | null;
+  report: NotebookSetupReport | null;
+  updatedAt: number;
+}
+
 export const notebooks = {
   getAll: () => invoke<NotebookRecord[]>('get_notebooks'),
   listTemplates: () => invoke<NotebookTemplateRecord[]>('list_notebook_templates'),
@@ -342,8 +323,14 @@ export const notebooks = {
     templateId,
     isNewNotebook,
   }),
-  create: (name: string, path?: string, icon?: string | null, activate = true) =>
-    invoke<NotebookRecord>('create_notebook', { name, path, icon, activate }),
+  create: (name: string, path?: string, icon?: string | null, activate = true, templateId?: string | null) =>
+    invoke<NotebookRecord>('create_notebook', { name, path, icon, activate, templateId }),
+  ensureTemplateSetup: (notebookId: string, templateId: string) =>
+    invoke<NotebookSetupJob>('ensure_notebook_template_setup', { notebookId, templateId }),
+  getTemplateSetupStatus: (notebookId: string) =>
+    invoke<NotebookSetupJob | null>('get_notebook_template_setup_status', { notebookId }),
+  startTemplateSetup: (notebookId: string, retry = false) =>
+    invoke<NotebookSetupJob | null>('start_notebook_template_setup', { notebookId, retry }),
   createFromCloud: (id: string, name: string, path: string, icon?: string | null) =>
     invoke<NotebookRecord>('create_notebook_from_cloud', { id, name, path, icon }),
   startImport: (notebookId: string) =>

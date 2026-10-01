@@ -5,8 +5,8 @@ type TagUsageSummary = (Vec<String>, Vec<(String, usize)>, usize, usize, usize);
 impl MemoFile {
     pub fn read_used_tag_ids(&self) -> std::io::Result<Vec<String>> {
         let notebook_id = self.current_notebook_id_for_index();
-        if self.v2_index_is_ready(&notebook_id)? {
-            return Ok(self.v2_tag_usage_summary(&notebook_id)?.0);
+        if self.note_index_is_ready(&notebook_id)? {
+            return Ok(self.note_tag_usage_summary(&notebook_id)?.0);
         }
         let list = self.read_index_result()?.unwrap_or_default();
         Self::used_tag_ids_from_index(list)
@@ -83,8 +83,8 @@ impl MemoFile {
         notebook_id: Option<&str>,
     ) -> std::io::Result<Vec<String>> {
         let resolved_id = self.notebook_id_for_index(notebook_id);
-        if self.v2_index_is_ready(&resolved_id)? {
-            return Ok(self.v2_tag_usage_summary(&resolved_id)?.0);
+        if self.note_index_is_ready(&resolved_id)? {
+            return Ok(self.note_tag_usage_summary(&resolved_id)?.0);
         }
         let list = self
             .read_index_for_notebook_id(notebook_id)?
@@ -97,8 +97,8 @@ impl MemoFile {
         notebook_id: Option<&str>,
     ) -> std::io::Result<TagUsageSummary> {
         let notebook_id = self.notebook_id_for_index(notebook_id);
-        if self.v2_index_is_ready(&notebook_id)? {
-            return self.v2_tag_usage_summary(&notebook_id);
+        if self.note_index_is_ready(&notebook_id)? {
+            return self.note_tag_usage_summary(&notebook_id);
         }
         let _ = self.read_index_for_notebook_id(Some(&notebook_id));
         let conn = self.open_memo_index_db_for_notebook_id(&notebook_id)?;
@@ -193,8 +193,8 @@ impl MemoFile {
         use std::collections::{HashMap, HashSet};
 
         let notebook_id = self.notebook_id_for_index(notebook_id);
-        let pairs: Vec<(String, String)> = if self.v2_index_is_ready(&notebook_id)? {
-            self.v2_tag_path_pairs(&notebook_id)?
+        let pairs: Vec<(String, String)> = if self.note_index_is_ready(&notebook_id)? {
+            self.note_tag_path_pairs(&notebook_id)?
         } else {
             let conn = self.open_memo_index_db_for_notebook_id(&notebook_id)?;
             let mut stmt = conn

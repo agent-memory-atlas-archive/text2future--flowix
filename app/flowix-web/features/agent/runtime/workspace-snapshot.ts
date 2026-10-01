@@ -4,7 +4,7 @@ import { resolvePrimaryWorkspace } from "@features/agent/runtime/primary-workspa
 import { normalizeWorkspacePath } from "@features/agent/runtime/workspace-path";
 import { useAgentAccessStore } from "@features/agent/store/agent-access-store";
 import { useAgentSessionStore } from "@features/agent/store/agent-session-store";
-import { useMemoStore } from "@features/memo/store/memo-store";
+import { useNoteStore } from "@features/memo/store/note-store";
 import {
   createInitialWorkspaceState,
   normalizeConversationWorkspaceState,
@@ -132,7 +132,7 @@ export function ensureConversationWorkspaceSnapshot(
     };
   }
 
-  const memoState = useMemoStore.getState();
+  const memoState = useNoteStore.getState();
   const configuredNotebookId = runtimeConfig.notebookId;
   const notebook =
     (configuredNotebookId

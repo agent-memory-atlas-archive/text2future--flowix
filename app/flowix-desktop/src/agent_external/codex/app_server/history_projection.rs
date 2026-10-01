@@ -454,17 +454,51 @@ pub(super) fn app_server_tool_content(kind: &str, item: &Value) -> String {
         | "dynamicToolCall"
         | "collabToolCall"
         | "collabAgentToolCall"
-        | "imageView"
-        | "imageGeneration" => item
+        | "imageView" => item
             .get("result")
             .map(Value::to_string)
             .or_else(|| item.get("error").map(Value::to_string))
             .unwrap_or_default(),
+        "imageGeneration" => {
+            let status = item
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let failure = item
+                .get("failure")
+                .filter(|value| is_nonempty_tool_error(value))
+                .or_else(|| {
+                    item.get("error")
+                        .filter(|value| is_nonempty_tool_error(value))
+                });
+            if let Some(failure) = failure {
+                let reason = failure
+                    .as_str()
+                    .filter(|reason| !reason.trim().is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| failure.to_string());
+                format!("[error] {reason}")
+            } else if matches!(status, "failed" | "failure" | "error") {
+                "[error] Image generation failed".to_string()
+            } else {
+                item.get("result").map(Value::to_string).unwrap_or_default()
+            }
+        }
         _ => item
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or(kind)
             .to_string(),
+    }
+}
+
+fn is_nonempty_tool_error(value: &Value) -> bool {
+    match value {
+        Value::Null | Value::Bool(false) => false,
+        Value::String(message) => !message.trim().is_empty(),
+        Value::Array(values) => !values.is_empty(),
+        Value::Object(fields) => !fields.is_empty(),
+        _ => true,
     }
 }
 
@@ -511,4 +545,3 @@ pub(super) fn paginate_app_server_turns(
         snapshot_sequence: Some(snapshot_end as i64),
     }
 }
-

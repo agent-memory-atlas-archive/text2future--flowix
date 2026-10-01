@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
 import { loadMemoLibraryMetadata, type MemoLibraryMetadata } from '@features/memo/services/memo-list-metadata-service';
-import type { Notebook } from '@features/memo/store/memo-store';
+import type { Notebook } from '@features/memo/store/note-store';
 
 interface MemoLibraryMetadataStore {
   metadata: MemoLibraryMetadata | null;

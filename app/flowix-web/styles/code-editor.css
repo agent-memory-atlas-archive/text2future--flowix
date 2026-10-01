@@ -44,7 +44,7 @@
  * absolute layers, and virtual viewport continue to share one coordinate
  * system. */
 .code-editor {
-	--code-editor-font-family: var(--code-font-family);
+	--code-editor-font-family: var(--code-font-family, ui-monospace, monospace);
 	--code-editor-font-size: var(--code-font-size);
 	--code-editor-line-height: var(--code-line-height);
 	--code-editor-active-surface-bg: color-mix(in oklch, var(--muted, #f3f4f6) 58%, transparent);
@@ -53,14 +53,6 @@
 	--code-editor-line-padding-right: 20px;
 	--code-editor-content-padding-top: 14px;
 	--code-editor-content-padding-bottom: 28px;
-}
-
-.document-container .code-editor {
-	--code-editor-font-family: var(--app-font-family);
-}
-
-.document-container .code-editor .cm-scroller {
-	font-family: var(--app-font-family);
 }
 
 .code-editor.code-editor--with-scroll-header .cm-source-header {

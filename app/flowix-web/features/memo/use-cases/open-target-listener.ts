@@ -3,6 +3,7 @@
 import { subscribe, type UnlistenFn } from '@platform/tauri/event-bus';
 
 import { openNotebookById, openNoteByDeepLink } from './open-by-target';
+import { toast } from '@/lib/toast';
 
 let currentNotebookUnlisten: UnlistenFn | null = null;
 let currentPathUnlisten: UnlistenFn | null = null;
@@ -19,6 +20,7 @@ export function mountOpenTargetListener(): void {
   currentPathUnlisten = subscribe<string>('flowix:open-path', (path) => {
     if (isMainWindow()) void openNoteByDeepLink(path).catch((error) => {
       console.warn('[openByTarget] path open failed:', error);
+      toast.error(error instanceof Error ? error.message : String(error));
     });
   });
   currentNotebookUnlisten?.();

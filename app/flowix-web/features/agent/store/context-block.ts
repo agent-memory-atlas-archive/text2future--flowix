@@ -2,7 +2,7 @@ import type { AgentTypeKey } from "@/types/agent";
 import { getActiveDocumentDraft } from "@features/document/store/document-session-service";
 import { useDocumentStore } from "@features/document/store/document-store";
 import { CONTEXT_PROMPT_MARKER } from "@features/agent/message";
-import { useMemoStore } from "@features/memo/store/memo-store";
+import { useNoteStore } from "@features/memo/store/note-store";
 import { useTagStore } from "@features/memo/store/tag-store";
 
 export function normalizeContextValue(
@@ -18,7 +18,7 @@ function truncateContextContent(content: string, maxLength = 500): string {
 }
 
 function getCurrentTaskTag(): string {
-  const memoState = useMemoStore.getState();
+  const memoState = useNoteStore.getState();
   const tagState = useTagStore.getState();
   if (memoState.activeFilter !== "tagged" || !tagState.selectedTagId) {
     return "";
@@ -89,7 +89,7 @@ export function buildUserLlmContent(content: string, directoryOverride?: string)
   systemReminderDirectory?: string;
   systemReminderDocumentPath?: string;
 } {
-  const memoState = useMemoStore.getState();
+  const memoState = useNoteStore.getState();
   const documentState = useDocumentStore.getState();
   const currentDirectory = directoryOverride?.trim() || memoState.selectedNotebook?.path?.trim();
   if (!currentDirectory) {

@@ -1,5 +1,5 @@
-import { memos } from '@platform/tauri/client';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { notes } from '@platform/tauri/client';
+import { useNoteStore } from '@features/memo/store/note-store';
 import type { NoteReferenceAttrs } from '@features/editor/extensions/note-link/view-note';
 
 export interface MentionNoteItem {
@@ -17,13 +17,13 @@ let cachedItems: MentionNoteItem[] | null = null;
 let cachePromise: Promise<MentionNoteItem[]> | null = null;
 
 async function fetchMentionNotes(query: string): Promise<MentionNoteItem[]> {
-  const state = useMemoStore.getState();
+  const state = useNoteStore.getState();
   if (!state.notebooksInitialized) await state.loadNotebooks();
-  const notebooks = useMemoStore.getState().notebooks;
+  const notebooks = useNoteStore.getState().notebooks;
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const groups = await Promise.all(notebooks.map(async (notebook) => {
-    const notes = await memos.listNotesByPath(notebook.id);
-    return notes.filter((note) => !normalizedQuery || note.title.toLocaleLowerCase().includes(normalizedQuery))
+    const entries = await notes.list(notebook.id);
+    return entries.filter((note) => !normalizedQuery || note.title.toLocaleLowerCase().includes(normalizedQuery))
       .map((note): MentionNoteItem => ({
         relativePath: note.relativePath,
         filename: note.relativePath.split('/').pop() || note.relativePath,

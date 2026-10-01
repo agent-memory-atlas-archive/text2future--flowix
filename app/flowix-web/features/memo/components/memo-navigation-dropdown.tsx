@@ -5,7 +5,7 @@ import { Check, ChevronDown, ChevronRight, Layers, ListTodo, X } from 'lucide-re
 
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { useTagStore } from '@features/memo/store/tag-store';
 import { TagMentionName } from '@features/editor/extensions/tag-mention/tag-mention-label';
 import {
@@ -229,10 +229,10 @@ export function MemoNavigationDropdown({
   className,
 }: MemoNavigationDropdownProps) {
   const { t } = useI18n();
-  const activeFilter = useMemoStore((state) => state.activeFilter);
-  const selectedNotebook = useMemoStore((state) => state.selectedNotebook);
+  const activeFilter = useNoteStore((state) => state.activeFilter);
+  const selectedNotebook = useNoteStore((state) => state.selectedNotebook);
   const selectedTagId = useTagStore((state) => state.selectedTagId);
-  const setActiveFilter = useMemoStore((state) => state.setActiveFilter);
+  const setActiveFilter = useNoteStore((state) => state.setActiveFilter);
   const setSelectedTagId = useTagStore((state) => state.setSelectedTagId);
   const tags = useTagStore((state) => state.tags);
   const loadTags = useTagStore((state) => state.loadTags);

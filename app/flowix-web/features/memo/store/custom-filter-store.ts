@@ -2,7 +2,8 @@ import { create } from 'zustand';
 
 import { STORAGE_KEYS } from '@/lib/constants';
 import { system } from '@platform/tauri/client';
-import type { MemoItem, PathNoteListItem } from '@/types/memo-item';
+import type { MemoItem } from '@/types/memo-item';
+import type { NoteListItem } from '@/types/note-item';
 
 export type CustomFilterOperator = 'contains' | 'equals';
 export type CustomViewDocumentType = 'note' | 'image' | 'video';
@@ -80,7 +81,7 @@ function persistNotebookFilters(notebookId: string, filters: CustomFilter[]): vo
 }
 
 /** Match user-defined frontmatter properties without changing the file format. */
-export function memoMatchesCustomFilter(memo: Pick<MemoItem | PathNoteListItem, 'properties'>, filter: CustomFilter): boolean {
+export function memoMatchesCustomFilter(memo: Pick<MemoItem | NoteListItem, 'properties'>, filter: CustomFilter): boolean {
   const actualValues = valueParts(memo.properties?.[filter.key]);
   const expected = filter.value.trim();
   if (!expected || actualValues.length === 0) return false;

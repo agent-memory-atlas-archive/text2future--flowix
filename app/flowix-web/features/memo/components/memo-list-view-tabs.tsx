@@ -1,56 +1,92 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { ChatTeardropTextIcon, NoteIcon, type Icon } from '@phosphor-icons/react';
 import { Tooltip } from '@shared/ui/tooltip';
 import { useI18n, type I18nKey } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
+import folderIcon from '@/assets/folder-outline.svg?raw';
+import { NotebookTreeFileIcon } from '@features/memo/components/notebook-tree-file-icon';
 
-export type MemoListViewTab = 'conversations' | 'notes';
+export type MemoListViewTab = 'cards' | 'folders' | 'conversations';
 
 interface MemoListViewTabsProps {
   activeTab: MemoListViewTab;
   onChange: (tab: MemoListViewTab) => void;
-  /** The notes tab doubles as the entry point for the note navigation drawer. */
+  /** The active cards tab doubles as the entry point for the note navigation drawer. */
   navigationDrawerEnabled?: boolean;
   navigationDrawerOpen?: boolean;
   onToggleNavigationDrawer?: () => void;
 }
 
+type TabIconProps = {
+  className?: string;
+  weight: 'regular' | 'fill';
+};
+
 const TABS: ReadonlyArray<{
   value: MemoListViewTab;
   labelKey: I18nKey;
-  icon: Icon;
+  icon: (props: TabIconProps) => ReactNode;
+  dimmed?: boolean;
 }> = [
   {
-    value: 'notes',
-    labelKey: 'memo.navigation.allNotes',
-    icon: NoteIcon,
+    value: 'folders',
+    labelKey: 'memo.list.viewFolders',
+    icon: ({ className }) => (
+      <span className={cn(className, 'inline-flex items-center justify-center')}>
+        <span
+          className="block h-full w-full"
+          dangerouslySetInnerHTML={{ __html: folderIcon }}
+        />
+      </span>
+    ),
+  },
+  {
+    value: 'cards',
+    labelKey: 'memo.list.viewCards',
+    icon: ({ className }) => <NotebookTreeFileIcon className={className} />,
   },
   {
     value: 'conversations',
     labelKey: 'memo.navigation.conversations',
-    icon: ChatTeardropTextIcon,
+    icon: () => (
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        width="32"
+        height="32"
+        viewBox="0 0 256 256"
+        fill="currentColor"
+        className="h-full w-full"
+      >
+        <path d="M172,112a8,8,0,0,1-8,8H96a8,8,0,0,1,0-16h68A8,8,0,0,1,172,112Zm-8,24H96a8,8,0,0,0,0,16h68a8,8,0,0,0,0-16Zm68-12A100.11,100.11,0,0,1,132,224H48a16,16,0,0,1-16-16V124a100,100,0,0,1,200,0Zm-16,0a84,84,0,0,0-168,0v84h84A84.09,84.09,0,0,0,216,124Z" />
+      </svg>
+    ),
   },
 ];
 
 function TabIcon({
-  icon: IconComponent,
+  icon,
   className,
   weight,
+  dimmed = true,
 }: {
-  icon: Icon;
+  icon: (props: TabIconProps) => ReactNode;
   className?: string;
   weight: 'regular' | 'fill';
+  dimmed?: boolean;
 }) {
   return (
-    <IconComponent
+    <span
       aria-hidden="true"
-      className={cn('memo-list-view-tab-icon h-4 w-4 opacity-50', className)}
-      size={16}
-      weight={weight}
-    />
+      className={cn(
+        'memo-list-view-tab-icon flex h-4 w-4 shrink-0 items-center justify-center',
+        dimmed && 'opacity-50',
+        className,
+      )}
+    >
+      {icon({ className: 'h-full w-full', weight })}
+    </span>
   );
 }
 
@@ -87,16 +123,14 @@ export function MemoListViewTabs({
         aria-hidden="true"
         className="pointer-events-none absolute left-0.5 top-1/2 h-6 w-6 -translate-y-1/2 rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-sm transition-transform duration-200 ease-out"
         style={{
-          transform: indicatorTab === 'conversations'
-            ? 'translateX(26px) translateY(-50%)'
-            : 'translateX(0) translateY(-50%)',
+          transform: `translateX(${TABS.findIndex((tab) => tab.value === indicatorTab) * 26}px) translateY(-50%)`,
         }}
       />
-      {TABS.map(({ value, labelKey, icon: IconComponent }) => {
+      {TABS.map(({ value, labelKey, icon: IconComponent, dimmed }) => {
         const active = activeTab === value;
         const label = t(labelKey);
         const opensNavigation =
-          value === 'notes' &&
+          value === 'cards' &&
           active &&
           navigationDrawerEnabled &&
           Boolean(onToggleNavigationDrawer);
@@ -154,6 +188,7 @@ export function MemoListViewTabs({
                       <TabIcon
                         icon={IconComponent}
                         weight={active ? 'fill' : 'regular'}
+                        dimmed={dimmed}
                         className="absolute inset-0 transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0"
                       />
                       <ChevronRight
@@ -164,7 +199,7 @@ export function MemoListViewTabs({
                   )}
                 </span>
               ) : (
-                <TabIcon icon={IconComponent} weight={active ? 'fill' : 'regular'} />
+                <TabIcon icon={IconComponent} weight={active ? 'fill' : 'regular'} dimmed={dimmed} />
               )}
             </button>
           </Tooltip>

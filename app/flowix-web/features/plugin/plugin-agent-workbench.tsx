@@ -12,7 +12,7 @@ import {
 import { AGENT_TYPES, isAgentTypeSelectable } from '@/lib/agent-types';
 import { canonicalPath } from '@/lib/path';
 import type { AgentTypeKey } from '@/types/agent';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { openNotebookNote } from '@features/memo/use-cases/open-notebook-note';
 import {
   type PluginDescriptor,
@@ -67,7 +67,7 @@ export function AgentPluginWorkbench({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<PluginArtifactRendererHandle>(null);
-  const selectedNotebook = useMemoStore((state) => state.selectedNotebook);
+  const selectedNotebook = useNoteStore((state) => state.selectedNotebook);
   const runNotebookPath = notebookPath ?? selectedNotebook?.path ?? null;
   const latestRunId = usePluginRunStore((state) => (
     runNotebookPath
@@ -148,14 +148,14 @@ export function AgentPluginWorkbench({
         // must not steal the workColumn back.
         const isCurrentWorkbenchContext = () => {
           const currentTarget = useWorkColumnStore.getState().navigation.target;
-          const currentNotebook = useMemoStore.getState().selectedNotebook;
+          const currentNotebook = useNoteStore.getState().selectedNotebook;
           return currentTarget.kind === 'plugin-workbench'
             && currentTarget.plugin.manifest.id === plugin.manifest.id
             && currentNotebook?.path != null
             && canonicalPath(currentNotebook.path) === canonicalPath(notebookPath);
         };
         if (!isCurrentWorkbenchContext()) return;
-        const currentNotebook = useMemoStore.getState().selectedNotebook;
+        const currentNotebook = useNoteStore.getState().selectedNotebook;
         if (currentNotebook && isCurrentWorkbenchContext()) {
           await openNotebookNote(next.path, currentNotebook);
         }

@@ -2,7 +2,7 @@
  * 通用事件分发器 — 给应用层事件 (如 `MemoEvent`) 一个中央路由。
  *
  * 背景: 项目里 `useMemoEvents.ts` 早期是 "hook 集中分发 (kind switch)"
- * 形态 — 单订阅点, 内部 switch 派发到 memo-store 的 handleMemo* action,
+ * 形态 — 单订阅点, 内部 switch 派发到 note-store 的 handleMemo* action,
  * 已经有中央化的雏形。但有 3 个缺陷:
  *
  * 1. 双订阅绕过中央路由 — `useExternalDocumentChangeWatch` 直接 subscribe
@@ -35,7 +35,7 @@
  *   subscribe<MemoEvent>('memo-event', (e) => memoDispatcher.dispatch(e));
  *
  *   memoDispatcher.subscribe(
- *     (e) => useMemoStore.getState().handleMemoUpdated(e.memo),
+ *     (e) => useNoteStore.getState().handleMemoUpdated(e.memo),
  *     (e) => e.kind === 'updated',
  *   );
  *

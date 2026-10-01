@@ -4,7 +4,7 @@ import { Filter, Layers, ListTodo, Menu, MoreHorizontal } from 'lucide-react';
 import { useCallback, useEffect, useState, type MouseEvent } from 'react';
 
 import { cn } from '@/lib/utils';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { useI18n } from '@/lib/i18n';
 import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
@@ -34,8 +34,7 @@ interface NavFilterButtonsProps {
 }
 
 // 顶部过滤器 (笔记 / 待办) ── 从 NoteNavigationPanel 拆出。
-// 两个按钮各自把 selectedTagId 清空并切 activeFilter; counts 由父级
-// (经 TagTree 的 loadTags -> onCountsChange 上抛) 传入。
+// 两个按钮各自把 selectedTagId 清空并切 activeFilter; counts 由父级传入。
 // activeFilter / setSelectedTagId / setActiveFilter 直接订阅 store,
 // 不再经 props 透传。
 export function NavFilterButtons({
@@ -44,8 +43,8 @@ export function NavFilterButtons({
   onSelectItem,
 }: NavFilterButtonsProps) {
   const { t } = useI18n();
-  const activeFilter = useMemoStore((s) => s.activeFilter);
-  const setActiveFilter = useMemoStore((s) => s.setActiveFilter);
+  const activeFilter = useNoteStore((s) => s.activeFilter);
+  const setActiveFilter = useNoteStore((s) => s.setActiveFilter);
   // 文件夹浏览是和全部 / 待办 / 标签并列的一个入口。浏览资料时
   // activeFilter 为 all 只是中间列的数据兜底，不能让“全部”也显示选中。
   const isFilterActive = (filter: typeof activeFilter) =>
@@ -193,7 +192,13 @@ function CustomFilterRow({ filter, active, onSelect, onEdit, onDelete }: CustomF
   );
 }
 
-export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }) {
+export function CustomFilterList({
+  onSelectItem,
+  showFilterRows = true,
+}: {
+  onSelectItem?: () => void;
+  showFilterRows?: boolean;
+}) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [editingFilter, setEditingFilter] = useState<CustomFilter | null>(null);
@@ -205,17 +210,17 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
   const [dialogNotebookId, setDialogNotebookId] = useState<string | null>(null);
   const [anchorElement, setAnchorElement] = useState<HTMLElement | null>(null);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
-  const selectedNotebook = useMemoStore((s) => s.selectedNotebook);
+  const selectedNotebook = useNoteStore((s) => s.selectedNotebook);
   const notebookId = selectedNotebook?.id ?? null;
   const filters = useCustomFilterStore((s) => notebookId ? s.filtersByNotebook[notebookId] ?? EMPTY_CUSTOM_FILTERS : EMPTY_CUSTOM_FILTERS);
   const loadNotebookFilters = useCustomFilterStore((s) => s.loadNotebookFilters);
   const addFilter = useCustomFilterStore((s) => s.addFilter);
   const updateFilter = useCustomFilterStore((s) => s.updateFilter);
   const removeFilter = useCustomFilterStore((s) => s.removeFilter);
-  const activeCustomFilterId = useMemoStore((s) => s.activeCustomFilterId);
-  const setActiveCustomFilter = useMemoStore((s) => s.setActiveCustomFilter);
-  const setActiveFilter = useMemoStore((s) => s.setActiveFilter);
-  const triggerRefresh = useMemoStore((s) => s.triggerRefresh);
+  const activeCustomFilterId = useNoteStore((s) => s.activeCustomFilterId);
+  const setActiveCustomFilter = useNoteStore((s) => s.setActiveCustomFilter);
+  const setActiveFilter = useNoteStore((s) => s.setActiveFilter);
+  const triggerRefresh = useNoteStore((s) => s.triggerRefresh);
 
   useEffect(() => {
     if (notebookId) void loadNotebookFilters(notebookId);
@@ -280,8 +285,8 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
     const nextKey = key.trim();
     const nextValue = value.trim();
     const targetNotebookId = dialogNotebookId ?? notebookId;
-    if (!nextName || (documentType === 'note' && (!nextKey || !nextValue)) || !targetNotebookId) return;
-    const nextFilter = { name: nextName, documentType, key: documentType === 'note' ? nextKey : '', operator, value: documentType === 'note' ? nextValue : '' };
+    if (!nextName || (documentType === 'note' && (!nextKey || !nextValue)) || (nextKey && !nextValue) || (!nextKey && nextValue) || !targetNotebookId) return;
+    const nextFilter = { name: nextName, documentType, key: nextKey, operator, value: nextValue };
     if (editingFilter) {
       updateFilter(targetNotebookId, editingFilter.id, nextFilter);
       if (notebookId === targetNotebookId && activeCustomFilterId === editingFilter.id) triggerRefresh();
@@ -300,7 +305,7 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
 
   return (
     <>
-      {filters.length > 0 && (
+      {showFilterRows && filters.length > 0 && (
         <div className="mt-1 pt-1">
           <div className="px-1 pb-1 pt-1 text-xs font-medium text-[var(--muted-foreground)]">
             {t('memo.customFilter.section')}
@@ -360,7 +365,7 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
                 </SelectContent>
               </Select>
             </label>
-            {documentType === 'note' && <>
+            <>
               <label className="block space-y-1 text-sm">
                 <span className="text-sm text-[var(--foreground)]">{t('memo.customFilter.key')}</span>
                 <Input value={key} onChange={(event) => setKey(event.target.value)} placeholder={t('memo.customFilter.keyPlaceholder')} />
@@ -383,10 +388,10 @@ export function CustomFilterList({ onSelectItem }: { onSelectItem?: () => void }
                   <Input value={value} onChange={(event) => setValue(event.target.value)} placeholder={t('memo.customFilter.valuePlaceholder')} />
                 </label>
               </div>
-            </>}
+            </>
             <div className="flex justify-end gap-2 pt-2">
               <Button type="button" variant="ghost" onClick={() => setOpen(false)}>{t('memo.customFilter.cancel')}</Button>
-              <Button type="button" onClick={handleSubmit} disabled={!name.trim() || (documentType === 'note' && (!key.trim() || !value.trim()))}>{t(editingFilter ? 'memo.customFilter.save' : 'memo.customFilter.create')}</Button>
+              <Button type="button" onClick={handleSubmit} disabled={!name.trim() || (documentType === 'note' && (!key.trim() || !value.trim())) || Boolean(key.trim()) !== Boolean(value.trim())}>{t(editingFilter ? 'memo.customFilter.save' : 'memo.customFilter.create')}</Button>
             </div>
           </div>
         </PopoverContent>

@@ -5,9 +5,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from '@/lib/toast';
 import { useI18n } from '@/lib/i18n';
 import { createLogger } from '@/lib/logger';
-import { memos } from '@platform/tauri/client';
+import { notes } from '@platform/tauri/client';
 import { memoDocumentOperations } from '@features/document/use-cases/memo-document-operations';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { NotePropertiesDialog } from '@features/document/components/note-properties-dialog';
 import {
   applyLoadedDocumentContent,
@@ -59,7 +59,7 @@ export function NotePropertiesHost() {
       try {
         if (sequence !== requestSequence.current) return;
         const targetPath = path;
-        const content = await memos.readDocument(targetPath);
+        const content = await notes.readDocument(targetPath);
         if (content === null) {
           toast.error(t('document.load.failed'));
           return;
@@ -124,7 +124,7 @@ export function NotePropertiesHost() {
       result.content,
       { preservePending: false, setAsCurrent: false },
     );
-    useMemoStore.getState().triggerRefresh();
+    useNoteStore.getState().triggerRefresh();
   }, [t, target]);
 
   if (!target) return null;

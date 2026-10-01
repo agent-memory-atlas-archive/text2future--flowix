@@ -7,12 +7,12 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::lock_utils::read_lock;
 use flowix_core::memo_file::{
-    is_ignored_notebook_relative_path, normalize_markdown_encoding_boundaries,
+    normalize_markdown_encoding_boundaries,
     notebook_path_from_relative, notebook_relative_path, Memo, MemoFile,
-    PathTodoEntry, V2NoteEntry,
+    NoteEntry, PathTodoEntry,
 };
-use flowix_core::service::PathNoteSaveOutcome;
-use flowix_core::{FlowixError, MemoPage, MemoService};
+use flowix_core::service::NoteSaveOutcome;
+use flowix_core::{FlowixError, MemoPage, MemoService, NoteService};
 
 use crate::app::search_index::rebuild_index_in_background;
 use crate::app::state::AppState;
@@ -30,6 +30,32 @@ pub struct MarkdownLocation {
     relative_path: Option<String>,
     notebook_path: Option<String>,
     indexable: bool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NotePathStatus {
+    Present,
+    Missing,
+}
+
+/// Report absence separately from permission and I/O errors for stale-note actions.
+#[tauri::command]
+pub fn note_path_status(file_path: String, state: State<AppState>) -> Result<NotePathStatus, String> {
+    let path = Path::new(&file_path);
+    if !path.is_absolute() {
+        return Err("absolute note path required".into());
+    }
+    let memo_file = read_lock(&state.memo_file, "memo_file");
+    super::helpers::notebook_note_address(&memo_file, path)?
+        .ok_or_else(|| "note path is outside a notebook or is not Markdown".to_string())?;
+    drop(memo_file);
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(NotePathStatus::Present),
+        Ok(_) => Err("note path is not a file".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(NotePathStatus::Missing),
+        Err(error) => Err(format!("cannot access note path: {error}")),
+    }
 }
 
 /// Classify a Markdown file independently of its opening UI and legacy memo ID.
@@ -58,7 +84,7 @@ pub async fn resolve_markdown_location(
             let relative = Path::new(&relative_path);
             let markdown = relative.extension().and_then(|ext| ext.to_str())
                 .is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "md" | "markdown"));
-            let indexable = markdown && !is_ignored_notebook_relative_path(relative);
+            let indexable = markdown && !memo_file.file_management_policy(&notebook.id).is_ignored_at(&canonical_root, relative);
             return Ok(MarkdownLocation {
                 path: path.to_string_lossy().into_owned(),
                 notebook_id: Some(notebook.id),
@@ -140,19 +166,19 @@ pub async fn get_memos(
 pub async fn list_notes_by_path(
     notebook_id: String,
     app: AppHandle,
-) -> Result<Vec<V2NoteEntry>, String> {
+) -> Result<Vec<NoteEntry>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let memo_file = read_lock(&state.memo_file, "memo_file");
-        MemoService::new(&memo_file)
-            .list_notes_by_path(&notebook_id)
+        NoteService::new(&memo_file)
+            .list(&notebook_id)
             .map_err(|error| error.to_string())
     })
     .await
     .map_err(|error| format!("path-based note list task failed: {error}"))?
 }
 
-/// Return one page from the V2 path index without consulting legacy memo IDs.
+/// Return one page from the path-keyed Note index without consulting Memo IDs.
 #[tauri::command]
 #[allow(non_snake_case)]
 pub async fn get_path_notes(
@@ -168,9 +194,9 @@ pub async fn get_path_notes(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let memo_file = read_lock(&state.memo_file, "memo_file");
-        let mut service = MemoService::new(&memo_file);
+        let mut service = NoteService::new(&memo_file);
         let page = service
-            .list_notes_by_path_page(
+            .list_page(
                 &notebook_id,
                 filter.as_deref().unwrap_or("all"),
                 sort.as_deref().unwrap_or("createdAt"),
@@ -282,7 +308,7 @@ pub fn get_memo_todo_metadata(
     let notebooks = memo_file.read_notebook_configs().unwrap_or_default();
     let mut entries = notebooks.into_iter()
         .filter(|notebook| notebook_id.as_deref().is_none_or(|id| notebook.id == id))
-        .flat_map(|notebook| memo_file.read_v2_path_todos(&notebook.id, sort.as_deref().unwrap_or("createdAt")).unwrap_or_default())
+        .flat_map(|notebook| memo_file.read_note_path_todos(&notebook.id, sort.as_deref().unwrap_or("createdAt")).unwrap_or_default())
         .collect::<Vec<_>>();
     if sort.as_deref() == Some("updatedAt") {
         entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -384,8 +410,8 @@ pub async fn read_document(
         let memo_file = read_lock(&state.memo_file, "memo_file");
         match notebook_note_address(&memo_file, requested_path) {
             Ok(Some((notebook_id, relative_path))) => {
-                let mut service = MemoService::new(&memo_file);
-                if let Err(error) = service.get_note_by_path(&notebook_id, &relative_path) {
+                let mut service = NoteService::new(&memo_file);
+                if let Err(error) = service.get(&notebook_id, &relative_path) {
                     tracing::debug!(
                         notebook_id = %notebook_id,
                         relative_path = %relative_path,
@@ -402,6 +428,28 @@ pub async fn read_document(
         fs::read_to_string(requested_path)
             .ok()
             .map(|content| normalize_markdown_encoding_boundaries(&content).into_owned())
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+#[tauri::command]
+pub async fn get_document_modified_at(
+    window: tauri::WebviewWindow,
+    file_path: String,
+    app: AppHandle,
+) -> Option<u64> {
+    crate::document_io::run("metadata", move || {
+        let state = app.state::<AppState>();
+        let path = Path::new(&file_path);
+        if !crate::commands::helpers::can_access_document_path(path, window.label(), &state) {
+            return None;
+        }
+        start_security_bookmark_access(&state, path);
+        fs::metadata(path).ok()?.modified().ok()?
+            .duration_since(std::time::UNIX_EPOCH).ok()
+            .map(|duration| duration.as_millis() as u64)
     })
     .await
     .ok()
@@ -475,16 +523,16 @@ fn write_document_internal(
 
     let (saved_path, saved_content) = {
         let memo_file = read_lock(&state.memo_file, "memo_file");
-        let mut service = MemoService::new(&memo_file);
+        let mut service = NoteService::new(&memo_file);
         mark_self_write_for(app, requested_path);
-        match service.save_note_by_path(
+        match service.save(
             &notebook_id,
             &relative_path,
             content,
             Some(&current_content),
         ) {
-            Ok(PathNoteSaveOutcome::Saved(document)) => (document.path, document.body),
-            Ok(PathNoteSaveOutcome::Conflict { .. }) => return Ok(None),
+            Ok(NoteSaveOutcome::Saved(document)) => (document.path, document.body),
+            Ok(NoteSaveOutcome::Conflict { .. }) => return Ok(None),
             Err(error) => return Err(error.to_string()),
         }
     };
@@ -558,7 +606,7 @@ pub struct PathNoteSearchHit {
     relative_path: String,
     title: String,
     snippet: String,
-    matched_in: &'static str,
+    matched_in: String,
 }
 
 #[tauri::command]
@@ -568,33 +616,19 @@ pub fn search_path_notes(
     limit: Option<usize>,
     state: State<AppState>,
 ) -> Result<Vec<PathNoteSearchHit>, String> {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() { return Ok(Vec::new()); }
     let memo_file = read_lock(&state.memo_file, "memo_file");
-    let notebook = memo_file.get_notebook_config_by_id(&notebook_id)
-        .ok_or_else(|| "notebook not found".to_string())?;
-    let mut entries = memo_file.read_v2_note_entries(&notebook_id).map_err(|e| e.to_string())?;
-    entries.sort_by_key(|entry| std::cmp::Reverse(entry.updated_at));
-    let mut hits = Vec::new();
-    for entry in entries {
-        let title_match = entry.title.to_lowercase().contains(&query);
-        let tag_match = entry.tags.iter().any(|tag| tag.to_lowercase().contains(&query));
-        let path = notebook_path_from_relative(Path::new(&notebook.path), &entry.relative_path)
-            .map_err(|error| error.to_string())?;
-        let body = fs::read_to_string(&path).unwrap_or_default();
-        let body_lower = body.to_lowercase();
-        let body_match = body_lower.find(&query);
-        if !title_match && !tag_match && body_match.is_none() { continue; }
-        let snippet = body_match.map(|_| body.chars().take(130).collect::<String>()
-            .replace(['\r', '\n'], " ")).unwrap_or_default();
-        hits.push(PathNoteSearchHit {
-            notebook_id: notebook_id.clone(),
-            relative_path: entry.relative_path,
-            title: entry.title,
-            snippet,
-            matched_in: if title_match { "title" } else if tag_match { "tag" } else { "body" },
-        });
-        if hits.len() >= limit.unwrap_or(30).clamp(1, 100) { break; }
-    }
-    Ok(hits)
+    NoteService::new(&memo_file)
+        .search(&notebook_id, &query, limit.unwrap_or(30).clamp(1, 100))
+        .map_err(|error| error.to_string())
+        .map(|hits| {
+            hits.into_iter()
+                .map(|hit| PathNoteSearchHit {
+                    notebook_id: notebook_id.clone(),
+                    relative_path: hit.relative_path,
+                    title: hit.title,
+                    snippet: hit.snippet,
+                    matched_in: hit.matched_in,
+                })
+                .collect()
+        })
 }

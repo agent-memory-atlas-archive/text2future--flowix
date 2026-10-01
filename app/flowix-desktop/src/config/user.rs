@@ -133,10 +133,8 @@ impl Default for ProductUpdatesConfig {
     }
 }
 
-/// 合法主�?枚举 —替代原来的裸 `String`, �?serde 边界上约束取值�?///
-/// 序列化形式是小写字�?�?(`"system"` / `"light"` / ...), 与前�?`ThemeId` 联合
-/// 类型字面量一一对应; 老的 preference.json (字�?�? 仍然兼�?读取�?/// 任何不在 6 �?��体里的字符串 (例�?用户手改磁盘 / �?��客户�?��新主�? 会在
-/// 反序列化阶�?直接报错, 不会写回内存 —兜底由前�?�� sanitizeTheme 兜底�?"system"�?
+/// Serde enum for persisted themes. Missing or invalid preference files fall
+/// back to `PreferenceFile::default()`, whose default theme is Rock.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
@@ -144,9 +142,9 @@ pub enum Theme {
     Light,
     Dark,
     #[default]
+    #[serde(alias = "mist")]
     Rock,
-    Mist,
-    /// 暖米纸面 + 珊瑚橙焦�?(主色 #FB6A42), �?rock/mist 占据同一"克制�?
+    /// 暖米纸面 + 珊瑚橙焦�?(主色 #FB6A42), �?rock 占据同一"克制�?
     /// �?+ 单色�?槽位但走暖色�?���?前�? css/theme/ember.css 提供色板�?
     Ember,
 }
@@ -172,12 +170,6 @@ pub struct PreferenceFile {
     /// Memo list surface ("cards" | "folders").
     #[serde(default)]
     pub memo_list_view: String,
-    /// Whether the notebook file tree includes hidden directories and their Markdown files.
-    #[serde(default)]
-    pub show_hidden_notebook_files: bool,
-    /// Whether notebook file views include the project-local AGENTS.md file.
-    #[serde(default)]
-    pub show_notebook_agents_file: bool,
     /// Whether newly created notes are automatically opened in the Browser Column.
     #[serde(default = "default_true")]
     pub auto_open_created_notes_in_browser: bool,
@@ -213,8 +205,6 @@ impl Default for PreferenceFile {
             region: String::default(),
             memo_card_variant: String::default(),
             memo_list_view: String::default(),
-            show_hidden_notebook_files: bool::default(),
-            show_notebook_agents_file: bool::default(),
             auto_open_created_notes_in_browser: true,
             shortcuts: HashMap::default(),
             properties: PropertiesConfig::default(),

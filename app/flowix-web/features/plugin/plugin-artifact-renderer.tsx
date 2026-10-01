@@ -3,6 +3,18 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, type ComponentType, type Ref } from 'react';
 import type { Markmap } from 'markmap-view';
 import type { PluginArtifactRendererId } from './plugin-renderer-ids';
+import { iframeScrollbarCss } from '@shared/ui/iframe-scrollbar';
+
+function styledIframeContent(content: string): string {
+  if (document.documentElement.dataset.platform !== 'non-mac') return content;
+  const parsed = new DOMParser().parseFromString(content, 'text/html');
+  const color = getComputedStyle(document.documentElement).getPropertyValue('--muted-foreground').trim();
+  if (!color) return content;
+  const style = parsed.createElement('style');
+  style.textContent = iframeScrollbarCss(`color-mix(in oklch, ${color} 30%, transparent)`);
+  parsed.head.append(style);
+  return `<!doctype html>\n${parsed.documentElement.outerHTML}`;
+}
 
 const MARKMAP_BRANCH_COLORS = [
   'var(--plugin-markmap-branch-1)',
@@ -127,12 +139,13 @@ function JsonRenderer({ content }: RendererProps) {
 }
 
 function HtmlRenderer({ content }: RendererProps) {
+  const styledContent = useMemo(() => styledIframeContent(content), [content]);
   return (
     <iframe
       title="Plugin HTML output"
       className="h-full w-full border-0 bg-white"
       sandbox=""
-      srcDoc={content}
+      srcDoc={styledContent}
     />
   );
 }
@@ -177,7 +190,7 @@ export function sandboxWebpageContent(content: string): string {
 
   parsed.head.prepend(navigationGuard);
   parsed.head.prepend(policy);
-  return `<!doctype html>\n${parsed.documentElement.outerHTML}`;
+  return styledIframeContent(`<!doctype html>\n${parsed.documentElement.outerHTML}`);
 }
 
 function WebpageRenderer({ content }: RendererProps) {

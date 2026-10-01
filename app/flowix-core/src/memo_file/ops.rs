@@ -1,8 +1,8 @@
 //! Legacy memo-ID CRUD and reconciliation operations.
 //!
 //! Markdown remains the content source. This module maintains an ID-bearing
-//! cache for older callers; path-based operations and the rebuildable V2 index
-//! also live in `v2_index`. New internal IDs contain eight `[0-9a-z]`
+//! cache for older callers; path-based operations and the rebuildable Note
+//! index also live in `note_index`. New internal IDs contain eight `[0-9a-z]`
 //! characters; older six-character IDs remain readable. New writes do not
 //! append an ID to filenames or frontmatter.
 //!
@@ -193,27 +193,11 @@ pub fn filename_from_notebook_relative_path(relative: &str) -> String {
         .to_string()
 }
 
-/// Returns true when a notebook-relative path belongs to an internal,
-/// generated, or hidden location that must never be indexed as a note.
-/// The notebook-root `AGENTS.md` is intentionally indexed as a note; nested
-/// `AGENTS.md` files remain agent configuration and stay excluded.
-/// Keep this rule in core so startup reconciliation and the desktop watcher
-/// classify the same path identically.
+/// Returns true when a notebook-relative path is excluded by the default
+/// file-management policy. User-configured ignore rules and notebook
+/// exceptions are applied by `FileManagementPolicy` at call sites.
 pub fn is_ignored_notebook_relative_path(path: &Path) -> bool {
-    let is_root_agents_file = path.components().count() == 1
-        && path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md");
-    path.components().any(|component| {
-        let std::path::Component::Normal(name) = component else {
-            return true;
-        };
-        let name = name.to_string_lossy();
-        name.starts_with('.')
-            || matches!(
-                name.as_ref(),
-                "attachments" | "attachments-cache" | "node_modules"
-            )
-    }) || (path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
-        && !is_root_agents_file)
+    super::FileManagementPolicy::default().is_ignored(path)
 }
 
 /// 跟 `flowix-desktop::fs_watcher::normalize_for_compare` 同口径的路径归一。

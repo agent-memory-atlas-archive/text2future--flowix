@@ -20,6 +20,7 @@ import {
 import { canonicalPath, fileNameFromPath } from '@/lib/path';
 import { toast } from '@/lib/toast';
 import { product } from '@platform/tauri/client/desktop';
+import { notes } from '@platform/tauri/client/notes';
 import { localDocumentOperations } from '@features/document/use-cases/local-document-operations';
 import { openPath } from '@platform/tauri/opener';
 import {
@@ -126,6 +127,33 @@ export function DocumentContainer({
     transitionId,
     isolatedSession: documentSessionMode === 'isolated',
   });
+
+  useEffect(() => {
+    if (!state.isLoaded || state.updatedAtDate || !filePath) return;
+    let cancelled = false;
+    void notes.modifiedAt(filePath).then((modifiedAt) => {
+      if (cancelled || !modifiedAt) return;
+      setState((previous) => previous.updatedAtDate ? previous : {
+        ...previous,
+        updatedAtDate: new Date(modifiedAt),
+      });
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [filePath, state.isLoaded, state.updatedAtDate, setState]);
+
+  useEffect(() => {
+    const key = documentIdentityKey(documentIdentity);
+    let cancelled = false;
+    const unsubscribe = subscribeDocumentBufferChanges((identity, reason) => {
+      if (reason !== 'save_settled' || documentIdentityKey(identity) !== key) return;
+      void notes.modifiedAt(filePath).then((modifiedAt) => {
+        if (!cancelled && modifiedAt) {
+          setState((previous) => ({ ...previous, updatedAtDate: new Date(modifiedAt) }));
+        }
+      }).catch(() => undefined);
+    });
+    return () => { cancelled = true; unsubscribe(); };
+  }, [documentIdentity, filePath, setState]);
 
   useEffect(() => {
     if (usesCodeEditor) onEditorReady?.(null);
@@ -404,7 +432,7 @@ export function DocumentContainer({
       displayId={displayId}
       filename={memoFilename}
       renameTitle={renameTitle}
-      updatedAt={!isExternalDocument ? state.updatedAtDate : null}
+      updatedAt={state.updatedAtDate}
       editable={
         !readOnly
         && (!isExternalDocument || Boolean(externalScopePath))

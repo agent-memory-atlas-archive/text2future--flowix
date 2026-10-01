@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useCustomFilterStore } from '@features/memo/store/custom-filter-store';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 
 export { MemoList } from '@features/memo/components/memo-list';
 export { useMemoListHoverPreview } from '@features/memo/components/use-memo-list-hover-preview';
@@ -21,7 +21,7 @@ export {
 export { startNotebookImportWithMonitoring } from '@features/memo/services/notebook-creation-service';
 
 export function useShellMemoViewModel() {
-  return useMemoStore(useShallow((state) => ({
+  return useNoteStore(useShallow((state) => ({
     notebooks: state.notebooks,
     selectedNotebook: state.selectedNotebook,
     startupPhase: state.startupPhase,
@@ -30,13 +30,14 @@ export function useShellMemoViewModel() {
     activePluginId: state.activePluginId,
     activeSort: state.activeSort,
     setActiveFilter: state.setActiveFilter,
-    loadPathNotes: state.loadPathNotes,
+    setMiddleColumnView: state.setMiddleColumnView,
+    loadNotes: state.loadNotes,
     triggerRefresh: state.triggerRefresh,
   })));
 }
 
 export function showAgentConversationsView(): void {
-  useMemoStore.getState().setActiveFilter('agents');
+  useNoteStore.getState().setMiddleColumnView('conversations');
 }
 
 export function useShellDocumentListTitle(input: {

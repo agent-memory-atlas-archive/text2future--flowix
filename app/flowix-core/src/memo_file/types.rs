@@ -25,12 +25,12 @@ use serde_json::Value;
 /// `"orange"` / ...), 数组形式存, 空数组即"无颜色"。
 /// 索引只缓存从 Markdown 解析出的值, 与 `icon` 字段同形。
 ///
-/// 旧版用单值 `Option<MemoColor>`, 现在切到 `Vec<MemoColor>`。memo index
+/// 旧版用单值 `Option<MemoColor>`, 现在切到 `Vec<NoteColor>`。memo index
 /// 老数据若含 `"color": "red"` / `"color": null` 会反序列化失败, 但本字段
 /// 是这次会话新加的, 没有真实数据, 走纯 breaking change 即可。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum MemoColor {
+pub enum NoteColor {
     Red,
     Orange,
     Yellow,
@@ -39,6 +39,9 @@ pub enum MemoColor {
     Blue,
     Gray,
 }
+
+/// Compatibility name for older Memo-ID models and downstream callers.
+pub type MemoColor = NoteColor;
 
 /// 跨 IPC 边界返回的 memo 完整形态 (前端 TS `MemoItem` 镜像)。
 ///
@@ -141,6 +144,46 @@ pub struct NotebookConfig {
     pub updated_at: i64,
 }
 
+/// Durable state for first-open notebook preparation. The registry database
+/// owns this state so it survives WebView and application restarts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotebookSetupJob {
+    pub notebook_id: String,
+    pub template_id: Option<String>,
+    #[serde(rename = "status")]
+    pub status: NotebookSetupJobStatus,
+    pub stage: String,
+    pub completed_files: usize,
+    pub total_files: usize,
+    pub message: Option<String>,
+    pub report: Option<NotebookSetupReport>,
+    pub updated_at: i64,
+}
+
+/// Aggregate result of a best-effort template application. Existing files are
+/// preserved and counted separately from files that could not be written.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotebookSetupReport {
+    pub total_files: usize,
+    pub written_files: usize,
+    pub skipped_existing_files: usize,
+    pub failed_files: usize,
+    pub first_failure_path: Option<String>,
+    pub first_failure_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NotebookSetupJobStatus {
+    Pending,
+    Running,
+    Completed,
+    Partial,
+    Failed,
+}
+
 /// Portable notebook identity stored in `<notebook>/.flowix/notebook.json`.
 /// It contains no derived memo data; Markdown remains the note source of truth.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -158,7 +201,7 @@ pub struct MemoLocation {
 }
 
 // ============================================
-// Memo list entry persisted in index.db.
+// Legacy memo-ID list entry persisted in the notebook-local database.
 // ============================================
 
 /// memo index 单条 memo 元数据。`filename` 即磁盘文件名, 含 `.md`。
@@ -209,7 +252,7 @@ impl Default for MemoIndexFile {
 }
 
 // ============================================
-// Notebook-level todo metadata persisted in index.db.
+// Legacy memo-ID todo metadata persisted in the notebook-local database.
 // ============================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

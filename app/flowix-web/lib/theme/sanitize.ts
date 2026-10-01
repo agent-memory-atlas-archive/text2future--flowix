@@ -9,6 +9,8 @@ const VALID: ReadonlySet<ThemeId> = new Set(THEME_IDS);
  * - 默认 fallback = DEFAULT_THEME_ID, 调用方可自定义 (e.g. 用 base.theme 作 fallback)。
  */
 export function sanitizeTheme(v: unknown, fallback: ThemeId = DEFAULT_THEME_ID): ThemeId {
+  // Older preference files may still contain the retired Mist theme.
+  if (v === 'mist') return 'rock';
   return typeof v === 'string' && VALID.has(v as ThemeId) ? (v as ThemeId) : fallback;
 }
 

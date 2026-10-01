@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, X } from 'lucide-react';
 
 import { useI18n } from '@/lib/i18n';
 import { toast } from '@/lib/toast';
@@ -44,6 +44,16 @@ function draftsFromResource(resource: MediaResource): PropertyDraft[] {
     key,
     value: displayValue(value),
   }));
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDate(timestamp: number): string {
+  return new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' }).format(timestamp);
 }
 
 export function MediaPropertiesPanel({
@@ -173,11 +183,12 @@ export function MediaPropertiesPanel({
   if (kind !== 'image' && kind !== 'video') return null;
 
   return (
-    <aside className="m-1 flex h-[calc(100%-0.5rem)] w-[300px] min-w-[260px] shrink-0 flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)]">
-      <div className="flex h-9 shrink-0 items-center border-b border-[color-mix(in_oklch,var(--border)_68%,transparent)] px-3">
-        <span className="text-xs font-medium text-[var(--foreground)]">
-          {t('media.properties.title')}
-        </span>
+    <aside className="flex h-full w-[300px] min-w-[260px] shrink-0 flex-col overflow-hidden border-l border-[var(--border)] bg-[var(--card)] text-[var(--foreground)]">
+      <div className="flex h-12 shrink-0 items-center justify-between px-4">
+        <span className="text-xs font-semibold">{kind === 'image' ? t('media.properties.imageTitle') : t('media.properties.title')}</span>
+        <button type="button" onClick={() => void close()} aria-label={t('media.properties.close')} className="flex h-6 w-6 items-center justify-center rounded-full text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] focus-visible:outline-2 focus-visible:outline-[var(--primary)]">
+          <X className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       {loading ? (
@@ -186,15 +197,26 @@ export function MediaPropertiesPanel({
         <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-[var(--destructive)]">{error}</div>
       ) : (
         <>
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            <div className="space-y-2">
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5">
+            {resource && (
+              <div className="space-y-0.5 border-b border-[var(--border)] pb-4 pt-1">
+                <div className="grid grid-cols-[90px_minmax(0,1fr)] items-start gap-2 py-1.5 text-xs"><span className="text-[var(--muted-foreground)]">{t('media.properties.size')}</span><span className="tabular-nums">{formatSize(resource.sizeBytes)}</span></div>
+                <div className="grid grid-cols-[90px_minmax(0,1fr)] items-start gap-2 py-1.5 text-xs"><span className="text-[var(--muted-foreground)]">{t('media.properties.modified')}</span><span>{formatDate(resource.modifiedMs)}</span></div>
+                <div className="grid grid-cols-[90px_minmax(0,1fr)] items-start gap-2 py-1.5 text-xs"><span className="text-[var(--muted-foreground)]">{t('media.properties.location')}</span><span className="break-all text-[var(--muted-foreground)]" title={filePath}>{resource.relativePath}</span></div>
+              </div>
+            )}
+            <div className="flex items-center justify-between pb-2 pt-5">
+              <span className="text-xs font-medium text-[var(--muted-foreground)]">{t('media.properties.custom')}</span>
+              {saving && <span className="text-[11px] text-[var(--muted-foreground)]">{t('media.properties.saving')}</span>}
+            </div>
+            <div className="space-y-1">
               {rows.map((row) => (
-                <div key={row.id} className="flex items-start gap-1.5">
+                <div key={row.id} className="group grid grid-cols-[90px_minmax(0,1fr)_22px] items-start gap-2 rounded-md py-1 hover:bg-[var(--muted)]/40">
                   <input
                     value={row.key}
                     onChange={(event) => updateRow(row.id, { key: event.target.value })}
                     placeholder={t('media.properties.key')}
-                    className="h-8 w-[96px] shrink-0 rounded-lg border border-input bg-background px-2 text-xs outline-none focus-visible:border-[var(--primary)]"
+                    className="h-7 min-w-0 rounded-md border border-transparent bg-transparent px-1.5 text-xs text-[var(--muted-foreground)] outline-none hover:border-[var(--border)] focus-visible:border-[var(--primary)] focus-visible:bg-[var(--background)]"
                     aria-label={t('media.properties.key')}
                   />
                   <textarea
@@ -202,7 +224,7 @@ export function MediaPropertiesPanel({
                     onChange={(event) => updateRow(row.id, { value: event.target.value })}
                     placeholder={t('media.properties.value')}
                     rows={1}
-                    className="min-h-8 min-w-0 flex-1 resize-y rounded-lg border border-input bg-background px-2 py-1.5 text-xs outline-none focus-visible:border-[var(--primary)]"
+                    className="min-h-7 min-w-0 resize-y rounded-md border border-transparent bg-transparent px-1.5 py-1 text-xs outline-none hover:border-[var(--border)] focus-visible:border-[var(--primary)] focus-visible:bg-[var(--background)]"
                     aria-label={row.key || t('media.properties.value')}
                   />
                   <button
@@ -211,7 +233,7 @@ export function MediaPropertiesPanel({
                       setRows((current) => current.filter((candidate) => candidate.id !== row.id));
                       markDirty();
                     }}
-                    className="flex h-8 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] hover:text-[var(--destructive)]"
+                    className="flex h-7 w-[22px] items-center justify-center rounded-md text-[var(--muted-foreground)] opacity-0 hover:text-[var(--destructive)] focus-visible:opacity-100 group-hover:opacity-100"
                     aria-label={t('media.properties.remove')}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -220,7 +242,7 @@ export function MediaPropertiesPanel({
               ))}
             </div>
             {rows.length === 0 && (
-              <div className="mt-4 rounded-lg border border-dashed border-[var(--border)] px-3 py-5 text-center text-xs text-[var(--muted-foreground)]">
+              <div className="py-3 text-xs text-[var(--muted-foreground)]">
                 {t('media.properties.empty')}
               </div>
             )}
@@ -230,7 +252,7 @@ export function MediaPropertiesPanel({
                 setRows((current) => [...current, { id: `new-${Date.now()}`, key: '', value: '' }]);
                 markDirty();
               }}
-              className="mt-3 inline-flex h-8 items-center gap-1 rounded-lg px-1 text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+              className="mt-2 inline-flex h-7 items-center gap-1 rounded-full bg-[var(--muted)] px-2.5 text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)] focus-visible:outline-2 focus-visible:outline-[var(--primary)]"
             >
               <Plus className="h-3.5 w-3.5" />
               {t('media.properties.add')}
@@ -238,15 +260,6 @@ export function MediaPropertiesPanel({
           </div>
         </>
       )}
-      <div className="p-3">
-        <button
-          type="button"
-          onClick={() => void close()}
-          className="inline-flex h-8 w-full items-center justify-center rounded-lg border border-[var(--border)] px-3 text-xs text-[var(--foreground)] hover:bg-[var(--muted)]"
-        >
-          {t('media.properties.close')}
-        </button>
-      </div>
     </aside>
   );
 }

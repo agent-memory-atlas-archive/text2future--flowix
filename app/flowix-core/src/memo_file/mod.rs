@@ -1,12 +1,13 @@
 //! Notebook storage and Markdown file operations.
 //!
-//! Markdown files own note content. The rebuildable V2 projection in each
+//! Markdown files own note content. The rebuildable path projection in each
 //! notebook's `.flowix/notebook.db` addresses notes by relative path. Legacy
 //! memo-ID records and APIs remain for callers that have not migrated yet;
-//! new writes do not stamp those IDs into Markdown frontmatter or filenames.
+//! new Note writes do not stamp those IDs into Markdown frontmatter or filenames.
 //!
 //! - `frontmatter` parses and edits authored YAML metadata.
-//! - `v2_index` maintains the path-keyed projection and path operations.
+//! - `note_index` maintains the path-keyed Note projection and path operations;
+//!   it discards the old rebuildable `v2_*` projection schema on first use.
 //! - `index_store` maintains legacy memo-ID records and related metadata.
 //! - `ops` contains legacy CRUD and reconciliation operations.
 //! - `versions` stores history currently keyed by internal memo ID.
@@ -30,6 +31,7 @@ pub const MEMO_ID_LENGTH: usize = 8;
 
 mod content;
 mod derivation;
+mod file_management;
 mod file_io;
 pub(crate) mod frontmatter;
 mod index_store;
@@ -37,17 +39,18 @@ mod internal_migration;
 mod media_resource;
 mod migration;
 mod notebook;
+mod notebook_registry;
 mod onboarding;
 mod ops;
 mod registration;
 pub(crate) mod time;
 pub mod types;
-mod v2_index;
+mod note_index;
 mod versions;
 
-pub use v2_index::{
-    V2IndexReconcileReport, V2NoteEntry, V2NotePropertyMigrationReport, V2PathWriteOutcome,
-    V2TodoMigrationReport,
+pub use note_index::{
+    NoteEntry, NoteIndexReconcileReport, NotePropertyMigrationReport, NoteSearchHit,
+    NoteTodoMigrationReport, NoteWriteOutcome,
 };
 
 // 公开 API re-export — 跟旧 `memo_file.rs` 的 pub use 边界一致。
@@ -60,6 +63,7 @@ pub use file_io::{
     atomic_create_bytes, atomic_write_bytes, filesystem_identity, rename_file_noclobber,
     FileWriteOutcome,
 };
+pub use file_management::FileManagementPolicy;
 pub use frontmatter::{
     build_md_content, extract_body_content, extract_document_metadata, extract_frontmatter_key,
     extract_frontmatter_properties, is_system_frontmatter_key, merge_frontmatter,
@@ -78,32 +82,34 @@ pub use ops::{
 };
 pub use types::{
     AgentThreadItem, DeleteTagReport, Memo, MemoColor, MemoIndexEntry, MemoIndexFile, MemoLocation,
-    MemoMetadataFile, MemoTag, MemoTodoEntry, MemoVersionCleanupReport, MoveTagReport, Notebook,
-    NotebookConfig, NotebookManifest, PathTodoEntry, ReconcileReport, TodoItem,
+    MemoMetadataFile, MemoTag, MemoTodoEntry, MemoVersionCleanupReport, MoveTagReport, NoteColor,
+    Notebook, NotebookConfig, NotebookManifest, NotebookSetupJob, NotebookSetupJobStatus,
+    NotebookSetupReport,
+    PathTodoEntry, ReconcileReport, TodoItem,
 };
 pub use versions::{
     MemoVersionManifest, MemoVersionMeta, MemoVersionSource, PathVersionMeta, MEMO_AUTO_VERSION_INTERVAL_MS,
     MEMO_ORPHAN_VERSION_RETENTION, MEMO_VERSION_LIMIT,
 };
 
-/// 笔记本目录 / 笔记文件的存储管理。
+/// Compatibility storage façade over notebook registry, Note catalog, media,
+/// revisions and Memo-ID records. Domain implementations live in separate
+/// modules; `NotebookRegistry` owns the device-local registry path and cache.
 ///
 /// 字段:
-/// - `config_dir`: 用户配置目录 (`~/.flowix/`). 笔记本注册表 + memo index
-///   + todo metadata 都存放在 `<config_dir>/index.db` 关联的 SQLite 文件里
-///     (分别走 [`MemoFile::get_index_db_path`] / `<notebook>/.metadata/` 派生)。
+/// - `registry`: 用户配置目录 (`~/.flowix/`) 下的设备级笔记本注册表。
+/// - Note 投影、兼容 memo-ID 数据和媒体属性位于
+///   `<notebook>/.flowix/notebook.db`。
 /// - `current_notebook_id`: 当前活跃 notebook id, `None` 表示走默认。
-/// - `index_cache`: 当前 notebook memo index 的内存缓存。读路径先查询 SQLite
+/// - `index_cache`: 当前 notebook 兼容 memo-ID 列表的内存缓存。读路径先查询 SQLite
 ///   `memo_index_state.last_updated`，只有版本一致才复用，保证其他进程写入可见。
 ///   写路径 ([`MemoFile::write_index`] / `_locked` 系列) 在 DB 写入成功后回填。
 ///   切 notebook 时由 [`Self::set_current_notebook`] 失效。
 ///   `std::sync::RwLock` 而非裸 `Option`, 因为读路径常在 `&self` 调用栈上
 ///   (写路径持外层 `RwLock<MemoFile>` 写锁, 读路径持外层读锁; 都需要绕过
 ///   借用检查写入 cache 字段)。
-/// - `notebook_configs_cache`: notebook registry 的最近读取镜像；registry 读取始终
-///   查询 SQLite，避免长驻 MCP 与 Desktop 之间出现过期 notebook 配置。
 pub struct MemoFile {
-    config_dir: PathBuf,
+    registry: notebook_registry::NotebookRegistry,
     current_notebook_id: Option<String>,
     /// memo index / todo metadata 跨线程 RMW 互斥锁。
     ///
@@ -113,8 +119,6 @@ pub struct MemoFile {
     current_index_io: std::sync::Mutex<()>,
     /// Memo index 内存缓存。`None` = 未加载 / 已失效；命中前会校验 DB 版本。
     index_cache: std::sync::RwLock<Option<MemoIndexFile>>,
-    /// Notebook registry 最近读取镜像。`None` = 未加载。
-    notebook_configs_cache: std::sync::RwLock<Option<Vec<NotebookConfig>>>,
 }
 
 pub struct CrossProcessWriteGuard {
@@ -130,11 +134,10 @@ impl Drop for CrossProcessWriteGuard {
 impl Default for MemoFile {
     fn default() -> Self {
         Self {
-            config_dir: PathBuf::new(),
+            registry: notebook_registry::NotebookRegistry::new(PathBuf::new()),
             current_notebook_id: None,
             current_index_io: std::sync::Mutex::new(()),
             index_cache: std::sync::RwLock::new(None),
-            notebook_configs_cache: std::sync::RwLock::new(None),
         }
     }
 }
@@ -142,16 +145,21 @@ impl Default for MemoFile {
 impl MemoFile {
     pub fn new(config_dir: PathBuf) -> Self {
         Self {
-            config_dir,
+            registry: notebook_registry::NotebookRegistry::new(config_dir),
             current_notebook_id: None,
             current_index_io: std::sync::Mutex::new(()),
             index_cache: std::sync::RwLock::new(None),
-            notebook_configs_cache: std::sync::RwLock::new(None),
         }
     }
 
+    pub fn file_management_policy(&self, notebook_id: &str) -> FileManagementPolicy {
+        self.get_notebook_config_by_id(notebook_id)
+            .map(|notebook| FileManagementPolicy::from_notebook_root(std::path::Path::new(&notebook.path)))
+            .unwrap_or_default()
+    }
+
     pub fn acquire_cross_process_write_lock(&self) -> io::Result<CrossProcessWriteGuard> {
-        std::fs::create_dir_all(&self.config_dir)?;
+        std::fs::create_dir_all(&self.registry.config_dir)?;
         const LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
         const RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
         let file = OpenOptions::new()
@@ -159,7 +167,7 @@ impl MemoFile {
             .read(true)
             .write(true)
             .truncate(false)
-            .open(self.config_dir.join(".memo-write.lock"))?;
+            .open(self.registry.config_dir.join(".memo-write.lock"))?;
         let started = std::time::Instant::now();
         loop {
             match fs2::FileExt::try_lock_exclusive(&file) {
@@ -206,7 +214,7 @@ impl MemoFile {
         if let Ok(mut g) = self.index_cache.write() {
             *g = None;
         }
-        if let Ok(mut g) = self.notebook_configs_cache.write() {
+        if let Ok(mut g) = self.registry.configs_cache.write() {
             *g = None;
         }
     }
@@ -242,12 +250,6 @@ impl MemoFile {
         self.get_flowix_dir().join("plugin").join(plugin_id)
     }
 
-    /// Legacy `.metadata/` path. Kept for compatibility with older consumers;
-    /// new storage code must use [`Self::get_flowix_dir`] instead.
-    #[deprecated(note = "use get_flowix_dir() for notebook-local Flowix data")]
-    pub fn get_metadata_dir(&self) -> PathBuf {
-        self.get_memo_base().join(".metadata")
-    }
 }
 
 #[cfg(test)]

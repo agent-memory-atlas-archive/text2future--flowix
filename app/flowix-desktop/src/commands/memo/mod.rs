@@ -33,7 +33,7 @@ pub use reads::*;
 
 use serde::Serialize;
 
-use flowix_core::memo_file::{Memo, V2NoteEntry};
+use flowix_core::memo_file::{Memo, NoteEntry};
 use flowix_core::search::MemoSearchHit;
 
 // Shared response / item structs 鈹€鈹€ referenced by multiple sections below.
@@ -50,7 +50,7 @@ pub struct GetMemosResponse {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetPathNotesResponse {
-    pub notes: Vec<V2NoteEntry>,
+    pub notes: Vec<NoteEntry>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
 }

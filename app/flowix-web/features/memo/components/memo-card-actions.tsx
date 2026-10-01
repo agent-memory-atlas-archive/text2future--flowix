@@ -23,15 +23,15 @@ import {
   DropdownMenuContext,
 } from '@shared/ui/dropdown-menu';
 import {
-  MEMO_COLORS,
-  MEMO_COLOR_HEX,
-  useMemoStore,
-} from '@features/memo/store/memo-store';
+  NOTE_COLORS,
+  NOTE_COLOR_HEX,
+  useNoteStore,
+} from '@features/memo/store/note-store';
 import {
-  memoListItemRelativePath,
-  type MemoListItem,
-  type MemoColor,
-} from '@/types/memo-item';
+  noteListItemRelativePath,
+  type NoteListItem,
+  type NoteColor,
+} from '@/types/note-item';
 import { buildNoteOpenLinkFromPath } from '@platform/open-target/path-link';
 import { joinNotebookMemoPath } from '@/lib/path';
 
@@ -47,13 +47,13 @@ export interface MenuItemComponent {
   }): React.ReactElement | null;
 }
 
-interface MemoCardActionsProps<T extends MemoListItem> {
+interface MemoCardActionsProps<T extends NoteListItem> {
   memo: T;
   /** Use the tree item's authoritative path when this menu is rendered there. */
   filePath?: string;
   onFavoriteToggle: (memo: T) => void;
   onDelete: (memo: T) => void;
-  onColorsChange?: (memo: T, colors: MemoColor[]) => void;
+  onColorsChange?: (memo: T, colors: NoteColor[]) => void;
   /**
    * Opens the memo in the browser column. Optional because the menu is also
    * rendered where a split target makes no sense; the item hides when absent.
@@ -74,7 +74,7 @@ const POPUP_DIVIDER_CLASS = 'mx-1 my-1 h-px bg-[var(--border-popup)] opacity-60'
 // Clicking any swatch
 // (including the no-color cell) calls `onChange` and closes the surrounding
 // menu — the picker is single-shot, not a sticky submenu.
-const COLOR_LABEL_KEYS: Record<MemoColor, I18nKey> = {
+const COLOR_LABEL_KEYS: Record<NoteColor, I18nKey> = {
   red: 'document.color.red',
   orange: 'document.color.orange',
   yellow: 'document.color.yellow',
@@ -84,7 +84,7 @@ const COLOR_LABEL_KEYS: Record<MemoColor, I18nKey> = {
   gray: 'document.color.gray',
 };
 
-export function getMemoColorLabel(color: MemoColor, language: AppLanguage): string {
+export function getNoteColorLabel(color: NoteColor, language: AppLanguage): string {
   return translate(language, COLOR_LABEL_KEYS[color]);
 }
 
@@ -123,8 +123,8 @@ async function writeClipboardText(text: string): Promise<void> {
 }
 
 interface MemoCardColorRowProps {
-  colors: MemoColor[];
-  onChange: (next: MemoColor[]) => void;
+  colors: NoteColor[];
+  onChange: (next: NoteColor[]) => void;
 }
 
 function MemoCardColorRow({ colors, onChange }: MemoCardColorRowProps) {
@@ -132,12 +132,12 @@ function MemoCardColorRow({ colors, onChange }: MemoCardColorRowProps) {
   const closeActiveMenu = useCloseActiveMenu();
   const selected = new Set(colors);
 
-  const apply = (next: Set<MemoColor>) => {
-    onChange(MEMO_COLORS.filter((c) => next.has(c)));
+  const apply = (next: Set<NoteColor>) => {
+    onChange(NOTE_COLORS.filter((c) => next.has(c)));
     closeActiveMenu();
   };
 
-  const toggle = (c: MemoColor) => {
+  const toggle = (c: NoteColor) => {
     const next = new Set(selected);
     if (next.has(c)) next.delete(c);
     else next.add(c);
@@ -169,13 +169,13 @@ function MemoCardColorRow({ colors, onChange }: MemoCardColorRowProps) {
             : 'border-[var(--border)] hover:border-[var(--muted-foreground)]',
         )}
       />
-      {MEMO_COLORS.map((c) => {
+      {NOTE_COLORS.map((c) => {
         const isSelected = selected.has(c);
         return (
           <button
             key={c}
             type="button"
-            aria-label={getMemoColorLabel(c, language)}
+            aria-label={getNoteColorLabel(c, language)}
             aria-pressed={isSelected}
             onClick={() => toggle(c)}
             onMouseDown={(event) => {
@@ -186,7 +186,7 @@ function MemoCardColorRow({ colors, onChange }: MemoCardColorRowProps) {
               'relative h-4 w-7 rounded-md transition-transform hover:scale-110 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)]',
               isSelected ? 'opacity-100' : 'opacity-50',
             )}
-            style={{ backgroundColor: MEMO_COLOR_HEX[c] }}
+            style={{ backgroundColor: NOTE_COLOR_HEX[c] }}
           >
             {isSelected && (
               <Check
@@ -202,7 +202,7 @@ function MemoCardColorRow({ colors, onChange }: MemoCardColorRowProps) {
   );
 }
 
-export function MemoCardActions<T extends MemoListItem>({
+export function MemoCardActions<T extends NoteListItem>({
   memo,
   filePath,
   onFavoriteToggle,
@@ -217,8 +217,8 @@ export function MemoCardActions<T extends MemoListItem>({
   // memo-card menu's "copy link" / "copy full text" target the same file
   // the titlebar's commands would when the memo is actively open.
   const resolvePath = () => {
-    const notebook = useMemoStore.getState().selectedNotebook;
-    const relativePath = memoListItemRelativePath(memo);
+    const notebook = useNoteStore.getState().selectedNotebook;
+    const relativePath = noteListItemRelativePath(memo);
     return notebook?.path
       ? joinNotebookMemoPath(notebook.path, relativePath)
       : relativePath;
@@ -228,7 +228,7 @@ export function MemoCardActions<T extends MemoListItem>({
     const path = resolvePath();
     if (!path) return;
     try {
-      const link = buildNoteOpenLinkFromPath(path, useMemoStore.getState().notebooks);
+      const link = buildNoteOpenLinkFromPath(path, useNoteStore.getState().notebooks);
       if (!link) throw new Error('Cannot create an unambiguous notebook link');
       await writeClipboardText(link);
       toast.success(t('document.command.copySuccess'));
@@ -264,7 +264,7 @@ export function MemoCardActions<T extends MemoListItem>({
   // not navigate the work column or change the currently-open memo.
   const handleOpenProperties = () => {
     const path = resolvePath();
-    const notebook = useMemoStore.getState().selectedNotebook;
+    const notebook = useNoteStore.getState().selectedNotebook;
     window.dispatchEvent(
       new CustomEvent('flowix:open-note-properties', {
         detail: { path, scopePath: notebook?.path ?? null },

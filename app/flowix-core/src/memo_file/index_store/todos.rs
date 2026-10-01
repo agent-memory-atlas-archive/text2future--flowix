@@ -11,8 +11,8 @@ impl MemoFile {
         sort: &str,
     ) -> std::io::Result<Vec<MemoTodoEntry>> {
         let notebook_id = self.notebook_id_for_index(notebook_id);
-        if self.v2_index_is_ready(&notebook_id)? {
-            if let Some(entries) = self.v2_todo_entries_with_legacy_ids(&notebook_id, sort)? {
+        if self.note_index_is_ready(&notebook_id)? {
+            if let Some(entries) = self.note_todo_entries_with_legacy_ids(&notebook_id, sort)? {
                 return Ok(entries);
             }
         }

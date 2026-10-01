@@ -9,10 +9,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@platform/tauri/client', () => ({
-  memos: { searchPathNotes: mocks.searchPathNotes },
+  notes: { search: mocks.searchPathNotes },
 }));
-vi.mock('@features/memo/store/memo-store', () => ({
-  useMemoStore: { getState: () => ({ notebooks: mocks.notebooks }) },
+vi.mock('@features/memo/store/note-store', () => ({
+  useNoteStore: { getState: () => ({ notebooks: mocks.notebooks }) },
 }));
 
 afterEach(() => {

@@ -9,7 +9,7 @@ import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { agent } from '@platform/tauri/client/agent';
 import { useAgentSessionStore } from '@features/agent/store/agent-session-store';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { acquireThreadInterest } from '@features/agent/store/thread-interest';
 import type { ThreadState } from '@features/agent/store/thread-runtime-state';
 import {
@@ -532,6 +532,7 @@ export function AgentConversationDetail({
         await openPath(localPath);
       })().catch((error) => {
         logger.error('Failed to open conversation link', { error });
+        toast.error(error instanceof Error ? error.message : String(error));
       });
     };
     body.addEventListener('click', handleMessageLinkClick);
@@ -733,9 +734,9 @@ export function AgentConversationDetail({
         const snapshotNotebookPath = snapshot?.notebookPath?.trim();
         const notebookPath = snapshotNotebookPath
           || (notebookId
-            ? useMemoStore.getState().notebooks.find((item) => item.id === notebookId)?.path
+            ? useNoteStore.getState().notebooks.find((item) => item.id === notebookId)?.path
             : undefined)
-          || useMemoStore.getState().selectedNotebook?.path;
+          || useNoteStore.getState().selectedNotebook?.path;
         if (notebookPath) {
           notebookAgentSettingsDialogRef.current ??= new NotebookAgentSettingsDialogController();
           notebookAgentSettingsDialogRef.current.open(notebookPath);

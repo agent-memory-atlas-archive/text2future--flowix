@@ -9,9 +9,7 @@
 //! 閰嶇疆鍔犺浇: `preference.json::watcher` 瀛楁, 杩愯鏃朵互 `Arc<RwLock<WhitelistConfig>>`
 //! �?���?(`MemoWatcher::set_whitelist` + `lib.rs::setup` �?�� `user-config-changed` 监听)�?//! �??到�?字�?时走 `Default::default()`�?//!
 //! 涓庢棫 watcher 纭紪鐮佽鍒欑殑鍏崇郴:
-//! - 鏃? `if path.components().any(|c| c.as_os_str() == ".metadata")`
-//! - �? `whitelist.allows(path)?` 一行�?�? 行为完全一�?(默�? skip_dirs
-//!   鍖呭惈 `.metadata`)
+//! - �? `whitelist.allows(path)?` 一行�?�? 行为完全一�?
 
 use std::path::Path;
 
@@ -40,12 +38,6 @@ impl Default for WhitelistConfig {
         Self {
             skip_dirs: vec![
                 ".flowix".into(),
-                ".metadata".into(),
-                ".git".into(),
-                ".DS_Store".into(),
-                "node_modules".into(),
-                ".cache".into(),
-                ".trash".into(),
                 // Plugin artifacts are implementation files, not notebook
                 // notes. Their Markdown must never be registered by the
                 // generic watcher; the plugin pointer note is the user-facing
@@ -55,21 +47,11 @@ impl Default for WhitelistConfig {
                 // save_attachment / save_attachment_content 浼氭妸鏂囦欢澶嶅埗
                 // �?<notebook>/attachments/<name>.md. 该目录下�?.md �?                // �?memo, 不应�?watcher 解析为新笔�? (会污染列�?
                 // 产生"无法打开"的�?立�?�?. attachments-cache 同理.
-                "attachments".into(),
-                "attachments-cache".into(),
             ],
-            skip_files: vec![
-                "*.tmp".into(),
-                "*.swp".into(),
-                "*~".into(),
-                ".DS_Store".into(),
-                "Thumbs.db".into(),
-                "*.bak".into(),
-                "*.lock".into(),
-            ],
+            skip_files: vec![],
             allowed_extensions: vec!["md".into(), "markdown".into()],
             max_file_size: Some(50 * 1024 * 1024), // 50MB
-            watch_hidden: false,
+            watch_hidden: true,
             allowed_filename_patterns: Vec::new(),
         }
     }
@@ -91,7 +73,7 @@ impl WhitelistConfig {
             .components()
             .any(|component| component.as_os_str() == ".flowix")
         {
-            return Err(DropReason::MetadataDirectory);
+            return Err(DropReason::InternalDirectory);
         }
 
         // 1. 闅愯棌鏂囦欢
@@ -108,14 +90,8 @@ impl WhitelistConfig {
 
         // 2. 璺宠繃鐩綍 (component-level)
         for skip in &self.skip_dirs {
-            // `.metadata` 鍗曠嫭鏍囪 (鍘嗗彶浠ｇ爜鏄惧紡 skip, 娌跨敤 DropReason::MetadataDirectory)
-            let reason = if skip == ".metadata" {
-                DropReason::MetadataDirectory
-            } else {
-                DropReason::PathBlacklisted
-            };
             if path.components().any(|c| c.as_os_str() == skip.as_str()) {
-                return Err(reason);
+                return Err(DropReason::PathBlacklisted);
             }
         }
 
@@ -208,21 +184,13 @@ mod tests {
     }
 
     #[test]
-    fn default_skips_metadata_dir() {
-        let w = WhitelistConfig::default();
-        assert_eq!(
-            w.allows(Path::new("/x/.metadata/internal.tmp")),
-            Err(DropReason::MetadataDirectory)
-        );
-    }
-
     #[test]
     fn flowix_dir_is_always_skipped_when_hidden_watching_is_enabled() {
         let mut w = WhitelistConfig::default();
         w.watch_hidden = true;
         assert_eq!(
             w.allows(Path::new("/x/.flowix/versions/memo/v_1.md")),
-            Err(DropReason::MetadataDirectory)
+            Err(DropReason::InternalDirectory)
         );
     }
 
@@ -255,11 +223,6 @@ mod tests {
     fn watch_hidden_true_allows_dots() {
         let mut w = WhitelistConfig::default();
         w.watch_hidden = true;
-        // .metadata 仍然黑名单优�?
-        assert_eq!(
-            w.allows(Path::new("/x/.metadata/x.md")),
-            Err(DropReason::MetadataDirectory)
-        );
         // .DS_Store 仍然黑名�?
         assert_eq!(
             w.allows(Path::new("/x/.DS_Store")),

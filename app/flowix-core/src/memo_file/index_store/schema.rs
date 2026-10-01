@@ -594,7 +594,7 @@ impl MemoFile {
             return Ok(());
         }
 
-        let legacy_path = self.get_global_index_db_path();
+        let legacy_path = self.registry_db_path();
         if !legacy_path.is_file() {
             conn.execute(
                 "INSERT OR REPLACE INTO notebook_index_meta (key, value) VALUES ('legacy_global_index_import_v1', ?1)",
@@ -604,7 +604,7 @@ impl MemoFile {
             return Ok(());
         }
 
-        let legacy = self.open_index_db()?;
+        let legacy = self.open_registry_db()?;
         let has_memos: bool = legacy
             .query_row(
                 "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memos')",
@@ -801,7 +801,7 @@ impl MemoFile {
         &self,
         notebook_id: &str,
     ) -> std::io::Result<Connection> {
-        let conn = self.open_notebook_index_db(notebook_id)?;
+        let conn = self.open_notebook_db(notebook_id)?;
         self.ensure_memo_tables(&conn)?;
         self.ensure_local_notebook_row(&conn, notebook_id)?;
         self.import_legacy_global_memo_index(&conn, notebook_id)?;
@@ -1149,7 +1149,7 @@ impl MemoFile {
         // Completed notebook migrations are checked on every startup. Read
         // their marker without running the full memo schema setup and legacy
         // import. A new notebook still takes the normal initialization path.
-        let path = self.notebook_index_db_path(notebook_id)?;
+        let path = self.notebook_db_path(notebook_id)?;
         if path.is_file() {
             let conn =
                 Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)

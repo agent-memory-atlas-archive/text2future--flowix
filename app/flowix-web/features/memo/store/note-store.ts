@@ -1,20 +1,29 @@
-import { joinNotebookMemoPath } from '@/lib/path';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { memoRepository, notebookRepository, type FilterType, type SortType } from '@features/memo/services';
-import { getMemoQueryKey } from '@features/memo/services/memo-query-key';
+import { noteRepository, notebookRepository, type FilterType, type SortType } from '@features/memo/services';
+import { getNoteQueryKey } from '@features/memo/services/note-query-key';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { useTagStore } from '@features/memo/store/tag-store';
-import { memoMatchesCustomFilter, useCustomFilterStore, type CustomFilter } from '@features/memo/store/custom-filter-store';
+import { memoMatchesCustomFilter, useCustomFilterStore } from '@features/memo/store/custom-filter-store';
+import { normalizePluginId } from '@features/plugin/plugin-note';
 
-import type { MemoColor, MemoItem, PathNoteListItem } from '@/types/memo-item';
-import type { CreatedPathDocument } from '@platform/tauri/client';
-export { MEMO_COLORS } from '@/types/memo-item';
+import type { NoteColor, NoteListItem } from '@/types/note-item';
+import type { CreatedNoteDocument } from '@platform/tauri/client';
+export { NOTE_COLORS } from '@/types/note-item';
+
+// Clear the retired Memo list UI state when this module loads; Note state uses a new key.
+if (typeof window !== 'undefined') {
+  try {
+    window.localStorage.removeItem('flowix-memo-storage');
+  } catch {
+    // Storage can be unavailable in restricted browser contexts.
+  }
+}
 
 // 颜色筛选二级选项。'any' = 任意带色 (memo.colors.length > 0),
 // 'none' = 无色 (memo.colors.length === 0), 其它值是具体颜色单选。
 // 颜色值会通过独立的后端分页参数下发, 保证颜色筛选和分页结果一致。
-export type ColorFilterValue = 'any' | 'none' | MemoColor;
+export type ColorFilterValue = 'any' | 'none' | NoteColor;
 
 // FilterType 增加了中间列专用的 'color' 维度。后端 filter 仍使用 all,
 // 具体颜色通过 color 参数传递。
@@ -23,7 +32,7 @@ export type ExtendedFilterType = FilterType | 'color' | 'custom';
 /** Which primary surface is shown in the middle column. */
 export type MiddleColumnView = 'notes' | 'conversations';
 
-export type MemoLibraryStartupPhase = 'idle' | 'loading' | 'ready' | 'error';
+export type NoteLibraryStartupPhase = 'idle' | 'loading' | 'ready' | 'error';
 
 interface MemoListPageQuery {
   notebookId?: string;
@@ -35,14 +44,14 @@ interface MemoListPageQuery {
   customFilterId: string | null;
 }
 
-export interface SelectedPathNoteIdentity {
+export interface SelectedNoteIdentity {
   notebookId: string;
   relativePath: string;
 }
 
-// 文档颜色标签 — 跟后端 `MemoColor` 镜像 (`#[serde(rename_all = "lowercase")]`),
+// 文档颜色标签 — 跟后端 `NoteColor` 镜像 (`#[serde(rename_all = "lowercase")]`),
 // 写入 memo index。单文档可挂多个色, 空数组即"无颜色"。色值在
-// `MEMO_COLOR_HEX` 集中维护, picker / 列表 dot 共用。
+// `NOTE_COLOR_HEX` 集中维护, picker / 列表 dot 共用。
 
 /**
  * 7 色色板 → 返回 `var(--memo-color-<key>)`, 由 css/theme/{light,dark,rock}.css
@@ -50,13 +59,13 @@ export interface SelectedPathNoteIdentity {
  *   - 各主题能各自微调 L / C / hue, 暗底提一档亮度、浅底降 chroma 让色
  *     块"嵌进"岩灰底。
  *   - 消费点 (picker 按钮底色 / 列表小圆点) 不需要感知主题 ── 读 `style={{
- *     backgroundColor: MEMO_COLOR_HEX[c] }}` 一致, 浏览器在元素层面解析 var。
+ *     backgroundColor: NOTE_COLOR_HEX[c] }}` 一致, 浏览器在元素层面解析 var。
  *
  * 历史: 此前是硬编码 hex (Tailwind 500 阶), L=62–80% 偏亮、chroma 中等,
  * 在暗底上不够"立得住"。改 OKLCH + 主题感知后, 整体降 L 6–10%、提 chroma
  * 15–25%, 跨主题色相识别稳定 (hue 不动或偏移 ≤ 8°)。
  */
-export const MEMO_COLOR_HEX: Record<MemoColor, string> = {
+export const NOTE_COLOR_HEX: Record<NoteColor, string> = {
   red: 'var(--memo-color-red)',
   orange: 'var(--memo-color-orange)',
   yellow: 'var(--memo-color-yellow)',
@@ -83,57 +92,6 @@ export interface Notebook {
 }
 
 /** 最近在资料文件树中打开的文档。只持久化路径，不缓存文档内容。 */
-function compareMemoItems(sort: SortType) {
-  return (a: MemoItem, b: MemoItem) => {
-    // 置顶优先于任何 sort 维度: pinned memo 始终靠前.
-    // filter === 'favorited' 时所有可见 memo 都是 favorited, 此分支恒 false.
-    if (a.favorited !== b.favorited) {
-      return Number(b.favorited) - Number(a.favorited);
-    }
-
-    if (sort === 'filenameAsc' || sort === 'filenameDesc') {
-      const filenameOrder = a.filename.toLowerCase().localeCompare(b.filename.toLowerCase())
-        || a.filename.localeCompare(b.filename)
-        || a.id.localeCompare(b.id);
-      return sort === 'filenameDesc' ? -filenameOrder : filenameOrder;
-    }
-
-    if (sort === 'updatedAt') {
-      return (b.updatedAt - a.updatedAt) || b.id.localeCompare(a.id);
-    }
-
-    return (b.createdAt - a.createdAt) || b.id.localeCompare(a.id);
-  };
-}
-
-function memoMatchesFilter(memo: MemoItem, filter: FilterType): boolean {
-  const now = new Date();
-  switch (filter) {
-    case 'todos':
-      return memo.todos.length > 0;
-    case 'agents':
-      return memo.agents.length > 0;
-    case 'favorited':
-      return memo.favorited;
-    case 'tagged':
-      return memo.tags.length > 0;
-    case 'thisWeek': {
-      const day = now.getDay();
-      const diffToMonday = day === 0 ? 6 : day - 1;
-      const start = new Date(now);
-      start.setHours(0, 0, 0, 0);
-      start.setDate(start.getDate() - diffToMonday);
-      return memo.createdAt >= start.getTime() && memo.createdAt <= now.getTime();
-    }
-    case 'thisMonth': {
-      const start = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-      return memo.createdAt >= start && memo.createdAt <= now.getTime();
-    }
-    default:
-      return true;
-  }
-}
-
 // 把前端的 `ExtendedFilterType` 转成后端识别的 `FilterType`。
 // 'color' 是前端专用, 在后端没有意义 → 退化成 'all' 拉全量, 由前端 store
 // 在 useMemo 里按 `colorFilter` 二次过滤。其他值原样下发。
@@ -141,41 +99,35 @@ function toBackendFilter(filter: ExtendedFilterType): FilterType {
   return filter === 'color' || filter === 'custom' ? 'all' : filter;
 }
 
-function upsertSortedMemo(
-  current: MemoItem[],
-  memo: MemoItem,
-  filter: ExtendedFilterType,
-  sort: SortType,
-  customFilter?: CustomFilter,
-): MemoItem[] {
-  const withoutExisting = current.filter((item) => item.id !== memo.id);
-  if (filter === 'custom' && (!customFilter || !memoMatchesCustomFilter(memo, customFilter))) {
-    return withoutExisting;
-  }
-  // 'color' 在 memoMatchesFilter 的 default 分支会被放行 (后端没返回任何
-  // 数据可过滤, 这里只是 upsert 排序); 实际 UI 端会在 useMemo 里按
-  // colorFilter 二次过滤, 新建笔记不挂色会自然落选。
-  if (!memoMatchesFilter(memo, filter as FilterType)) {
-    return withoutExisting;
-  }
-  return [...withoutExisting, memo].sort(compareMemoItems(sort));
+function compareNotes(sort: SortType) {
+  return (a: NoteListItem, b: NoteListItem) => {
+    if (a.favorited !== b.favorited) return Number(b.favorited) - Number(a.favorited);
+    if (sort === 'filenameAsc' || sort === 'filenameDesc') {
+      const order = a.filename.toLowerCase().localeCompare(b.filename.toLowerCase())
+        || a.filename.localeCompare(b.filename)
+        || a.relativePath.localeCompare(b.relativePath);
+      return sort === 'filenameDesc' ? -order : order;
+    }
+    const dateOrder = sort === 'updatedAt'
+      ? b.updatedAt - a.updatedAt
+      : b.createdAt - a.createdAt;
+    return dateOrder || b.relativePath.localeCompare(a.relativePath);
+  };
 }
 
-export interface MemoStore {
-  // List data
-  memos: MemoItem[];
-  /** ID-free primary list data, keyed by notebook-relative path. */
-  pathNotes: PathNoteListItem[];
+export interface NoteLibraryStore {
+  /** Note list data, keyed by notebook id and relative path. */
+  notes: NoteListItem[];
   notebooks: Notebook[];
   /** Whether the backend notebook collection has completed its first load. */
   notebooksInitialized: boolean;
   /** Lifecycle of the main-window notebook + initial memo bootstrap. */
-  startupPhase: MemoLibraryStartupPhase;
+  startupPhase: NoteLibraryStartupPhase;
   startupError: string | null;
   /** Query satisfied by the initial memo load, if startup reached ready. */
   initialMemoQueryKey: string | null;
   // Selection state
-  selectedPathNote: SelectedPathNoteIdentity | null;
+  selectedNote: SelectedNoteIdentity | null;
   selectedNotebook: Notebook | null;
   /** Stable persisted identity; the full entity is hydrated from backend data. */
   selectedNotebookId: string | null;
@@ -185,7 +137,7 @@ export interface MemoStore {
   activePluginId: string | null;
   activeCustomFilterId: string | null;
   activeSort: SortType;
-  // 'color' 二级弹窗用的具体颜色值。'any'/'none'/具体颜色 (MEMO_COLORS)。
+  // 'color' 二级弹窗用的具体颜色值。'any'/'none'/具体颜色 (NOTE_COLORS)。
   // 当 activeFilter !== 'color' 时此值仍然保留, 切回颜色筛选时恢复。
   colorFilter: ColorFilterValue;
   // Reload trigger
@@ -198,16 +150,15 @@ export interface MemoStore {
   memoListLoadingMore: boolean;
 
   // Setters
-  setMemos: (memos: MemoItem[]) => void;
   /**
    * Replace the notebook snapshot. When supplied, selectedNotebookId is
    * applied in the same state update so deletion/reconciliation cannot expose
    * a transient `null` selection to notebook synchronization effects.
    */
   setNotebooks: (notebooks: Notebook[], selectedNotebookId?: string | null) => void;
-  setStartupPhase: (phase: MemoLibraryStartupPhase, error?: string | null) => void;
+  setStartupPhase: (phase: NoteLibraryStartupPhase, error?: string | null) => void;
   setStartupReady: (initialMemoQueryKey: string) => void;
-  setSelectedPathNote: (identity: SelectedPathNoteIdentity | null) => void;
+  setSelectedNote: (identity: SelectedNoteIdentity | null) => void;
   setSelectedNotebook: (notebook: Notebook | null) => void;
   /**
    * Persist a new notebook display order. `nextOrderIds` is the desired
@@ -222,47 +173,21 @@ export interface MemoStore {
   setActiveSort: (sort: SortType) => void;
   setColorFilter: (color: ColorFilterValue) => void;
   triggerRefresh: () => void;
-  upsertMemo: (memo: MemoItem) => void;
-  // Incremental memo update (avoids full reload)
-  // v2 rename 联动: filename 加入可 patch 字段, rename 时只 patch filename + updatedAt
-  // 即可, 不动 preview / tags / todos 这些派生字段 (rename 期间 body 不变)。
-  updateMemoMeta: (id: string, meta: Partial<Pick<MemoItem, 'updatedAt' | 'preview' | 'thumbnail' | 'favorited' | 'filename'>>) => void;
   // Data loading
-  loadPathNotes: (params?: { notebookId?: string; filter?: ExtendedFilterType; sort?: SortType; tagId?: string }) => Promise<boolean>;
+  loadNotes: (params?: { notebookId?: string; filter?: ExtendedFilterType; sort?: SortType; tagId?: string }) => Promise<boolean>;
+  upsertCreatedNote: (created: CreatedNoteDocument) => void;
   loadMoreMemos: () => Promise<boolean>;
   loadNotebooks: () => Promise<void>;
-  createMemo: (tag: string | undefined, notebookId: string) => Promise<CreatedPathDocument>;
-  deleteMemo: (id: string) => Promise<boolean>;
-  favoriteMemo: (id: string) => Promise<boolean>;
-  unfavoriteMemo: (id: string) => Promise<boolean>;
-  setMemoColors: (id: string, colors: MemoColor[]) => Promise<boolean>;
-
-  // 后端 memo-event 推送的 store action — 由 memo-dispatcher 调用。
-  // 单条 memo 的权威 payload 直接增量更新列表；notebook 级的 tags/todos
-  // 派生视图由 dispatcher 触发对应 store 重新查询。
-  handleMemoCreated: (memo?: MemoItem) => void;
-  /**
-   * v2: 后端 emit 的 `Updated` payload 携带完整 memo (rename_memo_file /
-   * reload_memo_from_disk / read_memo 之后的最新 entry)。store 拿 memo 按 id
-   * 决定是 update (已在 memos 数组里) 还是 insert (不在 memos 数组里)。
-   *
-   * 不再调 readMemo IPC, 不再依赖 path 比对 filename, 不再手工合成 patched
-   * 对象。列表选择只保存笔记本和相对路径。
-   */
-  handleMemoUpdated: (memo: MemoItem) => void;
-  handleMemoDeleted: (id: string) => void;
+  createNote: (tag: string | undefined, notebookId: string) => Promise<CreatedNoteDocument>;
+  /** Invalidate the Note list after a legacy Memo IPC event. */
+  handleMemoEvent: () => void;
 }
 
-function omitUndefined<T extends object>(value: T): Partial<T> {
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>).filter(([, fieldValue]) => fieldValue !== undefined)
-  ) as Partial<T>;
-}
 
-function toPathNoteListItem(
-  note: Awaited<ReturnType<typeof memoRepository.listByPath>>['notes'][number],
+function toNoteListItem(
+  note: Awaited<ReturnType<typeof noteRepository.listByPath>>['notes'][number],
   notebookId: string,
-): PathNoteListItem {
+): NoteListItem {
   const relativePath = note.relativePath.replace(/\\/g, '/');
   return {
     ...note,
@@ -297,17 +222,16 @@ function invalidatePendingMemoLoads(): void {
   loadMemosRequestSeq += 1;
 }
 
-export const useMemoStore = create<MemoStore>()(
+export const useNoteStore = create<NoteLibraryStore>()(
   persist(
     (set, get) => ({
-      memos: [],
-      pathNotes: [],
+      notes: [],
       notebooks: [],
       notebooksInitialized: false,
       startupPhase: 'idle',
       startupError: null,
       initialMemoQueryKey: null,
-      selectedPathNote: null,
+      selectedNote: null,
       selectedNotebook: null,
       selectedNotebookId: null,
       middleColumnView: 'notes',
@@ -323,17 +247,6 @@ export const useMemoStore = create<MemoStore>()(
       memoListHasMore: false,
       memoListLoadingMore: false,
 
-      setMemos: (memos) => {
-        invalidatePendingMemoLoads();
-        set({
-          memos,
-          memoListQueryKey: null,
-          memoListQuery: null,
-          memoListNextCursor: null,
-          memoListHasMore: false,
-          memoListLoadingMore: false,
-        });
-      },
       setNotebooks: (notebooks, selectedNotebookIdOverride) => set((state) => {
         // Prefer the persisted id. The object fallback keeps tests and
         // pre-migration in-memory callers compatible while the first backend
@@ -348,10 +261,10 @@ export const useMemoStore = create<MemoStore>()(
           notebooks,
           selectedNotebook,
           selectedNotebookId: selectedNotebook?.id ?? null,
-          selectedPathNote: state.selectedPathNote
-            && state.selectedPathNote.notebookId === selectedNotebook?.id
-            && notebooks.some((notebook) => notebook.id === state.selectedPathNote?.notebookId)
-            ? state.selectedPathNote
+          selectedNote: state.selectedNote
+            && state.selectedNote.notebookId === selectedNotebook?.id
+            && notebooks.some((notebook) => notebook.id === state.selectedNote?.notebookId)
+            ? state.selectedNote
             : null,
           notebooksInitialized: true,
         };
@@ -366,7 +279,7 @@ export const useMemoStore = create<MemoStore>()(
         startupError: null,
         initialMemoQueryKey,
       }),
-      setSelectedPathNote: (selectedPathNote) => set({ selectedPathNote }),
+      setSelectedNote: (selectedNote) => set({ selectedNote }),
       setSelectedNotebook: (notebook) => {
         const currentNotebookId = get().selectedNotebookId
           ?? get().selectedNotebook?.id
@@ -377,8 +290,8 @@ export const useMemoStore = create<MemoStore>()(
           set({
             selectedNotebook: notebook,
             selectedNotebookId: nextNotebookId,
-            selectedPathNote: null,
-            pathNotes: [],
+            selectedNote: null,
+            notes: [],
             middleColumnView: 'notes',
             activeFilter: 'all',
             activePluginId: null,
@@ -388,11 +301,17 @@ export const useMemoStore = create<MemoStore>()(
         }
         set({ selectedNotebook: notebook, selectedNotebookId: nextNotebookId });
       },
-      // 中间列五种入口互斥单选 ── 全集: 全部 / 对话 / 待办 / 标签 /
-      // 文件夹浏览。每条 setter 都把其他状态归位, 避免点标签时文件树还
-      // 霸着中间列。
+      // Surface navigation is independent from note filtering. Keep the last
+      // note filter intact while the user visits the conversation surface.
       setMiddleColumnView: (view) => {
-        get().setActiveFilter(view === 'conversations' ? 'agents' : 'all');
+        const previous = get();
+        if (previous.middleColumnView === view) return;
+        set({
+          middleColumnView: view,
+          ...(view === 'notes' && previous.activeFilter === 'agents'
+            ? { activeFilter: 'all', activeCustomFilterId: null, activePluginId: null }
+            : {}),
+        });
       },
       setActiveFilter: (filter) => {
         const previous = get();
@@ -441,33 +360,7 @@ export const useMemoStore = create<MemoStore>()(
       setColorFilter: (color) => set({ colorFilter: color }),
       triggerRefresh: () => set((state) => ({ refreshTrigger: state.refreshTrigger + 1 })),
 
-      upsertMemo: (memo) => {
-        invalidatePendingMemoLoads();
-        set((state) => ({
-          memos: state.memos.some((item) => item.id === memo.id)
-            ? upsertSortedMemo(
-                state.memos,
-                memo,
-                state.activeFilter,
-                state.activeSort,
-                state.activeFilter === 'custom'
-                  ? useCustomFilterStore.getState().filtersByNotebook[state.selectedNotebook?.id ?? '']
-                    ?.find((item) => item.id === state.activeCustomFilterId)
-                  : undefined,
-              )
-            : state.memos,
-        }));
-      },
-
-      updateMemoMeta: (id, meta) => {
-        invalidatePendingMemoLoads();
-        const nextMeta = omitUndefined(meta);
-        set((state) => ({
-          memos: state.memos.map((m) => m.id === id ? { ...m, ...nextMeta } : m),
-        }));
-      },
-
-      loadPathNotes: async (params) => {
+      loadNotes: async (params) => {
         const requestSeq = ++loadMemosRequestSeq;
         const state = get();
         const notebookId = params?.notebookId || state.selectedNotebook?.id;
@@ -480,7 +373,7 @@ export const useMemoStore = create<MemoStore>()(
         const tagId = params?.tagId
           ?? (filter === 'tagged' ? useTagStore.getState().selectedTagId ?? undefined : undefined);
         const color = filter === 'color' ? state.colorFilter : undefined;
-        const queryKey = getMemoQueryKey(
+        const queryKey = getNoteQueryKey(
           notebookId,
           filter,
           sort,
@@ -490,12 +383,12 @@ export const useMemoStore = create<MemoStore>()(
           customFilterId,
         );
         if (pluginId) {
-          const indexed = await memoRepository.listAllByPath(notebookId);
+          const indexed = await noteRepository.listAllByPath(notebookId);
           if (requestSeq !== loadMemosRequestSeq) return false;
           set({
-            pathNotes: indexed
-              .filter((note) => note.properties.flowix_plugin === pluginId)
-              .map((note) => toPathNoteListItem(note, notebookId)),
+            notes: indexed
+              .filter((note) => normalizePluginId(note.properties.flowix_plugin) === pluginId)
+              .map((note) => toNoteListItem(note, notebookId)),
             memoListQueryKey: queryKey,
             memoListQuery: {
               notebookId, filter, sort, tagId, color, pluginId, customFilterId,
@@ -511,7 +404,7 @@ export const useMemoStore = create<MemoStore>()(
           ? useCustomFilterStore.getState().filtersByNotebook[notebookId]
             ?.find((item) => item.id === customFilterId)
           : null;
-        const response = await memoRepository.listByPath({
+        const response = await noteRepository.listByPath({
           notebookId,
           filter: toBackendFilter(filter),
           sort,
@@ -520,11 +413,11 @@ export const useMemoStore = create<MemoStore>()(
           limit: 50,
         });
         if (requestSeq !== loadMemosRequestSeq) return false;
-        const pathNotes = response.notes
-          .map((note) => toPathNoteListItem(note, notebookId))
+        const notes = response.notes
+          .map((note) => toNoteListItem(note, notebookId))
           .filter((note) => customFilter ? memoMatchesCustomFilter(note, customFilter) : true);
         set({
-          pathNotes,
+          notes,
           memoListQueryKey: queryKey,
           memoListQuery: {
             notebookId, filter, sort, tagId, color, pluginId: null, customFilterId,
@@ -534,6 +427,35 @@ export const useMemoStore = create<MemoStore>()(
           memoListLoadingMore: false,
         });
         return true;
+      },
+
+      upsertCreatedNote: (created) => {
+        const state = get();
+        if (state.selectedNotebook?.id !== created.notebookId || state.activePluginId) return;
+        const note = toNoteListItem(created.entry, created.notebookId);
+        const filter = state.activeFilter;
+        if (filter === 'favorited' && !note.favorited) return;
+        if (filter === 'todos' && note.todos.length === 0) return;
+        if (filter === 'agents' && note.agents.length === 0) return;
+        if (filter === 'tagged') {
+          const tag = useTagStore.getState().selectedTagId;
+          if (!tag || !note.tags.some((value) => value === tag || value.startsWith(`${tag}/`))) return;
+        }
+        if (filter === 'custom') {
+          const customFilter = useCustomFilterStore.getState().filtersByNotebook[created.notebookId]
+            ?.find((item) => item.id === state.activeCustomFilterId);
+          if (!customFilter || !memoMatchesCustomFilter(note, customFilter)) return;
+        }
+        invalidatePendingMemoLoads();
+        set((current) => ({
+          notes: [
+            ...current.notes.filter((item) => (
+              item.notebookId !== created.notebookId || item.relativePath !== note.relativePath
+            )),
+            note,
+          ].sort(compareNotes(current.activeSort)),
+          memoListLoadingMore: false,
+        }));
       },
 
       loadMoreMemos: async () => {
@@ -552,7 +474,7 @@ export const useMemoStore = create<MemoStore>()(
 
         // Do not let a scroll event from the previous query append into a new
         // notebook/filter while its first page is still in flight.
-        const currentQueryKey = getMemoQueryKey(
+        const currentQueryKey = getNoteQueryKey(
               state.selectedNotebook?.id,
               state.activeFilter,
               state.activeSort,
@@ -569,7 +491,7 @@ export const useMemoStore = create<MemoStore>()(
         const cursor = state.memoListNextCursor;
         set({ memoListLoadingMore: true });
         try {
-          const response = await memoRepository.listByPath({
+          const response = await noteRepository.listByPath({
                 notebookId: query.notebookId,
                 filter: toBackendFilter(query.filter),
                 sort: query.sort,
@@ -585,10 +507,10 @@ export const useMemoStore = create<MemoStore>()(
                 ?.find((item) => item.id === query.customFilterId)
               : null;
             const notes = response.notes
-              .map((note) => toPathNoteListItem(note, query.notebookId!))
+              .map((note) => toNoteListItem(note, query.notebookId!))
               .filter((note) => customFilter ? memoMatchesCustomFilter(note, customFilter) : true);
             set((current) => {
-              const byPath = new Map(current.pathNotes.map((note) => [
+              const byPath = new Map(current.notes.map((note) => [
                 `${note.notebookId}\u0000${note.relativePath}`,
                 note,
               ]));
@@ -596,7 +518,7 @@ export const useMemoStore = create<MemoStore>()(
                 byPath.set(`${note.notebookId}\u0000${note.relativePath}`, note);
               }
               return {
-                pathNotes: [...byPath.values()],
+                notes: [...byPath.values()],
                 memoListNextCursor: response.nextCursor ?? null,
                 memoListHasMore: response.hasMore ?? Boolean(response.nextCursor),
                 memoListLoadingMore: false,
@@ -639,7 +561,7 @@ export const useMemoStore = create<MemoStore>()(
         }
       },
 
-      createMemo: async (tag, notebookId) => {
+      createNote: async (tag, notebookId) => {
         // v4: 不再 markLocalMemoCreated — 后端 SelfWriteSuppressor 把
         // desktop 自写的 memo-event 在 watcher 端就掐掉, 不再到前端。
         // 事件去重/抑制由后端统一负责, 前端 store 不需要任何补丁。
@@ -651,127 +573,26 @@ export const useMemoStore = create<MemoStore>()(
           set({ activeFilter: createFilter });
         }
         const createTag = tag ?? (createFilter === 'tagged' ? selectedTagId ?? undefined : undefined);
-        const result = await memoRepository.create(createTag, notebookId);
+        const result = await noteRepository.create(createTag, notebookId);
         invalidatePendingMemoLoads();
-        await get().loadPathNotes({ notebookId, filter: createFilter });
+        await get().loadNotes({ notebookId, filter: createFilter });
         // 新建 memo 可能引入新 tag (body 派生) ── 主动 bump metadata refresh,
         // 让侧栏标签树立即出现新节点 / 更新计数。后端 SelfWriteSuppressor 会
         // 掐掉 desktop 自写的 memo-event, 不会自动触发 refresh, 必须手动调。
         useTagStore.getState().triggerMetadataRefresh();
         return result;
       },
-
-      deleteMemo: async (id) => {
-        const current = get();
-        const memo = current.memos.find(m => m.id === id);
-        const notebook = current.selectedNotebook;
-        const path = memo && notebook ? joinNotebookMemoPath(notebook.path, memo.relativePath ?? memo.filename) : null;
-        const success = path ? await memoRepository.delete(path) : false;
-        if (success) {
-          invalidatePendingMemoLoads();
-          const state = get();
-          set({
-            memos: state.memos.filter(m => m.id !== id),
-          });
-        }
-        return success;
-      },
-
-      favoriteMemo: async (id) => {
-        invalidatePendingMemoLoads();
-        const current = get();
-        const memo = current.memos.find(m => m.id === id);
-        const path = current.selectedNotebook && memo ? joinNotebookMemoPath(current.selectedNotebook.path, memo.relativePath ?? memo.filename) : null;
-        return path ? await memoRepository.favorite(path, id) : false;
-      },
-
-      unfavoriteMemo: async (id) => {
-        invalidatePendingMemoLoads();
-        const current = get();
-        const memo = current.memos.find(m => m.id === id);
-        const path = current.selectedNotebook && memo ? joinNotebookMemoPath(current.selectedNotebook.path, memo.relativePath ?? memo.filename) : null;
-        return path ? await memoRepository.unfavorite(path, id) : false;
-      },
-
-      // Update YAML colors by the current path through the document save queue.
-      setMemoColors: async (id, colors) => {
-        invalidatePendingMemoLoads();
-        const current = get();
-        const memo = current.memos.find(m => m.id === id);
-        const path = current.selectedNotebook && memo ? joinNotebookMemoPath(current.selectedNotebook.path, memo.relativePath ?? memo.filename) : null;
-        return path ? await memoRepository.setColors(path, colors, id) : false;
-      },
-
-      // ===== memo-event 推送入口 =====
-      // memo-dispatcher 监听后端 memo-event 后按 kind 派发到下面三个 action。
-      // 这里只处理 memo 列表里的单条记录；tags/todos 的 notebook 级刷新
-      // 由 dispatcher 根据 derivedChanged 信号交给 tag/todo store。
-
-      handleMemoCreated: (memo) => {
-        invalidatePendingMemoLoads();
-        if (!memo) {
-          get().triggerRefresh();
-          return;
-        }
-
-        set((state) => ({
-          memos:
-            state.activeFilter === 'tagged'
-              ? state.memos
-              : upsertSortedMemo(
-                  state.memos,
-                  memo,
-                  state.activeFilter,
-                  state.activeSort,
-                  state.activeFilter === 'custom'
-                    ? useCustomFilterStore.getState().filtersByNotebook[state.selectedNotebook?.id ?? '']
-                      ?.find((item) => item.id === state.activeCustomFilterId)
-                    : undefined,
-                ),
-        }));
-        if (get().activeFilter === 'tagged') {
-          get().triggerRefresh();
-        }
-      },
-
-      handleMemoUpdated: (memo) => {
-        invalidatePendingMemoLoads();
-        // 旧元数据事件仍按 id 更新缓存；列表选择独立使用路径。
-        // - memos 数组里有这条 id: 替换为后端发来的权威 memo, 重排
-        // - 没有: 直接 push 进数组 (罕见, 但 reconcile / external tool create
-        //   等场景可能出现, 后端 emit 走 Updated 路径时用 minimal memo 兜底)
-        set((state) => {
-          const nextMemos = upsertSortedMemo(
-            state.memos,
-            memo,
-            state.activeFilter,
-            state.activeSort,
-            state.activeFilter === 'custom'
-              ? useCustomFilterStore.getState().filtersByNotebook[state.selectedNotebook?.id ?? '']
-                ?.find((item) => item.id === state.activeCustomFilterId)
-              : undefined,
-          );
-          return { memos: nextMemos };
-        });
-        get().triggerRefresh();
-      },
-
-      handleMemoDeleted: (id) => {
-        invalidatePendingMemoLoads();
-        set((state) => ({
-          memos: state.memos.filter((m) => m.id !== id),
-        }));
-        get().triggerRefresh();
-        // Deleted 不 bump refreshTrigger — 列表已经同步, 没有需要重拉的派生字段
-      },
+      // The IPC event is still Memo-shaped for compatibility, but the store
+      // only invalidates and reloads its path-keyed Note projection.
+      handleMemoEvent: () => get().triggerRefresh(),
     }),
     {
-      name: STORAGE_KEYS.MEMO,
+      name: STORAGE_KEYS.NOTE,
       partialize: (state) => ({
-        // Persist identities only. Notebook/Memo entities are backend data
+        // Persist identities only. Notebook and Note entities are backend data
         // and may be renamed, deleted, or updated while the app is closed.
         selectedNotebookId: state.selectedNotebookId ?? state.selectedNotebook?.id ?? null,
-        selectedPathNote: state.selectedPathNote,
+        selectedNote: state.selectedNote,
         // 侧边栏入口要和中间列一起恢复。中间列的颜色 / 时间筛选不属于
         // 侧边栏导航，因此恢复时归位到“全部”。
         middleColumnView: state.middleColumnView,
@@ -782,30 +603,6 @@ export const useMemoStore = create<MemoStore>()(
           ? state.activeCustomFilterId
           : null,
       }),
-      // Migrate the old persisted shape, which stored full selected entities.
-      // Do not rehydrate those stale objects into runtime state.
-      merge: (persisted, current) => {
-        const legacy = persisted as Partial<MemoStore> & {
-          selectedNotebook?: Notebook | null;
-        };
-        return {
-          ...current,
-          middleColumnView: legacy.middleColumnView === 'conversations'
-            ? 'conversations'
-            : legacy.activeFilter === 'agents' ? 'conversations' : 'notes',
-          activeFilter: legacy.activeFilter && isSidebarNavigationFilter(legacy.activeFilter)
-            ? legacy.activeFilter
-            : 'all',
-          selectedNotebook: null,
-          selectedNotebookId: legacy.selectedNotebookId
-            ?? legacy.selectedNotebook?.id
-            ?? null,
-          selectedPathNote: legacy.selectedPathNote ?? null,
-          activeCustomFilterId: legacy.activeFilter === 'custom'
-            ? legacy.activeCustomFilterId ?? null
-            : null,
-        };
-      },
     }
   )
 );

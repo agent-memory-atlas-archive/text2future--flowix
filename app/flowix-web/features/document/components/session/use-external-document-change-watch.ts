@@ -63,9 +63,12 @@ export function useExternalDocumentChangeWatch({
           logger.debug('change received', {
             kind: payload.kind,
             revision: payload.revision,
+            source: payload.source,
+            originWindowLabel: payload.originWindowLabel,
             matchesCurrentDocument: canonicalPath(payload.path) === currentPath,
           });
           if (disposed || canonicalPath(payload.path) !== currentPath) return;
+          if (payload.source === 'user_edit' && payload.originWindowLabel === getCurrentWindow().label) return;
           if (consumeExpectedExternalDocumentEvent(
             payload.path,
             payload.kind,

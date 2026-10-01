@@ -54,8 +54,8 @@ vi.mock("@features/agent/store/agent-session-store", () => ({
   },
 }));
 
-vi.mock("@features/memo/store/memo-store", () => ({
-  useMemoStore: {
+vi.mock("@features/memo/store/note-store", () => ({
+  useNoteStore: {
     getState: () => ({
       notebooks: state.notebooks,
       selectedNotebook: state.selectedNotebook,

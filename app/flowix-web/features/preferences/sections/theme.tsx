@@ -2,7 +2,7 @@
 
 import { Check, MonitorSmartphone } from 'lucide-react';
 import { Button } from '@shared/ui/button';
-import { DEFAULT_THEME_ID, THEME_OPTIONS, type ThemeId } from '@features/theme';
+import { DEFAULT_THEME_ID, THEME_OPTIONS, sanitizeTheme, type ThemeId } from '@features/theme';
 import { cn } from '@/lib/utils';
 import { SectionHeader, FIELD_TITLE_CLASS, FIELD_DESC_CLASS } from '@features/preferences/sections/primitives';
 import { useI18n } from '@/lib/i18n';
@@ -20,10 +20,12 @@ interface ThemeSectionProps {
 function ThemeCard({
   option,
   active,
+  isDefault,
   onSelect,
 }: {
   option: typeof THEME_OPTIONS[number];
   active: boolean;
+  isDefault: boolean;
   onSelect: () => void;
 }) {
   const { t } = useI18n();
@@ -99,7 +101,14 @@ function ThemeCard({
       </div>
 
       <div className="mt-2 space-y-0.5">
-        <div className={cn(FIELD_TITLE_CLASS)}>{t(labelKey)}</div>
+        <div className="flex items-center gap-1.5">
+          <span className={cn(FIELD_TITLE_CLASS)}>{t(labelKey)}</span>
+          {isDefault && (
+            <span className="rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted-foreground)]">
+              {t('preferences.theme.default')}
+            </span>
+          )}
+        </div>
         <div className={cn(FIELD_DESC_CLASS, 'line-clamp-1')}>
           {t(descriptionKey)}
         </div>
@@ -110,7 +119,7 @@ function ThemeCard({
 
 export function ThemeSection({ settings, updateSettings }: ThemeSectionProps) {
   const { t } = useI18n();
-  const active = settings.theme ?? DEFAULT_THEME_ID;
+  const active = sanitizeTheme(settings.theme ?? DEFAULT_THEME_ID);
 
   return (
     <div className="space-y-6 pb-16">
@@ -124,6 +133,7 @@ export function ThemeSection({ settings, updateSettings }: ThemeSectionProps) {
             key={opt.id}
             option={opt}
             active={active === opt.id}
+            isDefault={opt.id === DEFAULT_THEME_ID}
             onSelect={() => updateSettings({ theme: opt.id })}
           />
         ))}

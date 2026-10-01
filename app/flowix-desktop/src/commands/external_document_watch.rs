@@ -28,6 +28,9 @@ struct WatchRegistry {
     generations: HashMap<String, u64>,
     revisions: HashMap<String, String>,
     delivering: HashSet<String>,
+    delivery_epochs: HashMap<String, u64>,
+    active_writes: HashMap<PathBuf, usize>,
+    completed_writes: HashMap<PathBuf, (String, String, String)>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -36,6 +39,9 @@ struct ExternalDocumentChangedPayload {
     path: String,
     kind: &'static str,
     revision: String,
+    source: &'static str,
+    #[serde(rename = "originWindowLabel", skip_serializing_if = "Option::is_none")]
+    origin_window_label: Option<String>,
 }
 
 pub struct ExternalDocumentWatchState {
@@ -134,6 +140,7 @@ impl ExternalDocumentWatchState {
         registry.generations.remove(lease_id);
         registry.revisions.remove(lease_id);
         registry.delivering.remove(lease_id);
+        registry.delivery_epochs.remove(lease_id);
         let path = decrement_path_ref_count(&mut registry, &lease.path);
         drop(registry);
         if let Some(path) = path {
@@ -158,6 +165,7 @@ impl ExternalDocumentWatchState {
                 registry.generations.remove(&lease_id);
                 registry.revisions.remove(&lease_id);
                 registry.delivering.remove(&lease_id);
+                registry.delivery_epochs.remove(&lease_id);
                 if let Some(path) = decrement_path_ref_count(&mut registry, &lease.path) {
                     paths.push(path);
                 }
@@ -169,20 +177,64 @@ impl ExternalDocumentWatchState {
         }
     }
 
-    pub fn acknowledge_window_write(&self, window_label: &str, path: &Path) {
+    pub fn begin_window_write(&self, path: &Path) {
+        if let Ok(mut registry) = self.registry.lock() {
+            *registry.active_writes.entry(path.to_path_buf()).or_default() += 1;
+        }
+    }
+
+    pub fn finish_window_write(
+        &self,
+        app: &tauri::AppHandle,
+        window_label: &str,
+        path: &Path,
+        saved_content: Option<&str>,
+    ) {
+        let saved = saved_content.is_some();
         let revision = file_revision(path);
         if let Ok(mut registry) = self.registry.lock() {
-            let lease_ids = registry
-                .leases
-                .iter()
-                .filter(|(_, lease)| lease.window_label == window_label && lease.path == path)
-                .map(|(lease_id, _)| lease_id.clone())
-                .collect::<Vec<_>>();
-            for lease_id in lease_ids {
-                registry.revisions.insert(lease_id, revision.clone());
+            if let Some(content) = saved_content {
+                registry.completed_writes.insert(
+                    path.to_path_buf(),
+                    (window_label.to_string(), revision, content.to_string()),
+                );
+            }
+            if let Some(count) = registry.active_writes.get_mut(path) {
+                *count -= 1;
+                if *count == 0 {
+                    registry.active_writes.remove(path);
+                }
+            }
+            if !registry.active_writes.contains_key(path) {
+                if let Some((origin, written_revision, written_content)) =
+                    registry.completed_writes.remove(path)
+                {
+                    // If another process changed the file after this save, let
+                    // the ordinary watcher deliver that revision as external.
+                    if written_revision == file_revision(path)
+                        && std::fs::read_to_string(path).is_ok_and(|disk| disk == written_content)
+                    {
+                        let leases = registry.leases.iter()
+                            .filter(|(_, lease)| lease.path == path)
+                            .map(|(id, lease)| (id.clone(), lease.clone()))
+                            .collect::<Vec<_>>();
+                        for (id, lease) in leases {
+                            invalidate_delivery(&mut registry, &id);
+                            let delivered = lease.window_label == origin
+                                || emit_external_document_changed(
+                                    app, &lease, written_revision.clone(), "user_edit", Some(&origin),
+                                );
+                            if delivered {
+                                registry.revisions.insert(id, written_revision.clone());
+                            }
+                        }
+                    }
+                }
             }
         }
-        self.rebind_path(path);
+        if saved {
+            self.rebind_path(path);
+        }
     }
 
     fn unwatch_path(&self, path: &Path) {
@@ -250,18 +302,20 @@ fn emit_if_revision_changed(
     lease: &WatchLease,
 ) {
     let revision = file_revision(&lease.path);
-    let claimed = {
+    let delivery_epoch = {
         let Ok(mut registry) = registry.lock() else {
             return;
         };
         try_claim_revision(&mut registry, lease_id, &lease.path, &revision)
+            .then(|| registry.delivery_epochs.get(lease_id).copied())
+            .flatten()
     };
-    if !claimed {
+    let Some(delivery_epoch) = delivery_epoch else {
         return;
-    }
-    let delivered = emit_external_document_changed(app, lease, revision.clone());
+    };
+    let delivered = emit_external_document_changed(app, lease, revision.clone(), "external", None);
     if let Ok(mut registry) = registry.lock() {
-        complete_revision_delivery(&mut registry, lease_id, delivered, revision);
+        complete_revision_delivery(&mut registry, lease_id, delivery_epoch, delivered, revision);
     }
 }
 
@@ -276,8 +330,8 @@ fn try_claim_revision(
     lease_path: &Path,
     revision: &str,
 ) -> bool {
-    if registry
-        .leases
+    if registry.active_writes.contains_key(lease_path)
+        || registry.leases
         .get(lease_id)
         .is_none_or(|current| current.path != lease_path)
         || registry.revisions.get(lease_id).map(String::as_str) == Some(revision)
@@ -286,7 +340,13 @@ fn try_claim_revision(
         return false;
     }
     registry.delivering.insert(lease_id.to_string());
+    *registry.delivery_epochs.entry(lease_id.to_string()).or_default() += 1;
     true
+}
+
+fn invalidate_delivery(registry: &mut WatchRegistry, lease_id: &str) {
+    *registry.delivery_epochs.entry(lease_id.to_string()).or_default() += 1;
+    registry.delivering.remove(lease_id);
 }
 
 /// Pure state transition: finalize a previously claimed delivery.
@@ -297,9 +357,13 @@ fn try_claim_revision(
 fn complete_revision_delivery(
     registry: &mut WatchRegistry,
     lease_id: &str,
+    delivery_epoch: u64,
     delivered: bool,
     revision: String,
 ) {
+    if registry.delivery_epochs.get(lease_id).copied() != Some(delivery_epoch) {
+        return;
+    }
     registry.delivering.remove(lease_id);
     if delivered && registry.leases.contains_key(lease_id) {
         registry.revisions.insert(lease_id.to_string(), revision);
@@ -310,12 +374,16 @@ fn emit_external_document_changed(
     app: &tauri::AppHandle,
     lease: &WatchLease,
     revision: String,
+    source: &'static str,
+    origin_window_label: Option<&str>,
 ) -> bool {
     let exists = lease.path.is_file();
     let payload = ExternalDocumentChangedPayload {
         path: lease.path.to_string_lossy().to_string(),
         kind: if exists { "modified" } else { "deleted" },
         revision,
+        source,
+        origin_window_label: origin_window_label.map(str::to_string),
     };
     tracing::info!(
         "[external-watch] changed window={} kind={} path={}",
@@ -522,6 +590,19 @@ mod tests {
     }
 
     #[test]
+    fn local_write_defers_file_notifications_until_write_settles() {
+        let path = PathBuf::from("/tmp/flowix-external-watch/docs/Reference.md");
+        let mut registry = WatchRegistry::default();
+        registry.leases.insert("lease".into(), WatchLease {
+            window_label: "main".into(), path: path.clone(),
+        });
+        registry.active_writes.insert(path.clone(), 1);
+        assert!(!try_claim_revision(&mut registry, "lease", &path, "changed"));
+        registry.active_writes.remove(&path);
+        assert!(try_claim_revision(&mut registry, "lease", &path, "changed"));
+    }
+
+    #[test]
     fn complete_revision_delivery_advances_only_on_success() {
         let path = PathBuf::from("/tmp/flowix-external-watch/docs/Reference.md");
         let mut registry = WatchRegistry::default();
@@ -534,19 +615,46 @@ mod tests {
             },
         );
         registry.delivering.insert(lease_id.clone());
+        registry.delivery_epochs.insert(lease_id.clone(), 1);
 
         // Failed emit (window missing / emit error): revision is not committed,
         // so the next attempt can retry.
-        complete_revision_delivery(&mut registry, &lease_id, false, "rev-a".to_string());
+        complete_revision_delivery(&mut registry, &lease_id, 1, false, "rev-a".to_string());
         assert!(!registry.delivering.contains(&lease_id));
         assert!(registry.revisions.get(&lease_id).is_none());
 
         registry.delivering.insert(lease_id.clone());
-        complete_revision_delivery(&mut registry, &lease_id, true, "rev-b".to_string());
+        registry.delivery_epochs.insert(lease_id.clone(), 2);
+        complete_revision_delivery(&mut registry, &lease_id, 2, true, "rev-b".to_string());
         assert_eq!(
             registry.revisions.get(&lease_id).map(String::as_str),
             Some("rev-b")
         );
+    }
+
+    #[test]
+    fn old_delivery_cannot_overwrite_confirmed_local_revision() {
+        let path = PathBuf::from("/tmp/flowix-external-watch/docs/Reference.md");
+        let lease_id = "lease".to_string();
+        let mut registry = WatchRegistry::default();
+        registry.leases.insert(lease_id.clone(), WatchLease {
+            window_label: "main".into(), path: path.clone(),
+        });
+        assert!(try_claim_revision(&mut registry, &lease_id, &path, "old"));
+        let old_epoch = registry.delivery_epochs[&lease_id];
+
+        // The local save confirms a newer revision while the old emit is in flight.
+        invalidate_delivery(&mut registry, &lease_id);
+        registry.revisions.insert(lease_id.clone(), "local".into());
+        complete_revision_delivery(&mut registry, &lease_id, old_epoch, true, "old".into());
+        assert_eq!(registry.revisions[&lease_id], "local");
+
+        assert!(try_claim_revision(&mut registry, &lease_id, &path, "new"));
+        let new_epoch = registry.delivery_epochs[&lease_id];
+        complete_revision_delivery(&mut registry, &lease_id, old_epoch, true, "old".into());
+        assert!(registry.delivering.contains(&lease_id));
+        complete_revision_delivery(&mut registry, &lease_id, new_epoch, true, "new".into());
+        assert_eq!(registry.revisions[&lease_id], "new");
     }
 
     #[test]

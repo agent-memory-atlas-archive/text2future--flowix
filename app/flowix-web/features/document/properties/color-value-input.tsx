@@ -1,12 +1,12 @@
 import { Check, ChevronDown } from 'lucide-react';
-import { MEMO_COLORS, MEMO_COLOR_HEX } from '@features/memo/store/memo-store';
-import type { MemoColor } from '@/types/memo-item';
+import { NOTE_COLORS, NOTE_COLOR_HEX } from '@features/memo/store/note-store';
+import type { NoteColor } from '@/types/note-item';
 import type { I18nKey } from '@/lib/i18n';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@shared/ui/dropdown-menu';
 
-const COLOR_LABEL_KEYS: Record<MemoColor, I18nKey> = {
+const COLOR_LABEL_KEYS: Record<NoteColor, I18nKey> = {
   red: 'document.color.red',
   orange: 'document.color.orange',
   yellow: 'document.color.yellow',
@@ -16,11 +16,11 @@ const COLOR_LABEL_KEYS: Record<MemoColor, I18nKey> = {
   gray: 'document.color.gray',
 };
 
-function parseColors(value: string): MemoColor[] {
+function parseColors(value: string): NoteColor[] {
   return value
     .split(',')
     .map((item) => item.trim())
-    .filter((item): item is MemoColor => MEMO_COLORS.includes(item as MemoColor));
+    .filter((item): item is NoteColor => NOTE_COLORS.includes(item as NoteColor));
 }
 
 export function ColorValueInput({
@@ -35,11 +35,11 @@ export function ColorValueInput({
   const { t } = useI18n();
   const selected = new Set(parseColors(value));
 
-  const toggle = (color: MemoColor) => {
+  const toggle = (color: NoteColor) => {
     const next = new Set(selected);
     if (next.has(color)) next.delete(color);
     else next.add(color);
-    onChange(MEMO_COLORS.filter((item) => next.has(item)).join(', '));
+    onChange(NOTE_COLORS.filter((item) => next.has(item)).join(', '));
   };
 
   const clear = () => onChange('');
@@ -62,7 +62,7 @@ export function ColorValueInput({
                 key={color}
                 aria-label={t(COLOR_LABEL_KEYS[color])}
                 className="h-3.5 w-3.5 shrink-0 rounded-full"
-                style={{ backgroundColor: MEMO_COLOR_HEX[color] }}
+                style={{ backgroundColor: NOTE_COLOR_HEX[color] }}
               />
             ))}
             {parseColors(value).length === 0 && (
@@ -87,7 +87,7 @@ export function ColorValueInput({
           </button>
         </div>
         <div className="grid grid-cols-4 gap-1.5">
-          {MEMO_COLORS.map((color) => {
+          {NOTE_COLORS.map((color) => {
             const isSelected = selected.has(color);
             return (
               <button
@@ -100,7 +100,7 @@ export function ColorValueInput({
               >
                 <span
                   className="h-5 w-5 rounded-full shadow-[inset_0_0_0_1px_rgb(0_0_0_/_0.12)]"
-                  style={{ backgroundColor: MEMO_COLOR_HEX[color] }}
+                  style={{ backgroundColor: NOTE_COLOR_HEX[color] }}
                 />
                 {isSelected && <Check className="absolute h-3.5 w-3.5 text-white" strokeWidth={3} />}
               </button>

@@ -21,7 +21,7 @@ import type { AgentTypeKey } from "@/types/agent";
 import type { WorkspaceHostId } from "@features/workspace/store/workspace-focus-store";
 import { deriveThreadTitleFromPrompt, defaultThreadTitle } from "@features/agent/store/thread-titles";
 import { toast } from "@/lib/toast";
-import { useMemoStore } from "@features/memo/store/memo-store";
+import { useNoteStore } from "@features/memo/store/note-store";
 import { openNoteByDeepLink } from "@features/memo/use-cases/open-by-target";
 import { agent } from "@platform/tauri/client/agent";
 import { normalizePlainLinkHref } from "@features/editor/extensions/markdown-link";
@@ -782,7 +782,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       ?? snapshot?.notebookId
       ?? instance?.source.notebookId
       ?? null;
-    const memoState = useMemoStore.getState();
+    const memoState = useNoteStore.getState();
     const notebook = (notebookId
       ? memoState.notebooks.find((item) => item.id === notebookId)
       : null) ?? memoState.selectedNotebook;
@@ -1499,7 +1499,9 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
     const href = normalizePlainLinkHref(rawHref);
     if (!href) return;
     if (href.startsWith("flowix://")) {
-      void openNoteByDeepLink(href);
+      void openNoteByDeepLink(href).catch((error) => {
+        toast.error(error instanceof Error ? error.message : String(error));
+      });
       return;
     }
     if (/^https?:\/\//i.test(href)) {

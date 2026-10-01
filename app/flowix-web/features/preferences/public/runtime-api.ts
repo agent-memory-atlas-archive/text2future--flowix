@@ -56,19 +56,6 @@ export function useAgentVisibilityPreferences() {
   };
 }
 
-/** Visibility preference consumed by the notebook file-tree runtime. */
-export function useShowHiddenNotebookFiles() {
-  return useUserSettingsStore((state) => state.settings.showHiddenNotebookFiles);
-}
-
-export function useShowNotebookAgentsFile() {
-  return useUserSettingsStore((state) => state.settings.showNotebookAgentsFile);
-}
-
-export function setShowHiddenNotebookFilesPreference(show: boolean): Promise<void> {
-  return useUserSettingsStore.getState().updateSettings({ showHiddenNotebookFiles: show });
-}
-
 export function useMemoListViewPreference() {
   return useUserSettingsStore((state) => state.settings.memoListView);
 }

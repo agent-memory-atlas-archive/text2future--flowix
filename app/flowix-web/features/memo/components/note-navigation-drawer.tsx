@@ -5,19 +5,14 @@ import { useCallback, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import type { PluginDescriptor } from '@platform/tauri/client';
-import type { Notebook } from '@features/memo/store/memo-store';
+import type { Notebook } from '@features/memo/store/note-store';
 import { NoteNavigationPanel } from '@features/memo/components/note-navigation-panel';
 
 export type NoteNavigationDrawerPhase = 'closed' | 'open' | 'closing';
 
 interface NoteNavigationDrawerProps {
   phase: NoteNavigationDrawerPhase;
-  notebooks: Notebook[];
   selectedNotebook: Notebook | null;
-  onSelectNotebook: (notebook: Notebook) => void;
-  onEditNotebook: (notebook: Notebook) => void;
-  onDeleteNotebook: (notebook: Notebook) => void;
-  onCreateNotebook: () => void;
   onOpenPreferences: (tab?: string) => void;
   activePluginId: string | null;
   onOpenPlugin: (plugin: PluginDescriptor) => void | Promise<void>;
@@ -28,19 +23,13 @@ interface NoteNavigationDrawerProps {
 }
 
 /**
- * The note navigation is intentionally an overlay now. Keeping the panel
- * itself intact means notebook/tag/file interactions stay in one place while
- * the drawer owns presentation concerns and reports transition completion;
- * the parent owns the shared phase so sibling surfaces can move in sync.
+ * The note navigation is an overlay. The drawer owns presentation and reports
+ * transition completion; the parent owns the shared phase so sibling surfaces
+ * can move in sync.
  */
 export function NoteNavigationDrawer({
   phase,
-  notebooks,
   selectedNotebook,
-  onSelectNotebook,
-  onEditNotebook,
-  onDeleteNotebook,
-  onCreateNotebook,
   onOpenPreferences,
   activePluginId,
   onOpenPlugin,
@@ -79,10 +68,6 @@ export function NoteNavigationDrawer({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [closeWithAnimation, phase]);
-
-  const handleSelectNotebook = useCallback((notebook: Notebook) => {
-    onSelectNotebook(notebook);
-  }, [onSelectNotebook]);
 
   const handleOpenPlugin = useCallback(async (plugin: PluginDescriptor) => {
     await onOpenPlugin(plugin);
@@ -128,12 +113,7 @@ export function NoteNavigationDrawer({
         onMouseLeave={onCompanionSurfaceLeave}
       >
         <NoteNavigationPanel
-          notebooks={notebooks}
           selectedNotebook={selectedNotebook}
-          onSelectNotebook={handleSelectNotebook}
-          onEditNotebook={onEditNotebook}
-          onDeleteNotebook={onDeleteNotebook}
-          onCreateNotebook={onCreateNotebook}
           onTogglePanel={closeWithAnimation}
           onOpenPreferences={onOpenPreferences}
           activePluginId={activePluginId}

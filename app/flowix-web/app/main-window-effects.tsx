@@ -65,9 +65,8 @@ export function MainWindowEffects() {
   }, []);
 
   useEffect(() => {
-    // The main window owns the critical library bootstrap. It resolves the
-    // authoritative notebook and first memo query before document restoration,
-    // so MemoList never has to race this work from a mount effect.
+    // The main window resolves notebook identity before document restoration.
+    // Cards, folders, and conversations then own their view data independently.
     void initializeMainWindowStartup()
       .catch((error) => {
         logger.warn('restore workspace failed', { error });

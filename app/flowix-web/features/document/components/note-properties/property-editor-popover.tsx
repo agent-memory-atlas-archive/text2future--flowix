@@ -607,7 +607,9 @@ export function PropertyKeyButton({
   const isReservedMemoId = row.key.trim() === 'key' || row.key.trim() === 'flowix_key';
 
   let display: React.ReactNode;
-  if (preset) {
+  if (row.key.trim() === 'flowix_plugin') {
+    display = <span className="min-w-0 flex-1 truncate">{t('document.properties.commonKey.plugin')}</span>;
+  } else if (preset) {
     display = <span className="min-w-0 flex-1 truncate">{preset.label}</span>;
   } else if (isReservedMemoId) {
     display = (

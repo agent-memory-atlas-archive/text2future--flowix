@@ -1,6 +1,10 @@
 'use client';
 
 import { createLogger } from '@/lib/logger';
+import {
+  setMemoListViewPreference,
+  useMemoListViewPreference,
+} from '@features/preferences/public/runtime-api';
 const logger = createLogger('main-layout');
 
 import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
@@ -55,7 +59,6 @@ import {
   type DocumentSurfaceContext,
 } from '@features/surface/public/shell-api';
 import type { PluginDescriptor } from '@platform/tauri/client';
-import { DOCUMENT_LIST_CREATE_REQUEST_EVENT } from '@features/surface/document-list-events';
 import {
   useShellWorkspaceViewModel,
   selectNotebook as selectNotebookInWorkspace,
@@ -152,12 +155,11 @@ export function MainLayout({
     completeOnboarding,
   } = system;
   // 切片订阅：每个 useStore 只取真正用到的字段，setter 走 useShallow 聚合。
-  // 替代原来的 `useMemoStore()` / `useDocumentStore()` / `useSettingsStore()`
+  // 替代原来的 `useNoteStore()` / `useDocumentStore()` / `useSettingsStore()`
   // 全量订阅 —— 任何 set 都会让 MainLayout 整树重渲，跨菜单栏 / 状态栏 /
   // document 容器一起抖。切到 selector 后, 只在用到的字段变化时本组件
   // 才重渲, memo-list / document-container 各自独立订阅, 互不污染。
   const {
-    notebooks,
     selectedNotebook,
     startupPhase: memoStartupPhase,
     middleColumnView,
@@ -165,9 +167,11 @@ export function MainLayout({
     activePluginId,
     activeSort,
     setActiveFilter,
-    loadPathNotes,
+    setMiddleColumnView,
+    loadNotes,
     triggerRefresh,
   } = useShellMemoViewModel();
+  const memoListView = useMemoListViewPreference();
   const isAgentConversationView = middleColumnView === 'conversations';
   const {
     currentDocumentPath,
@@ -371,12 +375,12 @@ export function MainLayout({
     const nextFilter = activeFilter === 'todos' ? 'all' : 'todos';
     setMemoListVisible(true);
     setActiveFilter(nextFilter);
-    await loadPathNotes({
+    await loadNotes({
       notebookId: selectedNotebook?.id,
       filter: nextFilter,
       sort: activeSort,
     });
-  }, [activeFilter, activeSort, loadPathNotes, selectedNotebook?.id, setActiveFilter, setMemoListVisible]);
+  }, [activeFilter, activeSort, loadNotes, selectedNotebook?.id, setActiveFilter, setMemoListVisible]);
 
   const handleNavigateBack = useCallback(() => {
     void navigateDocumentHistory('back');
@@ -494,11 +498,6 @@ export function MainLayout({
         }
       : null,
   );
-  const documentListSurface = workColumnPresentation.content.status === 'surface'
-    && workColumnPresentation.content.surface.kind === 'document-list'
-    ? workColumnPresentation.content.surface
-    : null;
-  const documentListCustomFilterId = documentListSurface?.filters.customFilterId ?? null;
   const isAgentConversationDetail = workColumnPresentation.header.kind === 'agent';
   const workColumnLoadingTone = navigationState.phase === 'loading'
     ? navigationState.pendingTarget?.kind === 'agent-conversation'
@@ -529,20 +528,6 @@ export function MainLayout({
       onNavigateBack: handleNavigateBack,
       onNavigateForward: handleNavigateForward,
       title: documentListTitle,
-      documentListActions: documentListSurface ? {
-        onCreate: () => window.dispatchEvent(new CustomEvent(DOCUMENT_LIST_CREATE_REQUEST_EVENT, {
-          detail: { displayId: documentListSurface.displayId },
-        })),
-        ...(documentListSurface.notebookId && documentListCustomFilterId ? {
-          onEditFilter: (anchorElement: HTMLButtonElement) => window.dispatchEvent(new CustomEvent('flowix:open-custom-filter-edit', {
-            detail: {
-              filterId: documentListCustomFilterId,
-              notebookId: documentListSurface.notebookId,
-              anchorElement,
-            },
-          })),
-        } : {}),
-      } : undefined,
     },
     contentCapabilities: {
       copyFullText: workColumnPresentation.capabilities.includes('copy-content'),
@@ -581,12 +566,7 @@ export function MainLayout({
           <div className={`relative flex flex-1 h-full overflow-hidden ${isWindowsPlatform() ? 'rounded-b-[12px]' : 'rounded-b-[18px]'} border-b border-[var(--divider)]`}>
           <NoteNavigationDrawer
             phase={noteNavigationPhase}
-            notebooks={notebooks}
             selectedNotebook={selectedNotebook}
-            onSelectNotebook={handleSelectNotebook}
-            onEditNotebook={handleEditNotebook}
-            onDeleteNotebook={handleDeleteNotebook}
-            onCreateNotebook={handleCreateNotebook}
             onOpenPreferences={(tab) => void windows.openPreferences(tab)}
             activePluginId={activePluginId}
             onOpenPlugin={handleOpenPlugin}
@@ -612,8 +592,17 @@ export function MainLayout({
             onPointerDown={() => focusWorkspaceHost('main-third')}
           >
             <ListColumnContent
-              activeView={middleColumnView === 'conversations' ? 'conversations' : 'notes'}
-              onViewChange={(tab) => setActiveFilter(tab === 'conversations' ? 'agents' : 'all')}
+              activeView={middleColumnView === 'conversations'
+                ? 'conversations'
+                : memoListView === 'folders' ? 'folders' : 'cards'}
+              onViewChange={(view) => {
+                if (view === 'conversations') {
+                  setMiddleColumnView('conversations');
+                  return;
+                }
+                void setMemoListViewPreference(view === 'folders' ? 'folders' : 'detailed');
+                setMiddleColumnView('notes');
+              }}
               navigationDrawerOpen={noteNavigationPhase !== 'closed'}
               onToggleNavigationDrawer={handleToggleNoteNavigation}
               conversationLoading={isAgentConversationView && !agentConversationListReady}
@@ -622,7 +611,7 @@ export function MainLayout({
                   className={`absolute inset-0 ${
                     showMemoListSurface
                       ? 'visible'
-                      : 'invisible pointer-events-none'
+                      : 'hidden'
                   }`}
                   aria-hidden={!showMemoListSurface}
                 >
@@ -639,7 +628,7 @@ export function MainLayout({
                     className={`absolute inset-0 ${
                       showAgentConversationSurface
                         ? 'visible z-10'
-                        : 'invisible pointer-events-none'
+                        : 'hidden'
                     }`}
                     aria-hidden={!showAgentConversationSurface}
                   >

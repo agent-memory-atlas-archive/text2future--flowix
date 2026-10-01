@@ -11,18 +11,34 @@ use crate::app::search_index::{force_rebuild_index, try_index_remove};
 use crate::app::state::AppState;
 use crate::watcher::runtime::mark_self_write_for;
 use flowix_core::memo_file::notebook_path_from_relative;
-use flowix_core::MemoService;
+use flowix_core::{MemoService, NoteService};
 
-fn delete_note_path_internal(file_path: &Path, state: &AppState, app: &AppHandle) -> bool {
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DeleteMemoOutcome {
+    Deleted,
+    MissingCleaned,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PruneMissingMemoOutcome {
+    Present,
+    MissingCleaned,
+}
+
+fn delete_note_path_internal(
+    file_path: &Path,
+    state: &AppState,
+    app: &AppHandle,
+    prune_only: bool,
+) -> Result<Option<DeleteMemoOutcome>, String> {
     if !file_path.is_absolute() {
-        return false;
+        return Err("absolute note path required".into());
     }
     let memo_file = read_lock(&state.memo_file, "memo_file");
-    let (notebook_id, relative_path) =
-        match super::helpers::notebook_note_address(&memo_file, file_path) {
-            Ok(Some(address)) => address,
-            Ok(None) | Err(_) => return false,
-        };
+    let (notebook_id, relative_path) = super::helpers::notebook_note_address(&memo_file, file_path)?
+        .ok_or_else(|| "note path is outside a notebook or is not Markdown".to_string())?;
     let before = memo_file.find_memo_by_relative_path_for_notebook_id(&notebook_id, &relative_path);
     let artifact_path = before.as_ref().and_then(|memo| {
         match crate::artifact::path_for_memo(&memo.id, &state.memo_file) {
@@ -34,25 +50,38 @@ fn delete_note_path_internal(file_path: &Path, state: &AppState, app: &AppHandle
         }
     });
     let absolute_path = file_path.to_path_buf();
-    mark_self_write_for(app, &absolute_path);
-    let file_was_present = absolute_path.exists();
-    let deleted = MemoService::new(&memo_file)
-        .delete_note_by_path(&notebook_id, &relative_path)
-        .unwrap_or(false);
+    let deleted = if prune_only {
+        if !memo_file
+            .prune_missing_note_by_path(&notebook_id, &relative_path)
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(None);
+        }
+        false
+    } else {
+        mark_self_write_for(app, &absolute_path);
+        NoteService::new(&memo_file)
+            .delete(&notebook_id, &relative_path)
+            .map_err(|error| error.to_string())?
+    };
     drop(memo_file);
+    let outcome = if deleted {
+        DeleteMemoOutcome::Deleted
+    } else {
+        DeleteMemoOutcome::MissingCleaned
+    };
 
     let Some(before) = before else {
-        return deleted;
+        return Ok(Some(outcome));
     };
 
     // The Markdown deletion is authoritative. Clean up optional ID-keyed
     // history and projections afterward without making them a prerequisite.
-    let legacy_cleanup =
-        MemoService::new(&read_lock(&state.memo_file, "memo_file")).delete_memo(&before.id);
-    if legacy_cleanup.is_err() {
-        let memo_file = read_lock(&state.memo_file, "memo_file");
-        let _ = memo_file.unregister_memo_by_path_for_notebook_id(&notebook_id, &absolute_path);
-        tracing::warn!(memo_id = %before.id, "note deleted but legacy memo cleanup failed");
+    let legacy_cleanup = read_lock(&state.memo_file, "memo_file")
+        .prune_deleted_memo_for_notebook_id(&notebook_id, &relative_path, &before.id)
+        .map_err(|error| error.to_string())?;
+    if !legacy_cleanup {
+        return Ok(None);
     }
     try_index_remove(state, &before.id);
     if let Some(artifact_path) = artifact_path {
@@ -70,16 +99,34 @@ fn delete_note_path_internal(file_path: &Path, state: &AppState, app: &AppHandle
             source: MemoChangeSource::UserDelete,
         },
     );
-    deleted || !file_was_present
+    Ok(Some(outcome))
 }
 
 #[tauri::command]
-pub fn delete_memo(file_path: String, state: State<AppState>, app: AppHandle) -> bool {
-    let deleted = delete_note_path_internal(Path::new(&file_path), state.inner(), &app);
-    if deleted {
+pub fn delete_memo(
+    file_path: String,
+    state: State<AppState>,
+    app: AppHandle,
+) -> Result<DeleteMemoOutcome, String> {
+    let outcome = delete_note_path_internal(Path::new(&file_path), state.inner(), &app, false)?
+        .ok_or_else(|| "note deletion did not complete".to_string())?;
+    force_rebuild_index(state.inner(), &app);
+    Ok(outcome)
+}
+
+#[tauri::command]
+pub fn prune_missing_memo(
+    file_path: String,
+    state: State<AppState>,
+    app: AppHandle,
+) -> Result<PruneMissingMemoOutcome, String> {
+    let outcome = delete_note_path_internal(Path::new(&file_path), state.inner(), &app, true)?;
+    if outcome.is_some() {
         force_rebuild_index(state.inner(), &app);
+        Ok(PruneMissingMemoOutcome::MissingCleaned)
+    } else {
+        Ok(PruneMissingMemoOutcome::Present)
     }
-    deleted
 }
 
 #[tauri::command]
@@ -96,7 +143,7 @@ pub fn clear_memos(notebook_id: Option<String>, state: State<AppState>, app: App
                 return false;
             }
         };
-        let note_paths = match memo_file.list_v2_note_paths_from_disk(&notebook.id) {
+        let note_paths = match memo_file.list_note_paths_from_disk(&notebook.id) {
             Ok(paths) => paths,
             Err(error) => {
                 tracing::warn!(notebook_id = %notebook.id, "cannot enumerate note files for clear: {error}");
@@ -122,7 +169,7 @@ pub fn clear_memos(notebook_id: Option<String>, state: State<AppState>, app: App
                 }
             };
         removed_paths.insert(relative_path);
-        if !delete_note_path_internal(&absolute_path, state.inner(), &app) {
+        if !matches!(delete_note_path_internal(&absolute_path, state.inner(), &app, false), Ok(Some(_))) {
             success = false;
         }
     }
@@ -139,7 +186,7 @@ pub fn clear_memos(notebook_id: Option<String>, state: State<AppState>, app: App
                 Ok(path) => path,
                 Err(_) => continue,
             };
-        if !delete_note_path_internal(&absolute_path, state.inner(), &app) {
+        if !matches!(delete_note_path_internal(&absolute_path, state.inner(), &app, false), Ok(Some(_))) {
             success = false;
         }
     }

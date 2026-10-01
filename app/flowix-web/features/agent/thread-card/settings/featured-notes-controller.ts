@@ -1,6 +1,7 @@
 import type { I18nKey, I18nParams } from '@/lib/i18n';
-import { memos as memosClient } from '@platform/tauri/client';
+import { notes as notesClient } from '@platform/tauri/client';
 import { openNoteByNotebookPath } from '@features/memo/use-cases/open-by-target';
+import { toast } from '@/lib/toast';
 import { applyPopoverPosition, calculateAnchoredPopoverPosition } from '../popover/popover-position';
 import { createCheckIcon, createChevronIcon, createPlusIcon, createTrashIcon } from '../agent-thread-card-icons';
 import {
@@ -59,7 +60,7 @@ export class FeaturedNotesController {
     const config = await readFeaturedNoteFilter(notebookId);
     if (this.isDestroyed() || requestId !== this.featuredNotesRequestId) return;
     try {
-      const indexed = await memosClient.listNotesByPath(notebookId);
+      const indexed = await notesClient.list(notebookId);
       const notes = getFeaturedPathNoteCards(indexed, config);
       if (this.isDestroyed() || requestId !== this.featuredNotesRequestId || !empty.isConnected) return;
 
@@ -537,7 +538,9 @@ export class FeaturedNotesController {
         });
         return;
       }
-      void openNoteByNotebookPath(notebookId, note.id);
+      void openNoteByNotebookPath(notebookId, note.id).catch((error) => {
+        toast.error(error instanceof Error ? error.message : String(error));
+      });
     });
     card.addEventListener("mousedown", (event) => event.stopPropagation());
     return card;

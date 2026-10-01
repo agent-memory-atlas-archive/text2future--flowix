@@ -1,8 +1,7 @@
 //! Application service boundary shared by desktop, CLI, MCP, and future transports.
 //!
-//! `MemoFile` remains the storage/domain primitive. `MemoService` owns use-case rules
-//! such as notebook resolution, global memo lookup, exact edits, validation, and typed
-//! errors so transport adapters do not need to reimplement them.
+//! `MemoFile` remains the shared storage façade. `NoteService` is the public
+//! path-keyed Note API; `MemoService` retains Memo-ID compatibility use cases.
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -14,14 +13,14 @@ use thiserror::Error;
 use crate::memo_file::{
     base_filename, normalize_search_tag_filter, notebook_path_from_relative,
     resolve_filename_conflict, Memo, MemoColor, MemoFile, MemoIndexEntry, MemoTodoEntry,
-    MemoVersionMeta, MemoVersionSource, NotebookConfig, V2NoteEntry,
+    MemoVersionMeta, MemoVersionSource, NoteEntry, NoteSearchHit, NoteWriteOutcome, NotebookConfig,
 };
 use crate::search::{self, NotebookSearchResults};
 
 const MAX_SEARCH_LIMIT: usize = 200;
-const DEFAULT_MEMO_PAGE_SIZE: usize = 50;
-const MAX_MEMO_PAGE_SIZE: usize = 100;
-const MAX_MEMO_CURSOR_BYTES: usize = 4096;
+const DEFAULT_LIST_PAGE_SIZE: usize = 50;
+const MAX_LIST_PAGE_SIZE: usize = 100;
+const MAX_LIST_CURSOR_BYTES: usize = 4096;
 
 pub struct MemoSaveReceipt {
     pub edited: EditedMemo,
@@ -54,7 +53,7 @@ struct MemoListCursor {
 /// Opaque cursor for the path-keyed notebook list. The path, rather than a
 /// legacy memo id, is the stable tie breaker for every ordering.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PathNoteListCursor {
+struct NoteListCursor {
     notebook_id: String,
     filter: String,
     sort: String,
@@ -75,8 +74,8 @@ pub struct MemoPage {
 }
 
 #[derive(Debug, Clone)]
-pub struct PathNotePage {
-    pub notes: Vec<V2NoteEntry>,
+pub struct NotePage {
+    pub notes: Vec<NoteEntry>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
 }
@@ -116,16 +115,16 @@ pub struct MemoDocument {
 }
 
 #[derive(Debug, Clone)]
-pub struct PathNoteDocument {
-    pub entry: V2NoteEntry,
+pub struct NoteDocument {
+    pub entry: NoteEntry,
     pub notebook: NotebookConfig,
     pub path: PathBuf,
     pub body: String,
 }
 
 #[derive(Debug, Clone)]
-pub enum PathNoteSaveOutcome {
-    Saved(PathNoteDocument),
+pub enum NoteSaveOutcome {
+    Saved(NoteDocument),
     Conflict { disk_content: String },
 }
 
@@ -153,10 +152,49 @@ pub struct DeletedMemo {
     pub file_removed: bool,
 }
 
-/// Use-case facade over one `MemoFile` instance.
+/// Path-identified Note use cases. This service does not resolve or retain
+/// Memo IDs; the path projection and Markdown file are its only identities.
+pub struct NoteService<'a> {
+    memo_file: &'a MemoFile,
+}
+
+impl<'a> NoteService<'a> {
+    pub fn new(memo_file: &'a MemoFile) -> Self {
+        Self { memo_file }
+    }
+
+    fn resolve_notebook(&self, key: &str) -> Result<NotebookConfig, FlowixError> {
+        self.memo_file
+            .read_notebook_configs()?
+            .into_iter()
+            .find(|config| config.id == key || config.name == key)
+            .ok_or_else(|| FlowixError::NotFound(format!("notebook `{key}` not found")))
+    }
+
+    fn path_note_entry(
+        &self,
+        notebook_id: &str,
+        relative_path: &str,
+    ) -> Result<NoteEntry, FlowixError> {
+        match self
+            .memo_file
+            .read_note_entry_by_path(notebook_id, relative_path)
+        {
+            Ok(Some(entry)) => Ok(entry),
+            Ok(None) | Err(_) => self
+                .memo_file
+                .derive_note_entry_from_disk(notebook_id, relative_path)
+                .map_err(FlowixError::Io),
+        }
+    }
+}
+
+/// Compatibility use-case facade over one `MemoFile` instance.
 ///
 /// The service borrows the store instead of owning it, so Desktop can construct it from
 /// its managed `MemoFile` while CLI/MCP can construct it from a short-lived instance.
+/// Public path-identified Note operations belong to `NoteService`; this facade
+/// keeps Memo-ID lookups and legacy command use cases.
 pub struct MemoService<'a> {
     memo_file: &'a MemoFile,
 }
@@ -164,23 +202,6 @@ pub struct MemoService<'a> {
 impl<'a> MemoService<'a> {
     pub fn new(memo_file: &'a MemoFile) -> Self {
         Self { memo_file }
-    }
-
-    fn path_note_entry(
-        &self,
-        notebook_id: &str,
-        relative_path: &str,
-    ) -> Result<V2NoteEntry, FlowixError> {
-        match self
-            .memo_file
-            .read_v2_note_entry_by_path(notebook_id, relative_path)
-        {
-            Ok(Some(entry)) => Ok(entry),
-            Ok(None) | Err(_) => self
-                .memo_file
-                .derive_v2_note_entry_from_disk(notebook_id, relative_path)
-                .map_err(FlowixError::Io),
-        }
     }
 
     pub fn list_notebooks(&mut self) -> Result<Vec<NotebookConfig>, FlowixError> {
@@ -209,7 +230,7 @@ impl<'a> MemoService<'a> {
         let notebook = self.resolve_notebook(notebook_key)?;
         let mut entries = match self
             .memo_file
-            .v2_list_entries_with_legacy_ids(&notebook.id)?
+            .list_note_entries_with_legacy_ids(&notebook.id)?
         {
             Some(entries) => entries,
             None => {
@@ -219,29 +240,41 @@ impl<'a> MemoService<'a> {
                     .memos
             }
         };
+        let policy = self.memo_file.file_management_policy(&notebook.id);
         entries.retain(|entry| {
             let relative_path = if entry.relative_path.is_empty() {
                 &entry.filename
             } else {
                 &entry.relative_path
             };
-            !crate::memo_file::is_ignored_notebook_relative_path(Path::new(relative_path))
+            !policy.is_ignored(Path::new(relative_path))
         });
         Ok(entries)
     }
+}
 
+impl NoteService<'_> {
     /// List notes by notebook-relative path, without legacy memo identities.
-    pub fn list_notes_by_path(
+    pub(crate) fn list_notes_by_path(
         &mut self,
         notebook_key: &str,
-    ) -> Result<Vec<V2NoteEntry>, FlowixError> {
+    ) -> Result<Vec<NoteEntry>, FlowixError> {
         let notebook = self.resolve_notebook(notebook_key)?;
-        Ok(self.memo_file.read_v2_note_entries(&notebook.id)?)
+        match self.memo_file.read_note_entries(&notebook.id) {
+            Ok(entries) => Ok(entries),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                // The unpaged list is used by plugin-filtered views. Give it
+                // the same cold-index recovery as the paginated list path.
+                self.memo_file.reconcile_note_index(&notebook.id)?;
+                Ok(self.memo_file.read_note_entries(&notebook.id)?)
+            }
+            Err(error) => Err(FlowixError::Io(error)),
+        }
     }
 
     /// Query a page directly from the rebuildable path index. This deliberately
     /// does not read or validate the legacy `memos` table.
-    pub fn list_notes_by_path_page(
+    pub(crate) fn list_notes_by_path_page(
         &mut self,
         notebook_key: &str,
         filter: &str,
@@ -250,11 +283,11 @@ impl<'a> MemoService<'a> {
         color: Option<&str>,
         cursor: Option<&str>,
         requested_limit: Option<usize>,
-    ) -> Result<PathNotePage, FlowixError> {
+    ) -> Result<NotePage, FlowixError> {
         let notebook = self.resolve_notebook(notebook_key)?;
         let limit = requested_limit
-            .unwrap_or(DEFAULT_MEMO_PAGE_SIZE)
-            .clamp(1, MAX_MEMO_PAGE_SIZE);
+            .unwrap_or(DEFAULT_LIST_PAGE_SIZE)
+            .clamp(1, MAX_LIST_PAGE_SIZE);
         let normalized_color = color.map(str::to_string);
         if let Some(value) = normalized_color.as_deref() {
             match value {
@@ -262,7 +295,7 @@ impl<'a> MemoService<'a> {
                 | "gray" => {}
                 _ => {
                     return Err(FlowixError::InvalidInput(format!(
-                        "unsupported memo color filter `{value}`"
+                        "unsupported note color filter `{value}`"
                     )))
                 }
             }
@@ -271,152 +304,116 @@ impl<'a> MemoService<'a> {
         let now = chrono::Utc::now().timestamp_millis();
         let week_start = crate::memo_file::time::start_of_this_week(now);
         let month_start = crate::memo_file::time::start_of_this_month(now);
-        let mut notes = match self.memo_file.read_v2_note_entries(&notebook.id) {
-            Ok(notes) => notes,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                // Startup reconciliation normally builds this projection in
-                // the background. A first list request can race that scan, so
-                // finish the initial build here instead of failing the list.
-                self.memo_file.reconcile_v2_note_index(&notebook.id)?;
-                self.memo_file.read_v2_note_entries(&notebook.id)?
-            }
-            Err(error) => return Err(FlowixError::Io(error)),
-        };
-        notes.retain(|note| {
-            let relative_path = note.relative_path.as_str();
-            if crate::memo_file::is_ignored_notebook_relative_path(Path::new(relative_path)) {
-                return false;
-            }
-            let matches_filter = match filter {
-                "todos" => !note.todos.is_empty(),
-                "agents" => !note.agents.is_empty(),
-                "favorited" => note.favorited,
-                "tagged" => tag_id.map_or(!note.tags.is_empty(), |selected| {
-                    note.tags
-                        .iter()
-                        .any(|tag| crate::memo_file::tag_path_matches_filter(tag, selected))
-                }),
-                "thisWeek" => note.created_at >= week_start && note.created_at <= now,
-                "thisMonth" => note.created_at >= month_start && note.created_at <= now,
-                _ => true,
-            };
-            if !matches_filter {
-                return false;
-            }
-            normalized_color
-                .as_deref()
-                .map_or(true, |color| match color {
-                    "any" => !note.colors.is_empty(),
-                    "none" => note.colors.is_empty(),
-                    value => note
-                        .colors
-                        .iter()
-                        .any(|item| v2_note_color_name(*item) == value),
-                })
-        });
-
-        notes.sort_by(|left, right| {
-            let favorite_order = right.favorited.cmp(&left.favorited);
-            if favorite_order != Ordering::Equal {
-                return favorite_order;
-            }
-            match sort {
-                "filenameAsc" | "filenameDesc" => {
-                    let left_name = path_note_filename(&left.relative_path);
-                    let right_name = path_note_filename(&right.relative_path);
-                    let name_order = left_name
-                        .to_lowercase()
-                        .cmp(&right_name.to_lowercase())
-                        .then_with(|| left_name.cmp(right_name))
-                        .then_with(|| left.relative_path.cmp(&right.relative_path));
-                    if sort == "filenameDesc" {
-                        name_order.reverse()
-                    } else {
-                        name_order
+        {
+            let parsed_cursor = cursor
+                .map(|value| {
+                    if value.len() > MAX_LIST_CURSOR_BYTES {
+                        return Err(FlowixError::InvalidInput(
+                            "note list cursor is too large".into(),
+                        ));
                     }
-                }
-                "updatedAt" => right
-                    .updated_at
-                    .cmp(&left.updated_at)
-                    .then_with(|| right.relative_path.cmp(&left.relative_path)),
-                _ => right
-                    .created_at
-                    .cmp(&left.created_at)
-                    .then_with(|| right.relative_path.cmp(&left.relative_path)),
-            }
-        });
-
-        let parsed_cursor = cursor
-            .map(|value| {
-                if value.len() > MAX_MEMO_CURSOR_BYTES {
+                    serde_json::from_str::<NoteListCursor>(value).map_err(|error| {
+                        FlowixError::InvalidInput(format!("invalid path note cursor: {error}"))
+                    })
+                })
+                .transpose()?;
+            if let Some(page_cursor) = parsed_cursor.as_ref() {
+                if page_cursor.notebook_id != notebook.id
+                    || page_cursor.filter != filter
+                    || page_cursor.sort != sort
+                    || page_cursor.tag_id.as_deref() != tag_id
+                    || page_cursor.color != normalized_color
+                {
                     return Err(FlowixError::InvalidInput(
-                        "memo list cursor is too large".to_string(),
+                        "path note cursor does not match the current query".into(),
                     ));
                 }
-                serde_json::from_str::<PathNoteListCursor>(value).map_err(|error| {
-                    FlowixError::InvalidInput(format!("invalid path note cursor: {error}"))
-                })
-            })
-            .transpose()?;
-        if let Some(cursor) = parsed_cursor.as_ref() {
-            if cursor.notebook_id != notebook.id
-                || cursor.filter != filter
-                || cursor.sort != sort
-                || cursor.tag_id.as_deref() != tag_id
-                || cursor.color != normalized_color
-            {
-                return Err(FlowixError::InvalidInput(
-                    "path note cursor does not match the current query".to_string(),
-                ));
             }
-        }
-        let start = parsed_cursor
-            .as_ref()
-            .map(|page_cursor| {
-                notes
-                    .iter()
-                    .position(|note| path_note_is_after_cursor(note, page_cursor, sort))
-                    .unwrap_or(notes.len())
-            })
-            .unwrap_or(0);
-        let end = start.saturating_add(limit).min(notes.len());
-        let page_notes = notes[start..end].to_vec();
-        let has_more = end < notes.len();
-        let next_cursor = if has_more {
-            page_notes.last().map(|note| {
-                serde_json::to_string(&PathNoteListCursor {
-                    notebook_id: notebook.id.clone(),
-                    filter: filter.to_string(),
-                    sort: sort.to_string(),
-                    tag_id: tag_id.map(str::to_string),
-                    color: normalized_color.clone(),
-                    favorited: note.favorited,
-                    sort_value: v2_note_sort_value(note, sort),
-                    sort_text: v2_note_sort_text(note, sort),
-                    sort_tiebreaker: v2_note_sort_tiebreaker(note, sort),
-                    relative_path: note.relative_path.clone(),
+            let page = self.memo_file.read_note_page(
+                &notebook.id,
+                filter,
+                tag_id,
+                normalized_color.as_deref(),
+                sort,
+                now,
+                week_start,
+                month_start,
+                parsed_cursor.as_ref().map(|cursor| {
+                    (
+                        cursor.favorited,
+                        cursor.sort_value,
+                        cursor.sort_text.as_deref(),
+                        cursor.sort_tiebreaker.as_deref(),
+                        cursor.relative_path.as_str(),
+                    )
+                }),
+                limit + 1,
+            );
+            let mut notes = match page {
+                Ok(notes) => notes,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    self.memo_file.reconcile_note_index(&notebook.id)?;
+                    self.memo_file.read_note_page(
+                        &notebook.id,
+                        filter,
+                        tag_id,
+                        normalized_color.as_deref(),
+                        sort,
+                        now,
+                        week_start,
+                        month_start,
+                        parsed_cursor.as_ref().map(|cursor| {
+                            (
+                                cursor.favorited,
+                                cursor.sort_value,
+                                cursor.sort_text.as_deref(),
+                                cursor.sort_tiebreaker.as_deref(),
+                                cursor.relative_path.as_str(),
+                            )
+                        }),
+                        limit + 1,
+                    )?
+                }
+                Err(error) => return Err(FlowixError::Io(error)),
+            };
+            let has_more = notes.len() > limit;
+            notes.truncate(limit);
+            let next_cursor = if has_more {
+                notes.last().map(|note| {
+                    serde_json::to_string(&NoteListCursor {
+                        notebook_id: notebook.id.clone(),
+                        filter: filter.into(),
+                        sort: sort.into(),
+                        tag_id: tag_id.map(str::to_string),
+                        color: normalized_color.clone(),
+                        favorited: note.favorited,
+                        sort_value: note_sort_value(note, sort),
+                        sort_text: note_sort_text(note, sort),
+                        sort_tiebreaker: note_sort_tiebreaker(note, sort),
+                        relative_path: note.relative_path.clone(),
+                    })
+                    .expect("path note cursor serialization cannot fail")
                 })
-                .expect("path note cursor serialization cannot fail")
-            })
-        } else {
-            None
-        };
-        Ok(PathNotePage {
-            notes: page_notes,
-            next_cursor,
-            has_more,
-        })
+            } else {
+                None
+            };
+            return Ok(NotePage {
+                notes,
+                next_cursor,
+                has_more,
+            });
+        }
     }
 
-    pub fn create_note_by_path(
+    pub(crate) fn create_note_by_path(
         &mut self,
         notebook_key: &str,
         parent_relative_path: Option<&str>,
         title: &str,
         content: &str,
-    ) -> Result<PathNoteDocument, FlowixError> {
+    ) -> Result<NoteDocument, FlowixError> {
         let notebook = self.resolve_notebook(notebook_key)?;
-        let relative_path = self.memo_file.create_v2_note_by_path(
+        let relative_path = self.memo_file.create_note_by_path(
             &notebook.id,
             parent_relative_path,
             title,
@@ -426,7 +423,7 @@ impl<'a> MemoService<'a> {
         let path = notebook_path_from_relative(&PathBuf::from(&notebook.path), &relative_path)
             .map_err(FlowixError::InvalidInput)?;
         let body = std::fs::read_to_string(&path)?;
-        Ok(PathNoteDocument {
+        Ok(NoteDocument {
             entry,
             notebook,
             path,
@@ -435,18 +432,18 @@ impl<'a> MemoService<'a> {
     }
 
     /// Open a Markdown note by notebook and relative path, with no memo ID lookup.
-    pub fn get_note_by_path(
+    pub(crate) fn get_note_by_path(
         &mut self,
         notebook_key: &str,
         relative_path: &str,
-    ) -> Result<PathNoteDocument, FlowixError> {
+    ) -> Result<NoteDocument, FlowixError> {
         let notebook = self.resolve_notebook(notebook_key)?;
         let entry = self.path_note_entry(&notebook.id, relative_path)?;
         let path =
             notebook_path_from_relative(&PathBuf::from(&notebook.path), &entry.relative_path)
                 .map_err(FlowixError::InvalidInput)?;
         let body = std::fs::read_to_string(&path)?;
-        Ok(PathNoteDocument {
+        Ok(NoteDocument {
             entry,
             notebook,
             path,
@@ -454,31 +451,31 @@ impl<'a> MemoService<'a> {
         })
     }
 
-    pub fn save_note_by_path(
+    pub(crate) fn save_note_by_path(
         &mut self,
         notebook_key: &str,
         relative_path: &str,
         content: &str,
         expected_content: Option<&str>,
-    ) -> Result<PathNoteSaveOutcome, FlowixError> {
+    ) -> Result<NoteSaveOutcome, FlowixError> {
         let notebook = self.resolve_notebook(notebook_key)?;
-        match self.memo_file.write_v2_note_by_path(
+        match self.memo_file.write_note_by_path(
             &notebook.id,
             relative_path,
             content,
             expected_content,
         )? {
-            crate::memo_file::V2PathWriteOutcome::Conflict { disk_content } => {
-                Ok(PathNoteSaveOutcome::Conflict { disk_content })
+            NoteWriteOutcome::Conflict { disk_content } => {
+                Ok(NoteSaveOutcome::Conflict { disk_content })
             }
-            crate::memo_file::V2PathWriteOutcome::Saved { content } => {
+            NoteWriteOutcome::Saved { content } => {
                 let entry = self.path_note_entry(&notebook.id, relative_path)?;
                 let path = notebook_path_from_relative(
                     &PathBuf::from(&notebook.path),
                     &entry.relative_path,
                 )
                 .map_err(FlowixError::InvalidInput)?;
-                Ok(PathNoteSaveOutcome::Saved(PathNoteDocument {
+                Ok(NoteSaveOutcome::Saved(NoteDocument {
                     entry,
                     notebook,
                     path,
@@ -488,15 +485,15 @@ impl<'a> MemoService<'a> {
         }
     }
 
-    pub fn rename_note_by_path(
+    pub(crate) fn rename_note_by_path(
         &mut self,
         notebook_key: &str,
         relative_path: &str,
         new_title: &str,
         expected_content: Option<&str>,
-    ) -> Result<PathNoteDocument, FlowixError> {
+    ) -> Result<NoteDocument, FlowixError> {
         let notebook = self.resolve_notebook(notebook_key)?;
-        let new_relative_path = self.memo_file.rename_v2_note_by_path(
+        let new_relative_path = self.memo_file.rename_note_by_path(
             &notebook.id,
             relative_path,
             new_title,
@@ -506,7 +503,7 @@ impl<'a> MemoService<'a> {
         let path = notebook_path_from_relative(&PathBuf::from(&notebook.path), &new_relative_path)
             .map_err(FlowixError::InvalidInput)?;
         let body = std::fs::read_to_string(&path)?;
-        Ok(PathNoteDocument {
+        Ok(NoteDocument {
             entry,
             notebook,
             path,
@@ -514,23 +511,21 @@ impl<'a> MemoService<'a> {
         })
     }
 
-    pub fn move_note_by_path(
+    pub(crate) fn move_note_by_path(
         &mut self,
         notebook_key: &str,
         relative_path: &str,
         parent_relative_path: &str,
-    ) -> Result<PathNoteDocument, FlowixError> {
+    ) -> Result<NoteDocument, FlowixError> {
         let notebook = self.resolve_notebook(notebook_key)?;
-        let new_relative_path = self.memo_file.move_v2_note_by_path(
-            &notebook.id,
-            relative_path,
-            parent_relative_path,
-        )?;
+        let new_relative_path =
+            self.memo_file
+                .move_note_by_path(&notebook.id, relative_path, parent_relative_path)?;
         let entry = self.path_note_entry(&notebook.id, &new_relative_path)?;
         let path = notebook_path_from_relative(&PathBuf::from(&notebook.path), &new_relative_path)
             .map_err(FlowixError::InvalidInput)?;
         let body = std::fs::read_to_string(&path)?;
-        Ok(PathNoteDocument {
+        Ok(NoteDocument {
             entry,
             notebook,
             path,
@@ -538,7 +533,7 @@ impl<'a> MemoService<'a> {
         })
     }
 
-    pub fn delete_note_by_path(
+    pub(crate) fn delete_note_by_path(
         &mut self,
         notebook_key: &str,
         relative_path: &str,
@@ -546,9 +541,11 @@ impl<'a> MemoService<'a> {
         let notebook = self.resolve_notebook(notebook_key)?;
         Ok(self
             .memo_file
-            .delete_v2_note_by_path(&notebook.id, relative_path)?)
+            .delete_note_by_path(&notebook.id, relative_path)?)
     }
+}
 
+impl MemoService<'_> {
     pub fn list_memos_filtered(
         &mut self,
         notebook_id: Option<&str>,
@@ -577,8 +574,8 @@ impl<'a> MemoService<'a> {
         requested_limit: Option<usize>,
     ) -> Result<MemoPage, FlowixError> {
         let limit = requested_limit
-            .unwrap_or(DEFAULT_MEMO_PAGE_SIZE)
-            .clamp(1, MAX_MEMO_PAGE_SIZE);
+            .unwrap_or(DEFAULT_LIST_PAGE_SIZE)
+            .clamp(1, MAX_LIST_PAGE_SIZE);
         let normalized_color = color.map(str::to_string);
         if let Some(value) = normalized_color.as_deref() {
             match value {
@@ -606,7 +603,7 @@ impl<'a> MemoService<'a> {
 
         let parsed_cursor = cursor
             .map(|value| {
-                if value.len() > MAX_MEMO_CURSOR_BYTES {
+                if value.len() > MAX_LIST_CURSOR_BYTES {
                     return Err(FlowixError::InvalidInput(
                         "memo list cursor is too large".to_string(),
                     ));
@@ -1255,6 +1252,7 @@ impl<'a> MemoService<'a> {
         tag_filter: Option<&str>,
         limit: usize,
     ) -> Result<NotebookSearchResults, FlowixError> {
+        // Memo-ID compatibility search. New path-based callers use NoteService::search.
         if query.trim().is_empty() {
             return Err(FlowixError::InvalidInput(
                 "search query cannot be empty".into(),
@@ -1430,6 +1428,98 @@ impl<'a> MemoService<'a> {
     }
 }
 
+impl<'a> NoteService<'a> {
+    pub fn list(&mut self, notebook: &str) -> Result<Vec<NoteEntry>, FlowixError> {
+        self.list_notes_by_path(notebook)
+    }
+
+    pub fn list_page(
+        &mut self,
+        notebook: &str,
+        filter: &str,
+        sort: &str,
+        tag_id: Option<&str>,
+        color: Option<&str>,
+        cursor: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<NotePage, FlowixError> {
+        self.list_notes_by_path_page(notebook, filter, sort, tag_id, color, cursor, limit)
+    }
+
+    pub fn search(
+        &mut self,
+        notebook: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<NoteSearchHit>, FlowixError> {
+        self.search_with_tag_filter(notebook, query, None, limit)
+    }
+
+    pub fn search_with_tag_filter(
+        &mut self,
+        notebook: &str,
+        query: &str,
+        tag_filter: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<NoteSearchHit>, FlowixError> {
+        let notebook = self.resolve_notebook(notebook)?;
+        Ok(self
+            .memo_file
+            .search_notes_with_tag_filter(&notebook.id, query, tag_filter, limit)?)
+    }
+
+    pub fn create(
+        &mut self,
+        notebook: &str,
+        parent: Option<&str>,
+        title: &str,
+        content: &str,
+    ) -> Result<NoteDocument, FlowixError> {
+        self.create_note_by_path(notebook, parent, title, content)
+    }
+
+    pub fn get(
+        &mut self,
+        notebook: &str,
+        relative_path: &str,
+    ) -> Result<NoteDocument, FlowixError> {
+        self.get_note_by_path(notebook, relative_path)
+    }
+
+    pub fn save(
+        &mut self,
+        notebook: &str,
+        relative_path: &str,
+        content: &str,
+        expected_content: Option<&str>,
+    ) -> Result<NoteSaveOutcome, FlowixError> {
+        self.save_note_by_path(notebook, relative_path, content, expected_content)
+    }
+
+    pub fn rename(
+        &mut self,
+        notebook: &str,
+        relative_path: &str,
+        title: &str,
+        expected_content: Option<&str>,
+    ) -> Result<NoteDocument, FlowixError> {
+        self.rename_note_by_path(notebook, relative_path, title, expected_content)
+    }
+
+    pub fn move_to(
+        &mut self,
+        notebook: &str,
+        relative_path: &str,
+        parent: &str,
+    ) -> Result<NoteDocument, FlowixError> {
+        self.move_note_by_path(notebook, relative_path, parent)
+    }
+
+    pub fn delete(&mut self, notebook: &str, relative_path: &str) -> Result<bool, FlowixError> {
+        self.delete_note_by_path(notebook, relative_path)
+    }
+}
+
 fn memo_sort_value(memo: &Memo, sort: &str) -> i64 {
     if sort == "updatedAt" {
         memo.updated_at
@@ -1497,7 +1587,7 @@ fn path_note_filename(relative_path: &str) -> &str {
     relative_path.rsplit('/').next().unwrap_or(relative_path)
 }
 
-fn v2_note_sort_value(note: &V2NoteEntry, sort: &str) -> i64 {
+fn note_sort_value(note: &NoteEntry, sort: &str) -> i64 {
     if sort == "updatedAt" {
         note.updated_at
     } else {
@@ -1505,51 +1595,14 @@ fn v2_note_sort_value(note: &V2NoteEntry, sort: &str) -> i64 {
     }
 }
 
-fn v2_note_sort_text(note: &V2NoteEntry, sort: &str) -> Option<String> {
+fn note_sort_text(note: &NoteEntry, sort: &str) -> Option<String> {
     matches!(sort, "filenameAsc" | "filenameDesc")
         .then(|| path_note_filename(&note.relative_path).to_lowercase())
 }
 
-fn v2_note_sort_tiebreaker(note: &V2NoteEntry, sort: &str) -> Option<String> {
+fn note_sort_tiebreaker(note: &NoteEntry, sort: &str) -> Option<String> {
     matches!(sort, "filenameAsc" | "filenameDesc")
         .then(|| path_note_filename(&note.relative_path).to_string())
-}
-
-fn v2_note_color_name(color: MemoColor) -> &'static str {
-    match color {
-        MemoColor::Red => "red",
-        MemoColor::Orange => "orange",
-        MemoColor::Yellow => "yellow",
-        MemoColor::Green => "green",
-        MemoColor::Cyan => "cyan",
-        MemoColor::Blue => "blue",
-        MemoColor::Gray => "gray",
-    }
-}
-
-fn path_note_is_after_cursor(note: &V2NoteEntry, cursor: &PathNoteListCursor, sort: &str) -> bool {
-    if note.favorited != cursor.favorited {
-        return !note.favorited;
-    }
-    if matches!(sort, "filenameAsc" | "filenameDesc") {
-        let lower_filename = path_note_filename(&note.relative_path).to_lowercase();
-        let filename_order = lower_filename
-            .as_str()
-            .cmp(cursor.sort_text.as_deref().unwrap_or_default())
-            .then_with(|| {
-                path_note_filename(&note.relative_path)
-                    .cmp(cursor.sort_tiebreaker.as_deref().unwrap_or_default())
-            })
-            .then_with(|| note.relative_path.cmp(&cursor.relative_path));
-        return if sort == "filenameDesc" {
-            filename_order == Ordering::Less
-        } else {
-            filename_order == Ordering::Greater
-        };
-    }
-    v2_note_sort_value(note, sort) < cursor.sort_value
-        || (v2_note_sort_value(note, sort) == cursor.sort_value
-            && note.relative_path < cursor.relative_path)
 }
 
 #[cfg(test)]
@@ -1579,7 +1632,7 @@ mod tests {
     #[test]
     fn path_note_pages_do_not_require_legacy_memo_projection() {
         let (_temp, store) = service_fixture();
-        let mut service = MemoService::new(&store);
+        let mut service = NoteService::new(&store);
         for title in ["Gamma", "Alpha", "Beta"] {
             service
                 .create_note_by_path(
@@ -1592,19 +1645,16 @@ mod tests {
         }
         // Path creation does not write any memo-ID projection.
         assert!(store
-            .v2_list_entries_with_legacy_ids("work")
+            .list_note_entries_with_legacy_ids("work")
             .unwrap()
             .is_none());
         assert_eq!(
-            store
-                .read_v2_note_entries("work")
-                .unwrap_err()
-                .kind(),
+            store.read_note_entries("work").unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock,
             "the first list request must exercise the initial-index fallback"
         );
 
-        // The first path-list request builds the V2 index if startup's
+        // The first path-list request builds the Note index if startup's
         // background reconciliation has not completed yet.
         let first = service
             .list_notes_by_path_page(
@@ -1645,6 +1695,107 @@ mod tests {
         );
         assert!(!second.has_more);
         assert!(second.next_cursor.is_none());
+    }
+
+    #[test]
+    fn path_note_list_builds_index_when_not_ready() {
+        let (_temp, store) = service_fixture();
+        let mut service = NoteService::new(&store);
+        service
+            .create_note_by_path("work", None, "Cold start", "# Cold start\nBody\n")
+            .unwrap();
+
+        assert_eq!(
+            store.read_note_entries("work").unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "the test must exercise an index that has not completed its initial scan"
+        );
+
+        let entries = service.list("work").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].relative_path, "Cold start.md");
+        assert_eq!(entries[0].title, "Cold start");
+        assert!(store.note_index_is_ready("work").unwrap());
+
+        // Once built, subsequent list calls read the projection without
+        // needing another recovery pass.
+        assert_eq!(service.list("work").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn date_sorted_path_pages_use_stable_database_cursor() {
+        let (_temp, store) = service_fixture();
+        let mut service = NoteService::new(&store);
+        for title in ["Gamma", "Alpha", "Beta"] {
+            service
+                .create_note_by_path("work", None, title, &format!("# {title}\n"))
+                .unwrap();
+        }
+        let first = service
+            .list_notes_by_path_page("work", "all", "updatedAt", None, None, None, Some(2))
+            .unwrap();
+        assert_eq!(first.notes.len(), 2);
+        assert!(first.has_more);
+        let second = service
+            .list_notes_by_path_page(
+                "work",
+                "all",
+                "updatedAt",
+                None,
+                None,
+                first.next_cursor.as_deref(),
+                Some(2),
+            )
+            .unwrap();
+        assert_eq!(second.notes.len(), 1);
+        assert!(!second.has_more);
+        let mut paths = first
+            .notes
+            .into_iter()
+            .chain(second.notes)
+            .map(|note| note.relative_path)
+            .collect::<Vec<_>>();
+        paths.sort();
+        assert_eq!(paths, ["Alpha.md", "Beta.md", "Gamma.md"]);
+    }
+
+    #[test]
+    fn repeated_search_refreshes_after_external_markdown_change() {
+        let (_temp, store) = service_fixture();
+        let mut service = MemoService::new(&store);
+        let created = service
+            .create_memo("work", "# Search note\noldkeyword\n")
+            .unwrap();
+        assert_eq!(
+            service
+                .search_memos("oldkeyword", Some("work"), None, 10)
+                .unwrap()
+                .hits
+                .len(),
+            1
+        );
+        assert_eq!(
+            service
+                .search_memos("oldkeyword", Some("work"), None, 10)
+                .unwrap()
+                .hits
+                .len(),
+            1
+        );
+        std::fs::write(&created.path, "# Search note\nnewkeywordlonger\n").unwrap();
+        assert!(service
+            .search_memos("oldkeyword", Some("work"), None, 10)
+            .unwrap()
+            .hits
+            .is_empty());
+        assert_eq!(
+            service
+                .search_memos("newkeywordlonger", Some("work"), None, 10)
+                .unwrap()
+                .hits
+                .len(),
+            1
+        );
     }
 
     #[test]

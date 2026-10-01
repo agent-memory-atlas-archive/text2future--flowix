@@ -1,6 +1,6 @@
 import type { I18nKey, I18nParams } from '@/lib/i18n';
-import { memos as memosClient } from '@platform/tauri/client';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { notes as notesClient } from '@platform/tauri/client';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { createAnchoredPopoverController, type AnchoredPopoverController } from '../anchored-popover-controller';
 
 const SEARCH_LIMIT = 10;
@@ -110,9 +110,9 @@ export class NotePickerController {
     this.renderResults();
     this.timer = setTimeout(() => {
       this.timer = null;
-      const notebooks = useMemoStore.getState().notebooks;
+      const notebooks = useNoteStore.getState().notebooks;
       void Promise.allSettled(notebooks.map(async (notebook): Promise<NoteHit[]> => {
-        const notes = await memosClient.searchPathNotes(notebook.id, query.trim(), SEARCH_LIMIT);
+        const notes = await notesClient.search(notebook.id, query.trim(), SEARCH_LIMIT);
         return notes.map((note) => ({
           notebookId: notebook.id,
           notebookName: notebook.name,

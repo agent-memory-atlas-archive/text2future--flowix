@@ -14,7 +14,7 @@ import { useI18n } from '@/lib/i18n';
 import { toast } from '@/lib/toast';
 import { Tooltip } from '@shared/ui/tooltip';
 import { AgentIcon } from '@features/agent/components/agent-icon';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 
 interface AgentConversationStatusEntry {
   instance: AgentConversationInstance;
@@ -60,7 +60,7 @@ export function AgentConversationStatusBar() {
   const latestCompletedRunIds = useAgentSessionStore((state) => state.latestCompletedRunIds);
   const readThroughRunIds = useAgentSessionStore((state) => state.readThroughRunIds);
   const threadTombstones = useAgentSessionStore((state) => state.threadTombstones);
-  const notebookId = useMemoStore((state) => state.selectedNotebook?.id ?? null);
+  const notebookId = useNoteStore((state) => state.selectedNotebook?.id ?? null);
   const markThreadRead = useAgentSessionStore((state) => state.markThreadRead);
   const selectedInstanceId = useWorkspaceRestoreStore(
     (state) => state.agentConversation.selectedInstanceId,
@@ -121,7 +121,7 @@ export function AgentConversationStatusBar() {
             key={instance.instanceId}
             content={title}
             side="top"
-            className="w-[12em] max-w-[calc(100vw-1rem)] justify-start text-left leading-4 [&>span]:min-w-0 [&>span]:whitespace-normal [&>span]:break-words"
+            className="w-max max-w-[min(12em,calc(100vw-1rem))] justify-start text-left leading-4 [&>span]:min-w-0 [&>span]:whitespace-normal [&>span]:break-words"
           >
             <button
               type="button"

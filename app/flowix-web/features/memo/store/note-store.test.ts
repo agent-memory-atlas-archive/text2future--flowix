@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@features/memo/services', () => ({
-  memoRepository: {
+  noteRepository: {
     list: mocks.list,
     listByPath: mocks.listByPath,
     listPluginNotes: vi.fn(),
@@ -16,7 +16,7 @@ vi.mock('@features/memo/services', () => ({
 }));
 
 vi.mock('@/lib/constants', () => ({
-  STORAGE_KEYS: { MEMO: 'test-memo-store' },
+  STORAGE_KEYS: { NOTE: 'test-note-store' },
 }));
 
 vi.mock('@features/memo/store/tag-store', () => ({
@@ -28,16 +28,15 @@ vi.mock('@features/memo/store/tag-store', () => ({
   },
 }));
 
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 
-describe('memo store list loading', () => {
+describe('note store list loading', () => {
   beforeEach(() => {
     mocks.list.mockReset();
     mocks.listByPath.mockReset();
     mocks.setSelectedTagId.mockReset();
-    useMemoStore.setState({
-      memos: [],
-      selectedPathNote: { notebookId: 'notebook-1', relativePath: 'current.md' },
+    useNoteStore.setState({
+      selectedNote: { notebookId: 'notebook-1', relativePath: 'current.md' },
       selectedNotebook: null,
       middleColumnView: 'notes',
       activeFilter: 'todos',
@@ -53,13 +52,13 @@ describe('memo store list loading', () => {
     };
     mocks.listByPath.mockResolvedValue({ notes: [filteredNote], nextCursor: null, hasMore: false });
 
-    await useMemoStore.getState().loadPathNotes({
+    await useNoteStore.getState().loadNotes({
       notebookId: 'notebook-1',
       filter: 'todos',
     });
 
-    expect(useMemoStore.getState().pathNotes[0].relativePath).toBe('todo.md');
-    expect(useMemoStore.getState().selectedPathNote?.relativePath).toBe('current.md');
+    expect(useNoteStore.getState().notes[0].relativePath).toBe('todo.md');
+    expect(useNoteStore.getState().selectedNote?.relativePath).toBe('current.md');
   });
 
   it('loads the primary note list from path records without memo IDs', async () => {
@@ -82,7 +81,7 @@ describe('memo store list loading', () => {
       nextCursor: null,
       hasMore: false,
     });
-    useMemoStore.setState({
+    useNoteStore.setState({
       selectedNotebook: {
         id: 'notebook-1',
         name: 'Notebook',
@@ -93,21 +92,21 @@ describe('memo store list loading', () => {
       },
     });
 
-    await useMemoStore.getState().loadPathNotes({ notebookId: 'notebook-1', filter: 'all' });
+    await useNoteStore.getState().loadNotes({ notebookId: 'notebook-1', filter: 'all' });
 
     expect(mocks.listByPath).toHaveBeenCalledWith(expect.objectContaining({
       notebookId: 'notebook-1',
       limit: 50,
     }));
     expect(mocks.list).not.toHaveBeenCalled();
-    expect(useMemoStore.getState().pathNotes[0]).toMatchObject({
+    expect(useNoteStore.getState().notes[0]).toMatchObject({
       kind: 'path-note',
       notebookId: 'notebook-1',
       relativePath: 'folder/Path note.md',
       filename: 'Path note.md',
       title: 'Path note',
     });
-    expect('id' in useMemoStore.getState().pathNotes[0]).toBe(false);
+    expect('id' in useNoteStore.getState().notes[0]).toBe(false);
   });
 
   it('appends path pages by notebook and relative path without duplicates', async () => {
@@ -120,7 +119,7 @@ describe('memo store list loading', () => {
     mocks.listByPath
       .mockResolvedValueOnce({ notes: [alpha], nextCursor: 'path-cursor', hasMore: true })
       .mockResolvedValueOnce({ notes: [alpha, beta], nextCursor: null, hasMore: false });
-    useMemoStore.setState({
+    useNoteStore.setState({
       selectedNotebook: {
         id: 'notebook-1', name: 'Notebook', path: '/tmp/notebook',
         createdAt: 1, updatedAt: 1, isDefault: true,
@@ -130,18 +129,18 @@ describe('memo store list loading', () => {
       activePluginId: null,
     });
 
-    await useMemoStore.getState().loadPathNotes({ notebookId: 'notebook-1', filter: 'all' });
-    await useMemoStore.getState().loadMoreMemos();
+    await useNoteStore.getState().loadNotes({ notebookId: 'notebook-1', filter: 'all' });
+    await useNoteStore.getState().loadMoreMemos();
 
     expect(mocks.listByPath).toHaveBeenNthCalledWith(2, expect.objectContaining({
       notebookId: 'notebook-1',
       cursor: 'path-cursor',
       limit: 50,
     }));
-    expect(useMemoStore.getState().pathNotes.map((note) => note.relativePath)).toEqual([
+    expect(useNoteStore.getState().notes.map((note) => note.relativePath)).toEqual([
       'Alpha.md', 'Beta.md',
     ]);
-    expect(useMemoStore.getState().memoListHasMore).toBe(false);
+    expect(useNoteStore.getState().memoListHasMore).toBe(false);
   });
 
   it('ignores an older path response after a newer path load', async () => {
@@ -150,72 +149,53 @@ describe('memo store list loading', () => {
       .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
       .mockResolvedValueOnce({ notes: [], nextCursor: null, hasMore: false });
 
-    const older = useMemoStore.getState().loadPathNotes({ notebookId: 'notebook-1', filter: 'all' });
-    await useMemoStore.getState().loadPathNotes({ notebookId: 'notebook-1', filter: 'all' });
+    const older = useNoteStore.getState().loadNotes({ notebookId: 'notebook-1', filter: 'all' });
+    await useNoteStore.getState().loadNotes({ notebookId: 'notebook-1', filter: 'all' });
     resolveOld?.({ notes: [], nextCursor: null, hasMore: false });
 
     await expect(older).resolves.toBe(false);
   });
 
   it('persists sidebar navigation and normalizes middle-column-only filters', () => {
-    useMemoStore.getState().setActiveFilter('agents');
+    useNoteStore.getState().setActiveFilter('agents');
 
-    let persisted = JSON.parse(localStorage.getItem('test-memo-store') ?? '{}');
+    let persisted = JSON.parse(localStorage.getItem('test-note-store') ?? '{}');
     expect(persisted.state.activeFilter).toBe('agents');
-    expect(useMemoStore.getState().middleColumnView).toBe('conversations');
+    expect(useNoteStore.getState().middleColumnView).toBe('conversations');
     expect(persisted.state.selectedMemoId).toBeUndefined();
     expect(persisted.state.selectedMemo).toBeUndefined();
 
-    useMemoStore.getState().setActiveFilter('color');
-    persisted = JSON.parse(localStorage.getItem('test-memo-store') ?? '{}');
+    useNoteStore.getState().setActiveFilter('color');
+    persisted = JSON.parse(localStorage.getItem('test-note-store') ?? '{}');
     expect(persisted.state.activeFilter).toBe('all');
-    expect(useMemoStore.getState().middleColumnView).toBe('notes');
+    expect(useNoteStore.getState().middleColumnView).toBe('notes');
 
   });
 
   it('persists path selection without an ID selection', () => {
-    useMemoStore.getState().setSelectedPathNote({
+    useNoteStore.getState().setSelectedNote({
       notebookId: 'notebook-1',
       relativePath: 'folder/note.md',
     });
 
-    const persisted = JSON.parse(localStorage.getItem('test-memo-store') ?? '{}');
-    expect(useMemoStore.getState().selectedPathNote?.relativePath).toBe('folder/note.md');
+    const persisted = JSON.parse(localStorage.getItem('test-note-store') ?? '{}');
+    expect(useNoteStore.getState().selectedNote?.relativePath).toBe('folder/note.md');
     expect(persisted.state.selectedMemoId).toBeUndefined();
-    expect(persisted.state.selectedPathNote).toEqual({
+    expect(persisted.state.selectedNote).toEqual({
       notebookId: 'notebook-1',
       relativePath: 'folder/note.md',
     });
-  });
-
-  it('drops legacy memo selection when rehydrating saved state', async () => {
-    localStorage.setItem('test-memo-store', JSON.stringify({
-      state: {
-        selectedMemoId: 'legacy-id',
-        selectedMemo: { id: 'legacy-id', filename: 'old.md' },
-        selectedNotebookId: 'notebook-1',
-        selectedPathNote: { notebookId: 'notebook-1', relativePath: 'folder/note.md' },
-        activeFilter: 'all',
-      },
-      version: 0,
-    }));
-    await useMemoStore.persist.rehydrate();
-
-    const state = useMemoStore.getState() as unknown as Record<string, unknown>;
-    expect(state).not.toHaveProperty('selectedMemoId');
-    expect(state).not.toHaveProperty('selectedMemo');
-    expect(state.selectedPathNote).toEqual({ notebookId: 'notebook-1', relativePath: 'folder/note.md' });
   });
 
   it('exits a plugin view when notes is already the active filter', () => {
-    useMemoStore.setState({
+    useNoteStore.setState({
       activeFilter: 'all',
       activePluginId: 'plugin-1',
     });
 
-    useMemoStore.getState().setActiveFilter('all');
+    useNoteStore.getState().setActiveFilter('all');
 
-    expect(useMemoStore.getState().activeFilter).toBe('all');
-    expect(useMemoStore.getState().activePluginId).toBeNull();
+    expect(useNoteStore.getState().activeFilter).toBe('all');
+    expect(useNoteStore.getState().activePluginId).toBeNull();
   });
 });

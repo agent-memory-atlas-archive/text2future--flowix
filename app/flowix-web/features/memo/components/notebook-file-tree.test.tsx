@@ -48,10 +48,10 @@ vi.mock('@shared/ui/context-menu', () => ({
 }));
 vi.mock('@features/memo/components/file-type-icon', () => ({ FileTypeIcon: () => null }));
 vi.mock('@features/memo/components/memo-card-actions', () => ({ MemoCardActions: () => null }));
-vi.mock('@features/memo/services/memo-repository', () => ({ memoRepository: {} }));
+vi.mock('@features/memo/services/note-repository', () => ({ noteRepository: {} }));
 vi.mock('@features/memo', () => ({
-  MEMO_COLOR_HEX: { blue: '#0000ff' },
-  useMemoStore: Object.assign(
+  NOTE_COLOR_HEX: { blue: '#0000ff' },
+  useNoteStore: Object.assign(
     (selector: (state: { memos: never[]; selectedMemo: null }) => unknown) => selector({ memos: [], selectedMemo: null }),
     { getState: () => ({ memos: [], selectedMemo: null }) },
   ),

@@ -7,11 +7,11 @@ export { AgentTasksSection } from '@features/agent/components/agent-tasks-sectio
 import { buildInitialInstanceRuntimeConfig } from '@features/agent/store/initial-runtime-config';
 import { useAgentSessionStore } from '@features/agent/store/agent-session-store';
 import { selectAndOpenAgentConversation } from '@features/workspace/use-cases/agent-conversation-navigation';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 
 /** Create and open a blank, notebook-scoped DSH conversation. */
 export function createAndOpenDshConversation(): void {
-  const notebookId = useMemoStore.getState().selectedNotebook?.id ?? null;
+  const notebookId = useNoteStore.getState().selectedNotebook?.id ?? null;
   const instance = useAgentSessionStore.getState().createInstance({
     agentType: 'deepseek-harness',
     title: '',

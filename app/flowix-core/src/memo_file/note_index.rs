@@ -7,19 +7,65 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
 
+use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use super::{
-    is_ignored_notebook_relative_path, notebook_path_from_relative, notebook_relative_path,
-    AgentThreadItem, Memo, MemoColor, MemoFile, MemoIndexEntry, MemoTodoEntry, PathTodoEntry, TodoItem,
+    notebook_path_from_relative, notebook_relative_path, AgentThreadItem, Memo, MemoFile,
+    MemoIndexEntry, MemoTodoEntry, NoteColor, PathTodoEntry, TodoItem,
 };
 
-const SCHEMA_VERSION: i64 = 2;
-const PARSER_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 3;
+const PARSER_VERSION: i64 = 7;
+const NOTE_SEARCH_FTS_VERSION: i64 = 1;
+const NOTE_INDEX_REFRESH_PENDING: &str = "note-index-refresh-pending";
+const NOTE_INDEX_REFRESH_PENDING_DIR: &str = "note-index-refresh-pending.d";
+static NOTE_INDEX_REFRESH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn mark_note_index_refresh_pending(root: &Path) -> io::Result<()> {
+    let pending_dir = root.join(".flowix").join(NOTE_INDEX_REFRESH_PENDING_DIR);
+    fs::create_dir_all(&pending_dir)?;
+    loop {
+        let sequence = NOTE_INDEX_REFRESH_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let name = format!(
+            "{}-{}-{sequence}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+            std::process::id()
+        );
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(pending_dir.join(name))
+        {
+            Ok(_) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn pending_note_index_refreshes(root: &Path) -> io::Result<Vec<std::path::PathBuf>> {
+    let mut pending = Vec::new();
+    let legacy = root.join(".flowix").join(NOTE_INDEX_REFRESH_PENDING);
+    if legacy.is_file() {
+        pending.push(legacy);
+    }
+    match fs::read_dir(root.join(".flowix").join(NOTE_INDEX_REFRESH_PENDING_DIR)) {
+        Ok(entries) => {
+            for entry in entries {
+                pending.push(entry?.path());
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    Ok(pending)
+}
 
 fn display_title_from_relative_path(relative_path: &str) -> String {
     let filename = relative_path.rsplit('/').next().unwrap_or(relative_path);
@@ -44,7 +90,7 @@ fn is_markdown_note_path(path: &Path) -> bool {
 /// No legacy memo ID or legacy table is required to read it.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct V2NoteEntry {
+pub struct NoteEntry {
     pub relative_path: String,
     pub title: String,
     pub preview: String,
@@ -56,32 +102,41 @@ pub struct V2NoteEntry {
     pub updated_at: i64,
     pub favorited: bool,
     pub icon: Option<String>,
-    pub colors: Vec<MemoColor>,
+    pub colors: Vec<NoteColor>,
     pub properties: serde_json::Value,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum V2PathWriteOutcome {
+pub enum NoteWriteOutcome {
     Saved { content: String },
     Conflict { disk_content: String },
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct V2IndexReconcileReport {
+pub struct NoteIndexReconcileReport {
     pub added: usize,
     pub updated: usize,
     pub removed: usize,
     pub unchanged: usize,
 }
 
+/// Search result from the rebuildable notebook-local full-text projection.
+#[derive(Debug, Clone)]
+pub struct NoteSearchHit {
+    pub relative_path: String,
+    pub title: String,
+    pub snippet: String,
+    pub matched_in: String,
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct V2TodoMigrationReport {
+pub struct NoteTodoMigrationReport {
     pub notes_written: usize,
     pub tasks_written: usize,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct V2NotePropertyMigrationReport {
+pub struct NotePropertyMigrationReport {
     pub notes_written: usize,
     pub properties_written: usize,
 }
@@ -131,7 +186,7 @@ impl LegacyTodoAttributes {
 
 impl MemoFile {
     /// Create a note with no generated memo ID and register it by relative path.
-    pub fn create_v2_note_by_path(
+    pub fn create_note_by_path(
         &self,
         notebook_id: &str,
         parent_relative_path: Option<&str>,
@@ -139,12 +194,15 @@ impl MemoFile {
         content: &str,
     ) -> io::Result<String> {
         let _write_guard = self.acquire_cross_process_write_lock()?;
-        let root = self.notebook_root_for_v2(notebook_id)?;
+        let root = self.notebook_root_for_note(notebook_id)?;
         let parent_relative = parent_relative_path.unwrap_or("").replace('\\', "/");
         let parent_path = if parent_relative.is_empty() {
             root.clone()
         } else {
-            if is_ignored_notebook_relative_path(Path::new(&parent_relative)) {
+            if self
+                .file_management_policy(notebook_id)
+                .is_ignored_at(&root, Path::new(&parent_relative))
+            {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "invalid note directory",
@@ -188,44 +246,48 @@ impl MemoFile {
             }
         };
         let relative = notebook_relative_path(&root, &path).map_err(io::Error::other)?;
-        if let Err(error) = self.refresh_v2_note_path(notebook_id, &relative) {
+        if let Err(error) = self.refresh_note_path(notebook_id, &relative) {
+            mark_note_index_refresh_pending(&root)?;
             tracing::warn!(notebook_id, relative_path = %relative, "note created but path index refresh failed: {error}");
         }
         Ok(relative)
     }
 
     /// Save an existing note using only its notebook-relative path.
-    pub fn write_v2_note_by_path(
+    pub fn write_note_by_path(
         &self,
         notebook_id: &str,
         relative_path: &str,
         content: &str,
         expected_content: Option<&str>,
-    ) -> io::Result<V2PathWriteOutcome> {
-        let root = self.notebook_root_for_v2(notebook_id)?;
-        let path = self.validate_v2_note_path(&root, relative_path, true)?;
+    ) -> io::Result<NoteWriteOutcome> {
+        let root = self.notebook_root_for_note(notebook_id)?;
+        let path = self.validate_note_path(&root, relative_path, true)?;
         super::extract_document_metadata(content)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
         match self.write_file_if_matches(&path, content, expected_content)? {
             super::FileWriteOutcome::Conflict { disk_content } => {
-                Ok(V2PathWriteOutcome::Conflict { disk_content })
+                Ok(NoteWriteOutcome::Conflict { disk_content })
             }
             super::FileWriteOutcome::Saved => {
-                if let Err(error) = self.refresh_v2_note_path(notebook_id, relative_path) {
+                if let Err(error) = self.refresh_note_path(notebook_id, relative_path) {
+                    mark_note_index_refresh_pending(&root)?;
                     tracing::warn!(
                         notebook_id,
                         relative_path,
                         "note saved but path index refresh failed: {error}"
                     );
                 }
-                Ok(V2PathWriteOutcome::Saved { content: content.to_string() })
+                Ok(NoteWriteOutcome::Saved {
+                    content: content.to_string(),
+                })
             }
         }
     }
 
     /// Rename a note without resolving a memo ID. The actual filesystem
-    /// rename is no-clobber; V2 rows are then moved by refreshing both paths.
-    pub fn rename_v2_note_by_path(
+    /// rename is no-clobber; Note rows are then moved by refreshing both paths.
+    pub fn rename_note_by_path(
         &self,
         notebook_id: &str,
         relative_path: &str,
@@ -233,8 +295,8 @@ impl MemoFile {
         expected_content: Option<&str>,
     ) -> io::Result<String> {
         let _write_guard = self.acquire_cross_process_write_lock()?;
-        let root = self.notebook_root_for_v2(notebook_id)?;
-        let old_path = self.validate_v2_note_path(&root, relative_path, true)?;
+        let root = self.notebook_root_for_note(notebook_id)?;
+        let old_path = self.validate_note_path(&root, relative_path, true)?;
         if let Some(expected) = expected_content {
             let current = fs::read_to_string(&old_path)?;
             let current = super::normalize_markdown_encoding_boundaries(&current);
@@ -247,12 +309,12 @@ impl MemoFile {
             }
         }
         let previous_created_at = self
-            .read_v2_note_entry_by_path(notebook_id, relative_path)
+            .read_note_entry_by_path(notebook_id, relative_path)
             .ok()
             .flatten()
             .map(|entry| entry.created_at)
             .or_else(|| {
-                self.derive_v2_note_entry_from_disk(notebook_id, relative_path)
+                self.derive_note_entry_from_disk(notebook_id, relative_path)
                     .ok()
                     .map(|entry| entry.created_at)
             });
@@ -296,26 +358,34 @@ impl MemoFile {
         };
         let new_relative = notebook_relative_path(&root, &new_path).map_err(io::Error::other)?;
         if let Err(error) = self.move_path_archive(notebook_id, relative_path, &new_relative) {
-            tracing::warn!(notebook_id, relative_path, "note renamed but archive move failed: {error}");
+            tracing::warn!(
+                notebook_id,
+                relative_path,
+                "note renamed but archive move failed: {error}"
+            );
         }
-        if let Err(error) = self.refresh_v2_note_path(notebook_id, relative_path) {
+        if let Err(error) = self.refresh_note_path(notebook_id, relative_path) {
+            mark_note_index_refresh_pending(&root)?;
             tracing::warn!(
                 notebook_id,
                 relative_path,
                 "note renamed but old path index cleanup failed: {error}"
             );
         }
-        if let Err(error) = self.refresh_v2_note_path(notebook_id, &new_relative) {
+        if let Err(error) = self.refresh_note_path(notebook_id, &new_relative) {
+            mark_note_index_refresh_pending(&root)?;
             tracing::warn!(notebook_id, relative_path = %new_relative, "note renamed but new path index refresh failed: {error}");
         } else if let Some(created_at) = previous_created_at.filter(|value| *value > 0) {
-            let result = self.open_v2_index_connection(notebook_id).and_then(|conn| {
-                conn.execute(
-                    "UPDATE v2_notes SET created_at=?2 WHERE relative_path=?1",
-                    params![new_relative, created_at],
-                )
-                .map(|_| ())
-                .map_err(io::Error::other)
-            });
+            let result = self
+                .open_note_index_connection(notebook_id)
+                .and_then(|conn| {
+                    conn.execute(
+                        "UPDATE notes SET created_at=?2 WHERE relative_path=?1",
+                        params![new_relative, created_at],
+                    )
+                    .map(|_| ())
+                    .map_err(io::Error::other)
+                });
             if let Err(error) = result {
                 tracing::warn!(notebook_id, relative_path = %new_relative, "note renamed but creation-time projection could not be preserved: {error}");
             }
@@ -324,33 +394,35 @@ impl MemoFile {
     }
 
     /// Move a note into an existing directory using only its notebook path.
-    /// Markdown is moved first; both V2 rows are best-effort projections and
+    /// Markdown is moved first; both Note rows are best-effort projections and
     /// can be repaired by reconciliation if SQLite is unavailable.
-    pub fn move_v2_note_by_path(
+    pub fn move_note_by_path(
         &self,
         notebook_id: &str,
         relative_path: &str,
         parent_relative_path: &str,
     ) -> io::Result<String> {
         let _write_guard = self.acquire_cross_process_write_lock()?;
-        let root = self.notebook_root_for_v2(notebook_id)?;
-        let old_path = self.validate_v2_note_path(&root, relative_path, true)?;
+        let root = self.notebook_root_for_note(notebook_id)?;
+        let old_path = self.validate_note_path(&root, relative_path, true)?;
         let parent_relative = parent_relative_path.replace('\\', "/");
         let parent = if parent_relative.is_empty() {
             root.clone()
         } else {
             let relative = Path::new(&parent_relative);
-            if is_ignored_notebook_relative_path(relative) {
+            if self
+                .file_management_policy(notebook_id)
+                .is_ignored_at(&root, relative)
+            {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "invalid note destination directory",
                 ));
             }
-            let path = notebook_path_from_relative(&root, &parent_relative)
-                .map_err(io::Error::other)?;
+            let path =
+                notebook_path_from_relative(&root, &parent_relative).map_err(io::Error::other)?;
             let metadata = fs::metadata(&path)?;
-            if !metadata.is_dir()
-                || !fs::canonicalize(&path)?.starts_with(fs::canonicalize(&root)?)
+            if !metadata.is_dir() || !fs::canonicalize(&path)?.starts_with(fs::canonicalize(&root)?)
             {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -369,31 +441,39 @@ impl MemoFile {
         }
 
         let previous_created_at = self
-            .read_v2_note_entry_by_path(notebook_id, relative_path)?
+            .read_note_entry_by_path(notebook_id, relative_path)?
             .map(|entry| entry.created_at);
         super::rename_file_noclobber(&old_path, &new_path)?;
         if let Err(error) = self.move_path_archive(notebook_id, relative_path, &new_relative) {
-            tracing::warn!(notebook_id, relative_path, "note moved but archive move failed: {error}");
+            tracing::warn!(
+                notebook_id,
+                relative_path,
+                "note moved but archive move failed: {error}"
+            );
         }
 
-        if let Err(error) = self.refresh_v2_note_path(notebook_id, relative_path) {
+        if let Err(error) = self.refresh_note_path(notebook_id, relative_path) {
+            mark_note_index_refresh_pending(&root)?;
             tracing::warn!(
                 notebook_id,
                 relative_path,
                 "note moved but old path index cleanup failed: {error}"
             );
         }
-        if let Err(error) = self.refresh_v2_note_path(notebook_id, &new_relative) {
+        if let Err(error) = self.refresh_note_path(notebook_id, &new_relative) {
+            mark_note_index_refresh_pending(&root)?;
             tracing::warn!(notebook_id, relative_path = %new_relative, "note moved but new path index refresh failed: {error}");
         } else if let Some(created_at) = previous_created_at.filter(|value| *value > 0) {
-            let result = self.open_v2_index_connection(notebook_id).and_then(|conn| {
-                conn.execute(
-                    "UPDATE v2_notes SET created_at=?2 WHERE relative_path=?1",
-                    params![new_relative, created_at],
-                )
-                .map(|_| ())
-                .map_err(io::Error::other)
-            });
+            let result = self
+                .open_note_index_connection(notebook_id)
+                .and_then(|conn| {
+                    conn.execute(
+                        "UPDATE notes SET created_at=?2 WHERE relative_path=?1",
+                        params![new_relative, created_at],
+                    )
+                    .map(|_| ())
+                    .map_err(io::Error::other)
+                });
             if let Err(error) = result {
                 tracing::warn!(notebook_id, relative_path = %new_relative, "note moved but creation-time projection could not be preserved: {error}");
             }
@@ -401,18 +481,15 @@ impl MemoFile {
         Ok(new_relative)
     }
 
-    /// Delete an existing note by path and remove only its rebuildable V2 row.
-    pub fn delete_v2_note_by_path(
-        &self,
-        notebook_id: &str,
-        relative_path: &str,
-    ) -> io::Result<bool> {
+    /// Delete an existing note by path and remove only its rebuildable projection row.
+    pub fn delete_note_by_path(&self, notebook_id: &str, relative_path: &str) -> io::Result<bool> {
         let _write_guard = self.acquire_cross_process_write_lock()?;
-        let root = self.notebook_root_for_v2(notebook_id)?;
-        let path = self.validate_v2_note_path(&root, relative_path, false)?;
+        let root = self.notebook_root_for_note(notebook_id)?;
+        let path = self.validate_note_path(&root, relative_path, false)?;
         match fs::remove_file(&path) {
             Ok(()) => {
-                if let Err(error) = self.refresh_v2_note_path(notebook_id, relative_path) {
+                if let Err(error) = self.refresh_note_path(notebook_id, relative_path) {
+                    mark_note_index_refresh_pending(&root)?;
                     tracing::warn!(
                         notebook_id,
                         relative_path,
@@ -422,7 +499,8 @@ impl MemoFile {
                 Ok(true)
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                if let Err(index_error) = self.refresh_v2_note_path(notebook_id, relative_path) {
+                if let Err(index_error) = self.refresh_note_path(notebook_id, relative_path) {
+                    mark_note_index_refresh_pending(&root)?;
                     tracing::warn!(
                         notebook_id,
                         relative_path,
@@ -435,7 +513,29 @@ impl MemoFile {
         }
     }
 
-    fn notebook_root_for_v2(&self, notebook_id: &str) -> io::Result<std::path::PathBuf> {
+    /// Remove a stale path projection without deleting a file that reappeared.
+    pub fn prune_missing_note_by_path(
+        &self,
+        notebook_id: &str,
+        relative_path: &str,
+    ) -> io::Result<bool> {
+        let _write_guard = self.acquire_cross_process_write_lock()?;
+        let root = self.notebook_root_for_note(notebook_id)?;
+        let path = self.validate_note_path(&root, relative_path, false)?;
+        match fs::symlink_metadata(&path) {
+            Ok(_) => return Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        self.refresh_note_path(notebook_id, relative_path)?;
+        match fs::symlink_metadata(&path) {
+            Ok(_) => Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn notebook_root_for_note(&self, notebook_id: &str) -> io::Result<std::path::PathBuf> {
         let root = self
             .get_notebook_config_by_id(notebook_id)
             .map(|config| std::path::PathBuf::from(config.path))
@@ -449,7 +549,7 @@ impl MemoFile {
         Ok(root)
     }
 
-    fn validate_v2_note_path(
+    fn validate_note_path(
         &self,
         root: &Path,
         relative_path: &str,
@@ -458,7 +558,7 @@ impl MemoFile {
         let normalized = relative_path.replace('\\', "/");
         let relative = Path::new(&normalized);
         if normalized != relative_path
-            || is_ignored_notebook_relative_path(relative)
+            || super::FileManagementPolicy::from_notebook_root(root).is_ignored_at(root, relative)
             || !is_markdown_note_path(relative)
         {
             return Err(io::Error::new(
@@ -491,17 +591,17 @@ impl MemoFile {
     /// Read one note's projection by path. This also repairs a missing or
     /// changed row from Markdown, so a rebuilt index is not required to open
     /// an individual note.
-    pub fn read_v2_note_entry_by_path(
+    pub fn read_note_entry_by_path(
         &self,
         notebook_id: &str,
         relative_path: &str,
-    ) -> io::Result<Option<V2NoteEntry>> {
-        self.refresh_v2_note_path(notebook_id, relative_path)?;
-        let conn = self.open_v2_index_connection(notebook_id)?;
+    ) -> io::Result<Option<NoteEntry>> {
+        self.refresh_note_path(notebook_id, relative_path)?;
+        let conn = self.open_note_index_connection(notebook_id)?;
         let row: Option<(String, String, String, Option<String>, i64, i64, i64, Option<String>, String, String)> = conn
             .query_row(
                 "SELECT relative_path, title, preview, thumbnail, created_at, updated_at, favorited, icon, colors_json, properties_json \
-                 FROM v2_notes WHERE relative_path=?1",
+                 FROM notes WHERE relative_path=?1",
                 params![relative_path],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
                     row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?)),
@@ -523,7 +623,7 @@ impl MemoFile {
         else {
             return Ok(None);
         };
-        let mut entry = V2NoteEntry {
+        let mut entry = NoteEntry {
             relative_path,
             title,
             preview,
@@ -539,7 +639,7 @@ impl MemoFile {
             properties: serde_json::from_str(&properties).map_err(io::Error::other)?,
         };
         let mut stmt = conn
-            .prepare("SELECT tag FROM v2_note_tags WHERE relative_path=?1 ORDER BY tag")
+            .prepare("SELECT tag FROM note_tags WHERE relative_path=?1 ORDER BY tag")
             .map_err(io::Error::other)?;
         entry.tags = stmt
             .query_map(params![&entry.relative_path], |row| row.get(0))
@@ -547,7 +647,7 @@ impl MemoFile {
             .collect::<Result<Vec<_>, _>>()
             .map_err(io::Error::other)?;
         let mut stmt = conn.prepare(
-            "SELECT todo_id, content, status FROM v2_note_todos WHERE relative_path=?1 ORDER BY position"
+            "SELECT todo_id, content, status FROM note_todos WHERE relative_path=?1 ORDER BY position"
         ).map_err(io::Error::other)?;
         entry.todos = stmt
             .query_map(params![&entry.relative_path], |row| {
@@ -561,7 +661,7 @@ impl MemoFile {
             .collect::<Result<Vec<_>, _>>()
             .map_err(io::Error::other)?;
         let mut stmt = conn.prepare(
-            "SELECT thread_id, title, agent_type FROM v2_note_agents WHERE relative_path=?1 ORDER BY position"
+            "SELECT thread_id, title, agent_type FROM note_agents WHERE relative_path=?1 ORDER BY position"
         ).map_err(io::Error::other)?;
         entry.agents = stmt
             .query_map(params![&entry.relative_path], |row| {
@@ -581,13 +681,13 @@ impl MemoFile {
     /// unavailable. This keeps opening and completing a file operation
     /// independent from index health; creation time falls back to filesystem
     /// metadata because `flowix_created_at` is intentionally index-only.
-    pub fn derive_v2_note_entry_from_disk(
+    pub fn derive_note_entry_from_disk(
         &self,
         notebook_id: &str,
         relative_path: &str,
-    ) -> io::Result<V2NoteEntry> {
-        let root = self.notebook_root_for_v2(notebook_id)?;
-        let path = self.validate_v2_note_path(&root, relative_path, true)?;
+    ) -> io::Result<NoteEntry> {
+        let root = self.notebook_root_for_note(notebook_id)?;
+        let path = self.validate_note_path(&root, relative_path, true)?;
         let metadata = fs::metadata(&path)?;
         let updated_at = metadata
             .modified()
@@ -624,7 +724,7 @@ impl MemoFile {
         };
         super::apply_derived_memo_fields(&mut derived, &content);
         let title = display_title_from_relative_path(relative_path);
-        Ok(V2NoteEntry {
+        Ok(NoteEntry {
             relative_path: derived.relative_path,
             title,
             preview: derived.preview,
@@ -642,17 +742,17 @@ impl MemoFile {
     }
 
     /// Read the path-keyed list without opening any legacy memo table.
-    pub fn read_v2_note_entries(&self, notebook_id: &str) -> io::Result<Vec<V2NoteEntry>> {
-        if !self.v2_index_is_ready(notebook_id)? {
+    pub fn read_note_entries(&self, notebook_id: &str) -> io::Result<Vec<NoteEntry>> {
+        if !self.note_index_is_ready(notebook_id)? {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
-                "V2 note index is not ready",
+                "Note index is not ready",
             ));
         }
-        let conn = self.open_v2_index_connection(notebook_id)?;
+        let conn = self.open_note_index_connection(notebook_id)?;
         let mut stmt = conn.prepare(
             "SELECT relative_path, title, preview, thumbnail, created_at, updated_at, favorited, icon, colors_json, properties_json \
-             FROM v2_notes ORDER BY created_at ASC, relative_path ASC"
+             FROM notes ORDER BY created_at ASC, relative_path ASC"
         ).map_err(io::Error::other)?;
         let rows = stmt
             .query_map([], |row| {
@@ -684,7 +784,7 @@ impl MemoFile {
                 colors,
                 properties,
             ) = row.map_err(io::Error::other)?;
-            entries.push(V2NoteEntry {
+            entries.push(NoteEntry {
                 relative_path,
                 title,
                 preview,
@@ -707,7 +807,7 @@ impl MemoFile {
             .map(|(index, entry)| (entry.relative_path.clone(), index))
             .collect();
         let mut stmt = conn
-            .prepare("SELECT relative_path, tag FROM v2_note_tags ORDER BY relative_path, tag")
+            .prepare("SELECT relative_path, tag FROM note_tags ORDER BY relative_path, tag")
             .map_err(io::Error::other)?;
         let rows = stmt
             .query_map([], |row| {
@@ -721,7 +821,7 @@ impl MemoFile {
             }
         }
         let mut stmt = conn.prepare(
-            "SELECT relative_path, todo_id, content, status FROM v2_note_todos ORDER BY relative_path, position"
+            "SELECT relative_path, todo_id, content, status FROM note_todos ORDER BY relative_path, position"
         ).map_err(io::Error::other)?;
         let rows = stmt
             .query_map([], |row| {
@@ -742,7 +842,7 @@ impl MemoFile {
             }
         }
         let mut stmt = conn.prepare(
-            "SELECT relative_path, thread_id, title, agent_type FROM v2_note_agents ORDER BY relative_path, position"
+            "SELECT relative_path, thread_id, title, agent_type FROM note_agents ORDER BY relative_path, position"
         ).map_err(io::Error::other)?;
         let rows = stmt
             .query_map([], |row| {
@@ -765,17 +865,347 @@ impl MemoFile {
         Ok(entries)
     }
 
+    /// Search the notebook-local FTS projection. Search content is derived
+    /// from Markdown and can be rebuilt without changing the source files.
+    pub fn search_notes(
+        &self,
+        notebook_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> io::Result<Vec<NoteSearchHit>> {
+        self.search_notes_with_tag_filter(notebook_id, query, None, limit)
+    }
+
+    pub fn search_notes_with_tag_filter(
+        &self,
+        notebook_id: &str,
+        query: &str,
+        tag_filter: Option<&str>,
+        limit: usize,
+    ) -> io::Result<Vec<NoteSearchHit>> {
+        let query = query.trim().to_lowercase();
+        if query.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let tag_filter = tag_filter.map(str::trim).filter(|tag| !tag.is_empty());
+        self.ensure_note_search_index(notebook_id)?;
+        let root = self.notebook_root_for_note(notebook_id)?;
+        if !pending_note_index_refreshes(&root)?.is_empty() {
+            self.verify_note_index(notebook_id)?;
+        }
+        let conn = self.open_note_index_connection(notebook_id)?;
+        let short_query = query.chars().count() < 3;
+        let (sql, query_pattern) = if short_query {
+            let escaped = query
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            let pattern = format!("%{escaped}%");
+            (
+                "SELECT relative_path, title, body, tags,
+                        CASE WHEN instr(lower(title), ?2) > 0 THEN 'title'
+                             WHEN instr(lower(tags), ?2) > 0 THEN 'tag'
+                             ELSE 'body' END AS matched_in
+                 FROM note_search_fts
+                 WHERE (lower(title) LIKE ?1 ESCAPE '\\'
+                    OR lower(body) LIKE ?1 ESCAPE '\\'
+                    OR lower(tags) LIKE ?1 ESCAPE '\\')
+                   AND (?4 IS NULL OR EXISTS (
+                       SELECT 1 FROM note_tags t
+                       WHERE t.relative_path=note_search_fts.relative_path
+                         AND (t.tag=?4 OR substr(t.tag, 1, length(?4)+1)=?4 || '/')
+                   ))
+                 ORDER BY updated_at DESC, relative_path ASC LIMIT ?3",
+                pattern,
+            )
+        } else {
+            let quoted = format!("\"{}\"", query.replace('"', "\"\""));
+            (
+                "SELECT relative_path, title, body, tags,
+                        CASE WHEN instr(lower(title), ?2) > 0 THEN 'title'
+                             WHEN instr(lower(tags), ?2) > 0 THEN 'tag'
+                             ELSE 'body' END AS matched_in
+                 FROM note_search_fts
+                 WHERE note_search_fts MATCH ?1
+                   AND (?4 IS NULL OR EXISTS (
+                       SELECT 1 FROM note_tags t
+                       WHERE t.relative_path=note_search_fts.relative_path
+                         AND (t.tag=?4 OR substr(t.tag, 1, length(?4)+1)=?4 || '/')
+                   ))
+                 ORDER BY updated_at DESC, relative_path ASC LIMIT ?3",
+                quoted,
+            )
+        };
+        let mut statement = conn.prepare(sql).map_err(io::Error::other)?;
+        let rows = statement
+            .query_map(
+                params![query_pattern, query, limit as i64, tag_filter],
+                |row| {
+                    let relative_path: String = row.get(0)?;
+                    let title: String = row.get(1)?;
+                    let body: String = row.get(2)?;
+                    let matched_in: String = row.get(4)?;
+                    let snippet = body
+                        .chars()
+                        .take(130)
+                        .collect::<String>()
+                        .replace(['\r', '\n'], " ");
+                    Ok(NoteSearchHit {
+                        relative_path,
+                        title,
+                        snippet,
+                        matched_in,
+                    })
+                },
+            )
+            .map_err(io::Error::other)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(io::Error::other)
+    }
+
+    fn ensure_note_search_index(&self, notebook_id: &str) -> io::Result<()> {
+        let root = self
+            .get_notebook_config_by_id(notebook_id)
+            .map(|config| std::path::PathBuf::from(config.path))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "notebook not found"))?;
+        let mut conn = self.open_note_index_connection(notebook_id)?;
+        let version: Option<i64> = conn
+            .query_row(
+                "SELECT value FROM note_index_meta WHERE key='note_search_fts_version'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(io::Error::other)?
+            .and_then(|value| value.parse().ok());
+        if version == Some(NOTE_SEARCH_FTS_VERSION) {
+            return Ok(());
+        }
+
+        // Read files outside SQLite write transactions. Each row is checked
+        // against its current hash before a short, atomic FTS update.
+        let notes: Vec<String> = conn
+            .prepare("SELECT relative_path FROM notes ORDER BY relative_path")
+            .map_err(io::Error::other)?
+            .query_map([], |row| row.get(0))
+            .map_err(io::Error::other)?
+            .collect::<Result<_, _>>()
+            .map_err(io::Error::other)?;
+        for relative_path in notes {
+            let path =
+                notebook_path_from_relative(&root, &relative_path).map_err(io::Error::other)?;
+            let bytes = match fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    self.refresh_note_path(notebook_id, &relative_path)?;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let hash = format!("{:x}", Sha256::digest(&bytes));
+            let content = String::from_utf8(bytes)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            let tx = conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(io::Error::other)?;
+            let current: Option<(String, String, i64)> = tx
+                .query_row(
+                    "SELECT content_hash, title, updated_at FROM notes WHERE relative_path=?1",
+                    params![relative_path],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()
+                .map_err(io::Error::other)?;
+            let Some((current_hash, title, updated_at)) = current else {
+                tx.commit().map_err(io::Error::other)?;
+                continue;
+            };
+            if current_hash != hash {
+                tx.commit().map_err(io::Error::other)?;
+                self.refresh_note_path(notebook_id, &relative_path)?;
+                continue;
+            }
+            let exists: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM note_search_fts WHERE relative_path=?1)",
+                    params![relative_path],
+                    |row| row.get(0),
+                )
+                .map_err(io::Error::other)?;
+            if exists {
+                tx.commit().map_err(io::Error::other)?;
+                continue;
+            }
+            let tags: String = tx.query_row(
+                "SELECT COALESCE(group_concat(tag, ' '), '') FROM note_tags WHERE relative_path=?1",
+                params![relative_path], |row| row.get(0),
+            ).map_err(io::Error::other)?;
+            tx.execute(
+                "INSERT INTO note_search_fts(relative_path, title, body, tags, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    relative_path,
+                    title,
+                    super::extract_body_content(&content),
+                    tags,
+                    updated_at
+                ],
+            )
+            .map_err(io::Error::other)?;
+            tx.commit().map_err(io::Error::other)?;
+        }
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(io::Error::other)?;
+        tx.execute("DELETE FROM note_search_fts WHERE relative_path NOT IN (SELECT relative_path FROM notes)", []).map_err(io::Error::other)?;
+        tx.execute(
+            "INSERT INTO note_index_meta (key, value) VALUES ('note_search_fts_version', ?1)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![NOTE_SEARCH_FTS_VERSION.to_string()],
+        )
+        .map_err(io::Error::other)?;
+        tx.commit().map_err(io::Error::other)
+    }
+
+    /// Fetch one sorted page directly from the projection. Markdown is
+    /// still authoritative; only the bounded result rows are hydrated.
+    pub fn read_note_page(
+        &self,
+        notebook_id: &str,
+        filter: &str,
+        tag_id: Option<&str>,
+        color: Option<&str>,
+        sort: &str,
+        now: i64,
+        week_start: i64,
+        month_start: i64,
+        cursor: Option<(bool, i64, Option<&str>, Option<&str>, &str)>,
+        limit: usize,
+    ) -> io::Result<Vec<NoteEntry>> {
+        if !self.note_index_is_ready(notebook_id)? {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "Note index is not ready",
+            ));
+        }
+        let conn = self.open_note_index_connection(notebook_id)?;
+        let date_column = if sort == "updatedAt" {
+            "updated_at"
+        } else {
+            "created_at"
+        };
+        let mut sql = String::from("SELECT n.relative_path FROM notes n WHERE 1=1");
+        let mut args: Vec<SqlValue> = Vec::new();
+        match filter {
+            "todos" => sql.push_str(
+                " AND EXISTS (SELECT 1 FROM note_todos t WHERE t.relative_path=n.relative_path)",
+            ),
+            "agents" => sql.push_str(
+                " AND EXISTS (SELECT 1 FROM note_agents a WHERE a.relative_path=n.relative_path)",
+            ),
+            "favorited" => sql.push_str(" AND n.favorited=1"),
+            "tagged" => {
+                if let Some(tag) = tag_id {
+                    sql.push_str(" AND EXISTS (SELECT 1 FROM note_tags t WHERE t.relative_path=n.relative_path AND (t.tag=? OR substr(t.tag,1,length(?)+1)=?))");
+                    args.push(tag.to_owned().into());
+                    args.push(tag.to_owned().into());
+                    args.push(format!("{tag}/").into());
+                } else {
+                    sql.push_str(" AND EXISTS (SELECT 1 FROM note_tags t WHERE t.relative_path=n.relative_path)");
+                }
+            }
+            "thisWeek" | "thisMonth" => {
+                sql.push_str(" AND n.created_at>=? AND n.created_at<=?");
+                args.push(
+                    (if filter == "thisWeek" {
+                        week_start
+                    } else {
+                        month_start
+                    })
+                    .into(),
+                );
+                args.push(now.into());
+            }
+            _ => {}
+        }
+        match color {
+            Some("any") => sql.push_str(" AND json_array_length(n.colors_json)>0"),
+            Some("none") => sql.push_str(" AND json_array_length(n.colors_json)=0"),
+            Some(value) => {
+                sql.push_str(
+                    " AND EXISTS (SELECT 1 FROM json_each(n.colors_json) c WHERE c.value=?)",
+                );
+                args.push(value.to_owned().into());
+            }
+            None => {}
+        }
+        let filename_sort = matches!(sort, "filenameAsc" | "filenameDesc");
+        if let Some((favorited, value, lower, filename, path)) = cursor {
+            if filename_sort {
+                let comparison = if sort == "filenameDesc" { "<" } else { ">" };
+                sql.push_str(&format!(" AND (n.favorited<? OR (n.favorited=? AND (n.filename_lower,n.filename,n.relative_path) {comparison} (?,?,?)))"));
+                args.extend([
+                    SqlValue::Integer(i64::from(favorited)),
+                    SqlValue::Integer(i64::from(favorited)),
+                    lower.unwrap_or_default().to_owned().into(),
+                    filename.unwrap_or_default().to_owned().into(),
+                    path.to_owned().into(),
+                ]);
+            } else {
+                sql.push_str(&format!(" AND (n.favorited<? OR (n.favorited=? AND (n.{date_column}<? OR (n.{date_column}=? AND n.relative_path<?))))"));
+                args.extend([
+                    SqlValue::Integer(i64::from(favorited)),
+                    SqlValue::Integer(i64::from(favorited)),
+                    value.into(),
+                    value.into(),
+                    path.to_owned().into(),
+                ]);
+            }
+        }
+        if filename_sort {
+            let direction = if sort == "filenameDesc" {
+                "DESC"
+            } else {
+                "ASC"
+            };
+            sql.push_str(&format!(" ORDER BY n.favorited DESC, n.filename_lower {direction}, n.filename {direction}, n.relative_path {direction} LIMIT ?"));
+        } else {
+            sql.push_str(&format!(
+                " ORDER BY n.favorited DESC, n.{date_column} DESC, n.relative_path DESC LIMIT ?"
+            ));
+        }
+        args.push((limit as i64).into());
+        let paths = conn
+            .prepare(&sql)
+            .map_err(io::Error::other)?
+            .query_map(rusqlite::params_from_iter(args), |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(io::Error::other)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(io::Error::other)?;
+        paths
+            .into_iter()
+            .map(|path| {
+                self.read_note_entry_by_path(notebook_id, &path)?
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::NotFound, "indexed note disappeared")
+                    })
+            })
+            .collect()
+    }
+
     /// Adapt the path-keyed list to the current ID-bearing API while migration
     /// of external callers is still in progress.
-    pub(crate) fn v2_list_entries_with_legacy_ids(
+    pub(crate) fn list_note_entries_with_legacy_ids(
         &self,
         notebook_id: &str,
     ) -> io::Result<Option<Vec<MemoIndexEntry>>> {
-        if !self.v2_index_is_ready(notebook_id)? {
+        if !self.note_index_is_ready(notebook_id)? {
             return Ok(None);
         }
-        let entries = self.read_v2_note_entries(notebook_id)?;
-        let conn = self.open_v2_index_connection(notebook_id)?;
+        let entries = self.read_note_entries(notebook_id)?;
+        let conn = self.open_note_index_connection(notebook_id)?;
         let legacy_table: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memos'",
@@ -828,10 +1258,10 @@ impl MemoFile {
         }
         Ok(Some(adapted))
     }
-    pub(crate) fn v2_index_is_ready(&self, notebook_id: &str) -> io::Result<bool> {
-        let conn = self.open_v2_index_connection(notebook_id)?;
+    pub(crate) fn note_index_is_ready(&self, notebook_id: &str) -> io::Result<bool> {
+        let conn = self.open_note_index_connection(notebook_id)?;
         let mut stmt = conn.prepare(
-            "SELECT key, value FROM v2_index_meta WHERE key IN ('build_state', 'parser_version')"
+            "SELECT key, value FROM note_index_meta WHERE key IN ('build_state', 'parser_version')"
         ).map_err(io::Error::other)?;
         let values = stmt
             .query_map([], |row| {
@@ -848,24 +1278,24 @@ impl MemoFile {
                 .is_some_and(|value| value == &PARSER_VERSION.to_string()))
     }
 
-    pub(crate) fn v2_note_count(&self, notebook_id: &str) -> io::Result<usize> {
-        let conn = self.open_v2_index_connection(notebook_id)?;
+    pub(crate) fn note_count(&self, notebook_id: &str) -> io::Result<usize> {
+        let conn = self.open_note_index_connection(notebook_id)?;
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM v2_notes", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))
             .map_err(io::Error::other)?;
         Ok(usize::try_from(count).unwrap_or(0))
     }
 
-    pub(crate) fn v2_occupied_filenames(
+    pub(crate) fn note_occupied_filenames(
         &self,
         notebook_id: &str,
         parent: Option<&str>,
     ) -> io::Result<Vec<String>> {
-        let conn = self.open_v2_index_connection(notebook_id)?;
+        let conn = self.open_note_index_connection(notebook_id)?;
         let parent = parent.unwrap_or("");
         let mut stmt = conn
             .prepare(
-                "SELECT relative_path FROM v2_notes WHERE \
+                "SELECT relative_path FROM notes WHERE \
              (?1 = '' AND instr(relative_path, '/') = 0) OR \
              (?1 <> '' AND substr(relative_path, 1, length(?1) + 1) = ?1 || '/' \
               AND instr(substr(relative_path, length(?1) + 2), '/') = 0)",
@@ -885,23 +1315,25 @@ impl MemoFile {
             .collect()
     }
 
-    pub(crate) fn v2_tag_usage_summary(
+    pub(crate) fn note_tag_usage_summary(
         &self,
         notebook_id: &str,
     ) -> io::Result<(Vec<String>, Vec<(String, usize)>, usize, usize, usize)> {
-        let conn = self.open_v2_index_connection(notebook_id)?;
+        let conn = self.open_note_index_connection(notebook_id)?;
         let count = |sql| -> io::Result<usize> {
             let value: i64 = conn
                 .query_row(sql, [], |row| row.get(0))
                 .map_err(io::Error::other)?;
             Ok(usize::try_from(value).unwrap_or(0))
         };
-        let total = count("SELECT COUNT(*) FROM v2_notes")?;
-        let agents = count("SELECT COUNT(DISTINCT relative_path) FROM v2_note_agents")?;
-        let todos = count("SELECT COUNT(DISTINCT relative_path) FROM v2_note_todos")?;
-        let mut stmt = conn.prepare(
-            "SELECT tag, COUNT(*) FROM v2_note_tags GROUP BY tag ORDER BY tag COLLATE NOCASE ASC"
-        ).map_err(io::Error::other)?;
+        let total = count("SELECT COUNT(*) FROM notes")?;
+        let agents = count("SELECT COUNT(DISTINCT relative_path) FROM note_agents")?;
+        let todos = count("SELECT COUNT(DISTINCT relative_path) FROM note_todos")?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT tag, COUNT(*) FROM note_tags GROUP BY tag ORDER BY tag COLLATE NOCASE ASC",
+            )
+            .map_err(io::Error::other)?;
         let tags = stmt
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
@@ -916,10 +1348,13 @@ impl MemoFile {
         Ok((ids, tags, total, agents, todos))
     }
 
-    pub(crate) fn v2_tag_path_pairs(&self, notebook_id: &str) -> io::Result<Vec<(String, String)>> {
-        let conn = self.open_v2_index_connection(notebook_id)?;
+    pub(crate) fn note_tag_path_pairs(
+        &self,
+        notebook_id: &str,
+    ) -> io::Result<Vec<(String, String)>> {
+        let conn = self.open_note_index_connection(notebook_id)?;
         let mut stmt = conn
-            .prepare("SELECT tag, relative_path FROM v2_note_tags")
+            .prepare("SELECT tag, relative_path FROM note_tags")
             .map_err(io::Error::other)?;
         let pairs = stmt
             .query_map([], |row| {
@@ -931,40 +1366,54 @@ impl MemoFile {
         pairs
     }
 
-    pub fn read_v2_path_todos(&self, notebook_id: &str, sort: &str) -> io::Result<Vec<PathTodoEntry>> {
-        let conn = self.open_v2_index_connection(notebook_id)?;
-        let order = if sort == "updatedAt" { "t.updated_at DESC, t.created_at DESC" }
-            else { "t.created_at DESC, t.updated_at DESC" };
-        let sql = format!("SELECT t.relative_path, t.todo_id, t.content, t.status, t.priority, t.time_range, \
-            t.owner, t.assignee, t.created_at, t.updated_at FROM v2_note_todos t ORDER BY {order}");
+    pub fn read_note_path_todos(
+        &self,
+        notebook_id: &str,
+        sort: &str,
+    ) -> io::Result<Vec<PathTodoEntry>> {
+        let conn = self.open_note_index_connection(notebook_id)?;
+        let order = if sort == "updatedAt" {
+            "t.updated_at DESC, t.created_at DESC"
+        } else {
+            "t.created_at DESC, t.updated_at DESC"
+        };
+        let sql = format!(
+            "SELECT t.relative_path, t.todo_id, t.content, t.status, t.priority, t.time_range, \
+            t.owner, t.assignee, t.created_at, t.updated_at FROM note_todos t ORDER BY {order}"
+        );
         let mut statement = conn.prepare(&sql).map_err(io::Error::other)?;
-        let rows = statement.query_map([], |row| Ok(PathTodoEntry {
-            notebook_id: notebook_id.to_owned(),
-            relative_path: row.get(0)?,
-            todo_id: row.get(1)?,
-            content: row.get(2)?,
-            status: row.get(3)?,
-            priority: row.get(4)?,
-            time_range: row.get(5)?,
-            owner: row.get(6)?,
-            assignee: row.get(7)?,
-            created_at: row.get(8)?,
-            updated_at: row.get(9)?,
-        })).map_err(io::Error::other)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(io::Error::other)
+        let rows = statement
+            .query_map([], |row| {
+                Ok(PathTodoEntry {
+                    notebook_id: notebook_id.to_owned(),
+                    relative_path: row.get(0)?,
+                    todo_id: row.get(1)?,
+                    content: row.get(2)?,
+                    status: row.get(3)?,
+                    priority: row.get(4)?,
+                    time_range: row.get(5)?,
+                    owner: row.get(6)?,
+                    assignee: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                })
+            })
+            .map_err(io::Error::other)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(io::Error::other)
     }
 
-    /// V2 owns task content and metadata. The legacy ID join only supplies
+    /// The Note projection owns task content and metadata. The legacy ID join only supplies
     /// the current IPC field until task actions accept note paths directly.
-    pub(crate) fn v2_todo_entries_with_legacy_ids(
+    pub(crate) fn note_todo_entries_with_legacy_ids(
         &self,
         notebook_id: &str,
         sort: &str,
     ) -> io::Result<Option<Vec<MemoTodoEntry>>> {
-        let conn = self.open_v2_index_connection(notebook_id)?;
+        let conn = self.open_note_index_connection(notebook_id)?;
         let missing: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM v2_note_todos t LEFT JOIN memos m \
+                "SELECT COUNT(*) FROM note_todos t LEFT JOIN memos m \
              ON m.notebook_id = ?1 AND m.relative_path = t.relative_path \
              WHERE m.id IS NULL",
                 params![notebook_id],
@@ -982,7 +1431,7 @@ impl MemoFile {
         let sql = format!(
             "SELECT t.todo_id, t.content, t.status, m.id, t.priority, t.time_range, \
              t.owner, t.assignee, t.created_at, t.updated_at \
-             FROM v2_note_todos t JOIN memos m \
+             FROM note_todos t JOIN memos m \
              ON m.notebook_id = ?1 AND m.relative_path = t.relative_path ORDER BY {order}"
         );
         let mut stmt = conn.prepare(&sql).map_err(io::Error::other)?;
@@ -1009,27 +1458,27 @@ impl MemoFile {
     }
     /// Move note properties that may exist only in the legacy index into the
     /// Markdown frontmatter. Existing file properties always win.
-    pub fn migrate_v2_note_properties_for_notebook(
+    pub fn migrate_note_properties_for_notebook(
         &self,
         notebook_id: &str,
-    ) -> io::Result<V2NotePropertyMigrationReport> {
+    ) -> io::Result<NotePropertyMigrationReport> {
         let _write_guard = self.acquire_cross_process_write_lock()?;
         let _index_guard = self.current_index_io.lock().expect("index_io poisoned");
         let root = self
             .get_notebook_config_by_id(notebook_id)
             .map(|config| std::path::PathBuf::from(config.path))
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "notebook not found"))?;
-        let conn = self.open_v2_index_connection(notebook_id)?;
+        let conn = self.open_note_index_connection(notebook_id)?;
         let complete: Option<String> = conn
             .query_row(
-                "SELECT value FROM v2_index_meta WHERE key='note_properties_migrated'",
+                "SELECT value FROM note_index_meta WHERE key='note_properties_migrated'",
                 [],
                 |row| row.get(0),
             )
             .optional()
             .map_err(io::Error::other)?;
         if complete.as_deref() == Some("1") {
-            return Ok(V2NotePropertyMigrationReport::default());
+            return Ok(NotePropertyMigrationReport::default());
         }
         let has_legacy: i64 = conn
             .query_row(
@@ -1040,12 +1489,12 @@ impl MemoFile {
             .map_err(io::Error::other)?;
         if has_legacy == 0 {
             conn.execute(
-                "INSERT INTO v2_index_meta (key, value) VALUES ('note_properties_migrated','1') \
+                "INSERT INTO note_index_meta (key, value) VALUES ('note_properties_migrated','1') \
                 ON CONFLICT(key) DO UPDATE SET value='1'",
                 [],
             )
             .map_err(io::Error::other)?;
-            return Ok(V2NotePropertyMigrationReport::default());
+            return Ok(NotePropertyMigrationReport::default());
         }
         let mut statement = conn
             .prepare(
@@ -1073,7 +1522,7 @@ impl MemoFile {
             .filter(|note| note.created_at > 0)
             .map(|note| (note.relative_path.clone(), note.created_at))
             .collect();
-        let mut report = V2NotePropertyMigrationReport::default();
+        let mut report = NotePropertyMigrationReport::default();
         for note in notes {
             let stored_properties: serde_json::Value = serde_json::from_str(&note.properties_json)
                 .map_err(|error| {
@@ -1184,15 +1633,15 @@ impl MemoFile {
         // Creation time remains index metadata. Seed it from the old index
         // once, without changing the Markdown file for this field.
         for (relative_path, created_at) in legacy_created_times {
-            self.refresh_v2_note_path(notebook_id, &relative_path)?;
+            self.refresh_note_path(notebook_id, &relative_path)?;
             conn.execute(
-                "UPDATE v2_notes SET created_at=?2 WHERE relative_path=?1",
+                "UPDATE notes SET created_at=?2 WHERE relative_path=?1",
                 params![relative_path, created_at],
             )
             .map_err(io::Error::other)?;
         }
         conn.execute(
-            "INSERT INTO v2_index_meta (key, value) VALUES ('note_properties_migrated','1') \
+            "INSERT INTO note_index_meta (key, value) VALUES ('note_properties_migrated','1') \
             ON CONFLICT(key) DO UPDATE SET value='1'",
             [],
         )
@@ -1203,27 +1652,27 @@ impl MemoFile {
     /// Persist non-derivable legacy task attributes in their Markdown note.
     /// The migration is idempotent. A mismatched task ID or conflicting
     /// frontmatter value aborts before writing that note.
-    pub fn migrate_v2_todo_metadata_for_notebook(
+    pub fn migrate_note_todo_metadata_for_notebook(
         &self,
         notebook_id: &str,
-    ) -> io::Result<V2TodoMigrationReport> {
+    ) -> io::Result<NoteTodoMigrationReport> {
         let _write_guard = self.acquire_cross_process_write_lock()?;
         let _index_guard = self.current_index_io.lock().expect("index_io poisoned");
         let root = self
             .get_notebook_config_by_id(notebook_id)
             .map(|config| std::path::PathBuf::from(config.path))
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "notebook not found"))?;
-        let conn = self.open_v2_index_connection(notebook_id)?;
+        let conn = self.open_note_index_connection(notebook_id)?;
         let complete: Option<String> = conn
             .query_row(
-                "SELECT value FROM v2_index_meta WHERE key='todo_metadata_migrated'",
+                "SELECT value FROM note_index_meta WHERE key='todo_metadata_migrated'",
                 [],
                 |row| row.get(0),
             )
             .optional()
             .map_err(io::Error::other)?;
         if complete.as_deref() == Some("1") {
-            return Ok(V2TodoMigrationReport::default());
+            return Ok(NoteTodoMigrationReport::default());
         }
         let has_legacy: i64 = conn
             .query_row(
@@ -1234,12 +1683,12 @@ impl MemoFile {
             .map_err(io::Error::other)?;
         if has_legacy == 0 {
             conn.execute(
-                "INSERT INTO v2_index_meta (key, value) VALUES ('todo_metadata_migrated', '1') \
+                "INSERT INTO note_index_meta (key, value) VALUES ('todo_metadata_migrated', '1') \
                           ON CONFLICT(key) DO UPDATE SET value='1'",
                 [],
             )
             .map_err(io::Error::other)?;
-            return Ok(V2TodoMigrationReport::default());
+            return Ok(NoteTodoMigrationReport::default());
         }
         let mut stmt = conn
             .prepare("SELECT m.relative_path, t.todo_id, t.priority, t.time_range, t.owner, t.assignee, \
@@ -1270,7 +1719,7 @@ impl MemoFile {
             }
         }
         drop(stmt);
-        let mut report = V2TodoMigrationReport::default();
+        let mut report = NoteTodoMigrationReport::default();
         for (relative_path, attributes) in by_path {
             let path =
                 notebook_path_from_relative(&root, &relative_path).map_err(io::Error::other)?;
@@ -1345,7 +1794,7 @@ impl MemoFile {
             }
         }
         conn.execute(
-            "INSERT INTO v2_index_meta (key, value) VALUES ('todo_metadata_migrated', '1') \
+            "INSERT INTO note_index_meta (key, value) VALUES ('todo_metadata_migrated', '1') \
                       ON CONFLICT(key) DO UPDATE SET value='1'",
             [],
         )
@@ -1353,24 +1802,25 @@ impl MemoFile {
         Ok(report)
     }
 
-    /// Reconcile one notebook's V2 projection with files on disk. Existing
+    /// Reconcile one notebook's Note projection with files on disk. Existing
     /// rows are checked by stat first and hashed only when their stat changes.
     /// This method intentionally does not touch the legacy memo tables.
-    pub fn reconcile_v2_note_index(&self, notebook_id: &str) -> io::Result<V2IndexReconcileReport> {
-        self.reconcile_v2_note_index_inner(notebook_id, false)
+    pub fn reconcile_note_index(&self, notebook_id: &str) -> io::Result<NoteIndexReconcileReport> {
+        self.reconcile_note_index_inner(notebook_id, false)
     }
 
     /// Hash every file, including entries whose size and mtime are unchanged.
     /// Use this for an occasional audit or after a suspected missed watcher event.
-    pub fn verify_v2_note_index(&self, notebook_id: &str) -> io::Result<V2IndexReconcileReport> {
-        self.reconcile_v2_note_index_inner(notebook_id, true)
+    pub fn verify_note_index(&self, notebook_id: &str) -> io::Result<NoteIndexReconcileReport> {
+        self.reconcile_note_index_inner(notebook_id, true)
     }
 
     /// Enumerate Markdown note paths directly from the notebook tree without
     /// consulting SQLite. Mutating operations such as clear-notebook use this
     /// inventory so a missing index cannot hide files from the operation.
-    pub fn list_v2_note_paths_from_disk(&self, notebook_id: &str) -> io::Result<Vec<String>> {
-        let root = self.notebook_root_for_v2(notebook_id)?;
+    pub fn list_note_paths_from_disk(&self, notebook_id: &str) -> io::Result<Vec<String>> {
+        let root = self.notebook_root_for_note(notebook_id)?;
+        let policy = self.file_management_policy(notebook_id);
         let mut paths = Vec::new();
         for item in WalkDir::new(&root)
             .follow_links(false)
@@ -1380,7 +1830,7 @@ impl MemoFile {
                     || entry
                         .path()
                         .strip_prefix(&root)
-                        .map(|relative| !is_ignored_notebook_relative_path(relative))
+                        .map(|relative| !policy.is_ignored_at(&root, relative))
                         .unwrap_or(false)
             })
         {
@@ -1395,18 +1845,22 @@ impl MemoFile {
 
     /// Refresh one path after a local write or watcher event. A missing file
     /// removes its projection; all other notebook files stay untouched.
-    pub fn refresh_v2_note_path(&self, notebook_id: &str, relative_path: &str) -> io::Result<()> {
+    pub fn refresh_note_path(&self, notebook_id: &str, relative_path: &str) -> io::Result<()> {
         let relative = Path::new(relative_path);
-        if is_ignored_notebook_relative_path(relative) || !is_markdown_note_path(relative) {
+        let root = self
+            .get_notebook_config_by_id(notebook_id)
+            .map(|config| std::path::PathBuf::from(config.path))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "notebook not found"))?;
+        if self
+            .file_management_policy(notebook_id)
+            .is_ignored_at(&root, relative)
+            || !is_markdown_note_path(relative)
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "not a notebook note path",
             ));
         }
-        let root = self
-            .get_notebook_config_by_id(notebook_id)
-            .map(|config| std::path::PathBuf::from(config.path))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "notebook not found"))?;
         let path = notebook_path_from_relative(&root, relative_path).map_err(io::Error::other)?;
         if let Ok(metadata) = fs::symlink_metadata(&path) {
             if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -1424,16 +1878,16 @@ impl MemoFile {
                 ));
             }
         }
-        let mut conn = self.open_v2_index_connection(notebook_id)?;
-        let mut report = V2IndexReconcileReport::default();
-        Self::refresh_v2_path(&mut conn, &root, &path, true, false, &mut report)
+        let mut conn = self.open_note_index_connection(notebook_id)?;
+        let mut report = NoteIndexReconcileReport::default();
+        Self::refresh_note_index_path(&mut conn, &root, &path, true, false, &mut report)
     }
 
-    fn reconcile_v2_note_index_inner(
+    fn reconcile_note_index_inner(
         &self,
         notebook_id: &str,
         verify_hashes: bool,
-    ) -> io::Result<V2IndexReconcileReport> {
+    ) -> io::Result<NoteIndexReconcileReport> {
         let root = self
             .get_notebook_config_by_id(notebook_id)
             .map(|config| std::path::PathBuf::from(config.path))
@@ -1444,10 +1898,11 @@ impl MemoFile {
                 "notebook directory missing",
             ));
         }
-        let mut conn = self.open_v2_index_connection(notebook_id)?;
+        let pending_at_start = pending_note_index_refreshes(&root)?;
+        let mut conn = self.open_note_index_connection(notebook_id)?;
         let parser_version: Option<i64> = conn
             .query_row(
-                "SELECT value FROM v2_index_meta WHERE key='parser_version'",
+                "SELECT value FROM note_index_meta WHERE key='parser_version'",
                 [],
                 |row| row.get::<_, String>(0),
             )
@@ -1456,13 +1911,14 @@ impl MemoFile {
             .and_then(|value| value.parse().ok());
         let reparse_all = parser_version != Some(PARSER_VERSION);
         conn.execute(
-            "INSERT INTO v2_index_meta (key, value) VALUES ('build_state', 'building') \
+            "INSERT INTO note_index_meta (key, value) VALUES ('build_state', 'building') \
                       ON CONFLICT(key) DO UPDATE SET value='building'",
             [],
         )
         .map_err(io::Error::other)?;
         let mut seen = HashSet::new();
-        let mut report = V2IndexReconcileReport::default();
+        let mut report = NoteIndexReconcileReport::default();
+        let policy = self.file_management_policy(notebook_id);
         for entry in WalkDir::new(&root)
             .follow_links(false)
             .into_iter()
@@ -1471,7 +1927,7 @@ impl MemoFile {
                     || entry
                         .path()
                         .strip_prefix(&root)
-                        .map(|relative| !is_ignored_notebook_relative_path(relative))
+                        .map(|relative| !policy.is_ignored_at(&root, relative))
                         .unwrap_or(false)
             })
         {
@@ -1481,7 +1937,7 @@ impl MemoFile {
             }
             let relative = notebook_relative_path(&root, entry.path()).map_err(io::Error::other)?;
             seen.insert(relative.clone());
-            Self::refresh_v2_path(
+            Self::refresh_note_index_path(
                 &mut conn,
                 &root,
                 entry.path(),
@@ -1491,7 +1947,7 @@ impl MemoFile {
             )?;
         }
         let mut stmt = conn
-            .prepare("SELECT relative_path FROM v2_notes")
+            .prepare("SELECT relative_path FROM notes")
             .map_err(io::Error::other)?;
         let indexed = stmt
             .query_map([], |row| row.get::<_, String>(0))
@@ -1502,7 +1958,12 @@ impl MemoFile {
         for relative in indexed {
             if !seen.contains(&relative) {
                 conn.execute(
-                    "DELETE FROM v2_notes WHERE relative_path = ?1",
+                    "DELETE FROM note_search_fts WHERE relative_path = ?1",
+                    params![relative],
+                )
+                .map_err(io::Error::other)?;
+                conn.execute(
+                    "DELETE FROM notes WHERE relative_path = ?1",
                     params![relative],
                 )
                 .map_err(io::Error::other)?;
@@ -1510,38 +1971,50 @@ impl MemoFile {
             }
         }
         conn.execute(
-            "INSERT INTO v2_index_meta (key, value) VALUES ('last_complete_scan_at', ?1) \
+            "INSERT INTO note_index_meta (key, value) VALUES ('last_complete_scan_at', ?1) \
                       ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             params![chrono::Utc::now().timestamp_millis().to_string()],
         )
         .map_err(io::Error::other)?;
         conn.execute(
-            "INSERT INTO v2_index_meta (key, value) VALUES ('parser_version', ?1) \
+            "INSERT INTO note_index_meta (key, value) VALUES ('parser_version', ?1) \
                       ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             params![PARSER_VERSION.to_string()],
         )
         .map_err(io::Error::other)?;
         conn.execute(
-            "UPDATE v2_index_meta SET value='ready' WHERE key='build_state'",
+            "UPDATE note_index_meta SET value='ready' WHERE key='build_state'",
             [],
         )
         .map_err(io::Error::other)?;
+        for pending in pending_at_start {
+            match fs::remove_file(pending) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
         Ok(report)
     }
 
-    fn refresh_v2_path(
+    fn refresh_note_index_path(
         conn: &mut Connection,
         root: &Path,
         path: &Path,
         verify_hashes: bool,
         reparse_all: bool,
-        report: &mut V2IndexReconcileReport,
+        report: &mut NoteIndexReconcileReport,
     ) -> io::Result<()> {
         let relative = notebook_relative_path(root, path).map_err(io::Error::other)?;
         if !path.exists() {
+            conn.execute(
+                "DELETE FROM note_search_fts WHERE relative_path = ?1",
+                params![relative],
+            )
+            .map_err(io::Error::other)?;
             report.removed += conn
                 .execute(
-                    "DELETE FROM v2_notes WHERE relative_path = ?1",
+                    "DELETE FROM notes WHERE relative_path = ?1",
                     params![relative],
                 )
                 .map_err(io::Error::other)?;
@@ -1561,7 +2034,7 @@ impl MemoFile {
             .map(|time| time.as_millis().min(i64::MAX as u128) as i64)
             .unwrap_or_else(|| modified_ns.unwrap_or(0) / 1_000_000);
         let previous: Option<(i64, Option<i64>, String, i64)> = conn.query_row(
-                "SELECT size_bytes, modified_ns, content_hash, created_at FROM v2_notes WHERE relative_path = ?1",
+                "SELECT size_bytes, modified_ns, content_hash, created_at FROM notes WHERE relative_path = ?1",
                 params![relative],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             ).optional().map_err(io::Error::other)?;
@@ -1584,7 +2057,7 @@ impl MemoFile {
                 .is_some_and(|(_, _, old_hash, _)| *old_hash == hash)
         {
             conn.execute(
-                "UPDATE v2_notes SET size_bytes = ?2, modified_ns = ?3 WHERE relative_path = ?1",
+                "UPDATE notes SET size_bytes = ?2, modified_ns = ?3 WHERE relative_path = ?1",
                 params![relative, size, modified_ns],
             )
             .map_err(io::Error::other)?;
@@ -1615,13 +2088,13 @@ impl MemoFile {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(io::Error::other)?;
         tx.execute(
-                "INSERT INTO v2_notes (relative_path, size_bytes, modified_ns, content_hash, title, preview, thumbnail, properties_json, indexed_at, created_at, updated_at, favorited, icon, colors_json) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) \
+                "INSERT INTO notes (relative_path, size_bytes, modified_ns, content_hash, title, preview, thumbnail, properties_json, indexed_at, created_at, updated_at, favorited, icon, colors_json, filename, filename_lower) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) \
                  ON CONFLICT(relative_path) DO UPDATE SET size_bytes=excluded.size_bytes, modified_ns=excluded.modified_ns, \
                  content_hash=excluded.content_hash, title=excluded.title, preview=excluded.preview, thumbnail=excluded.thumbnail, \
                  properties_json=excluded.properties_json, indexed_at=excluded.indexed_at, \
                  created_at=excluded.created_at, updated_at=excluded.updated_at, favorited=excluded.favorited, \
-                 icon=excluded.icon, colors_json=excluded.colors_json",
+                 icon=excluded.icon, colors_json=excluded.colors_json, filename=excluded.filename, filename_lower=excluded.filename_lower",
                 params![relative, size, modified_ns, hash, title, derived.preview, derived.thumbnail,
                     derived.properties.to_string(),
                     chrono::Utc::now().timestamp_millis(),
@@ -1629,22 +2102,40 @@ impl MemoFile {
                         .unwrap_or(file_created_ms),
                     modified_ns.unwrap_or(0) / 1_000_000,
                     i64::from(derived.favorited), derived.icon,
-                    serde_json::to_string(&derived.colors).map_err(io::Error::other)?],
+                     serde_json::to_string(&derived.colors).map_err(io::Error::other)?,
+                     derived.filename, derived.filename.to_lowercase()],
             ).map_err(io::Error::other)?;
         tx.execute(
-            "DELETE FROM v2_note_tags WHERE relative_path = ?1",
+            "DELETE FROM note_tags WHERE relative_path = ?1",
             params![relative],
         )
         .map_err(io::Error::other)?;
         for tag in &derived.tags {
             tx.execute(
-                "INSERT INTO v2_note_tags (relative_path, tag) VALUES (?1, ?2)",
+                "INSERT INTO note_tags (relative_path, tag) VALUES (?1, ?2)",
                 params![relative, tag],
             )
             .map_err(io::Error::other)?;
         }
         tx.execute(
-            "DELETE FROM v2_note_todos WHERE relative_path = ?1",
+            "DELETE FROM note_search_fts WHERE relative_path = ?1",
+            params![relative],
+        )
+        .map_err(io::Error::other)?;
+        tx.execute(
+            "INSERT INTO note_search_fts(relative_path, title, body, tags, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                relative,
+                title,
+                super::extract_body_content(&content),
+                derived.tags.join(" "),
+                modified_ns.unwrap_or(0) / 1_000_000,
+            ],
+        )
+        .map_err(io::Error::other)?;
+        tx.execute(
+            "DELETE FROM note_todos WHERE relative_path = ?1",
             params![relative],
         )
         .map_err(io::Error::other)?;
@@ -1665,7 +2156,7 @@ impl MemoFile {
                     .and_then(serde_json::Value::as_i64)
                     .unwrap_or(0)
             };
-            tx.execute("INSERT INTO v2_note_todos \
+            tx.execute("INSERT INTO note_todos \
                     (relative_path, position, todo_id, content, status, priority, time_range, owner, assignee, created_at, updated_at) \
                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                     params![relative, position as i64, todo.id, todo.content, todo.status,
@@ -1674,12 +2165,12 @@ impl MemoFile {
                     .map_err(io::Error::other)?;
         }
         tx.execute(
-            "DELETE FROM v2_note_agents WHERE relative_path = ?1",
+            "DELETE FROM note_agents WHERE relative_path = ?1",
             params![relative],
         )
         .map_err(io::Error::other)?;
         for (position, agent) in derived.agents.iter().enumerate() {
-            tx.execute("INSERT INTO v2_note_agents (relative_path, position, thread_id, title, agent_type) VALUES (?1, ?2, ?3, ?4, ?5)",
+            tx.execute("INSERT INTO note_agents (relative_path, position, thread_id, title, agent_type) VALUES (?1, ?2, ?3, ?4, ?5)",
                     params![relative, position as i64, agent.thread_id, agent.title, agent.agent_type]).map_err(io::Error::other)?;
         }
         tx.commit().map_err(io::Error::other)?;
@@ -1691,30 +2182,43 @@ impl MemoFile {
         Ok(())
     }
 
-    fn open_v2_index_connection(&self, notebook_id: &str) -> io::Result<Connection> {
-        let path = self.notebook_index_db_path(notebook_id)?;
-        let conn = Connection::open(path).map_err(io::Error::other)?;
+    fn open_note_index_connection(&self, notebook_id: &str) -> io::Result<Connection> {
+        let path = self.notebook_db_path(notebook_id)?;
+        let mut conn = Connection::open(path).map_err(io::Error::other)?;
         conn.busy_timeout(std::time::Duration::from_secs(10))
             .map_err(io::Error::other)?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+            .map_err(io::Error::other)?;
+        discard_legacy_v2_note_projection(&mut conn)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; \
-            CREATE TABLE IF NOT EXISTS v2_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); \
-            CREATE TABLE IF NOT EXISTS v2_notes (relative_path TEXT PRIMARY KEY, \
+            CREATE TABLE IF NOT EXISTS note_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); \
+            CREATE TABLE IF NOT EXISTS notes (relative_path TEXT PRIMARY KEY, \
               size_bytes INTEGER NOT NULL, modified_ns INTEGER, content_hash TEXT NOT NULL, \
               title TEXT NOT NULL, preview TEXT NOT NULL, thumbnail TEXT, properties_json TEXT NOT NULL, indexed_at INTEGER NOT NULL, \
               created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0, \
-              favorited INTEGER NOT NULL DEFAULT 0, icon TEXT, colors_json TEXT NOT NULL DEFAULT '[]'); \
-            CREATE TABLE IF NOT EXISTS v2_note_tags (relative_path TEXT NOT NULL REFERENCES v2_notes(relative_path) ON DELETE CASCADE, \
+              favorited INTEGER NOT NULL DEFAULT 0, icon TEXT, colors_json TEXT NOT NULL DEFAULT '[]', \
+              filename TEXT NOT NULL DEFAULT '', filename_lower TEXT NOT NULL DEFAULT ''); \
+            CREATE TABLE IF NOT EXISTS note_tags (relative_path TEXT NOT NULL REFERENCES notes(relative_path) ON DELETE CASCADE, \
               tag TEXT NOT NULL, PRIMARY KEY(relative_path, tag)); \
-            CREATE INDEX IF NOT EXISTS idx_v2_note_tags_tag ON v2_note_tags(tag); \
-            CREATE TABLE IF NOT EXISTS v2_note_todos (relative_path TEXT NOT NULL REFERENCES v2_notes(relative_path) ON DELETE CASCADE, \
+            CREATE INDEX IF NOT EXISTS idx_note_tags_tag ON note_tags(tag); \
+            CREATE INDEX IF NOT EXISTS idx_notes_created_page ON notes(favorited DESC, created_at DESC, relative_path DESC); \
+            CREATE INDEX IF NOT EXISTS idx_notes_updated_page ON notes(favorited DESC, updated_at DESC, relative_path DESC); \
+            CREATE TABLE IF NOT EXISTS note_todos (relative_path TEXT NOT NULL REFERENCES notes(relative_path) ON DELETE CASCADE, \
               position INTEGER NOT NULL, todo_id TEXT NOT NULL, content TEXT NOT NULL, status TEXT NOT NULL, \
               priority TEXT NOT NULL DEFAULT '', time_range TEXT NOT NULL DEFAULT '', owner TEXT NOT NULL DEFAULT '', \
               assignee TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0, \
               PRIMARY KEY(relative_path, position)); \
-            CREATE TABLE IF NOT EXISTS v2_note_agents (relative_path TEXT NOT NULL REFERENCES v2_notes(relative_path) ON DELETE CASCADE, \
+            CREATE TABLE IF NOT EXISTS note_agents (relative_path TEXT NOT NULL REFERENCES notes(relative_path) ON DELETE CASCADE, \
               position INTEGER NOT NULL, thread_id TEXT NOT NULL, title TEXT NOT NULL, agent_type TEXT NOT NULL, \
               PRIMARY KEY(relative_path, position));")
             .map_err(io::Error::other)?;
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS note_search_fts USING fts5(\
+                relative_path UNINDEXED, title, body, tags, updated_at UNINDEXED,\
+                tokenize='trigram'\
+            );",
+        )
+        .map_err(io::Error::other)?;
         for (column, definition) in [
             ("priority", "TEXT NOT NULL DEFAULT ''"),
             ("time_range", "TEXT NOT NULL DEFAULT ''"),
@@ -1724,7 +2228,7 @@ impl MemoFile {
             ("updated_at", "INTEGER NOT NULL DEFAULT 0"),
         ] {
             let mut statement = conn
-                .prepare("PRAGMA table_info(v2_note_todos)")
+                .prepare("PRAGMA table_info(note_todos)")
                 .map_err(io::Error::other)?;
             let names = statement
                 .query_map([], |row| row.get::<_, String>(1))
@@ -1733,7 +2237,7 @@ impl MemoFile {
                 .map_err(io::Error::other)?;
             if !names.iter().any(|name| name == column) {
                 conn.execute_batch(&format!(
-                    "ALTER TABLE v2_note_todos ADD COLUMN {column} {definition}"
+                    "ALTER TABLE note_todos ADD COLUMN {column} {definition}"
                 ))
                 .map_err(io::Error::other)?;
             }
@@ -1745,9 +2249,11 @@ impl MemoFile {
             ("favorited", "INTEGER NOT NULL DEFAULT 0"),
             ("icon", "TEXT"),
             ("colors_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("filename", "TEXT NOT NULL DEFAULT ''"),
+            ("filename_lower", "TEXT NOT NULL DEFAULT ''"),
         ] {
             let mut statement = conn
-                .prepare("PRAGMA table_info(v2_notes)")
+                .prepare("PRAGMA table_info(notes)")
                 .map_err(io::Error::other)?;
             let names = statement
                 .query_map([], |row| row.get::<_, String>(1))
@@ -1756,20 +2262,22 @@ impl MemoFile {
                 .map_err(io::Error::other)?;
             if !names.iter().any(|name| name == column) {
                 conn.execute_batch(&format!(
-                    "ALTER TABLE v2_notes ADD COLUMN {column} {definition}"
+                    "ALTER TABLE notes ADD COLUMN {column} {definition}"
                 ))
                 .map_err(io::Error::other)?;
             }
         }
+        conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_notes_filename_page ON notes(favorited DESC, filename_lower ASC, filename ASC, relative_path ASC);")
+            .map_err(io::Error::other)?;
         conn.execute(
-            "INSERT INTO v2_index_meta (key, value) VALUES ('schema_version', ?1) \
+            "INSERT INTO note_index_meta (key, value) VALUES ('schema_version', ?1) \
                       ON CONFLICT(key) DO NOTHING",
             params![SCHEMA_VERSION.to_string()],
         )
         .map_err(io::Error::other)?;
         let stored_version: String = conn
             .query_row(
-                "SELECT value FROM v2_index_meta WHERE key='schema_version'",
+                "SELECT value FROM note_index_meta WHERE key='schema_version'",
                 [],
                 |row| row.get(0),
             )
@@ -1777,12 +2285,12 @@ impl MemoFile {
         if stored_version != SCHEMA_VERSION.to_string() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("unsupported V2 index schema version: {stored_version}"),
+                format!("unsupported Note index schema version: {stored_version}"),
             ));
         }
         let stored_notebook: Option<String> = conn
             .query_row(
-                "SELECT value FROM v2_index_meta WHERE key='notebook_id'",
+                "SELECT value FROM note_index_meta WHERE key='notebook_id'",
                 [],
                 |row| row.get(0),
             )
@@ -1791,11 +2299,11 @@ impl MemoFile {
         if stored_notebook.is_some_and(|stored| stored != notebook_id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "V2 index belongs to a different notebook",
+                "Note index belongs to a different notebook",
             ));
         }
         conn.execute(
-            "INSERT INTO v2_index_meta (key, value) VALUES ('notebook_id', ?1) \
+            "INSERT INTO note_index_meta (key, value) VALUES ('notebook_id', ?1) \
              ON CONFLICT(key) DO NOTHING",
             params![notebook_id],
         )
@@ -1804,10 +2312,174 @@ impl MemoFile {
     }
 }
 
+/// The V2 path projection is derived from Markdown. Drop its tables on first
+/// use, leaving the current Note projection and unrelated notebook data intact.
+fn discard_legacy_v2_note_projection(conn: &mut Connection) -> io::Result<()> {
+    // Nearly every Note operation opens a connection. Keep the common path
+    // read-only; take a writer reservation only while clearing legacy tables.
+    let has_legacy_tables: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name IN \
+             ('v2_index_meta', 'v2_notes', 'v2_note_tags', 'v2_note_todos', \
+              'v2_note_agents', 'v2_note_search', 'v2_note_search_fts'))",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(io::Error::other)?;
+    if !has_legacy_tables {
+        return Ok(());
+    }
+
+    // A concurrent opener may have already removed these tables. IF EXISTS
+    // makes the transaction safe in either case. Drop FTS virtual tables by
+    // their parent name so SQLite also removes their shadow tables.
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(io::Error::other)?;
+    tx.execute_batch(
+        "DROP TABLE IF EXISTS v2_note_search;
+         DROP TABLE IF EXISTS v2_note_search_fts;
+         DROP TABLE IF EXISTS v2_note_tags;
+         DROP TABLE IF EXISTS v2_note_todos;
+         DROP TABLE IF EXISTS v2_note_agents;
+         DROP TABLE IF EXISTS v2_notes;
+         DROP TABLE IF EXISTS v2_index_meta;",
+    )
+    .map_err(io::Error::other)?;
+    tx.commit().map_err(io::Error::other)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::memo_file::NotebookConfig;
+
+    #[test]
+    fn mixed_v2_and_note_tables_keep_current_note_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("notebook");
+        fs::create_dir_all(&root).unwrap();
+        let store = MemoFile::new(temp.path().join("config"));
+        store.write_notebook_configs(&[NotebookConfig {
+            id: "nb_test".into(), name: "Test".into(), icon: None,
+            path: root.to_string_lossy().into_owned(), is_default: true,
+            sort: 0, created_at: 0, updated_at: 0,
+        }]).unwrap();
+        let conn = store.open_note_index_connection("nb_test").unwrap();
+        conn.execute("INSERT INTO notes (relative_path, size_bytes, content_hash, title, preview, properties_json, indexed_at) VALUES ('current.md', 1, 'hash', 'Current', '', '{}', 1)", []).unwrap();
+        conn.execute_batch("CREATE TABLE v2_index_meta (key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE v2_notes (relative_path TEXT PRIMARY KEY);
+            INSERT INTO v2_notes VALUES ('old.md');
+            CREATE VIRTUAL TABLE v2_note_search USING fts5(body);
+            INSERT INTO v2_note_search (body) VALUES ('old');
+            CREATE TABLE memos (id TEXT PRIMARY KEY);
+            INSERT INTO memos VALUES ('legacy-id');").unwrap();
+        drop(conn);
+
+        let conn = store.open_note_index_connection("nb_test").unwrap();
+        let note: String = conn.query_row("SELECT relative_path FROM notes", [], |row| row.get(0)).unwrap();
+        assert_eq!(note, "current.md");
+        let legacy: String = conn.query_row("SELECT id FROM memos", [], |row| row.get(0)).unwrap();
+        assert_eq!(legacy, "legacy-id");
+        let old_tables: i64 = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'v2_%'", [], |row| row.get(0)).unwrap();
+        assert_eq!(old_tables, 0);
+    }
+
+    #[test]
+    fn v2_only_projection_rebuilds_from_markdown() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("notebook");
+        fs::create_dir_all(root.join(".flowix")).unwrap();
+        fs::write(root.join("new.md"), "# New note\n").unwrap();
+        let store = MemoFile::new(temp.path().join("config"));
+        store.write_notebook_configs(&[NotebookConfig {
+            id: "nb_test".into(), name: "Test".into(), icon: None,
+            path: root.to_string_lossy().into_owned(), is_default: true,
+            sort: 0, created_at: 0, updated_at: 0,
+        }]).unwrap();
+        let conn = Connection::open(root.join(".flowix/notebook.db")).unwrap();
+        conn.execute_batch("CREATE TABLE v2_index_meta (key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE v2_notes (relative_path TEXT PRIMARY KEY);
+            INSERT INTO v2_notes VALUES ('stale.md');").unwrap();
+        drop(conn);
+
+        assert!(!store.note_index_is_ready("nb_test").unwrap());
+        store.reconcile_note_index("nb_test").unwrap();
+        let entries = store.read_note_entries("nb_test").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].relative_path, "new.md");
+    }
+
+    #[test]
+    fn search_backfills_old_notebooks_and_tracks_path_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("notebook");
+        fs::create_dir_all(&root).unwrap();
+        let note = root.join("检索.md");
+        fs::write(&note, "---\ntags: [项目]\n---\n这里有苹果香蕉。\n").unwrap();
+        let mut store = MemoFile::new(temp.path().join("config"));
+        store
+            .write_notebook_configs(&[NotebookConfig {
+                id: "nb_search".into(),
+                name: "Search".into(),
+                icon: None,
+                path: root.to_string_lossy().into_owned(),
+                is_default: true,
+                sort: 0,
+                created_at: 0,
+                updated_at: 0,
+            }])
+            .unwrap();
+        store.set_current_notebook(Some("nb_search".into()));
+        store.reconcile_note_index("nb_search").unwrap();
+
+        // Simulate a notebook database written before the search projection.
+        let conn = store.open_note_index_connection("nb_search").unwrap();
+        conn.execute("DELETE FROM note_search_fts", []).unwrap();
+        conn.execute(
+            "DELETE FROM note_index_meta WHERE key='note_search_fts_version'",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        assert_eq!(
+            store
+                .search_notes("nb_search", "苹果香蕉", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            store.search_notes("nb_search", "苹果", 10).unwrap().len(),
+            1
+        );
+        assert_eq!(
+            store.search_notes("nb_search", "项目", 10).unwrap()[0].matched_in,
+            "tag"
+        );
+
+        fs::write(&note, "新的搜索内容。\n").unwrap();
+        store.refresh_note_path("nb_search", "检索.md").unwrap();
+        assert!(store
+            .search_notes("nb_search", "苹果香蕉", 10)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store
+                .search_notes("nb_search", "搜索内容", 10)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        fs::remove_file(&note).unwrap();
+        store.refresh_note_path("nb_search", "检索.md").unwrap();
+        assert!(store
+            .search_notes("nb_search", "搜索内容", 10)
+            .unwrap()
+            .is_empty());
+    }
 
     #[test]
     fn builds_and_reconciles_from_markdown_without_memo_ids() {
@@ -1834,15 +2506,12 @@ mod tests {
             .unwrap();
         store.set_current_notebook(Some("nb_test".into()));
 
-        let first = store.reconcile_v2_note_index("nb_test").unwrap();
+        let first = store.reconcile_note_index("nb_test").unwrap();
         assert_eq!(first.added, 1);
-        assert_eq!(
-            store.reconcile_v2_note_index("nb_test").unwrap().unchanged,
-            1
-        );
-        let conn = store.open_v2_index_connection("nb_test").unwrap();
+        assert_eq!(store.reconcile_note_index("nb_test").unwrap().unchanged, 1);
+        let conn = store.open_note_index_connection("nb_test").unwrap();
         let path: String = conn
-            .query_row("SELECT relative_path FROM v2_notes", [], |row| row.get(0))
+            .query_row("SELECT relative_path FROM notes", [], |row| row.get(0))
             .unwrap();
         assert_eq!(path, "sub/a.md");
         let legacy_tables: i64 = conn
@@ -1854,22 +2523,22 @@ mod tests {
             .unwrap();
         assert_eq!(legacy_tables, 0);
         assert!(store
-            .v2_list_entries_with_legacy_ids("nb_test")
+            .list_note_entries_with_legacy_ids("nb_test")
             .unwrap()
             .is_none());
-        let path_entries = store.read_v2_note_entries("nb_test").unwrap();
+        let path_entries = store.read_note_entries("nb_test").unwrap();
         assert_eq!(path_entries.len(), 1);
         assert_eq!(path_entries[0].relative_path, "sub/a.md");
         assert_eq!(path_entries[0].title, "a");
         assert_eq!(path_entries[0].tags, vec!["work"]);
-        let mut service = crate::service::MemoService::new(&store);
+        let mut service = crate::service::NoteService::new(&store);
         assert_eq!(
             service.list_notes_by_path("nb_test").unwrap()[0].relative_path,
             "sub/a.md"
         );
         let opened = service.get_note_by_path("nb_test", "sub/a.md").unwrap();
         assert_eq!(opened.body, "---\ntags: [work]\n---\n# A\nFirst\n");
-        conn.execute("DELETE FROM v2_notes WHERE relative_path='sub/a.md'", [])
+        conn.execute("DELETE FROM notes WHERE relative_path='sub/a.md'", [])
             .unwrap();
         assert_eq!(
             service
@@ -1881,7 +2550,7 @@ mod tests {
         );
         let tags: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM v2_note_tags WHERE tag = 'work'",
+                "SELECT COUNT(*) FROM note_tags WHERE tag = 'work'",
                 [],
                 |row| row.get(0),
             )
@@ -1908,13 +2577,13 @@ mod tests {
         );
 
         fs::write(root.join("sub/a.md"), "# A\nChanged\n").unwrap();
-        assert_eq!(store.reconcile_v2_note_index("nb_test").unwrap().updated, 1);
+        assert_eq!(store.reconcile_note_index("nb_test").unwrap().updated, 1);
         fs::remove_file(root.join("sub/a.md")).unwrap();
-        assert_eq!(store.reconcile_v2_note_index("nb_test").unwrap().removed, 1);
+        assert_eq!(store.reconcile_note_index("nb_test").unwrap().removed, 1);
     }
 
     #[test]
-    fn moves_v2_note_by_path_without_a_legacy_memo_row() {
+    fn moves_note_by_path_without_a_legacy_memo_row() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("notebook");
         fs::create_dir_all(root.join("sub")).unwrap();
@@ -1933,16 +2602,14 @@ mod tests {
             }])
             .unwrap();
         store.set_current_notebook(Some("nb_test".into()));
-        store.reconcile_v2_note_index("nb_test").unwrap();
+        store.reconcile_note_index("nb_test").unwrap();
         let created_at = store
-            .read_v2_note_entry_by_path("nb_test", "a.md")
+            .read_note_entry_by_path("nb_test", "a.md")
             .unwrap()
             .unwrap()
             .created_at;
 
-        let moved = store
-            .move_v2_note_by_path("nb_test", "a.md", "sub")
-            .unwrap();
+        let moved = store.move_note_by_path("nb_test", "a.md", "sub").unwrap();
 
         assert_eq!(moved, "sub/a.md");
         assert!(!root.join("a.md").exists());
@@ -1950,11 +2617,11 @@ mod tests {
             fs::read_to_string(root.join("sub/a.md")).unwrap(),
             "# A\nbody\n"
         );
-        let entries = store.read_v2_note_entries("nb_test").unwrap();
+        let entries = store.read_note_entries("nb_test").unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].relative_path, "sub/a.md");
         assert_eq!(entries[0].created_at, created_at);
-        let conn = store.open_v2_index_connection("nb_test").unwrap();
+        let conn = store.open_note_index_connection("nb_test").unwrap();
         let legacy_tables: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memos'",
@@ -1966,7 +2633,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_projection_coexists_with_legacy_rows_in_the_same_notebook_db() {
+    fn note_projection_coexists_with_legacy_rows_in_the_same_notebook_db() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("notebook");
         fs::create_dir_all(&root).unwrap();
@@ -1985,26 +2652,26 @@ mod tests {
             .unwrap();
         store.set_current_notebook(Some("nb_test".into()));
         let created = store
-            .create_memo("Legacy and V2", "# Legacy and V2\n", None)
+            .create_memo("Legacy and Note", "# Legacy and Note\n", None)
             .unwrap();
-        let conn = store.open_v2_index_connection("nb_test").unwrap();
+        let conn = store.open_note_index_connection("nb_test").unwrap();
         let immediate_path: String = conn
-            .query_row("SELECT relative_path FROM v2_notes", [], |row| row.get(0))
+            .query_row("SELECT relative_path FROM notes", [], |row| row.get(0))
             .unwrap();
         assert_eq!(immediate_path, created.relative_path);
         drop(conn);
-        // Creation updates V2 immediately; the first full scan records the
+        // Creation updates the Note projection immediately; the first full scan records the
         // parser version and reparses that row once.
-        assert_eq!(store.reconcile_v2_note_index("nb_test").unwrap().updated, 1);
-        let conn = store.open_v2_index_connection("nb_test").unwrap();
+        assert_eq!(store.reconcile_note_index("nb_test").unwrap().updated, 1);
+        let conn = store.open_note_index_connection("nb_test").unwrap();
         let legacy_id: String = conn
             .query_row("SELECT id FROM memos", [], |row| row.get(0))
             .unwrap();
         assert_eq!(legacy_id, created.id);
-        let v2_path: String = conn
-            .query_row("SELECT relative_path FROM v2_notes", [], |row| row.get(0))
+        let note_path: String = conn
+            .query_row("SELECT relative_path FROM notes", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(v2_path, created.relative_path);
+        assert_eq!(note_path, created.relative_path);
         drop(conn);
         let conn = store.open_memo_index_db_for_notebook_id("nb_test").unwrap();
         conn.execute(
@@ -2014,34 +2681,34 @@ mod tests {
         .unwrap();
         drop(conn);
         let listed = store
-            .v2_list_entries_with_legacy_ids("nb_test")
+            .list_note_entries_with_legacy_ids("nb_test")
             .unwrap()
             .unwrap();
         assert_eq!(listed.len(), 1);
         assert_ne!(listed[0].preview, "stale legacy preview");
         assert_eq!(listed[0].id, created.id);
-        let mut service = crate::service::MemoService::new(&store);
-        let service_list = service.list_memos("nb_test").unwrap();
+        let mut service = crate::service::NoteService::new(&store);
+        let service_list = service.list("nb_test").unwrap();
         assert_ne!(service_list[0].preview, "stale legacy preview");
         store
             .write_memo(&created.id, "# Changed\nnew body\n")
             .unwrap();
-        let conn = store.open_v2_index_connection("nb_test").unwrap();
+        let conn = store.open_note_index_connection("nb_test").unwrap();
         let title: String = conn
-            .query_row("SELECT title FROM v2_notes", [], |row| row.get(0))
+            .query_row("SELECT title FROM notes", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(title, "Legacy and V2");
+        assert_eq!(title, "Legacy and Note");
         drop(conn);
         store.delete_memo_result_global(&created.id).unwrap();
-        let conn = store.open_v2_index_connection("nb_test").unwrap();
+        let conn = store.open_note_index_connection("nb_test").unwrap();
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM v2_notes", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 0);
     }
 
     #[test]
-    fn legacy_task_attributes_survive_rebuilding_the_v2_projection() {
+    fn legacy_task_attributes_survive_rebuilding_the_note_projection() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().join("notebook");
         fs::create_dir_all(&root).unwrap();
@@ -2071,28 +2738,28 @@ mod tests {
         drop(conn);
 
         let report = store
-            .migrate_v2_todo_metadata_for_notebook("nb_test")
+            .migrate_note_todo_metadata_for_notebook("nb_test")
             .unwrap();
         assert_eq!(report.notes_written, 1);
         assert_eq!(report.tasks_written, 1);
         assert_eq!(
             store
-                .migrate_v2_todo_metadata_for_notebook("nb_test")
+                .migrate_note_todo_metadata_for_notebook("nb_test")
                 .unwrap()
                 .notes_written,
             0
         );
         let content = fs::read_to_string(root.join(&created.relative_path)).unwrap();
         assert!(content.contains("flowix_todo_metadata:"));
-        store.reconcile_v2_note_index("nb_test").unwrap();
-        let path_tasks = store.read_v2_path_todos("nb_test", "createdAt").unwrap();
+        store.reconcile_note_index("nb_test").unwrap();
+        let path_tasks = store.read_note_path_todos("nb_test", "createdAt").unwrap();
         assert_eq!(path_tasks.len(), 1);
         assert_eq!(path_tasks[0].relative_path, created.relative_path);
         assert_eq!(path_tasks[0].priority, "high");
-        let conn = store.open_v2_index_connection("nb_test").unwrap();
+        let conn = store.open_note_index_connection("nb_test").unwrap();
         let (priority, owner, created_at): (String, String, i64) = conn
             .query_row(
-                "SELECT priority, owner, created_at FROM v2_note_todos",
+                "SELECT priority, owner, created_at FROM note_todos",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
@@ -2107,12 +2774,12 @@ mod tests {
             (priority.as_str(), owner.as_str(), created_at),
             ("high", "me", 11)
         );
-        conn.execute("DELETE FROM v2_notes", []).unwrap();
+        conn.execute("DELETE FROM notes", []).unwrap();
         drop(conn);
-        store.reconcile_v2_note_index("nb_test").unwrap();
-        let conn = store.open_v2_index_connection("nb_test").unwrap();
+        store.reconcile_note_index("nb_test").unwrap();
+        let conn = store.open_note_index_connection("nb_test").unwrap();
         let priority: String = conn
-            .query_row("SELECT priority FROM v2_note_todos", [], |row| row.get(0))
+            .query_row("SELECT priority FROM note_todos", [], |row| row.get(0))
             .unwrap();
         assert_eq!(priority, "high");
     }
@@ -2156,7 +2823,7 @@ mod tests {
         .unwrap();
         drop(conn);
         let report = store
-            .migrate_v2_note_properties_for_notebook("nb_test")
+            .migrate_note_properties_for_notebook("nb_test")
             .unwrap();
         assert_eq!(report.notes_written, 1);
         let content = fs::read_to_string(root.join(&created.relative_path)).unwrap();
@@ -2169,15 +2836,15 @@ mod tests {
         assert_eq!(properties["flowix_colors"], serde_json::json!(["blue"]));
         assert_eq!(
             store
-                .migrate_v2_note_properties_for_notebook("nb_test")
+                .migrate_note_properties_for_notebook("nb_test")
                 .unwrap()
                 .notes_written,
             0
         );
-        store.reconcile_v2_note_index("nb_test").unwrap();
-        let conn = store.open_v2_index_connection("nb_test").unwrap();
+        store.reconcile_note_index("nb_test").unwrap();
+        let conn = store.open_note_index_connection("nb_test").unwrap();
         let (created_at, icon): (i64, String) = conn
-            .query_row("SELECT created_at, icon FROM v2_notes", [], |row| {
+            .query_row("SELECT created_at, icon FROM notes", [], |row| {
                 Ok((row.get(0)?, row.get(1)?))
             })
             .unwrap();
@@ -2215,13 +2882,13 @@ mod tests {
         drop(conn);
 
         let report = store
-            .migrate_v2_note_properties_for_notebook("nb_test")
+            .migrate_note_properties_for_notebook("nb_test")
             .unwrap();
         assert_eq!(report.notes_written, 0);
         assert_eq!(fs::read(&path).unwrap(), original);
-        let conn = store.open_v2_index_connection("nb_test").unwrap();
+        let conn = store.open_note_index_connection("nb_test").unwrap();
         let created_at: i64 = conn
-            .query_row("SELECT created_at FROM v2_notes", [], |row| row.get(0))
+            .query_row("SELECT created_at FROM notes", [], |row| row.get(0))
             .unwrap();
         assert_eq!(created_at, 123);
     }

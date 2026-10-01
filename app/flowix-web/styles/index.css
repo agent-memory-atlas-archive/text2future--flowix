@@ -37,7 +37,6 @@
 @import './theme/light.css';
 @import './theme/dark.css';
 @import './theme/rock.css';
-@import './theme/mist.css';
 @import './theme/ember.css';
 
 @font-face {
@@ -270,6 +269,10 @@
 	cursor: default !important;
 }
 
+.notebook-file-tree__default-file-icon {
+	opacity: 0.6;
+}
+
 .notebook-file-tree__item--moving {
 	opacity: 0.62;
 }
@@ -420,10 +423,9 @@
 		--font-nav: 'SF Mono';
 
 		/* User-configurable typography (Preferences → Format).
-		 * 主要消费方是 Tiptap 编辑器 (.markdown-editor .ProseMirror:not(.agent-thread-card__composer-editor));
-		 * Thread Card 消息样式直接读 --app-font-size, 侧边栏对话详情
-		 * (.markdown-editor.agent-conversation-detail) 也显式消费
-		 * --app-font-family —— 均是为了与文档内嵌卡片字体对齐。
+		 * Tiptap 正文及其嵌入内容消费 --app-font-family;
+		 * Agent 对话和产品 UI 继续使用 --font-sans。字号/行高也被部分
+		 * 编辑器和 Thread Card 尺寸规则消费。
 		 * 不再写到 body / html, 避免影响 MemoList、Agent 面板等其它
 		 * UI 文本。默认值需与 constants.ts 的 DEFAULT_USER_SETTINGS
 		 * 保持同步。由 useApplyFontSettings 运行时覆盖。 */

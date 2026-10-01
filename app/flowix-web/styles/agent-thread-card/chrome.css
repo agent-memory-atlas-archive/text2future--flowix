@@ -103,11 +103,10 @@
 .markdown-editor .agent-thread-card {
   margin: 0 0 calc(var(--app-font-size, 15px) * var(--app-line-height, 1.8) * 0.32);
   background: transparent;
-  /* A Thread Card is a nested NodeView. Own the inherited editor typography
-   * at the component boundary so messages and chrome do not depend on the
-   * parent ProseMirror's font/caret settings. Keep the app tokens shared with
-   * the standalone conversation surface and user Preferences. */
-  font-family: var(--app-font-family, var(--font-sans));
+  /* Messages and card chrome use the product font even though this NodeView
+   * is nested inside a user-configurable Tiptap document. The nested composer
+   * is itself a Tiptap editor and opts into --app-font-family separately. */
+  font-family: var(--font-sans);
   font-size: var(--app-font-size, 15px);
   line-height: var(--app-line-height, 1.6);
   color: var(--foreground);

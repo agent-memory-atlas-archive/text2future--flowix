@@ -1,47 +1,47 @@
 import type { MemoEvent, MemoDerivedRefresh } from '@/types/memo';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { useTagStore } from '@features/memo/store/tag-store';
 import { useTodoCountStore } from '@features/memo/store/todo-count-store';
-import { rebaseSelectedTagId } from '@features/memo/services/memo-list-metadata-service';
 export { resumePendingNoteLinkUpdates } from '@features/memo/services/note-link-rewriter';
 export {
   mountOpenTargetListener,
   unmountOpenTargetListener,
 } from '@features/memo/use-cases/open-target-listener';
 export {
-  initializeMemoLibrary,
-} from '@features/memo/use-cases/initialize-memo-library';
+  initializeNoteLibrary,
+  initializeNotebookContext,
+} from '@features/memo/use-cases/initialize-note-library';
 
 export function markMemoLibraryStartupError(error: unknown): void {
-  useMemoStore.getState().setStartupPhase(
+  useNoteStore.getState().setStartupPhase(
     'error',
     error instanceof Error ? error.message : String(error),
   );
 }
 
 export function getAppSelectedNotebookId(): string | null {
-  return useMemoStore.getState().selectedNotebook?.id ?? null;
+  return useNoteStore.getState().selectedNotebook?.id ?? null;
 }
 
 export async function getAppNotebookPath(notebookId: string): Promise<string | null> {
-  let notebook = useMemoStore.getState().notebooks.find((item) => item.id === notebookId);
+  let notebook = useNoteStore.getState().notebooks.find((item) => item.id === notebookId);
   if (!notebook) {
-    await useMemoStore.getState().loadNotebooks();
-    notebook = useMemoStore.getState().notebooks.find((item) => item.id === notebookId);
+    await useNoteStore.getState().loadNotebooks();
+    notebook = useNoteStore.getState().notebooks.find((item) => item.id === notebookId);
   }
   return notebook?.path ?? null;
 }
 
-export function applyAppMemoCreated(memo: Parameters<ReturnType<typeof useMemoStore.getState>['handleMemoCreated']>[0]): void {
-  useMemoStore.getState().handleMemoCreated(memo);
+export function applyAppMemoCreated(_memo: unknown): void {
+  useNoteStore.getState().handleMemoEvent();
 }
 
-export function applyAppMemoUpdated(memo: Parameters<ReturnType<typeof useMemoStore.getState>['handleMemoUpdated']>[0]): void {
-  useMemoStore.getState().handleMemoUpdated(memo);
+export function applyAppMemoUpdated(_memo: unknown): void {
+  useNoteStore.getState().handleMemoEvent();
 }
 
-export function applyAppMemoDeleted(memoId: string): void {
-  useMemoStore.getState().handleMemoDeleted(memoId);
+export function applyAppMemoDeleted(_memoId: string): void {
+  useNoteStore.getState().handleMemoEvent();
 }
 
 export function refreshAppTodoCount(notebookId: string): void {
@@ -73,35 +73,18 @@ function refreshTags(notebookId: string): void {
 
 export function applyAppTagsRenamed(event: Extract<MemoEvent, { kind: 'tags_renamed' }>): void {
   refreshTags(event.notebookId);
-  if (!event.affectedMemoIds.length || !event.renamedTags.length) return;
-  const ids = new Set(event.affectedMemoIds);
-  let dirty = false;
-  const memos = useMemoStore.getState().memos.map((memo) => {
-    if (!ids.has(memo.id)) return memo;
-    const tags = memo.tags.map((tag) => event.renamedTags.reduce(
-      (current, [oldPrefix, newPrefix]) => rebaseSelectedTagId(current, oldPrefix, newPrefix) ?? current,
-      tag,
-    ));
-    if (tags.every((tag, index) => tag === memo.tags[index])) return memo;
-    dirty = true;
-    return { ...memo, tags };
-  });
-  if (dirty) useMemoStore.setState({ memos });
+  if (getAppSelectedNotebookId() === event.notebookId
+    && event.affectedMemoIds.length
+    && event.renamedTags.length) {
+    useNoteStore.getState().triggerRefresh();
+  }
 }
 
 export function applyAppTagsDeleted(event: Extract<MemoEvent, { kind: 'tags_deleted' }>): void {
   refreshTags(event.notebookId);
-  if (!event.affectedMemoIds.length || !event.deletedTags.length) return;
-  const ids = new Set(event.affectedMemoIds);
-  let dirty = false;
-  const memos = useMemoStore.getState().memos.map((memo) => {
-    if (!ids.has(memo.id)) return memo;
-    const tags = memo.tags.filter((tag) => !event.deletedTags.some(
-      (deleted) => tag === deleted || tag.startsWith(`${deleted}/`),
-    ));
-    if (tags.length === memo.tags.length) return memo;
-    dirty = true;
-    return { ...memo, tags };
-  });
-  if (dirty) useMemoStore.setState({ memos });
+  if (getAppSelectedNotebookId() === event.notebookId
+    && event.affectedMemoIds.length
+    && event.deletedTags.length) {
+    useNoteStore.getState().triggerRefresh();
+  }
 }

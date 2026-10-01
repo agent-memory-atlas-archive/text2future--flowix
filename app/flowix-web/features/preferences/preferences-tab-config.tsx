@@ -2,6 +2,7 @@ import { StarFourIcon } from '@phosphor-icons/react';
 import {
   Cloud,
   FileCog,
+  FolderOpen,
   History,
   Keyboard,
   Link2,
@@ -33,6 +34,7 @@ export const PREFERENCE_TAB_GROUPS: readonly PreferencesTabGroup[] = [
     labelKey: 'preferences.groups.features',
     tabs: [
       { id: 'general', labelKey: 'preferences.tabs.general', icon: <Settings className="w-4 h-4" /> },
+      { id: 'fileDisplayRules', labelKey: 'preferences.tabs.fileDisplayRules', icon: <FolderOpen className="w-4 h-4" /> },
       { id: 'format', labelKey: 'preferences.tabs.format', icon: <Type className="w-4 h-4" /> },
       { id: 'theme', labelKey: 'preferences.tabs.theme', icon: <Palette className="w-4 h-4" /> },
       { id: 'noteSettings', labelKey: 'preferences.tabs.noteSettings', icon: <FileCog className="w-4 h-4" /> },

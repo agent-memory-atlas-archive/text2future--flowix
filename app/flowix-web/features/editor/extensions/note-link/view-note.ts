@@ -15,11 +15,12 @@ import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api'
 import { createTerminalInlineAtomCaretDecorations } from '@features/editor/extensions/shared/terminal-inline-atom-caret';
 import { navigateToHeadingAnchor } from '@features/editor/components/heading-anchor-navigation';
 import GithubSlugger from 'github-slugger';
-import { memos as memosClient } from '@platform/tauri/client';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { notes as notesClient } from '@platform/tauri/client';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { joinNotebookMemoPath } from '@/lib/path';
 import { buildNoteOpenLink } from '@platform/open-target/path-link';
 import { displayTitleFromFilename } from '@/lib/utils';
+import { toast } from '@/lib/toast';
 
 // ─── Attrs ────────────────────────────────────────────────────────────────────
 
@@ -488,6 +489,7 @@ class NoteReferenceView implements ProseMirrorNodeView {
       this.applyAttrs({ stale: true });
       // eslint-disable-next-line no-console
       console.warn('[note-reference] open failed:', err);
+      toast.error(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -568,26 +570,26 @@ class NoteReferenceView implements ProseMirrorNodeView {
           return;
         }
         if (initialAttrs.notebookName && initialAttrs.relativePath && !initialAttrs.notebookId) {
-          let notebooks = useMemoStore.getState().notebooks;
+          let notebooks = useNoteStore.getState().notebooks;
           if (!notebooks.some((item) => item.name === initialAttrs.notebookName)) {
-            await useMemoStore.getState().loadNotebooks();
-            notebooks = useMemoStore.getState().notebooks;
+            await useNoteStore.getState().loadNotebooks();
+            notebooks = useNoteStore.getState().notebooks;
           }
           const matches = notebooks.filter((item) => item.name === initialAttrs.notebookName);
           const notebook = matches.length === 1 ? matches[0] : null;
           const path = notebook ? joinNotebookMemoPath(notebook.path, initialAttrs.relativePath) : null;
-          const content = path ? await memosClient.readDocument(path) : null;
+          const content = path ? await notesClient.readDocument(path) : null;
           this.applyAttrs({ notebookId: notebook?.id ?? null, stale: content === null });
           return;
         }
         if (initialAttrs.notebookId && initialAttrs.relativePath) {
-          let notebook = useMemoStore.getState().notebooks.find((item) => item.id === initialAttrs.notebookId);
+          let notebook = useNoteStore.getState().notebooks.find((item) => item.id === initialAttrs.notebookId);
           if (!notebook) {
-            await useMemoStore.getState().loadNotebooks();
-            notebook = useMemoStore.getState().notebooks.find((item) => item.id === initialAttrs.notebookId);
+            await useNoteStore.getState().loadNotebooks();
+            notebook = useNoteStore.getState().notebooks.find((item) => item.id === initialAttrs.notebookId);
           }
           const path = notebook ? joinNotebookMemoPath(notebook.path, initialAttrs.relativePath) : null;
-          const content = path ? await memosClient.readDocument(path) : null;
+          const content = path ? await notesClient.readDocument(path) : null;
           const stale = content === null;
           const current = this.node.attrs as NoteReferenceAttrs;
           if (current.stale !== stale || (notebook && current.notebookName !== notebook.name)) {
@@ -596,7 +598,7 @@ class NoteReferenceView implements ProseMirrorNodeView {
           return;
         }
         if (initialAttrs.originalPath) {
-          const content = await memosClient.readDocument(initialAttrs.originalPath);
+          const content = await notesClient.readDocument(initialAttrs.originalPath);
           const stale = content === null;
           if ((this.node.attrs as NoteReferenceAttrs).stale !== stale) this.applyAttrs({ stale });
           return;
@@ -613,7 +615,7 @@ class NoteReferenceView implements ProseMirrorNodeView {
           notebookId = url.searchParams.get('notebookId');
           relativePath = url.searchParams.get('f') ?? url.searchParams.get('file') ?? url.searchParams.get('relativePath');
           if ((!notebookId || !relativePath) && url.searchParams.get('path')) {
-            const location = await memosClient.resolveMarkdownLocation(url.searchParams.get('path')!);
+            const location = await notesClient.resolveLocation(url.searchParams.get('path')!);
             notebookId = location.notebookId;
             relativePath = location.relativePath;
           }
@@ -835,7 +837,7 @@ export const NoteReference = Node.create({
     }
     if (a.relativePath) {
       const notebook = a.notebookId
-        ? useMemoStore.getState().notebooks.find((item) => item.id === a.notebookId)
+        ? useNoteStore.getState().notebooks.find((item) => item.id === a.notebookId)
         : null;
       const book = notebook?.name ?? a.notebookName;
       if (book) {

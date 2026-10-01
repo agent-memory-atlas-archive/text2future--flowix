@@ -92,7 +92,7 @@ impl MemoFile {
     pub fn run_pending_data_migrations(&self) -> io::Result<DataMigrationReport> {
         // The common startup path only reads the version. Acquire the cross-
         // process write lock when a migration is actually pending.
-        if let Ok(conn) = self.open_index_db() {
+        if let Ok(conn) = self.open_registry_db() {
             if let Ok(version) = conn.query_row(
                 "SELECT version FROM data_migration_state WHERE id = 1",
                 [],
@@ -109,7 +109,7 @@ impl MemoFile {
             }
         }
         let _process_guard = self.acquire_cross_process_write_lock()?;
-        let conn = self.open_index_db()?;
+        let conn = self.open_registry_db()?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS data_migration_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -137,7 +137,7 @@ impl MemoFile {
                 continue;
             }
             (migration.run)(self)?;
-            let conn = self.open_index_db()?;
+            let conn = self.open_registry_db()?;
             conn.execute(
                 "UPDATE data_migration_state SET version = ?1 WHERE id = 1",
                 params![migration.version as i64],
@@ -156,7 +156,7 @@ impl MemoFile {
 
     #[cfg(test)]
     pub(crate) fn data_migration_version(&self) -> io::Result<u32> {
-        let conn = self.open_index_db()?;
+        let conn = self.open_registry_db()?;
         conn.query_row(
             "SELECT version FROM data_migration_state WHERE id = 1",
             [],

@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use flowix_core::memo_file::{
     media_kind_for_path, notebook_relative_path, MediaResource, MemoFile,
@@ -73,6 +73,7 @@ pub fn update_media_resource(
     properties: serde_json::Value,
     expected_properties_revision: Option<i64>,
     state: State<AppState>,
+    app: AppHandle,
 ) -> Result<MediaResourceResponse, String> {
     let file = dunce::canonicalize(&file_path).map_err(|error| error.to_string())?;
     let notebook = Path::new(&notebook_path);
@@ -102,6 +103,7 @@ pub fn update_media_resource(
         )
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "media resource disappeared".to_string())?;
+    let _ = app.emit("media-properties-changed", serde_json::json!({ "notebookId": notebook_id }));
     Ok(MediaResourceResponse { resource: updated })
 }
 

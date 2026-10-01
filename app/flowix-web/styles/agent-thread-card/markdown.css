@@ -508,7 +508,7 @@
   right: 0.8rem;
   color: var(--muted-foreground);
   content: attr(data-language-label);
-  font-family: var(--app-font-family, var(--font-sans));
+  font-family: var(--font-sans);
   font-size: 0.75em;
   line-height: 1.2;
   pointer-events: none;

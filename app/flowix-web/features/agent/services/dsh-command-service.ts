@@ -9,7 +9,7 @@ import { normalizeConversationWorkspaceState } from "@features/agent/runtime/con
 import { resolveNotebookAgentFiles } from "@/lib/agent-access-defaults";
 import { useAgentAccessStore } from "@features/agent/store/agent-access-store";
 import { useAgentSessionStore } from "@features/agent/store/agent-session-store";
-import { useMemoStore } from "@features/memo/store/memo-store";
+import { useNoteStore } from "@features/memo/store/note-store";
 import { agentClient } from "@features/agent/store/agent-client";
 
 export const DSH_AGENT_TYPE = "deepseek-harness" as const satisfies AgentTypeKey;
@@ -94,8 +94,8 @@ export function buildDshCommandMessage(
     normalizeWorkspaceSnapshot(instanceRuntimeConfig?.workspaceSnapshot);
   const notebookId = instanceRuntimeConfig?.notebookId;
   const notebook = notebookId
-    ? useMemoStore.getState().notebooks.find((item) => item.id === notebookId)
-    : useMemoStore.getState().selectedNotebook;
+    ? useNoteStore.getState().notebooks.find((item) => item.id === notebookId)
+    : useNoteStore.getState().selectedNotebook;
   const accessState = useAgentAccessStore.getState();
   const defaultFiles = !workspaceSnapshot && notebookId
     ? resolveNotebookAgentFiles(accessState.config, accessState.notebookConfigs, notebookId)

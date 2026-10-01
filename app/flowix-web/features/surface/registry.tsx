@@ -9,9 +9,10 @@ import {
   useEffect,
   useState,
 } from 'react';
-import { memos } from '@platform/tauri/client';
+import { notes } from '@platform/tauri/client';
 import { PluginArtifactRenderer } from '@features/plugin/plugin-artifact-renderer';
 import { normalizePluginArtifactRenderer, type PluginArtifactRendererId } from '@features/plugin/plugin-note';
+import { extractFrontmatter } from '@features/document/properties/frontmatter-model';
 import { DocumentContainer, UnavailableFileView } from '@features/document/components/document-container';
 import { useDocumentStore } from '@features/document/store/document-store';
 import { documentIdentityFromFile } from '@features/document/store/document-identity';
@@ -85,46 +86,50 @@ function MDSurfaceView({ surface }: { surface: MDSurface }) {
     setMindmapContent(null);
     setPluginRenderer(null);
     setPreview(false);
-    void memos.readDocument(surface.fileIdentity.path).then((content) => {
+    void notes.readDocument(surface.fileIdentity.path).then((content) => {
       if (cancelled || !content) return;
-      const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
-      const pluginId = frontmatter?.[1].match(/^flowix_plugin:\s*['"]?([^'"\r\n]+)['"]?\s*$/m)?.[1];
-      const rendererValue = frontmatter?.[1].match(/^flowix_renderer:\s*['"]?([^'"\r\n]+)['"]?\s*$/m)?.[1]
-        ?? (pluginId === 'mindmap' ? 'markmap' : null);
+      const frontmatter = extractFrontmatter(content);
+      const pluginValue = frontmatter.data.flowix_plugin;
+      const pluginMetadata = pluginValue && typeof pluginValue === 'object' && !Array.isArray(pluginValue)
+        ? pluginValue as Record<string, unknown> : null;
+      const pluginId = typeof pluginMetadata?.id === 'string' ? pluginMetadata.id : null;
+      const rendererValue = typeof pluginMetadata?.renderer === 'string' ? pluginMetadata.renderer
+        : pluginId === 'mindmap' ? 'markmap' : null;
       const renderer = normalizePluginArtifactRenderer(rendererValue);
-      if (frontmatter && pluginId && renderer) {
+      if (frontmatter.hasFrontmatter && !frontmatter.parseError && pluginId && renderer) {
         setPluginRenderer(renderer);
-        setMindmapContent(content.slice(frontmatter[0].length).trimStart());
+        setMindmapContent(frontmatter.body.trimStart());
         setPreview(true);
       }
     }).catch(() => undefined);
     return () => { cancelled = true; };
   }, [surface.fileIdentity.path]);
-  return <div className="flex h-full min-h-0 flex-col">
-    {mindmapContent !== null && pluginRenderer && <div className="flex justify-end border-b border-[var(--divider)] px-3 py-1">
-      <button type="button" className="rounded px-3 py-1 text-sm hover:bg-[var(--muted)]"
+  return <div className="relative flex h-full min-h-0 flex-col">
+    <div className="min-h-0 flex-1" style={{ display: preview ? 'none' : undefined }}>
+      <DocumentContainer {...surface.props} fileIdentity={surface.fileIdentity} externalEditorMode="markdown" />
+    </div>
+    {preview && mindmapContent !== null && pluginRenderer && <div className="min-h-0 flex-1"><PluginArtifactRenderer renderer={pluginRenderer} content={mindmapContent} /></div>}
+    {mindmapContent !== null && pluginRenderer && <button type="button" className="mindmap-markdown-toggle"
         onClick={() => {
           if (!preview) {
             const session = useDocumentStore.getState().activeExternalSession;
             const scopePath = session?.fileIdentity.path === surface.fileIdentity.path ? session.scopePath : null;
             void saveDocumentPath(documentIdentityFromFile(surface.fileIdentity), surface.fileIdentity.path, scopePath)
-              .then((saved) => saved ? memos.readDocument(surface.fileIdentity.path) : null)
+              .then((saved) => saved ? notes.readDocument(surface.fileIdentity.path) : null)
               .then((content) => {
-              const frontmatter = content?.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
-              if (content && frontmatter) {
-                setMindmapContent(content.slice(frontmatter[0].length).trimStart());
+              const frontmatter = content ? extractFrontmatter(content) : null;
+              const pluginValue = frontmatter?.data.flowix_plugin;
+              const pluginId = pluginValue && typeof pluginValue === 'object' && !Array.isArray(pluginValue)
+                ? (pluginValue as Record<string, unknown>).id : null;
+              if (frontmatter?.hasFrontmatter && !frontmatter.parseError && pluginId === 'mindmap') {
+                setMindmapContent(frontmatter.body.trimStart());
                 setPreview(true);
               }
             }).catch(() => undefined);
           } else {
             setPreview(false);
           }
-        }}>{preview ? '编辑 Markdown' : '预览思维导图'}</button>
-    </div>}
-    <div className="min-h-0 flex-1" style={{ display: preview ? 'none' : undefined }}>
-      <DocumentContainer {...surface.props} fileIdentity={surface.fileIdentity} externalEditorMode="markdown" />
-    </div>
-    {preview && mindmapContent !== null && pluginRenderer && <div className="min-h-0 flex-1"><PluginArtifactRenderer renderer={pluginRenderer} content={mindmapContent} /></div>}
+        }}>{preview ? '编辑 Markdown' : '预览思维导图'}</button>}
   </div>;
 }
 

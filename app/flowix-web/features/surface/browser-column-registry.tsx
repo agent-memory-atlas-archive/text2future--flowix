@@ -29,6 +29,7 @@ import {
 import { canonicalUrl } from '@features/workspace/store/workspace-content-identity';
 import { requireFileDisplayIdentity, type FileDisplayIdentity } from '@/lib/file-display-registry';
 import { openUrl } from '@platform/tauri/opener';
+import { styleAccessibleIframeScrollbar } from '@shared/ui/iframe-scrollbar';
 
 export type BrowserColumnSurfaceCapability =
   | 'edit'
@@ -188,6 +189,7 @@ function BrowserWebSurfaceView({ surface }: { surface: BrowserWebSurface }) {
 
   const handleIframeLoad = useCallback(() => {
     const iframe = iframeRef.current;
+    styleAccessibleIframeScrollbar(iframe);
     let loadedUrl = currentUrl;
     let pageTitle = '';
     try {

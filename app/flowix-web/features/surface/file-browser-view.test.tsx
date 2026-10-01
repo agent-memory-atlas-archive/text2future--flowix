@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import { FileBrowserView, type FileBrowserViewSurface } from './file-browser-view';
 import { useAgentAccessStore } from '@features/agent/store/agent-access-store';
-import { useMemoStore } from '@features/memo/store';
+import { useNoteStore } from '@features/memo/store';
 import { DocumentContainer } from '@features/document/components/document-container';
 
 const probe = vi.hoisted(() => ({ mounts: 0, scope: null as string | null, flush: vi.fn().mockResolvedValue(true) }));
@@ -34,7 +34,7 @@ it('derives the tree from the owning notebook without remounting or changing fil
   const environment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   environment.IS_REACT_ACT_ENVIRONMENT = true;
   const previousConfig = useAgentAccessStore.getState().config;
-  const previousNotebookId = useMemoStore.getState().selectedNotebookId;
+  const previousNotebookId = useNoteStore.getState().selectedNotebookId;
   useAgentAccessStore.setState({ config: { version: 1, entries: [], defaults: {} }, notebookConfigs: {} });
   probe.mounts = 0;
   const element = document.createElement('div');
@@ -67,7 +67,7 @@ it('derives the tree from the owning notebook without remounting or changing fil
       ] } },
     }));
     expect(element.querySelector('[data-tree-root]')?.getAttribute('data-tree-root')).toBe('/workspace/src');
-    await act(async () => useMemoStore.setState({ selectedNotebookId: 'unrelated' }));
+    await act(async () => useNoteStore.setState({ selectedNotebookId: 'unrelated' }));
     expect(element.querySelector('[data-tree-root]')?.getAttribute('data-tree-root')).toBe('/workspace/src');
     const fileButton = Array.from(element.querySelectorAll('button')).find((button) => button.textContent === 'select file');
     await act(async () => fileButton?.click());
@@ -84,7 +84,7 @@ it('derives the tree from the owning notebook without remounting or changing fil
   } finally {
     await act(async () => root.unmount());
     useAgentAccessStore.setState({ config: previousConfig });
-    useMemoStore.setState({ selectedNotebookId: previousNotebookId });
+    useNoteStore.setState({ selectedNotebookId: previousNotebookId });
     environment.IS_REACT_ACT_ENVIRONMENT = false;
   }
 });

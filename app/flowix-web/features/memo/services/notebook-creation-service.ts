@@ -1,7 +1,8 @@
-import type { Notebook } from '@features/memo/store/memo-store';
-import { notebookRepository } from '@features/memo/services/memo-repository';
+import type { Notebook } from '@features/memo/store/note-store';
+import { notebookRepository } from '@features/memo/services/note-repository';
 import {
   listenToNotebookImportStatus,
+  type NotebookSetupJob,
   type NotebookImportStatus,
 } from '@platform/tauri/client';
 
@@ -9,12 +10,15 @@ export interface NotebookRegistrationResult {
   notebook: Notebook;
   created: boolean;
   needsImport: boolean;
+  hasTemplateSetup?: boolean;
+  setupJob?: NotebookSetupJob | null;
 }
 
 interface CreateNotebookRegistrationInput {
   name: string;
   path?: string;
   icon?: string | null;
+  templateId?: string | null;
   reuseExisting?: boolean;
 }
 
@@ -90,6 +94,7 @@ export async function createNotebookRegistration({
   name,
   path,
   icon,
+  templateId,
   reuseExisting = false,
 }: CreateNotebookRegistrationInput): Promise<NotebookRegistrationResult> {
   const trimmedName = name.trim();
@@ -101,8 +106,15 @@ export async function createNotebookRegistration({
   const pathForCreate = requestedPath || undefined;
 
   try {
-    const notebook = await notebookRepository.create(trimmedName, pathForCreate, icon, false);
-    return { notebook, created: true, needsImport: true };
+    const notebook = templateId
+      ? await notebookRepository.create(trimmedName, pathForCreate, icon, false, templateId)
+      : await notebookRepository.create(trimmedName, pathForCreate, icon, false);
+    return {
+      notebook,
+      created: true,
+      needsImport: true,
+      ...(templateId ? { hasTemplateSetup: true } : {}),
+    };
   } catch (error) {
     // A second onboarding attempt can race with another registration. Resolve
     // the backend duplicate response to the already registered notebook.
@@ -110,11 +122,18 @@ export async function createNotebookRegistration({
       const existingPath = pathForCreate ?? await notebookRepository.getDefaultPath(trimmedName);
       const registered = await findNotebookByPath(existingPath);
       if (registered) {
-        return {
+        const setupJob = templateId
+          ? await notebookRepository.ensureTemplateSetup(registered.id, templateId)
+          : await notebookRepository.getTemplateSetupStatus?.(registered.id) ?? null;
+        const registration = {
           notebook: registered,
           created: false,
-          needsImport: await notebookNeedsImport(registered.id),
+          ...(setupJob ? { hasTemplateSetup: true } : {}),
+          needsImport: setupJob
+            ? setupJob.status !== 'completed'
+            : await notebookNeedsImport(registered.id),
         };
+        return setupJob ? { ...registration, setupJob } : registration;
       }
     }
     throw error;

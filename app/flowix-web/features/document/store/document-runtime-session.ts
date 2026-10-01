@@ -26,6 +26,7 @@ export interface DocumentRuntimeSession {
   openingRead?: { path: string; promise: Promise<string | null> };
   openingRecovery?: Promise<RecoveryDraft | null>;
   title?: MemoTitleSession;
+  /** Recovery-only input; never the displayed title or an automatic rename intent. */
   restoredTitle?: { draft: string; filename: string };
   queue?: CommitQueue;
   clock?: CaptureClock;

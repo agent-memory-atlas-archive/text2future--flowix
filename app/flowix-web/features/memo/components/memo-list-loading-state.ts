@@ -1,5 +1,5 @@
 import type { ColorFilterValue } from '@features/memo/store';
-import { getMemoQueryKey } from '@features/memo/services/memo-query-key';
+import { getNoteQueryKey } from '@features/memo/services/note-query-key';
 
 export function getMemoListQueryKey(
   notebookId: string | undefined,
@@ -10,7 +10,7 @@ export function getMemoListQueryKey(
   pluginId?: string | null,
   customFilterId?: string | null,
 ): string {
-  return getMemoQueryKey(notebookId, filter, sort, tagId, colorFilter, pluginId, customFilterId);
+  return getNoteQueryKey(notebookId, filter, sort, tagId, colorFilter, pluginId, customFilterId);
 }
 
 export function shouldShowMemoListLoading({

@@ -34,7 +34,7 @@ import {
 } from '@features/memo/public/global-search-api';
 import { openNotebookNote } from '@features/memo/use-cases/open-notebook-note';
 import { joinNotebookMemoPath } from '@/lib/path';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import {
   selectAndOpenAgentConversation,
   selectNotebook,
@@ -49,10 +49,11 @@ import {
 import { getAgentType } from '@/lib/agent-types';
 import {
   memos,
+  notes,
   tags,
   windows,
-  type PathNoteSearchHit,
-  type MemoTemplate,
+  type NoteSearchHit,
+  type NoteTemplate,
 } from '@platform/tauri/client';
 import { ShortcutKbd } from '@shared/ui/shortcut-kbd';
 import { useI18n } from '@/lib/i18n';
@@ -115,7 +116,7 @@ function getPropertyFilterOperatorLabel(
 export function GlobalSearchCommand({ open, onOpenChange }: GlobalSearchCommandProps) {
   const { t } = useI18n();
   const [query, setQuery] = useState('');
-  const [hits, setHits] = useState<PathNoteSearchHit[]>([]);
+  const [hits, setHits] = useState<NoteSearchHit[]>([]);
   const [indexReady, setIndexReady] = useState(true);
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [propertyFilters, setPropertyFilters] = useState<PropertyFilterCondition[]>([]);
@@ -156,7 +157,7 @@ export function GlobalSearchCommand({ open, onOpenChange }: GlobalSearchCommandP
     debounceRef.current = setTimeout(async () => {
       try {
         const res = selectedNotebook
-          ? await memos.searchPathNotes(selectedNotebook.id, q, 30)
+          ? await notes.search(selectedNotebook.id, q, 30)
           : [];
         // 期间用户可能又改了 query / 切了 notebook, 旧请求直接丢弃
         if (myReq !== reqIdRef.current) return;
@@ -404,9 +405,9 @@ function RunningAgentConversationsGroup({ onClose }: RunningAgentConversationsGr
 }
 
 interface SearchResultsGroupProps {
-  hits: PathNoteSearchHit[];
+  hits: NoteSearchHit[];
   indexReady: boolean;
-  onPick: (hit: PathNoteSearchHit) => void;
+  onPick: (hit: NoteSearchHit) => void;
 }
 
 function SearchResultsGroup({ hits, indexReady, onPick }: SearchResultsGroupProps) {
@@ -504,14 +505,14 @@ function StaticGroups({ onClose }: StaticGroupsProps) {
     selectedNotebook,
     activeFilter,
     setActiveFilter,
-    createMemo,
+    createNote,
     setSelectedTagId,
   } = useGlobalSearchMemoViewModel();
 
   // 标签不在全局 store (只在 memo-list 局部 useState), 这里按需拉一次.
   // 切 notebook 不会让旧 tag 消失 — 后端 derived_tags() 返回跨 notebook 全集.
   const [tagList, setTagList] = useState<Array<{ id: string; name: string }>>([]);
-  const [templateList, setTemplateList] = useState<MemoTemplate[]>([]);
+  const [templateList, setTemplateList] = useState<NoteTemplate[]>([]);
   useEffect(() => {
     let cancelled = false;
     void Promise.all([
@@ -567,7 +568,7 @@ function StaticGroups({ onClose }: StaticGroupsProps) {
   const handleNewMemo = async () => {
     if (!selectedNotebook) return;
     try {
-      const created = await createMemo(undefined, selectedNotebook.id);
+      const created = await createNote(undefined, selectedNotebook.id);
       void openNotebookNote(created.path, selectedNotebook);
     } catch (err) {
       logger.error('create memo failed', { error: err });
@@ -577,11 +578,11 @@ function StaticGroups({ onClose }: StaticGroupsProps) {
 
   /** 新建笔记本 — MemoListServicesHost 监听了 flowix:open-create-notebook 事件, 会打开
    *  现有 Dialog 走选路径 + 命名流程. 直接 dispatch 复用. */
-  const handleCreateFromTemplate = async (template: MemoTemplate) => {
+  const handleCreateFromTemplate = async (template: NoteTemplate) => {
     if (!selectedNotebook) return;
     try {
-      const created = await memos.createPathFromTemplate(template.id, selectedNotebook.id);
-      await useMemoStore.getState().loadPathNotes({ notebookId: selectedNotebook.id });
+      const created = await notes.createFromTemplate(template.id, selectedNotebook.id);
+      await useNoteStore.getState().loadNotes({ notebookId: selectedNotebook.id });
       void openNotebookNote(created.path, selectedNotebook);
     } catch (err) {
       logger.error('create from template failed', { error: err });

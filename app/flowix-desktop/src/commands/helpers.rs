@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::config::{path_is_inside, path_is_inside_reserved_directory};
 use crate::lock_utils::{read_lock, write_lock};
@@ -10,7 +10,7 @@ use crate::watcher::runtime::current_watcher;
 
 use crate::app::state::AppState;
 use flowix_core::memo_file::{
-    is_ignored_notebook_relative_path, notebook_relative_path, MemoFile, NotebookConfig,
+    notebook_relative_path, MemoFile, NotebookConfig,
 };
 
 pub(crate) fn watch_created_notebook(state: &AppState, app: &AppHandle, config: &NotebookConfig) {
@@ -48,7 +48,7 @@ pub(crate) fn notebook_note_address(
             continue;
         };
         let relative = Path::new(&relative_path);
-        if is_ignored_notebook_relative_path(relative) {
+        if memo_file.file_management_policy(&notebook.id).is_ignored_at(&root, relative) {
             return Err("document path is inside an ignored notebook directory".into());
         }
         if !relative
@@ -71,7 +71,7 @@ pub(crate) fn notebook_note_address(
 pub(crate) fn refresh_notebook_note_index(memo_file: &MemoFile, path: &Path) {
     match notebook_note_address(memo_file, path) {
         Ok(Some((notebook_id, relative_path))) => {
-            if let Err(error) = memo_file.refresh_v2_note_path(&notebook_id, &relative_path) {
+            if let Err(error) = memo_file.refresh_note_path(&notebook_id, &relative_path) {
                 tracing::warn!(
                     notebook_id,
                     relative_path,
@@ -96,9 +96,55 @@ pub(crate) fn refresh_watcher_roots(state: &AppState, app: &AppHandle) {
         start_security_bookmark_access(state, Path::new(&config.path));
     }
     if let Some(watcher) = current_watcher(app) {
-        if let Ok(mut g) = watcher.write() {
-            g.rebind_all(app.clone(), configs);
+        if let Ok(mut guard) = watcher.write() {
+            guard.rebind_all(app.clone(), configs.clone());
         }
+    }
+    // A full rebind has a short gap. Reconcile once after binding so changes
+    // made during that gap are included even if no filesystem event arrives.
+    let memo_file = read_lock(&state.memo_file, "memo_file");
+    for config in &configs {
+        match memo_file.reconcile_note_index(&config.id) {
+            Ok(report) if report.added + report.updated + report.removed > 0 => {
+                let _ = app.emit("flowix:path-note-changed", serde_json::json!({
+                    "notebookId": config.id, "relativePath": "", "deleted": false,
+                }));
+            }
+            Err(error) => tracing::warn!(notebook_id = %config.id, "watcher rebind reconciliation failed: {error}"),
+            _ => {}
+        }
+    }
+}
+
+pub(crate) fn retry_notebook_watch(state: &AppState, app: &AppHandle, notebook_id: &str) {
+    let Some(config) =
+        read_lock(&state.memo_file, "memo_file").get_notebook_config_by_id(notebook_id)
+    else {
+        return;
+    };
+    let Some(watcher) = current_watcher(app) else {
+        return;
+    };
+    let Ok(mut watcher) = watcher.write() else {
+        return;
+    };
+    if watcher.is_watching(notebook_id) {
+        return;
+    }
+    start_security_bookmark_access(state, Path::new(&config.path));
+    if !watcher.add_notebook_root(&config) {
+        tracing::warn!(notebook_id, "notebook watch retry failed");
+        return;
+    }
+    drop(watcher);
+    match read_lock(&state.memo_file, "memo_file").reconcile_note_index(notebook_id) {
+        Ok(report) if report.added + report.updated + report.removed > 0 => {
+            let _ = app.emit("flowix:path-note-changed", serde_json::json!({
+                "notebookId": notebook_id, "relativePath": "", "deleted": false,
+            }));
+        }
+        Err(error) => tracing::warn!(notebook_id, "notebook watch retry reconciliation failed: {error}"),
+        _ => {}
     }
 }
 

@@ -4,15 +4,15 @@ const mocks = vi.hoisted(() => ({
   memoState: {
     selectedNotebook: null as { id: string; path: string } | null,
     selectedNotebookId: null as string | null,
-    selectedPathNote: null as { notebookId: string; relativePath: string } | null,
+    selectedNote: null as { notebookId: string; relativePath: string } | null,
     notebooks: [] as Array<{ id: string; path: string }>,
     upsertMemo: vi.fn(),
     setSelectedNotebook: vi.fn((notebook: { id: string; path: string } | null) => {
       mocks.memoState.selectedNotebook = notebook;
       mocks.memoState.selectedNotebookId = notebook?.id ?? null;
     }),
-    setSelectedPathNote: vi.fn((identity: { notebookId: string; relativePath: string } | null) => {
-      mocks.memoState.selectedPathNote = identity;
+    setSelectedNote: vi.fn((identity: { notebookId: string; relativePath: string } | null) => {
+      mocks.memoState.selectedNote = identity;
     }),
     setNotebooks: vi.fn((
       notebooks: Array<{ id: string; path: string }>,
@@ -35,7 +35,7 @@ const mocks = vi.hoisted(() => ({
     setActivePluginId: vi.fn(),
     loadNotebooks: vi.fn(),
     loadMemos: vi.fn(),
-    loadPathNotes: vi.fn().mockResolvedValue(true),
+    loadNotes: vi.fn().mockResolvedValue(true),
   },
   documentState: {
     activeExternalSession: null as {
@@ -51,8 +51,8 @@ const mocks = vi.hoisted(() => ({
   setCurrentNotebook: vi.fn(),
 }));
 
-vi.mock('@features/memo/store/memo-store', () => ({
-  useMemoStore: { getState: () => mocks.memoState },
+vi.mock('@features/memo/store/note-store', () => ({
+  useNoteStore: { getState: () => mocks.memoState },
 }));
 
 vi.mock('@features/document/store/document-store', () => ({
@@ -67,7 +67,7 @@ vi.mock('@features/document/store/document-store', () => ({
 
 vi.mock('@platform/tauri/client', () => ({
   agent: {},
-  memos: { resolveMarkdownLocation: mocks.resolveMarkdownLocation },
+  notes: { resolveLocation: mocks.resolveMarkdownLocation },
   notebooks: { setCurrent: mocks.setCurrentNotebook },
 }));
 
@@ -99,7 +99,7 @@ describe('workspace navigation transaction', () => {
   beforeEach(() => {
     resetWorkspace();
     useBrowserColumnStore.getState().reset();
-    mocks.memoState.selectedPathNote = { notebookId: 'notebook-a', relativePath: 'old.md' };
+    mocks.memoState.selectedNote = { notebookId: 'notebook-a', relativePath: 'old.md' };
     mocks.memoState.selectedNotebook = null;
     mocks.memoState.selectedNotebookId = null;
     mocks.memoState.notebooks = [];
@@ -108,7 +108,7 @@ describe('workspace navigation transaction', () => {
     mocks.openExternalDocument.mockResolvedValue(undefined);
     mocks.resolveMarkdownLocation.mockReset();
     mocks.resolveMarkdownLocation.mockResolvedValue(null);
-    mocks.memoState.loadPathNotes.mockResolvedValue(true);
+    mocks.memoState.loadNotes.mockResolvedValue(true);
     mocks.clearDocument.mockReset();
     mocks.clearDocument.mockResolvedValue(undefined);
     mocks.setCurrentNotebook.mockReset();
@@ -130,7 +130,7 @@ describe('workspace navigation transaction', () => {
       scopePath: '/workspace',
     })).rejects.toThrow('external unavailable');
 
-    expect(mocks.memoState.selectedPathNote).toEqual({ notebookId: 'notebook-a', relativePath: 'old.md' });
+    expect(mocks.memoState.selectedNote).toEqual({ notebookId: 'notebook-a', relativePath: 'old.md' });
     expect(useWorkColumnStore.getState().navigation).toMatchObject({
       phase: 'failed',
       pendingTarget: {
@@ -159,7 +159,7 @@ describe('workspace navigation transaction', () => {
     await openExternalTarget('/notes/a.md');
 
     expect(mocks.setCurrentNotebook).toHaveBeenCalledWith('notebook-a');
-    expect(mocks.memoState.selectedPathNote).toEqual({ notebookId: 'notebook-a', relativePath: 'a.md' });
+    expect(mocks.memoState.selectedNote).toEqual({ notebookId: 'notebook-a', relativePath: 'a.md' });
     expect(mocks.openExternalDocument).toHaveBeenCalledWith('/notes/a.md', expect.objectContaining({
       scopePath: '/notes', notebookId: 'notebook-a', relativePath: 'a.md', indexable: true,
     }));
@@ -226,7 +226,7 @@ describe('workspace navigation transaction', () => {
     );
     expect(mocks.setCurrentNotebook).toHaveBeenCalledWith(remainingNotebook.id);
     expect(mocks.memoState.selectedNotebook?.id).toBe(remainingNotebook.id);
-    expect(mocks.memoState.loadPathNotes).toHaveBeenCalledWith({
+    expect(mocks.memoState.loadNotes).toHaveBeenCalledWith({
       notebookId: remainingNotebook.id,
     });
     expect(useWorkColumnStore.getState().navigation).toMatchObject({

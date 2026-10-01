@@ -117,8 +117,8 @@ export function applyToolResultChunk(
   agentType?: AgentTypeKey,
   metadata: MessageChunkMetadata = {},
 ): ApplyResult {
-  const resultContent = summarizeToolResult(result);
   const resultToolName = name && name !== "tool_result" ? name : "";
+  const resultContent = summarizeToolResult(result, resultToolName);
   const hasMatchingCall = st.messages.some(
     (message) => message.role === "tool" && toolCallIdsMatch(message.toolCallId, id),
   );
@@ -181,11 +181,27 @@ export function applyToolResultChunk(
  *
  * 不导出 ── 只服务于 applyToolResultChunk。
  */
-function summarizeToolResult(result: unknown): string {
+function summarizeToolResult(result: unknown, toolName?: string): string {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return stringifyToolResult(result);
   }
   const record = result as Record<string, unknown>;
+
+  if (["image_generation", "image_generation_call"].includes(
+    toolName?.toLowerCase() ?? "",
+  )) {
+    const status = typeof record.status === "string"
+      ? record.status.toLowerCase()
+      : "";
+    const failure = [record.failure, record.error, record.reason]
+      .map(imageGenerationErrorText)
+      .find((value): value is string => Boolean(value));
+    if (failure || ["failed", "failure", "error"].includes(status)) {
+      return `[error] ${truncateToolResultForDisplay(
+        failure || "Image generation failed",
+      )}`;
+    }
+  }
 
   if (
     typeof record.content === "string" &&
@@ -226,6 +242,18 @@ function summarizeToolResult(result: unknown): string {
     }
   }
   return stringifyToolResult(Object.keys(summary).length > 0 ? summary : result);
+}
+
+function imageGenerationErrorText(value: unknown): string | undefined {
+  if (typeof value === "string") return value.trim() || undefined;
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  for (const key of ["message", "detail", "reason"]) {
+    if (typeof record[key] === "string" && record[key].trim()) {
+      return record[key].trim();
+    }
+  }
+  return Object.keys(record).length > 0 ? stringifyToolResult(record) : undefined;
 }
 
 /**

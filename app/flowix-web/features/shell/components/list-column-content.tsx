@@ -39,7 +39,7 @@ export function ListColumnContent({
       <div className="absolute inset-0">{children}</div>
       {conversationLoading && (
         <div
-          className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-[color-mix(in_oklch,var(--card)_78%,transparent)] text-sm text-[var(--muted-foreground)] backdrop-blur-[1px]"
+          className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center text-sm text-[var(--muted-foreground)]"
           role="status"
           aria-live="polite"
         >

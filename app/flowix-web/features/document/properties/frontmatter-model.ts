@@ -2,12 +2,12 @@ import YAML, { isMap, isScalar, isSeq, type YAMLMap } from 'yaml';
 import type { PropertyKind } from '@features/document/properties/presets';
 import { canonicalizePropertyKey } from '@features/document/properties/property-key';
 import { isValidTagPath } from '@/lib/tag-path';
-import { MEMO_COLORS } from '@/types/memo-item';
+import { NOTE_COLORS } from '@/types/note-item';
 
 export const FRONTMATTER_RE = /^\uFEFF?(?:[ \t]*\r?\n)*---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 export const SYSTEM_FRONTMATTER_KEYS = new Set(['flowix_key', 'key']);
 
-const FLOWIX_COLOR_SET = new Set<string>(MEMO_COLORS);
+const FLOWIX_COLOR_SET = new Set<string>(NOTE_COLORS);
 
 export type FrontmatterPropertyErrorCode =
   | 'empty-key'
@@ -270,7 +270,7 @@ function normalizeFlowixColors(value: unknown): string[] {
     }
     selected.add(item.trim());
   }
-  return MEMO_COLORS.filter((color) => selected.has(color));
+  return NOTE_COLORS.filter((color) => selected.has(color));
 }
 
 function parsePropertyInput(
@@ -326,6 +326,20 @@ function parsePropertyInput(
   return value;
 }
 
+function parsePluginMetadataJson(value: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new FrontmatterPropertyError('invalid-yaml', 'Plugin metadata must be a JSON object');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+    || typeof (parsed as Record<string, unknown>).id !== 'string') {
+    throw new FrontmatterPropertyError('invalid-yaml', 'Plugin metadata must include an id');
+  }
+  return parsed as Record<string, unknown>;
+}
+
 export function updateVisibleFrontmatterProperty(
   yamlContent: string,
   previousKey: string | null,
@@ -367,7 +381,9 @@ export function updateVisibleFrontmatterProperty(
   const previousValue = previousKey
     ? asRecord(document.toJS())[previousKey]
     : undefined;
-  const parsedValue = parsePropertyInput(nextValueInput, kind, previousValue);
+  const parsedValue = nextKey === 'flowix_plugin'
+    ? parsePluginMetadataJson(nextValueInput)
+    : parsePropertyInput(nextValueInput, kind, previousValue);
   const collectionKey = kind === 'Tag' || kind === 'Tags' || kind === 'Color'
     || nextKey === 'tags' || nextKey === 'flowix_colors';
   // A key-only edit starts with the old scalar value. Switch collection
@@ -382,7 +398,9 @@ export function updateVisibleFrontmatterProperty(
     : kind === 'Color' || nextKey === 'flowix_colors'
       ? normalizeFlowixColors(collectionValue)
       : collectionValue;
-  const valueNode = document.createNode(nextValue);
+  const valueNode = nextKey === 'flowix_plugin'
+    ? YAML.parseDocument(JSON.stringify(nextValue)).contents
+    : document.createNode(nextValue);
   if (
     Array.isArray(nextValue)
     && (kind === 'MultiSelect' || kind === 'Tag' || kind === 'Tags' || kind === 'Color' || nextKey === 'tags' || nextKey === 'flowix_colors')
@@ -518,6 +536,11 @@ export function replaceVisibleFrontmatterProperties(
   properties.forEach(({ key, value, kind }) => {
     const canonicalKey = canonicalizePropertyKey(key);
     if (SYSTEM_FRONTMATTER_KEYS.has(canonicalKey)) return;
+    if (canonicalKey === 'flowix_plugin') {
+      const plugin = typeof value === 'string' ? parsePluginMetadataJson(value) : value;
+      map.set(canonicalKey, YAML.parseDocument(JSON.stringify(plugin)).contents);
+      return;
+    }
     map.set(
       canonicalKey,
       kind === 'Tags' || canonicalKey === 'tags'

@@ -8,8 +8,8 @@ impl MemoFile {
         notebook_id: &str,
         parent: Option<&str>,
     ) -> std::io::Result<Vec<String>> {
-        if self.v2_index_is_ready(notebook_id)? {
-            return self.v2_occupied_filenames(notebook_id, parent);
+        if self.note_index_is_ready(notebook_id)? {
+            return self.note_occupied_filenames(notebook_id, parent);
         }
         let conn = self.open_memo_index_db_for_notebook_id(notebook_id)?;
         let mut stmt = conn
@@ -28,8 +28,8 @@ impl MemoFile {
     pub fn memo_counts_by_notebook(&self) -> std::io::Result<HashMap<String, usize>> {
         let mut counts = HashMap::new();
         for notebook in self.read_notebook_configs()? {
-            if self.v2_index_is_ready(&notebook.id)? {
-                counts.insert(notebook.id.clone(), self.v2_note_count(&notebook.id)?);
+            if self.note_index_is_ready(&notebook.id)? {
+                counts.insert(notebook.id.clone(), self.note_count(&notebook.id)?);
                 continue;
             }
             let conn = self.open_memo_index_db_for_notebook_id(&notebook.id)?;
@@ -53,7 +53,7 @@ impl MemoFile {
         let conn = match self.open_memo_index_db() {
             Ok(conn) => conn,
             Err(e) => {
-                eprintln!("[index.db] open failed: {e}");
+                eprintln!("[notebook.db] open failed: {e}");
                 return None;
             }
         };
@@ -61,7 +61,7 @@ impl MemoFile {
         let list = match self.read_index_from_db(&conn, &notebook_id) {
             Ok(list) => list,
             Err(e) => {
-                eprintln!("[index.db] read failed: {e}");
+                eprintln!("[notebook.db] read failed: {e}");
                 return None;
             }
         }?;
@@ -289,9 +289,9 @@ impl MemoFile {
         )?;
         tx.commit().map_err(sqlite_to_io)?;
         if let Some(path) = old_path.filter(|path| path != &memo.relative_path) {
-            self.refresh_v2_note_path(notebook_id, &path)?;
+            self.refresh_note_path(notebook_id, &path)?;
         }
-        self.refresh_v2_note_path(notebook_id, &memo.relative_path)?;
+        self.refresh_note_path(notebook_id, &memo.relative_path)?;
         if self.current_notebook_id_for_index() == notebook_id {
             let mut cache = self.index_cache.write().expect("index_cache poisoned");
             if let Some(index) = cache.as_mut() {
@@ -355,7 +355,7 @@ impl MemoFile {
         )?;
         tx.commit().map_err(sqlite_to_io)?;
         if let Some(path) = old_path {
-            self.refresh_v2_note_path(notebook_id, &path)?;
+            self.refresh_note_path(notebook_id, &path)?;
         }
         if self.current_notebook_id_for_index() == notebook_id {
             let refreshed = self.read_index_from_db(&conn, notebook_id)?;

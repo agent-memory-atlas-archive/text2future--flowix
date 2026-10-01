@@ -6,8 +6,6 @@ import { canonicalDirectoryPath, canonicalPath, parentDirectoryPath } from '@/li
 import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import { useI18n } from '@/lib/i18n';
-import { useShowHiddenNotebookFiles } from '@features/preferences/public/runtime-api';
-import { useShowNotebookAgentsFile } from '@features/preferences/public/runtime-api';
 import { resourceKindFromPath } from '@features/editor/public/code-file';
 import {
   NotebookFileTree,
@@ -34,60 +32,21 @@ import { createDocumentListTarget, workColumnTargetFilePath } from '@features/wo
 import {
   files,
   mediaResources,
-  memos,
+  notes,
   type DocTreeItem,
   type FileBrowserDirectoriesChangedEvent,
 } from '@platform/tauri/client';
 import { subscribe } from '@platform/tauri/event-bus';
 import { type Notebook } from '@features/memo/store';
-import type { SortType } from '@features/memo/services';
 
 const FILE_BROWSER_DIRECTORIES_CHANGED_EVENT = 'file-browser-directories-changed';
 const logger = createLogger('notebook-folder-view');
 
-function isInsideHiddenDirectory(item: DocTreeItem, notebookPath: string): boolean {
-  const root = canonicalDirectoryPath(notebookPath);
-  const itemPath = canonicalPath(item.fullPath);
-  const prefix = root === '/' ? '/' : `${root}/`;
-  if (!itemPath.startsWith(prefix)) return false;
-  const relativeParts = itemPath.slice(prefix.length).split('/').filter(Boolean);
-  const directoryParts = item.type === 'folder' ? relativeParts : relativeParts.slice(0, -1);
-  return directoryParts.some((part) => part.startsWith('.') && part !== '.' && part !== '..');
-}
-
-export function isNotebookTreeItemVisible(
-  item: DocTreeItem,
-  notebookPath?: string,
-  showHiddenNotebookFiles = false,
-  showAgentsFile = false,
-): boolean {
-  if (item.name === 'AGENTS.md' && !showAgentsFile) return false;
-  if (!showHiddenNotebookFiles && notebookPath && isInsideHiddenDirectory(item, notebookPath)) {
-    return false;
-  }
-  if (item.type === 'folder') {
-    return !['attachment', 'attachments'].includes(item.name.toLowerCase());
-  }
-  // The file tree is a filesystem view: show every file, including source
-  // code and formats that Flowix cannot preview. Markdown remains the only
-  // document type treated as a note by the open handler below.
-  return true;
-}
-
-export function sortNotebookTreeItems(items: DocTreeItem[], sort: SortType): DocTreeItem[] {
-  const timestamp = (item: DocTreeItem) => (
-    sort === 'updatedAt'
-      ? item.modifiedMs
-      : item.memoCreatedMs ?? item.createdMs
-  ) ?? 0;
+export function sortNotebookTreeItems(items: DocTreeItem[]): DocTreeItem[] {
+  const timestamp = (item: DocTreeItem) => item.memoCreatedMs ?? item.createdMs ?? 0;
   return [...items].sort((left, right) => {
     if (left.type !== right.type) return left.type === 'folder' ? -1 : 1;
     if (left.type === 'folder') return left.name.localeCompare(right.name);
-    if (sort === 'filenameAsc' || sort === 'filenameDesc') {
-      const filenameOrder = left.name.toLowerCase().localeCompare(right.name.toLowerCase())
-        || left.name.localeCompare(right.name);
-      return sort === 'filenameDesc' ? -filenameOrder : filenameOrder;
-    }
     return timestamp(right) - timestamp(left) || left.name.localeCompare(right.name);
   });
 }
@@ -97,10 +56,8 @@ export function NotebookFolderView({
   createFolderRequest,
   createNoteRequest,
   onCreateFolder,
-  sort,
   onCreateNote,
-  hiddenListFolders = [],
-  onToggleListFolderVisibility,
+  defaultCreateFolder,
   onSetDefaultCreateFolder,
   isActive = true,
 }: {
@@ -108,47 +65,26 @@ export function NotebookFolderView({
   createFolderRequest?: NotebookFolderCreateRequest | null;
   createNoteRequest?: NotebookNoteCreateRequest | null;
   onCreateFolder?: () => void;
-  sort: SortType;
   onCreateNote?: (parentPath: string, title: string) => Promise<void> | void;
-  hiddenListFolders?: string[];
-  onToggleListFolderVisibility?: (folderPath: string) => void;
+  defaultCreateFolder?: string | null;
   onSetDefaultCreateFolder?: (folderPath: string) => void;
   isActive?: boolean;
 }) {
   const { t } = useI18n();
-  const showHiddenNotebookFiles = useShowHiddenNotebookFiles();
-  const showAgentsFile = useShowNotebookAgentsFile();
   const tree = useFolderTree(notebook.path, {
-    includeHiddenDirectories: showHiddenNotebookFiles,
-    showAgentsFile,
+    enabled: isActive,
   });
   const noteTree = useMemo(() => {
     if (!isActive) return tree;
     return {
       ...tree,
-      rootChildren: sortNotebookTreeItems(
-        tree.rootChildren.filter((item) => isNotebookTreeItemVisible(
-          item,
-          notebook.path,
-          showHiddenNotebookFiles,
-          showAgentsFile,
-        )),
-        sort,
-      ),
+      rootChildren: sortNotebookTreeItems(tree.rootChildren),
       nodes: new Map([...tree.nodes].map(([path, item]) => [
         path,
         item.children
           ? {
               ...item,
-              children: sortNotebookTreeItems(
-                item.children.filter((child) => isNotebookTreeItemVisible(
-                  child,
-                  notebook.path,
-                  showHiddenNotebookFiles,
-                  showAgentsFile,
-                )),
-                sort,
-              ),
+                children: sortNotebookTreeItems(item.children),
             }
           : item,
       ])),
@@ -156,9 +92,6 @@ export function NotebookFolderView({
   }, [
     isActive,
     notebook.path,
-    showHiddenNotebookFiles,
-    showAgentsFile,
-    sort,
     tree.rootChildren,
     tree.nodes,
     tree.expanded,
@@ -177,6 +110,10 @@ export function NotebookFolderView({
   const refreshDirectoriesRef = useRef(tree.refreshDirectories);
   refreshDirectoriesRef.current = tree.refreshDirectories;
 
+  useEffect(() => subscribe<{ notebookId: string }>('file-management-changed', ({ notebookId }) => {
+    if (isActive && notebookId === notebook.id) void tree.reload();
+  }), [isActive, notebook.id, tree.reload]);
+
   useEffect(() => {
     if (!isActive) return;
     let disposed = false;
@@ -191,10 +128,7 @@ export function NotebookFolderView({
       },
     );
 
-    void files.watchRoot(notebook.path, {
-      ignoreHidden: !showHiddenNotebookFiles,
-      ignoreAgents: !showAgentsFile,
-    })
+    void files.watchRoot(notebook.path)
       .then((nextLeaseId) => {
         if (disposed) {
           void files.unwatchRoot(nextLeaseId).catch(() => undefined);
@@ -211,7 +145,7 @@ export function NotebookFolderView({
       unlisten();
       if (leaseId) void files.unwatchRoot(leaseId).catch(() => undefined);
     };
-  }, [isActive, notebook.path, showHiddenNotebookFiles, showAgentsFile]);
+  }, [isActive, notebook.path]);
 
   const openFile = useCallback(async (filePath: string) => {
     const startedAt = performance.now();
@@ -291,7 +225,7 @@ export function NotebookFolderView({
         const isMarkdownNote = source.resourceKind === 'note'
           || /\.(md|markdown)$/i.test(sourcePath);
         if (isMarkdownNote) {
-          const moved = await memos.moveMemoToDirectory(
+          const moved = await notes.moveToDirectory(
             sourcePath,
             notebook.id,
             parentRelativePath,
@@ -321,22 +255,21 @@ export function NotebookFolderView({
     toast.success(t('memo.fileTree.deleted', { name: folderPath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? folderPath }));
   }, [notebook.path, t, tree.refresh]);
 
-  const deleteResource = useCallback(async (item: DocTreeItem) => {
+  const deleteFile = useCallback(async (item: DocTreeItem) => {
     const kind = item.resourceKind ?? resourceKindFromPath(item.name);
-    if (kind !== 'image' && kind !== 'video') return;
-    const ok = await mediaResources.delete(item.fullPath, notebook.path);
+    if (kind === 'note') return;
+    const isMedia = kind === 'image' || kind === 'video';
+    const ok = isMedia
+      ? await mediaResources.delete(item.fullPath, notebook.path)
+      : await files.delete(item.fullPath, notebook.path);
     if (!ok) {
-      toast.error(t('media.fileTree.deleteFailed'));
+      toast.error(t(isMedia ? 'media.fileTree.deleteFailed' : 'memo.fileTree.deleteFailed'));
       return;
     }
     const parent = parentDirectoryPath(item.fullPath, notebook.path);
     await tree.refresh(parent);
-    toast.success(t('media.fileTree.deleted', { name: item.name }));
+    toast.success(t(isMedia ? 'media.fileTree.deleted' : 'memo.fileTree.deleted', { name: item.name }));
   }, [notebook.path, t, tree.refresh]);
-
-  // MemoList remains mounted while the middle column shows conversations.
-  // Avoid retaining a large hidden tree in the DOM while it is inactive.
-  if (!isActive) return null;
 
   return (
     <NotebookFileTree
@@ -345,8 +278,8 @@ export function NotebookFolderView({
       notebookPath={notebook.path}
       activeFilePath={activeFilePath}
       tree={noteTree}
-      hiddenListFolders={hiddenListFolders}
-      onToggleListFolderVisibility={onToggleListFolderVisibility}
+      isActive={isActive}
+      defaultCreateFolder={defaultCreateFolder}
       onSetDefaultCreateFolder={onSetDefaultCreateFolder}
       createFolderRequest={createFolderRequest}
       createNoteRequest={createNoteRequest}
@@ -363,7 +296,7 @@ export function NotebookFolderView({
       onCreateNote={(parentPath, title) => onCreateNote?.(parentPath, title)}
       onMoveNote={moveItem}
       onDeleteFolder={deleteFolder}
-      onDeleteResource={deleteResource}
+      onDeleteFile={deleteFile}
     />
   );
 }

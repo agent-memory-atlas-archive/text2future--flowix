@@ -33,7 +33,7 @@
 	--frame-bg: var(--background);
 	/* foreground: L 从原 0.215 提到 0.300, chroma 从 0.038 降到 0.009
 	 * — 原值在白底上读作"被蓝灰染过的深字", 偏色相; 降 chroma 后
-	 * 读作"中性墨", 与 rock/mist 一致. */
+	 * 读作"中性墨", 与 rock 一致. */
 	--foreground: oklch(0.300 0.009 var(--neutral-hue));
 	--card: #ffffff;
 	--list-bg: var(--card);
@@ -96,7 +96,7 @@
 	 * var(--foreground)), chip 的浅灰单独承担 tag 视觉信号. */
 	--document-tag-bg: oklch(0.95 0 0);
 	--document-tag-foreground: var(--foreground);
-	/* memo color: 借鉴 rock/mist 的"pastel 档" (chroma 0.090~0.150),
+	/* memo color: 借鉴 rock 的"pastel 档" (chroma 0.090~0.150),
 	 * 在白底上读作"柔色块", 不抢 brand 焦点. hue 身份稳定, 跨主题切换
 	 * 时色彩识别一致. gray 用 var(--neutral-hue) 派生, 与其他主题同步. */
 	--memo-color-red:    oklch(64% 0.140 25);

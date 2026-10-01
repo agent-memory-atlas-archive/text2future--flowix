@@ -18,7 +18,7 @@ import { buildInitialInstanceRuntimeConfig } from '@features/agent/store/initial
 import { useWorkspaceRestoreStore } from '@features/workspace/store/workspace-restore-store';
 import { selectAndOpenAgentConversation } from '@features/workspace/use-cases/agent-conversation-navigation';
 import { openBrowserColumnAgentConversation } from '@features/workspace/use-cases/browser-column-navigation';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { agentClient } from '@features/agent/store/agent-client';
 import { isAgentConversationRunning } from '@features/agent/store/conversation-run-index';
 import { useAgentRuntimeStore } from '@features/agent/store/agent-runtime-store';
@@ -94,6 +94,9 @@ type ConversationListItem = FixedVirtualListItem & (
   | {
       kind: 'loading';
     }
+  | {
+      kind: 'more-error';
+    }
 );
 
 // 日期分组标题文案 key ── 用 as const 让每个 value 都是字面量 I18nKey, 直接喂 t()
@@ -139,7 +142,7 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
   const agentRuntimeStatusByType = useAgentRuntimeStore((state) => state.statusByType);
   const agentRuntimeIsChecking = useAgentRuntimeStore((state) => state.isChecking);
   const refreshAgentRuntimeIfStale = useAgentRuntimeStore((state) => state.refreshIfStale);
-  const currentNotebookId = useMemoStore((state) => state.selectedNotebook?.id ?? null);
+  const currentNotebookId = useNoteStore((state) => state.selectedNotebook?.id ?? null);
   const selectedInstanceId = useWorkspaceRestoreStore(
     (state) => state.agentConversation.selectedInstanceId,
   );
@@ -150,12 +153,16 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
     EMPTY_CONVERSATION_PAGE_STATE,
   );
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [firstPageRetry, setFirstPageRetry] = useState(0);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [agentTypeCounts, setAgentTypeCounts] = useState<Readonly<Record<string, number>>>({});
   const nextCursorRef = useRef<AgentConversationCursor | null>(null);
   const listQueryKeyRef = useRef('');
   const loadingMoreRef = useRef(false);
+  const requestSequenceRef = useRef(0);
   const [filterType, setFilterType] = useState<AgentTypeKey | null>(null);
   const [showScrollTopHint, setShowScrollTopHint] = useState(false);
   const latestCompletedRunIds = useAgentSessionStore((state) => state.latestCompletedRunIds);
@@ -270,10 +277,20 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
     let active = true;
     const queryKey = `${currentNotebookId ?? ''}\u001f${filterType ?? ''}`;
     const query = { notebookId: currentNotebookId, agentType: filterType, cursor: null } as const;
+    const queryChanged = listQueryKeyRef.current !== queryKey;
+    // Invalidate any in-flight page request before starting a new first page.
+    // A stale request must not append rows or clear the new query's loading UI.
+    requestSequenceRef.current += 1;
+    loadingMoreRef.current = false;
+    setIsLoadingMore(false);
     listQueryKeyRef.current = queryKey;
     nextCursorRef.current = null;
-    setConversationPage(EMPTY_CONVERSATION_PAGE_STATE);
-    setHasMore(true);
+    if (queryChanged) {
+      setConversationPage(EMPTY_CONVERSATION_PAGE_STATE);
+      setHasMore(true);
+      setLoadMoreError(false);
+    }
+    setLoadError(false);
     // Lifecycle changes can trigger a fresh first page after the view is
     // mounted, keeping deletion/archive state aligned with the backend.
     setIsLoading(true);
@@ -289,6 +306,7 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
       })
       .catch((error) => {
         logger.error('failed to load conversations', { error });
+        if (active) setLoadError(true);
       })
       .finally(() => {
         if (active) setIsLoading(false);
@@ -296,7 +314,7 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
     return () => {
       active = false;
     };
-  }, [currentNotebookId, filterType, lifecycleVersion]);
+  }, [currentNotebookId, filterType, lifecycleVersion, firstPageRetry]);
 
   // Facets stay small even when the conversation history is large. This lets
   // the agent filter describe the complete notebook while the conversation
@@ -318,18 +336,23 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
     };
   }, [currentNotebookId, lifecycleVersion]);
 
-  const loadMoreConversations = useCallback(async () => {
-    if (loadingMoreRef.current || !hasMore) return;
+  const loadMoreConversations = useCallback(async (retry = false) => {
+    if (loadingMoreRef.current || !hasMore || isLoading || loadError || (loadMoreError && !retry)) return;
     loadingMoreRef.current = true;
     setIsLoadingMore(true);
+    setLoadMoreError(false);
     const queryKey = `${currentNotebookId ?? ''}\u001f${filterType ?? ''}`;
+    const requestSequence = ++requestSequenceRef.current;
     try {
       const query = { notebookId: currentNotebookId, agentType: filterType, cursor: nextCursorRef.current };
       const { items, hasMore: nextHasMore, nextCursor } = await agentClient.listConversationInstancesPage(
         query,
         CONVERSATION_PAGE_SIZE,
       );
-      if (listQueryKeyRef.current !== queryKey) return;
+      if (
+        listQueryKeyRef.current !== queryKey
+        || requestSequenceRef.current !== requestSequence
+      ) return;
       nextCursorRef.current = nextCursor;
       setHasMore(nextHasMore);
       setConversationPage((current) => mergeConversationPage(
@@ -338,11 +361,17 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
       ));
     } catch (error) {
       logger.error('failed to load more conversations', { error });
+      if (
+        listQueryKeyRef.current === queryKey
+        && requestSequenceRef.current === requestSequence
+      ) setLoadMoreError(true);
     } finally {
-      loadingMoreRef.current = false;
-      setIsLoadingMore(false);
+      if (requestSequenceRef.current === requestSequence) {
+        loadingMoreRef.current = false;
+        setIsLoadingMore(false);
+      }
     }
-  }, [currentNotebookId, filterType, hasMore]);
+  }, [currentNotebookId, filterType, hasMore, isLoading, loadError, loadMoreError]);
 
   const conversations = useMemo(() => {
     // The backend snapshot is the durable source of truth. An editor card is
@@ -476,9 +505,11 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
     });
     if (isLoadingMore) {
       items.push({ kind: 'loading', key: 'loading-more', size: 36 });
+    } else if (loadMoreError) {
+      items.push({ kind: 'more-error', key: 'loading-more-error', size: 52 });
     }
     return items;
-  }, [conversationSections, isLoadingMore]);
+  }, [conversationSections, isLoadingMore, loadMoreError]);
 
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const {
@@ -614,7 +645,7 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
     <section className="relative flex h-full min-h-0 flex-1 flex-col bg-[var(--list-bg)]" aria-label={t('memo.navigation.conversations')}>
       {/* 标题行 ── 与 MemoList / FolderFileTree 共用同一套中间列头部结构:
           左侧标题占据剩余空间, 右侧保留本列表自己的筛选控件。 */}
-      <div className="flex items-center justify-between gap-2 pb-2 pl-[74px] pr-3">
+      <div className="flex items-center justify-between gap-2 pb-2 pl-[100px] pr-3">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <span className="min-w-0 truncate text-[15px] font-medium text-[var(--foreground)]">
               {t('memo.navigation.conversations')}
@@ -714,12 +745,12 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
             const target = event.currentTarget;
             onVirtualListScroll(event);
             setShowScrollTopHint(target.scrollTop > 0);
-            if (hasMore && target.scrollTop + target.clientHeight >= target.scrollHeight - 80) {
+            if (hasMore && !isLoading && !loadError && !loadMoreError && target.scrollTop + target.clientHeight >= target.scrollHeight - 80) {
               void loadMoreConversations();
             }
           }}
         >
-          {isLoading ? (
+          {isLoading && scopedConversations.length === 0 ? (
             <div
               className="flex h-full min-h-0 w-full items-center justify-center gap-2 px-4 text-center text-sm text-[var(--muted-foreground)]"
               role="status"
@@ -728,11 +759,23 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
               <Loader2 className="h-4 w-4 animate-spin text-[var(--primary)]" aria-hidden="true" />
               <span>{t('status.agent.loadingConversations')}</span>
             </div>
+          ) : loadError && scopedConversations.length === 0 ? (
+            <div className="flex h-full min-h-0 w-full flex-col items-center justify-center gap-3 px-4 text-center text-sm text-[var(--muted-foreground)]" role="alert">
+              <span>{t('status.agent.loadConversationsFailed')}</span>
+              <Button size="sm" onClick={() => setFirstPageRetry((value) => value + 1)}>{t('error.retry')}</Button>
+            </div>
           ) : scopedConversations.length === 0 ? (
             <div className="flex h-full w-full items-center justify-center px-4 text-center text-sm text-[var(--muted-foreground)]">
               {t('status.agent.noConversations')}
             </div>
           ) : (
+            <>
+            {(loadError || isLoading) && (
+              <div className="flex items-center justify-center gap-2 px-2 py-1 text-xs text-[var(--muted-foreground)]" role={loadError ? 'alert' : 'status'}>
+                <span>{loadError ? t('status.agent.loadConversationsFailed') : t('status.agent.loadingConversations')}</span>
+                {loadError && <Button size="xs" variant="ghost" onClick={() => setFirstPageRetry((value) => value + 1)}>{t('error.retry')}</Button>}
+              </div>
+            )}
             <div className="relative min-h-full" style={{ height: totalSize }}>
               {virtualItems.map(({ item, start, size }) => {
                 if (item.kind === 'heading') {
@@ -764,6 +807,20 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
                   );
                 }
 
+                if (item.kind === 'more-error') {
+                  return (
+                    <div
+                      key={item.key}
+                      className="absolute inset-x-0 top-0 flex items-center justify-center gap-2 text-xs text-[var(--muted-foreground)]"
+                      style={{ height: size, transform: `translateY(${start}px)` }}
+                      role="alert"
+                    >
+                      <span>{t('status.agent.loadConversationsFailed')}</span>
+                      <Button size="xs" variant="ghost" onClick={() => void loadMoreConversations(true)}>{t('error.retry')}</Button>
+                    </div>
+                  );
+                }
+
                 const instance = item.instance;
                 const agent = getAgentType(instance.agentType);
                 const selected = instance.instanceId === selectedInstanceId;
@@ -788,21 +845,23 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
                           className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left text-[var(--foreground)]"
                         >
                         <span className={cn(
-                          'flex h-4 w-4 shrink-0 items-center justify-center rounded-full',
+                          'relative flex h-4 w-4 shrink-0 items-center justify-center rounded-full',
                           running && 'agent-conversation-list__icon--running',
                         )}>
                           <AgentIcon typeKey={agent.key} alt="" className="h-4 w-4 object-contain" />
+                          {(running || (!!instance.threadId
+                            && latestCompletedRunIds[instance.threadId] !== readThroughRunIds[instance.threadId]
+                            && !(conversationDetailOpen && selectedInstanceId === instance.instanceId))) && (
+                            <span
+                              aria-hidden="true"
+                              className={cn(
+                                'absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 rounded-full',
+                                running ? 'bg-[var(--success)]' : 'bg-[var(--muted-foreground)]',
+                              )}
+                            />
+                          )}
                         </span>
-                        {running ? (
-                          // 绿色: agent 正在运行
-                          <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--success)]" />
-                        ) : !!instance.threadId
-                          && latestCompletedRunIds[instance.threadId] !== readThroughRunIds[instance.threadId]
-                          && !(conversationDetailOpen && selectedInstanceId === instance.instanceId) ? (
-                          // 灰色: 刚跑完、本次会话内用户还没点进去过
-                          <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--muted-foreground)]" />
-                        ) : null}
-                        <span className="agent-conversation-list__title min-w-0 flex-1 select-none text-sm font-normal">
+                        <span className={cn('agent-conversation-list__title min-w-0 flex-1 select-none text-sm font-normal', selected ? 'opacity-100' : 'opacity-80')}>
                           {instance.title?.trim() || t('common.untitled')}
                         </span>
                         <time className="shrink-0 text-xs text-[var(--muted-foreground)] group-hover:hidden" dateTime={new Date(instance.updatedAt).toISOString()}>
@@ -874,12 +933,13 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
                 );
               })}
             </div>
+            </>
           )}
         </OverlayScrollbar>
         <div
           aria-hidden="true"
           className={cn(
-            'pointer-events-none absolute inset-x-0 top-0 z-[3] h-3 bg-gradient-to-b from-[color-mix(in_oklch,var(--foreground)_3%,transparent)] to-transparent transition-opacity duration-200',
+            'pointer-events-none absolute inset-x-0 top-0 z-[3] h-6 bg-gradient-to-b from-[var(--list-bg)] to-transparent transition-opacity duration-200',
             showScrollTopHint ? 'opacity-100' : 'opacity-0',
           )}
         />

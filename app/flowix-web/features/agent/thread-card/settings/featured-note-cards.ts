@@ -2,7 +2,7 @@ import { system } from "@platform/tauri/client";
 import { getPropertyIconOption } from "@features/document/properties/property-icons";
 import { getNotebookIconMarkup } from "@features/memo/components/notebook-icon";
 import type { MemoItem } from "@/types/memo-item";
-import type { PathNoteEntry } from "@platform/tauri/client/memos";
+import type { NoteEntry } from "@platform/tauri/client/notes";
 
 // Keep one row visible: one or two cards are centered, three fill the row,
 // and any additional cards move to the next page.
@@ -284,7 +284,7 @@ export function getFeaturedNoteCards(
 }
 
 export function getFeaturedPathNoteCards(
-  notes: PathNoteEntry[],
+  notes: NoteEntry[],
   config: FeaturedNoteFilterConfig = DEFAULT_FEATURED_NOTE_FILTER_CONFIG,
 ): FeaturedNoteCard[] {
   const { conditions } = normalizeFeaturedNoteFilterConfig(config);

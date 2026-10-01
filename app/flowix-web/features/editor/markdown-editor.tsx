@@ -945,7 +945,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           const { selection } = editor.state;
           if (!(selection instanceof TextSelection) || !selection.empty) return false;
 
-          if (event.key === 'ArrowUp' && selection.from === getEditableBodyStart(editor).position + 1) {
+          if ((event.key === 'ArrowUp' || event.key === 'ArrowLeft')
+            && selection.from === getEditableBodyStart(editor).position + 1) {
             event.preventDefault();
             onFocusTitleRef.current?.();
             return true;

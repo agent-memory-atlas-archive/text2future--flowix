@@ -64,7 +64,6 @@ pub async fn open_preferences_window(
         Theme::Light => Some("light"),
         Theme::Dark => Some("dark"),
         Theme::Rock => Some("rock"),
-        Theme::Mist => Some("mist"),
         Theme::Ember => Some("ember"),
     };
     let base = match boot_theme {

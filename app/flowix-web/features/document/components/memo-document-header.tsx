@@ -71,11 +71,11 @@ export function MemoDocumentHeader({
   titleRef,
 }: MemoDocumentHeaderProps) {
   const language = useAppLanguage();
-  const dateLine = updatedAt ? (
+  const dateLine = (
     <div className="memo-date-line">
-      {formatDocumentDateTime(updatedAt, language)}
+      {updatedAt ? formatDocumentDateTime(updatedAt, language) : null}
     </div>
-  ) : null;
+  );
   const titleEditor = (
     <MemoTitleEditor
       ref={titleRef}
@@ -97,7 +97,7 @@ export function MemoDocumentHeader({
   if (sourceMode) {
     return (
       <>
-        {dateLine && <div className="source-document-date-row">{dateLine}</div>}
+        <div className="source-document-date-row">{dateLine}</div>
         <div className="source-document-title-row">
           <div className="memo-document-header">{titleEditor}</div>
         </div>

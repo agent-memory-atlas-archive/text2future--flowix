@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::Manager;
+use tauri::{AppHandle, Emitter, Manager};
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,7 @@ use tauri::{State, WebviewWindow};
 
 use crate::config::path_is_inside;
 use crate::lock_utils::read_lock;
-use flowix_core::memo_file::{media_kind_for_path, notebook_path_from_relative, MemoColor};
+use flowix_core::memo_file::{notebook_path_from_relative, FileManagementPolicy, MemoColor};
 
 use super::helpers::{
     can_access_document_path, can_access_scoped_file, is_agent_access_folder,
@@ -157,23 +158,6 @@ fn resource_kind_for_path(path: &Path) -> Option<DocTreeResourceKind> {
     Some(DocTreeResourceKind::Other)
 }
 
-/// Hide legacy media-property YAML files from the notebook tree. New media
-/// properties are stored in `.flowix/notebook.db`; this keeps old files from
-/// becoming visible after upgrading.
-fn is_media_properties_sidecar(path: &Path) -> bool {
-    let is_yaml = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("yaml"));
-    if !is_yaml {
-        return false;
-    }
-    let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
-        return false;
-    };
-    media_kind_for_path(Path::new(stem)).is_some()
-}
-
 fn canonical_path(path: &Path) -> std::path::PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
@@ -242,8 +226,14 @@ fn memo_tree_metadata_for_directory(
 fn read_dir_single_level(
     dir_path: &Path,
     memo_metadata: Option<&HashMap<std::path::PathBuf, MemoTreeMetadata>>,
-    include_hidden_directories: bool,
-    show_agents_file: bool,
+) -> Vec<DocTreeItem> {
+    read_dir_single_level_with_policy(dir_path, memo_metadata, None)
+}
+
+fn read_dir_single_level_with_policy(
+    dir_path: &Path,
+    memo_metadata: Option<&HashMap<std::path::PathBuf, MemoTreeMetadata>>,
+    policy: Option<(&Path, &FileManagementPolicy)>,
 ) -> Vec<DocTreeItem> {
     let mut items = Vec::new();
 
@@ -259,28 +249,29 @@ fn read_dir_single_level(
             }
             let name = entry.file_name().to_string_lossy().to_string();
 
+            if let Some((root, rules)) = policy {
+                if path.strip_prefix(root).is_ok_and(|relative| rules.is_ignored_at(root, relative)) {
+                    continue;
+                }
+            }
+
             // .flowix is application-owned notebook data. It stays hidden
             // even when the user opts into hidden directories.
             if name == ".flowix" {
                 continue;
             }
 
-            if is_media_properties_sidecar(&path) {
+            // Non-notebook file browser roots use the same default visibility
+            // for AGENTS.md; notebook roots are filtered by FileManagementPolicy.
+            if policy.is_none() && name == "AGENTS.md" {
                 continue;
             }
 
-            // AGENTS.md remains on disk for native Agent runtimes to load;
-            // visibility is controlled by the user preference.
-            if name == "AGENTS.md" && !show_agents_file {
-                continue;
-            }
-
-            // Hidden files remain hidden. The notebook tree can opt into
-            // hidden directories so Markdown files below them can be loaded,
-            // but dot-files themselves are never tree items.
+            // FileManagementPolicy controls notebook paths. External browser
+            // roots keep hidden paths out of the tree by default.
             let meta = fs::metadata(&path).ok();
             let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
-            if name.starts_with('.') && (!is_dir || !include_hidden_directories) {
+            if policy.is_none() && name.starts_with('.') {
                 continue;
             }
 
@@ -344,14 +335,27 @@ fn read_dir_single_level(
     items
 }
 
+fn notebook_policy_for_path(state: &AppState, path: &Path) -> Option<(std::path::PathBuf, FileManagementPolicy)> {
+    let memo_file = read_lock(&state.memo_file, "memo_file");
+    let root = memo_file.registered_notebook_paths().into_iter()
+        .filter(|root| path.starts_with(root))
+        .max_by_key(|root| root.components().count())?;
+    let policy = FileManagementPolicy::from_notebook_root(&root);
+    Some((root, policy))
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NotebookViewPreferences {
     #[serde(default)]
-    pub hidden_list_folders: Vec<String>,
-    #[serde(default)]
     pub default_create_folder: Option<String>,
+    #[serde(default)]
+    pub file_management: FileManagementPolicy,
+    #[serde(default, skip_deserializing, skip_serializing_if = "is_false")]
+    pub refresh_pending: bool,
 }
+
+fn is_false(value: &bool) -> bool { !*value }
 
 fn notebook_preferences_path(root: &Path) -> Result<std::path::PathBuf, String> {
     let flowix_dir = root.join(".flowix");
@@ -384,7 +388,42 @@ fn read_notebook_view_preferences(root: &Path) -> NotebookViewPreferences {
     serde_json::from_slice(&bytes).unwrap_or_default()
 }
 
-fn normalize_hidden_list_folders(folders: Vec<String>) -> Result<Vec<String>, String> {
+pub(crate) fn migrate_legacy_watcher_rules(
+    root: &Path,
+    config: &crate::watcher::WhitelistConfig,
+) -> Result<(), String> {
+    static MIGRATION_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = MIGRATION_LOCK.lock().map_err(|_| "FILE_MANAGEMENT_MIGRATION_LOCK_FAILED")?;
+    let mut preferences = read_notebook_view_preferences(root);
+    if preferences.file_management.legacy_watcher_migrated { return Ok(()); }
+    let policy = &mut preferences.file_management;
+    policy.legacy_skip_dirs = config.skip_dirs.iter()
+        .filter(|name| !matches!(name.as_str(), ".flowix" | ".plugin-output" | ".git" | ".DS_Store" | "node_modules" | ".cache" | ".trash" | "attachments" | "attachments-cache"))
+        .cloned().collect();
+    policy.legacy_skip_files = config.skip_files.iter()
+        .filter(|name| !matches!(name.as_str(), "*.tmp" | "*.swp" | "*~" | ".DS_Store" | "Thumbs.db" | "*.bak" | "*.lock"))
+        .cloned().collect();
+    policy.legacy_watcher_migrated = true;
+    let path = notebook_preferences_path(root)?;
+    fs::create_dir_all(path.parent().ok_or("INVALID_NOTEBOOK_CONFIG_DIRECTORY")?)
+        .map_err(|error| error.to_string())?;
+    if !policy.legacy_skip_dirs.is_empty() || !policy.legacy_skip_files.is_empty() {
+        flowix_core::memo_file::atomic_write_bytes(
+            &root.join(".flowix/file-management-refresh-pending"), b"pending",
+        ).map_err(|error| error.to_string())?;
+    }
+    let bytes = serde_json::to_vec_pretty(&preferences).map_err(|error| error.to_string())?;
+    flowix_core::memo_file::atomic_write_bytes(&path, &bytes).map_err(|error| error.to_string())?;
+    let database = root.join(".flowix/notebook.db");
+    if database.is_file() {
+        if let Ok(connection) = rusqlite::Connection::open(database) {
+            let _ = connection.execute("DELETE FROM document_list_meta WHERE key='version'", []);
+        }
+    }
+    Ok(())
+}
+
+fn normalize_relative_folder_paths(folders: Vec<String>) -> Result<Vec<String>, String> {
     let mut normalized = Vec::new();
     for folder in folders {
         let trimmed = folder.trim_matches('/');
@@ -410,12 +449,107 @@ fn normalize_hidden_list_folders(folders: Vec<String>) -> Result<Vec<String>, St
 pub fn get_notebook_view_preferences(
     notebook_path: String,
     state: State<AppState>,
+    app: AppHandle,
 ) -> Result<NotebookViewPreferences, String> {
     let root = Path::new(&notebook_path);
     if !is_registered_notebook_root(root, &state) {
         return Err("NOTEBOOK_NOT_REGISTERED".to_string());
     }
-    Ok(read_notebook_view_preferences(root))
+    migrate_legacy_watcher_rules(root, &state.user_config.get_preference().watcher)?;
+    if root.join(".flowix/file-management-refresh-pending").exists() {
+        if let Ok(canonical_root) = fs::canonicalize(root) {
+            let _ = refresh_file_management_indexes(&canonical_root, &state, &app);
+        }
+    }
+    let mut preferences = read_notebook_view_preferences(root);
+    preferences.refresh_pending = root.join(".flowix/file-management-refresh-pending").exists();
+    Ok(preferences)
+}
+
+fn refresh_file_management_indexes(root: &Path, state: &AppState, app: &AppHandle) -> Result<(), String> {
+    let memo_file = read_lock(&state.memo_file, "memo_file");
+    let notebook = memo_file.read_notebook_configs()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|notebook| fs::canonicalize(&notebook.path).ok().as_deref() == Some(root))
+        .ok_or("NOTEBOOK_NOT_REGISTERED")?;
+    memo_file.reconcile_note_index(&notebook.id)
+        .map_err(|error| format!("refresh note index failed: {error}"))?;
+    memo_file.reconcile_media_resources(&notebook.id)
+        .map_err(|error| format!("refresh media index failed: {error}"))?;
+    let database = memo_file.notebook_db_path(&notebook.id)
+        .map_err(|error| error.to_string())?;
+    let connection = rusqlite::Connection::open(database)
+        .map_err(|error| format!("open document index failed: {error}"))?;
+    connection.execute("DELETE FROM document_list_meta WHERE key='version'", [])
+        .map_err(|error| format!("invalidate document index failed: {error}"))?;
+    fs::remove_file(root.join(".flowix/file-management-refresh-pending"))
+        .map_err(|error| format!("clear index refresh marker failed: {error}"))?;
+    let _ = app.emit("file-management-changed", serde_json::json!({
+        "notebookId": notebook.id,
+        "notebookPath": root.to_string_lossy(),
+    }));
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileManagementCandidate {
+    relative_path: String,
+    is_directory: bool,
+    locked: bool,
+}
+
+/// Show concrete ignored entries. Descendants of an ignored directory become
+/// discoverable after that directory is included, avoiding scans of .git and
+/// dependency trees just to render Preferences.
+#[tauri::command]
+pub fn get_file_management_candidates(
+    notebook_path: String,
+    state: State<AppState>,
+) -> Result<Vec<FileManagementCandidate>, String> {
+    let root = Path::new(&notebook_path);
+    if !is_registered_notebook_root(root, &state) {
+        return Err("NOTEBOOK_NOT_REGISTERED".to_string());
+    }
+    migrate_legacy_watcher_rules(root, &state.user_config.get_preference().watcher)?;
+    let policy = read_notebook_view_preferences(root).file_management;
+    let defaults = FileManagementPolicy::default();
+    let mut pending = vec![root.to_path_buf()];
+    let mut candidates = [".flowix", ".plugin-output"].into_iter()
+        .filter(|name| *name == ".flowix" || root.join(name).exists())
+        .map(|name| FileManagementCandidate {
+            relative_path: name.to_string(), is_directory: root.join(name).is_dir(), locked: true,
+        }).collect::<Vec<_>>();
+    while let Some(directory) = pending.pop() {
+        let entries = fs::read_dir(&directory).map_err(|error| error.to_string())?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(relative) = path.strip_prefix(root) else { continue; };
+            let Ok(metadata) = fs::symlink_metadata(&path) else { continue; };
+            if metadata.file_type().is_symlink() { continue; }
+            let is_directory = metadata.is_dir();
+            let name = Path::new(entry.file_name().as_os_str()).to_path_buf();
+            let own_name_ignored = defaults.is_ignored(&name)
+                || policy.matches_legacy_entry(&path)
+                || FileManagementPolicy::has_hidden_attribute(&path);
+            if FileManagementPolicy::is_locked_name(&entry.file_name().to_string_lossy()) {
+                continue;
+            }
+            if own_name_ignored {
+                candidates.push(FileManagementCandidate {
+                    relative_path: relative.to_string_lossy().replace('\\', "/"),
+                    is_directory,
+                    locked: false,
+                });
+            }
+            if is_directory && !policy.is_ignored_at(root, relative) {
+                pending.push(path);
+            }
+        }
+    }
+    candidates.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    Ok(candidates)
 }
 
 #[tauri::command]
@@ -423,6 +557,7 @@ pub fn set_notebook_view_preferences(
     notebook_path: String,
     preferences: NotebookViewPreferences,
     state: State<AppState>,
+    app: AppHandle,
 ) -> Result<(), String> {
     let root = Path::new(&notebook_path);
     if !is_registered_notebook_root(root, &state) {
@@ -430,6 +565,8 @@ pub fn set_notebook_view_preferences(
     }
     let root = fs::canonicalize(root)
         .map_err(|error| format!("resolve notebook directory failed: {error}"))?;
+    migrate_legacy_watcher_rules(&root, &state.user_config.get_preference().watcher)?;
+    let previous_policy = read_notebook_view_preferences(&root).file_management;
     let path = notebook_preferences_path(&root)?;
     let parent = path
         .parent()
@@ -437,13 +574,28 @@ pub fn set_notebook_view_preferences(
     fs::create_dir_all(parent)
         .map_err(|error| format!("create notebook config directory failed: {error}"))?;
     let preferences = NotebookViewPreferences {
-        hidden_list_folders: normalize_hidden_list_folders(preferences.hidden_list_folders)?,
         default_create_folder: normalize_default_create_folder(preferences.default_create_folder)?,
+        file_management: FileManagementPolicy {
+            included_paths: normalize_relative_folder_paths(preferences.file_management.included_paths)?,
+            legacy_skip_dirs: previous_policy.legacy_skip_dirs.clone(),
+            legacy_skip_files: previous_policy.legacy_skip_files.clone(),
+            legacy_watcher_migrated: previous_policy.legacy_watcher_migrated,
+        },
+        refresh_pending: false,
     };
     let bytes = serde_json::to_vec_pretty(&preferences)
         .map_err(|error| format!("serialize notebook preferences failed: {error}"))?;
+    let refresh_marker = root.join(".flowix/file-management-refresh-pending");
+    if previous_policy.included_paths != preferences.file_management.included_paths {
+        flowix_core::memo_file::atomic_write_bytes(&refresh_marker, b"pending")
+            .map_err(|error| format!("mark index refresh pending failed: {error}"))?;
+    }
     flowix_core::memo_file::atomic_write_bytes(&path, &bytes)
-        .map_err(|error| format!("write notebook preferences failed: {error}"))
+        .map_err(|error| format!("write notebook preferences failed: {error}"))?;
+    if refresh_marker.exists() {
+        refresh_file_management_indexes(&root, &state, &app)?;
+    }
+    Ok(())
 }
 
 fn normalize_default_create_folder(folder: Option<String>) -> Result<Option<String>, String> {
@@ -472,8 +624,6 @@ fn normalize_default_create_folder(folder: Option<String>) -> Result<Option<Stri
 #[tauri::command]
 pub fn get_file_tree(
     space_path: String,
-    include_hidden_directories: Option<bool>,
-    show_agents_file: Option<bool>,
     state: State<AppState>,
 ) -> Option<Vec<DocTreeItem>> {
     let path = Path::new(&space_path);
@@ -485,19 +635,17 @@ pub fn get_file_tree(
         return None;
     }
     let memo_metadata = memo_tree_metadata_for_directory(path, &state);
-    Some(read_dir_single_level(
+    let notebook_policy = notebook_policy_for_path(&state, path);
+    Some(read_dir_single_level_with_policy(
         path,
         memo_metadata.as_ref(),
-        include_hidden_directories.unwrap_or(false),
-        show_agents_file.unwrap_or(false),
+        notebook_policy.as_ref().map(|(root, policy)| (root.as_path(), policy)),
     ))
 }
 
 #[tauri::command]
 pub fn get_dir_children(
     dir_path: String,
-    include_hidden_directories: Option<bool>,
-    show_agents_file: Option<bool>,
     state: State<AppState>,
 ) -> Vec<DocTreeItem> {
     let path = Path::new(&dir_path);
@@ -509,11 +657,11 @@ pub fn get_dir_children(
         return vec![];
     }
     let memo_metadata = memo_tree_metadata_for_directory(path, &state);
-    read_dir_single_level(
+    let notebook_policy = notebook_policy_for_path(&state, path);
+    read_dir_single_level_with_policy(
         path,
         memo_metadata.as_ref(),
-        include_hidden_directories.unwrap_or(false),
-        show_agents_file.unwrap_or(false),
+        notebook_policy.as_ref().map(|(root, policy)| (root.as_path(), policy)),
     )
 }
 
@@ -648,7 +796,7 @@ pub fn delete_folder(folder_path: String, space_path: String, state: State<AppSt
                     == canonical_scope
             })
         {
-            if let Err(error) = memo_file.reconcile_v2_note_index(&notebook.id) {
+            if let Err(error) = memo_file.reconcile_note_index(&notebook.id) {
                 tracing::warn!(notebook_id = %notebook.id, "V2 index refresh after folder deletion failed: {error}");
             }
         }
@@ -703,7 +851,7 @@ fn rename_path_and_notify(
                     .is_some_and(|path| path.starts_with(root))
             })
         }) {
-            if let Err(error) = mf.reconcile_v2_note_index(&config.id) {
+            if let Err(error) = mf.reconcile_note_index(&config.id) {
                 tracing::warn!(notebook_id = %config.id, "V2 index refresh after folder move failed: {error}");
             }
         }
@@ -1121,14 +1269,14 @@ mod tests {
         fs::create_dir(directory.path().join("folder")).unwrap();
         fs::create_dir(directory.path().join(".flowix")).unwrap();
         fs::write(directory.path().join(".hidden.md"), "hidden").unwrap();
-        let items = read_dir_single_level(directory.path(), None, false, false);
+        let items = read_dir_single_level(directory.path(), None);
         assert_eq!(items.len(), 2);
         assert!(items.iter().all(|item| item.name != "photo.png.yaml"));
         assert!(items.iter().all(|item| item.name != "AGENTS.md"));
         assert_eq!(items[0].name, "folder");
         assert_eq!(items[1].name, "note.md");
 
-        let hidden_items = read_dir_single_level(directory.path(), None, true, false);
+        let hidden_items = read_dir_single_level(directory.path(), None);
         assert!(hidden_items.iter().all(|item| item.name != ".flowix"));
     }
 
@@ -1139,7 +1287,7 @@ mod tests {
         fs::write(directory.path().join("video.mp4.yml"), "kind: demo").unwrap();
         fs::write(directory.path().join("config.yaml"), "enabled: true").unwrap();
 
-        let items = read_dir_single_level(directory.path(), None, false, false);
+        let items = read_dir_single_level(directory.path(), None);
         assert_eq!(
             items
                 .iter()
@@ -1168,7 +1316,7 @@ mod tests {
             },
         );
 
-        let items = read_dir_single_level(directory.path(), Some(&metadata), false, false);
+        let items = read_dir_single_level(directory.path(), Some(&metadata));
         assert_eq!(items[0].memo_created_ms, Some(42));
         let memo = items[0].memo_meta.as_ref().expect("indexed memo metadata");
         assert_eq!(memo.id, "memo-1");
@@ -1194,14 +1342,22 @@ mod tests {
     }
 
     #[test]
-    fn directory_listing_can_include_hidden_directories_but_not_dot_files() {
+    fn notebook_policy_can_include_hidden_directories_but_not_dot_files() {
         let directory = tempfile::tempdir().unwrap();
         let hidden = directory.path().join(".codex");
         fs::create_dir(&hidden).unwrap();
         fs::write(hidden.join("skill.md"), "skill").unwrap();
         fs::write(directory.path().join(".gitignore"), "ignored").unwrap();
 
-        let items = read_dir_single_level(directory.path(), None, true, false);
+        let policy = FileManagementPolicy {
+            included_paths: vec![".codex".to_string()],
+            ..Default::default()
+        };
+        let items = read_dir_single_level_with_policy(
+            directory.path(),
+            None,
+            Some((directory.path(), &policy)),
+        );
         assert_eq!(
             items
                 .iter()
@@ -1209,7 +1365,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![".codex"]
         );
-        let hidden_children = read_dir_single_level(&hidden, None, true, false);
+        let hidden_children = read_dir_single_level_with_policy(
+            &hidden,
+            None,
+            Some((directory.path(), &policy)),
+        );
         assert_eq!(hidden_children[0].name, "skill.md");
     }
 
@@ -1226,7 +1386,7 @@ mod tests {
         symlink(&outside, root.join("outside.md")).unwrap();
         symlink(root.join("missing"), root.join("dangling.md")).unwrap();
         symlink(root.join("note.md"), root.join("inside.md")).unwrap();
-        let names: Vec<_> = read_dir_single_level(&root, None, false, false)
+        let names: Vec<_> = read_dir_single_level(&root, None)
             .into_iter()
             .map(|item| item.name)
             .collect();

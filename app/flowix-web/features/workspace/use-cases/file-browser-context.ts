@@ -1,5 +1,6 @@
 import { getSelectedWorkspaceNotebookId } from '@features/memo/public/workspace-api';
 import { getWorkspaceAgentResourceFolders } from '@features/agent/public/workspace-api';
+import { externalFileViewKind } from '@features/editor/public/code-file';
 import { resolveFileBrowserRoot, type FileBrowserContext } from '../store/file-browser-target';
 
 /** Capture ownership once, independently of whichever notebook is selected later. */
@@ -15,6 +16,7 @@ export function captureFileBrowserContext(
   );
   return {
     notebookId, folderPath, scopePath: scopePath ?? resourceRoot,
-    fileTreeVisible: true, fileTreeWidth: 220,
+    fileTreeVisible: !filePath || externalFileViewKind(filePath) !== 'code',
+    fileTreeWidth: 220,
   };
 }

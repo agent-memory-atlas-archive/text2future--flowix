@@ -8,10 +8,11 @@ import {
   TreeStructureIcon,
 } from '@phosphor-icons/react';
 import { joinNotebookMemoPath } from '@/lib/path';
-import { useMemoStore } from '@features/memo/store/memo-store';
-import { memos, type PluginDescriptor } from '@platform/tauri/client';
+import { useNoteStore } from '@features/memo/store/note-store';
+import { notes, type PluginDescriptor } from '@platform/tauri/client';
 import { openBrowserColumnMarkdown } from '@features/workspace/use-cases/browser-column-navigation';
 import { AgentPluginWorkbench } from './plugin-agent-workbench';
+import { normalizePluginId } from './plugin-note';
 
 interface PluginWorkbenchProps {
   plugin: PluginDescriptor;
@@ -35,7 +36,7 @@ function ArtifactToolWorkbench({
   plugin,
   notebookPath,
 }: PluginWorkbenchProps) {
-  const selectedNotebook = useMemoStore((state) => state.selectedNotebook);
+  const selectedNotebook = useNoteStore((state) => state.selectedNotebook);
   const [documents, setDocuments] = useState<{ relativePath: string; title: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,8 +48,8 @@ function ArtifactToolWorkbench({
     setLoading(true);
     setError(null);
     try {
-      const indexed = await memos.listNotesByPath(selectedNotebook.id);
-      setDocuments(indexed.filter((note) => note.properties?.flowix_plugin === plugin.manifest.id
+      const indexed = await notes.list(selectedNotebook.id);
+      setDocuments(indexed.filter((note) => normalizePluginId(note.properties?.flowix_plugin) === plugin.manifest.id
         && !note.properties?.flowix_artifact)
         .map((note) => ({ relativePath: note.relativePath, title: note.title })));
     } catch (loadError) {

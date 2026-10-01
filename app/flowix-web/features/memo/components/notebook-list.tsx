@@ -12,7 +12,7 @@ import {
 import { canUseNativeContextMenu, logNativeContextMenuError, popupNativeContextMenu } from '@platform/tauri/native-context-menu';
 import { loadNativeMenuIcons } from '@platform/tauri/native-menu-icons';
 import { NotebookIcon } from '@features/memo/components/notebook-icon';
-import { useMemoStore, type Notebook } from '@features/memo/store/memo-store';
+import { useNoteStore, type Notebook } from '@features/memo/store/note-store';
 import { useI18n } from '@/lib/i18n';
 import {
   cloud,
@@ -64,8 +64,8 @@ export function NotebookList({
 }: NotebookListProps) {
   const { t } = useI18n();
   const experimental = useExperimentalMode();
-  const setNotebooks = useMemoStore((s) => s.setNotebooks);
-  const notebooksInitialized = useMemoStore((s) => s.notebooksInitialized);
+  const setNotebooks = useNoteStore((s) => s.setNotebooks);
+  const notebooksInitialized = useNoteStore((s) => s.notebooksInitialized);
   const [notebookPopupOpen, setNotebookPopupOpen] = useState(false);
   const cloudStateRequestRef = useRef(0);
 

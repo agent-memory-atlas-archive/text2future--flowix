@@ -717,11 +717,20 @@ pub fn write_output(
         if !path_is_inside(&output_path, &notebook) {
             return Err("mindmap path escaped notebook root".to_string());
         }
-        let document = flowix_plugin_runtime::serialize_path_plugin_document(
-            &plugin.manifest.id, &plugin.manifest.version,
-            &plugin.manifest.output.format, &plugin.manifest.output.renderer,
-            &clean, agent_type, source_note,
-        );
+        let document = if id == "mindmap" {
+            flowix_plugin_runtime::serialize_artifact_document(
+                &plugin.manifest.id,
+                &plugin.manifest.version,
+                &plugin.manifest.output.format,
+                &clean,
+            )
+        } else {
+            flowix_plugin_runtime::serialize_path_plugin_document(
+                &plugin.manifest.id, &plugin.manifest.version,
+                &plugin.manifest.output.format, &plugin.manifest.output.renderer,
+                &clean, agent_type, source_note,
+            )
+        };
         flowix_core::memo_file::atomic_write_bytes(&output_path, document.as_bytes())
             .map_err(|e| format!("write mindmap: {e}"))?;
         let relative_path = output_path.strip_prefix(&notebook)
@@ -733,7 +742,7 @@ pub fn write_output(
             .map(|config| config.id)
             .ok_or_else(|| "notebook path is not registered in Flowix".to_string())?;
         read_lock(memo_file, "memo_file")
-            .refresh_v2_note_path(&notebook_id, &relative_path)
+            .refresh_note_path(&notebook_id, &relative_path)
             .map_err(|e| format!("index mindmap: {e}"))?;
         if let Some(app_handle) = app_handle.as_ref() {
             crate::watcher::runtime::mark_self_write_for(app_handle, &output_path);

@@ -1,12 +1,12 @@
 import { invokeDocumentMutation } from './document-mutation';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import type { ThemeId } from '@/lib/theme';
-import type { MemoColor } from '@/types/memo-item';
+import type { NoteColor } from '@/types/note-item';
 
 export interface DocTreeMemoMeta {
   id: string;
   icon: string | null;
-  colors: MemoColor[];
+  colors: NoteColor[];
   favorited: boolean;
 }
 
@@ -46,25 +46,49 @@ export interface DocTreeItem {
 }
 
 export interface NotebookViewPreferences {
-  hiddenListFolders: string[];
   defaultCreateFolder: string | null;
+  fileManagement: { includedPaths: string[]; legacySkipDirs?: string[]; legacySkipFiles?: string[]; legacyWatcherMigrated?: boolean };
+  refreshPending?: boolean;
+}
+
+export interface DocumentPageItem {
+  fullPath: string;
+  name: string;
+  resourceKind: 'note' | 'image' | 'video' | 'other' | 'folder';
+  sizeBytes: number | null;
+  modifiedMs: number | null;
+  createdMs: number | null;
+}
+
+export interface DocumentPage {
+  folders: DocumentPageItem[];
+  items: DocumentPageItem[];
+  nextCursor: string | null;
+  hasMore: boolean;
 }
 
 export const files = {
-  getTree: (spacePath: string, includeHiddenDirectories = false, showAgentsFile = false) =>
-    invoke<DocTreeItem[] | null>('get_file_tree', { spacePath, includeHiddenDirectories, showAgentsFile }),
-  getDirChildren: (dirPath: string, includeHiddenDirectories = false, showAgentsFile = false) =>
-    invoke<DocTreeItem[]>('get_dir_children', { dirPath, includeHiddenDirectories, showAgentsFile }),
+  listDocumentPage: (request: {
+    notebookId: string;
+    folderPath: string;
+    resourceKinds?: string[];
+    customFilter?: { documentType: string; key: string; operator: string; value: string } | null;
+    cursor?: string | null;
+    limit?: number;
+    refreshDirectories?: string[];
+  }) => invoke<DocumentPage>('list_document_page', { request }),
+  getTree: (spacePath: string) =>
+    invoke<DocTreeItem[] | null>('get_file_tree', { spacePath }),
+  getDirChildren: (dirPath: string) =>
+    invoke<DocTreeItem[]>('get_dir_children', { dirPath }),
   getNotebookViewPreferences: (notebookPath: string) =>
     invoke<NotebookViewPreferences>('get_notebook_view_preferences', { notebookPath }),
+  getFileManagementCandidates: (notebookPath: string) =>
+    invoke<Array<{ relativePath: string; isDirectory: boolean; locked: boolean }>>('get_file_management_candidates', { notebookPath }),
   setNotebookViewPreferences: (notebookPath: string, preferences: NotebookViewPreferences) =>
     invoke<void>('set_notebook_view_preferences', { notebookPath, preferences }),
-  watchRoot: (rootPath: string, options?: { ignoreHidden?: boolean; ignoreAgents?: boolean }) =>
-    invoke<string>('watch_file_browser_root', {
-      rootPath,
-      ignoreHidden: options?.ignoreHidden ?? false,
-      ignoreAgents: options?.ignoreAgents ?? true,
-    }),
+  watchRoot: (rootPath: string) =>
+    invoke<string>('watch_file_browser_root', { rootPath }),
   unwatchRoot: (leaseId: string) => invoke<void>('unwatch_file_browser_root', { leaseId }),
   read: (filePath: string, spacePath?: string) => invoke<string | null>('read_file', { filePath, spacePath }),
   readImage: (filePath: string, spacePath?: string) => invoke<string | null>('read_image_file', { filePath, spacePath }),
@@ -142,6 +166,8 @@ export interface ExternalDocumentChangedEvent {
   path: string;
   kind: 'modified' | 'deleted';
   revision: string;
+  source?: 'user_edit' | 'external';
+  originWindowLabel?: string;
 }
 
 export interface FileBrowserDirectoriesChangedEvent {

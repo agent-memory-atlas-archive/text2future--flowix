@@ -127,10 +127,14 @@ if (targetPlatform === 'win32') {
 function collectFiles(root) {
   if (!existsSync(root)) return []
   const files = []
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const candidate = path.join(root, entry.name)
-    if (entry.isDirectory()) files.push(...collectFiles(candidate))
-    else if (entry.isFile()) files.push(candidate)
+  const pending = [root]
+  while (pending.length > 0) {
+    const directory = pending.pop()
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const candidate = path.join(directory, entry.name)
+      if (entry.isDirectory()) pending.push(candidate)
+      else if (entry.isFile()) files.push(candidate)
+    }
   }
   return files
 }

@@ -11,8 +11,8 @@ const { invoke, notebooks } = vi.hoisted(() => ({
   notebooks: [] as { id: string; name: string; path: string }[],
 }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
-vi.mock('@features/memo/store/memo-store', () => ({
-  useMemoStore: { getState: () => ({ notebooks, notebooksInitialized: true }) },
+vi.mock('@features/memo/store/note-store', () => ({
+  useNoteStore: { getState: () => ({ notebooks, notebooksInitialized: true }) },
 }));
 
 import { localDocumentOperations } from '@features/document/use-cases/local-document-operations';

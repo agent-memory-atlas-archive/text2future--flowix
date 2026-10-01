@@ -7,6 +7,7 @@ import {
 } from '@features/preferences/hooks/use-user-settings';
 import {
 	GeneralSection,
+	FileDisplayRulesSection,
 	FormatSection,
 	ThemeSection,
 	NoteSettingsSection,
@@ -59,14 +60,10 @@ function PlaceholderSection({ title, emptyText }: { title: string; emptyText: st
 
 function GeneralSettingsSection() {
 	const language = useUserSettings((settings) => settings.language);
-	const showHiddenNotebookFiles = useUserSettings((settings) => settings.showHiddenNotebookFiles);
-	const showNotebookAgentsFile = useUserSettings((settings) => settings.showNotebookAgentsFile);
 	const { updateSettings } = useUserSettingsActions();
 	return (
 		<GeneralSection
 			language={language}
-			showHiddenNotebookFiles={showHiddenNotebookFiles}
-			showNotebookAgentsFile={showNotebookAgentsFile}
 			updateSettings={updateSettings}
 		/>
 	);
@@ -178,6 +175,7 @@ export function PreferencesView({ initialTab }: PreferencesViewProps) {
 							{activeTab === 'general' && (
 								<GeneralSettingsSection />
 							)}
+							{activeTab === 'fileDisplayRules' && <FileDisplayRulesSection />}
 							{activeTab === 'format' && (
 								<FormatSettingsSection />
 							)}

@@ -34,8 +34,8 @@ const accessStateMock = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("@features/memo/store/memo-store", () => ({
-  useMemoStore: {
+vi.mock("@features/memo/store/note-store", () => ({
+  useNoteStore: {
     getState: () => ({
       selectedNotebook: memoStateMock.selectedNotebook,
     }),

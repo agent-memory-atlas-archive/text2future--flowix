@@ -227,10 +227,15 @@ pub async fn write_external_document(
                 };
 
                 let memo_file = read_lock(&state.memo_file, "memo_file");
+                watches.begin_window_write(&path);
                 let outcome = memo_file.write_file_if_matches(
                     &path,
                     &content,
                     expectedContent.as_deref(),
+                );
+                watches.finish_window_write(
+                    &app, window.label(), &path,
+                    matches!(&outcome, Ok(FileWriteOutcome::Saved)).then_some(content.as_str()),
                 );
                 match outcome {
                     Ok(FileWriteOutcome::Saved) => {
@@ -260,7 +265,6 @@ pub async fn write_external_document(
                         };
                     }
                 }
-                watches.acknowledge_window_write(window.label(), &path);
                 ExternalDocumentWriteOutcome::Saved {
                     path: path.to_string_lossy().to_string(),
                     content,

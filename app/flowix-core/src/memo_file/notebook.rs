@@ -1,22 +1,59 @@
 //! Notebook registry storage.
 //!
 //! The authoritative notebook registry lives in `index.db` under the user
-//! config directory (`~/.flowix/index.db` in production). It is created with
-//! schema on first call to `open_index_db` and read/written via SQLite.
+//! config directory (`~/.flowix/index.db` in production). Notebook-owned note
+//! and media data live separately in `<notebook>/.flowix/notebook.db`.
 
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
-
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 
 use super::file_io::atomic_write_bytes;
-use super::types::{NotebookConfig, NotebookManifest};
+use super::types::{
+    NotebookConfig, NotebookManifest, NotebookSetupJob, NotebookSetupJobStatus,
+};
+use super::types::NotebookSetupReport;
 use super::MemoFile;
 
 pub(super) fn sqlite_to_io(error: rusqlite::Error) -> std::io::Error {
     std::io::Error::other(error)
+}
+
+fn notebook_setup_status_as_str(status: NotebookSetupJobStatus) -> &'static str {
+    match status {
+        NotebookSetupJobStatus::Pending => "pending",
+        NotebookSetupJobStatus::Running => "running",
+        NotebookSetupJobStatus::Completed => "completed",
+        NotebookSetupJobStatus::Partial => "partial",
+        NotebookSetupJobStatus::Failed => "failed",
+    }
+}
+
+fn map_notebook_setup_job(row: &Row<'_>) -> rusqlite::Result<NotebookSetupJob> {
+    let status: String = row.get(2)?;
+    let status = match status.as_str() {
+        "pending" => NotebookSetupJobStatus::Pending,
+        "running" => NotebookSetupJobStatus::Running,
+        "completed" => NotebookSetupJobStatus::Completed,
+        "partial" => NotebookSetupJobStatus::Partial,
+        "failed" => NotebookSetupJobStatus::Failed,
+        _ => return Err(rusqlite::Error::InvalidQuery),
+    };
+    let completed_files: i64 = row.get(4)?;
+    let total_files: i64 = row.get(5)?;
+    let report_json: Option<String> = row.get(8)?;
+    Ok(NotebookSetupJob {
+        notebook_id: row.get(0)?,
+        template_id: row.get(1)?,
+        status,
+        stage: row.get(3)?,
+        completed_files: completed_files.max(0) as usize,
+        total_files: total_files.max(0) as usize,
+        message: row.get(6)?,
+        report: report_json.and_then(|json| serde_json::from_str::<NotebookSetupReport>(&json).ok()),
+        updated_at: row.get(7)?,
+    })
 }
 
 impl MemoFile {
@@ -93,25 +130,28 @@ impl MemoFile {
         Ok(manifest)
     }
 
-    /// Active notebook index path. Once a notebook-local database exists this
-    /// points at `<notebook>/.flowix/notebook.db`; before first use it falls
-    /// back to the legacy global path for compatibility with old callers.
-    pub fn get_index_db_path(&self) -> PathBuf {
-        if let Some(notebook_id) = self.current_notebook_id_value() {
-            if let Some(config) = self.get_notebook_config_by_id(&notebook_id) {
-                let local = PathBuf::from(config.path).join(".flowix/notebook.db");
-                if local.is_file() {
-                    return local;
-                }
-            }
+    /// Path-keyed note projection, media catalog and notebook-owned metadata.
+    pub fn notebook_db_path(&self, notebook_id: &str) -> std::io::Result<PathBuf> {
+        let notebook = self.get_notebook_config_by_id(notebook_id).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "notebook not found")
+        })?;
+        let root = PathBuf::from(notebook.path);
+        if !root.is_dir() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("notebook directory missing: {}", root.display()),
+            ));
         }
-        self.get_global_index_db_path()
+        let flowix_dir = root.join(".flowix");
+        fs::create_dir_all(&flowix_dir)?;
+        Ok(flowix_dir.join("notebook.db"))
     }
 
-    /// Device-local notebook registry database. Memo rows are never written
-    /// here after notebook-local indexing is initialized.
-    pub(crate) fn get_global_index_db_path(&self) -> PathBuf {
-        self.config_dir.join("index.db")
+    /// Device-local notebook registry database. The on-disk name remains
+    /// `index.db` for compatibility; it stores registry state, not the active
+    /// notebook's note catalog.
+    pub fn registry_db_path(&self) -> PathBuf {
+        self.registry.db_path()
     }
 
     /// Default notebook directory: `~/Documents/flowix`.
@@ -136,97 +176,8 @@ impl MemoFile {
         Ok(())
     }
 
-    pub(super) fn open_index_db(&self) -> std::io::Result<Connection> {
-        if let Some(parent) = self.get_global_index_db_path().parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut conn = Connection::open(self.get_global_index_db_path()).map_err(sqlite_to_io)?;
-        conn.busy_timeout(Duration::from_secs(10))
-            .map_err(sqlite_to_io)?;
-        // 建表 + 老库兼容:
-        // - 全新库走 CREATE TABLE IF NOT EXISTS, `sort` 列直接建好。
-        // - 旧库 (v3 之前没有 `sort` 列) 走 ALTER TABLE ADD COLUMN, DEFAULT 0
-        //   让旧行读出来不报错, 然后由 `normalize_sort_for_legacy_rows`
-        //   一次性把 sort=0 的行按 created_at 升序重排成 10/20/30...。
-        let has_sort_column = conn
-            .prepare("PRAGMA table_info(notebooks)")
-            .map_err(sqlite_to_io)?
-            .query_map([], |row| row.get::<_, String>(1))
-            .map_err(sqlite_to_io)?
-            .filter_map(Result::ok)
-            .any(|name| name == "sort");
-        if !has_sort_column {
-            conn.execute_batch(
-                r#"
-                CREATE TABLE IF NOT EXISTS notebooks (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    icon TEXT,
-                    path TEXT NOT NULL UNIQUE,
-                    is_default INTEGER NOT NULL,
-                    created_at INTEGER NOT NULL,
-                    updated_at INTEGER NOT NULL
-                );
-                "#,
-            )
-            .map_err(sqlite_to_io)?;
-            conn.execute_batch("ALTER TABLE notebooks ADD COLUMN sort INTEGER NOT NULL DEFAULT 0;")
-                .map_err(sqlite_to_io)?;
-        }
-        conn.execute_batch(
-            r#"
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            PRAGMA foreign_keys = ON;
-            CREATE TABLE IF NOT EXISTS notebooks (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                icon TEXT,
-                path TEXT NOT NULL UNIQUE,
-                is_default INTEGER NOT NULL,
-                sort INTEGER NOT NULL DEFAULT 0,
-                created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_notebooks_is_default
-                ON notebooks(is_default);
-            CREATE INDEX IF NOT EXISTS idx_notebooks_sort
-                ON notebooks(sort);
-            CREATE TABLE IF NOT EXISTS app_state (
-                key TEXT PRIMARY KEY,
-                value TEXT,
-                updated_at INTEGER NOT NULL
-            );
-            "#,
-        )
-        .map_err(sqlite_to_io)?;
-        if !has_sort_column {
-            // 旧库升级: 把 sort=0 的旧行按 created_at 升序重排, 步长 10。
-            // 写入事务, 失败回滚。读端下次进来 ORDER BY sort 即可看到正确顺序。
-            let tx = conn.transaction().map_err(sqlite_to_io)?;
-            let mut stmt = tx
-                .prepare(
-                    "SELECT id FROM notebooks WHERE sort = 0 \
-                     ORDER BY created_at ASC, name COLLATE NOCASE ASC",
-                )
-                .map_err(sqlite_to_io)?;
-            let ids: Vec<String> = stmt
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(sqlite_to_io)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(sqlite_to_io)?;
-            drop(stmt);
-            for (index, id) in ids.iter().enumerate() {
-                let sort_value = ((index as i64) + 1) * 10;
-                tx.execute(
-                    "UPDATE notebooks SET sort = ?1 WHERE id = ?2 AND sort = 0",
-                    params![sort_value, id],
-                )
-                .map_err(sqlite_to_io)?;
-            }
-            tx.commit().map_err(sqlite_to_io)?;
-        }
-        Ok(conn)
+    pub(super) fn open_registry_db(&self) -> std::io::Result<Connection> {
+        self.registry.open()
     }
 
     /// Find a notebook config by id.
@@ -242,7 +193,7 @@ impl MemoFile {
     /// `MemoFile` instance. A stale value (for example after deletion) is
     /// treated as no selection.
     pub fn read_selected_notebook_id(&self) -> std::io::Result<Option<String>> {
-        let conn = self.open_index_db()?;
+        let conn = self.open_registry_db()?;
         let mut stmt = conn
             .prepare(
                 r#"
@@ -265,7 +216,7 @@ impl MemoFile {
     /// Persist the notebook selected by the user interface for Desktop, CLI,
     /// and MCP consumers that share this Flowix home.
     pub fn write_selected_notebook_id(&self, id: Option<&str>) -> std::io::Result<()> {
-        let conn = self.open_index_db()?;
+        let conn = self.open_registry_db()?;
         if let Some(id) = id {
             let exists = conn
                 .query_row(
@@ -301,9 +252,9 @@ impl MemoFile {
         Ok(())
     }
 
-    /// Read notebook configs from the global `index.db`.
+    /// Read notebook configs from the user-level registry database.
     pub fn read_notebook_configs(&self) -> std::io::Result<Vec<NotebookConfig>> {
-        let conn = self.open_index_db()?;
+        let conn = self.open_registry_db()?;
         let mut stmt = conn
             .prepare(
                 r#"
@@ -336,7 +287,8 @@ impl MemoFile {
         let configs = rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_to_io)?;
 
         *self
-            .notebook_configs_cache
+            .registry
+            .configs_cache
             .write()
             .expect("notebook_configs_cache poisoned") = Some(configs.clone());
         Ok(configs)
@@ -355,6 +307,17 @@ impl MemoFile {
     /// notebook ids. Deleting and reinserting every row would trigger
     /// `ON DELETE CASCADE` on memo rows for notebooks that still exist.
     pub fn write_notebook_configs(&self, notebooks: &[NotebookConfig]) -> std::io::Result<()> {
+        self.write_notebook_configs_with_setup_job(notebooks, None)
+    }
+
+    /// Atomically persist notebook registration and its optional first-open
+    /// setup job. This closes the crash window between creating a notebook and
+    /// remembering which template it should receive.
+    pub fn write_notebook_configs_with_setup_job(
+        &self,
+        notebooks: &[NotebookConfig],
+        setup_job: Option<&NotebookSetupJob>,
+    ) -> std::io::Result<()> {
         // Validate/write portable identities before changing the device-local
         // catalog, so a manifest conflict cannot leave the registry committed
         // to a different notebook identity.
@@ -363,7 +326,7 @@ impl MemoFile {
                 Self::ensure_notebook_manifest(notebook)?;
             }
         }
-        let mut conn = self.open_index_db()?;
+        let mut conn = self.open_registry_db()?;
         let tx = conn.transaction().map_err(sqlite_to_io)?;
         {
             let mut stmt = tx
@@ -416,12 +379,118 @@ impl MemoFile {
             }
         }
 
+        if let Some(job) = setup_job {
+            let status = notebook_setup_status_as_str(job.status);
+            let report_json = job
+                .report
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(std::io::Error::other)?;
+            tx.execute(
+                r#"
+                INSERT INTO notebook_setup_jobs
+                    (notebook_id, template_id, status, stage, completed_files, total_files, message, report_json, updated_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                ON CONFLICT(notebook_id) DO UPDATE SET
+                    template_id = excluded.template_id,
+                    status = excluded.status,
+                    stage = excluded.stage,
+                    completed_files = excluded.completed_files,
+                    total_files = excluded.total_files,
+                    message = excluded.message,
+                    report_json = excluded.report_json,
+                    updated_at = excluded.updated_at
+                "#,
+                params![
+                    job.notebook_id,
+                    job.template_id,
+                    status,
+                    job.stage,
+                    job.completed_files as i64,
+                    job.total_files as i64,
+                    job.message,
+                    report_json,
+                    job.updated_at,
+                ],
+            )
+            .map_err(sqlite_to_io)?;
+        }
+
         tx.commit().map_err(sqlite_to_io)?;
 
         *self
-            .notebook_configs_cache
+            .registry
+            .configs_cache
             .write()
             .expect("notebook_configs_cache poisoned") = Some(notebooks.to_vec());
+        Ok(())
+    }
+
+    pub fn get_notebook_setup_job(&self, notebook_id: &str) -> std::io::Result<Option<NotebookSetupJob>> {
+        let conn = self.open_registry_db()?;
+        conn.query_row(
+            r#"SELECT notebook_id, template_id, status, stage, completed_files,
+                      total_files, message, updated_at, report_json
+               FROM notebook_setup_jobs WHERE notebook_id = ?1"#,
+            [notebook_id],
+            map_notebook_setup_job,
+        )
+        .optional()
+        .map_err(sqlite_to_io)
+    }
+
+    pub fn list_notebook_setup_jobs(&self) -> std::io::Result<Vec<NotebookSetupJob>> {
+        let conn = self.open_registry_db()?;
+        let mut statement = conn
+            .prepare(
+                r#"SELECT notebook_id, template_id, status, stage, completed_files,
+                          total_files, message, updated_at, report_json
+                   FROM notebook_setup_jobs"#,
+            )
+            .map_err(sqlite_to_io)?;
+        let rows = statement
+            .query_map([], map_notebook_setup_job)
+            .map_err(sqlite_to_io)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_to_io)
+    }
+
+    pub fn write_notebook_setup_job(&self, job: &NotebookSetupJob) -> std::io::Result<()> {
+        let conn = self.open_registry_db()?;
+        let report_json = job
+            .report
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(std::io::Error::other)?;
+        conn.execute(
+            r#"
+            INSERT INTO notebook_setup_jobs
+                (notebook_id, template_id, status, stage, completed_files, total_files, message, report_json, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(notebook_id) DO UPDATE SET
+                template_id = excluded.template_id,
+                status = excluded.status,
+                stage = excluded.stage,
+                completed_files = excluded.completed_files,
+                total_files = excluded.total_files,
+                message = excluded.message,
+                report_json = excluded.report_json,
+                updated_at = excluded.updated_at
+            "#,
+            params![
+                job.notebook_id,
+                job.template_id,
+                notebook_setup_status_as_str(job.status),
+                job.stage,
+                job.completed_files as i64,
+                job.total_files as i64,
+                job.message,
+                report_json,
+                job.updated_at,
+            ],
+        )
+        .map_err(sqlite_to_io)?;
         Ok(())
     }
 
@@ -431,7 +500,7 @@ impl MemoFile {
     /// 用于 `create_notebook_registry` 等新建入口; 跟读路径 ORDER BY sort ASC
     /// 配套, 保证新行自然落到末尾。
     pub fn next_notebook_sort(&self) -> std::io::Result<i64> {
-        let conn = self.open_index_db()?;
+        let conn = self.open_registry_db()?;
         let max_sort: Option<i64> = conn
             .query_row("SELECT MAX(sort) FROM notebooks", [], |row| row.get(0))
             .ok()

@@ -4,9 +4,9 @@ import { useCallback } from 'react';
 
 import { displayTitleFromFilename } from '@/lib/utils';
 import { sanitizeFileName, stripFrontmatter } from '@/lib/export-utils';
-import { memos as memosClient, dialogs, type SaveFileFilter } from '@platform/tauri/client';
+import { notes, dialogs, type SaveFileFilter } from '@platform/tauri/client';
 import { buildNoteOpenLinkFromPath } from '@platform/open-target/path-link';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { memoDocumentOperations } from '@features/document/use-cases/memo-document-operations';
 import { translate } from '@/lib/i18n';
 import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
@@ -154,7 +154,7 @@ export function useDocumentCommands({
     if (!currentDocumentPath) return;
 
     try {
-      const link = buildNoteOpenLinkFromPath(currentDocumentPath, useMemoStore.getState().notebooks);
+      const link = buildNoteOpenLinkFromPath(currentDocumentPath, useNoteStore.getState().notebooks);
       if (!link) throw new Error('Cannot create an unambiguous notebook link');
       await writeClipboardText(link);
       toast.success(tCmd('document.command.copySuccess'));
@@ -181,7 +181,7 @@ export function useDocumentCommands({
     if (!doc) return;
 
     try {
-      const template = await memosClient.saveTemplate(doc.title, doc.markdown);
+      const template = await notes.saveTemplate(doc.title, doc.markdown);
       toast.success(tCmd('document.command.saveAsTemplate', { name: template.name }));
     } catch (error) {
       logger.warn('[useDocumentCommands] Failed to save template:', { error: error });

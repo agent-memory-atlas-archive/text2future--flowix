@@ -76,8 +76,8 @@ vi.mock("@platform/tauri/client", () => ({
     getClaudeSessionId: vi.fn(async () => null),
     getCodexDefaultModel: vi.fn(async () => "gpt-5.5"),
   },
-  memos: {
-    searchPathNotes: vi.fn(async () => []),
+  notes: {
+    search: vi.fn(async () => []),
   },
   deepseekHarness: {
     get: vi.fn(async () => ({
@@ -137,8 +137,8 @@ vi.mock("@features/agent/store/agent-runtime-store", () => ({
   },
 }));
 
-vi.mock("@features/memo/store/memo-store", () => ({
-  useMemoStore: {
+vi.mock("@features/memo/store/note-store", () => ({
+  useNoteStore: {
     getState: () => memoStateMock,
     subscribe: vi.fn(() => () => undefined),
   },

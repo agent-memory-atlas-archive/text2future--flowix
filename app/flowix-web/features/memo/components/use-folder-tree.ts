@@ -97,26 +97,27 @@ export interface FolderTreeState {
   /** 已展开的 folder path 集合。 */
   expanded: Set<string>;
   loading: boolean;
+  loadingDirectories: Set<string>;
+  directoryErrors: Set<string>;
   /** 根目录读取失败 (路径被删 / 无权限) 时为错误信息。 */
   error: string | null;
 }
 
 export interface FolderTreeOptions {
-  /** Include dot-directories in the loaded tree (dot-files stay hidden). */
-  includeHiddenDirectories?: boolean;
-  /** Include the notebook AGENTS.md file when the global preference allows it. */
-  showAgentsFile?: boolean;
+  /** Defer the first filesystem read until the folder surface is selected. */
+  enabled?: boolean;
 }
 
 export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
-  const includeHiddenDirectories = options?.includeHiddenDirectories === true;
-  const showAgentsFile = options?.showAgentsFile === true;
+  const enabled = options?.enabled !== false;
   const [rootChildren, setRootChildren] = useState<DocTreeItem[]>([]);
   const [nodes, setNodes] = useState<Map<string, DocTreeItem>>(() => new Map());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [dirtyDirectories, setDirtyDirectories] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [loadingDirectories, setLoadingDirectories] = useState<Set<string>>(() => new Set());
+  const [directoryErrors, setDirectoryErrors] = useState<Set<string>>(() => new Set());
   // 请求代际: 每次 folderPath 变化 / 手动刷新自增, 迟到响应按代丢弃。
   const generationRef = useRef(0);
   const mountedRef = useRef(true);
@@ -139,8 +140,10 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
     const generation = ++generationRef.current;
     setLoading(true);
     setError(null);
+    setLoadingDirectories(new Set());
+    setDirectoryErrors(new Set());
     try {
-      const items = await files.getTree(folderPath, includeHiddenDirectories, showAgentsFile);
+      const items = await files.getTree(folderPath);
       if (!mountedRef.current || generation !== generationRef.current) return;
       if (items === null) {
         setRootChildren([]);
@@ -166,13 +169,17 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
         setLoading(false);
       }
     }
-  }, [folderPath, includeHiddenDirectories, showAgentsFile]);
+  }, [folderPath]);
 
   const rootKey = canonicalDirectoryPath(folderPath);
+  const autoLoadKey = rootKey;
+  const lastAutoLoadKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
+    if (!enabled || lastAutoLoadKeyRef.current === autoLoadKey) return;
+    lastAutoLoadKeyRef.current = autoLoadKey;
     void loadRoot();
-  }, [loadRoot]);
+  }, [autoLoadKey, enabled, loadRoot]);
 
   /** Coalesce concurrent reads of the same directory (manual action + watcher). */
   const refreshDirectory = useCallback((dirPath: string, force = false) => {
@@ -182,9 +189,16 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
 
     const requestSequence = (directoryRefreshSequenceRef.current.get(key) ?? 0) + 1;
     directoryRefreshSequenceRef.current.set(key, requestSequence);
+    setLoadingDirectories((previous) => new Set(previous).add(key));
+    setDirectoryErrors((previous) => {
+      if (!previous.has(key)) return previous;
+      const next = new Set(previous);
+      next.delete(key);
+      return next;
+    });
 
     const generation = generationRef.current;
-    const request = files.getDirChildren(dirPath, includeHiddenDirectories, showAgentsFile)
+    const request = files.getDirChildren(dirPath)
       .then((children) => {
         if (
           !mountedRef.current
@@ -196,6 +210,12 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
         // table. Without pruning, long-running watcher refreshes retain stale
         // nodes that flattenLoadedTree continues to visit.
         setNodes((prev) => reconcileDirectoryChildren(prev, key, children));
+        setDirectoryErrors((previous) => {
+          if (!previous.has(key)) return previous;
+          const next = new Set(previous);
+          next.delete(key);
+          return next;
+        });
         setDirtyDirectories((prev) => {
           if (!prev.has(key)) return prev;
           const next = new Set(prev);
@@ -206,6 +226,18 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
       })
       .catch((err) => {
         logger.warn('refresh directory failed', { dirPath, err });
+        if (!mountedRef.current || generation !== generationRef.current) return;
+        setDirectoryErrors((previous) => new Set(previous).add(key));
+      })
+      .finally(() => {
+        if (!mountedRef.current || generation !== generationRef.current) return;
+        if (directoryRefreshSequenceRef.current.get(key) !== requestSequence) return;
+        setLoadingDirectories((previous) => {
+          if (!previous.has(key)) return previous;
+          const next = new Set(previous);
+          next.delete(key);
+          return next;
+        });
       });
     directoryRefreshesRef.current.set(key, request);
     void request.then(
@@ -221,7 +253,11 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
       },
     );
     return request;
-  }, [includeHiddenDirectories, showAgentsFile]);
+  }, []);
+
+  const retryDirectory = useCallback((dirPath: string) => {
+    return refreshDirectory(dirPath, true);
+  }, [refreshDirectory]);
 
   /** 展开时惰性拉子级; 已有子级的 folder 只切展开态。 */
   const loadChildren = useCallback(async (dirPath: string) => {
@@ -287,7 +323,7 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
     const requestSequence = rootRefreshSequenceRef.current + 1;
     rootRefreshSequenceRef.current = requestSequence;
     const generation = generationRef.current;
-    const request = files.getTree(folderPath, includeHiddenDirectories, showAgentsFile)
+    const request = files.getTree(folderPath)
       .then((items) => {
         if (
           !mountedRef.current
@@ -326,7 +362,7 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
       },
     );
     return request;
-  }, [folderPath, includeHiddenDirectories, showAgentsFile, rootKey]);
+  }, [folderPath, rootKey]);
 
   /** 局部刷新某个目录的子级 (新建/删除/重命名后调用)。 */
   const refresh = useCallback(async (dirPath?: string) => {
@@ -380,8 +416,8 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
   }, [expanded, refresh, refreshRootPreservingExpansion, rootKey]);
 
   const state: FolderTreeState = useMemo(
-    () => ({ rootChildren, nodes, expanded, loading, error }),
-    [rootChildren, nodes, expanded, loading, error],
+    () => ({ rootChildren, nodes, expanded, loading, error, loadingDirectories, directoryErrors }),
+    [rootChildren, nodes, expanded, loading, error, loadingDirectories, directoryErrors],
   );
 
   return useMemo(() => ({
@@ -392,7 +428,8 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
     refresh,
     refreshDirectories,
     reload: loadRoot,
-  }), [state, toggle, expandTo, collapseAll, refresh, refreshDirectories, loadRoot]);
+    retryDirectory,
+  }), [state, toggle, expandTo, collapseAll, refresh, refreshDirectories, loadRoot, retryDirectory]);
 }
 
 export type FolderTreeController = ReturnType<typeof useFolderTree>;

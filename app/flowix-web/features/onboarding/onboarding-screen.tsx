@@ -30,10 +30,9 @@ import {
 import { useAgentRuntimeStore } from '@features/agent/store/agent-runtime-store';
 import { useAgentAccessStore } from '@features/agent/store/agent-access-store';
 import { resolveNotebookAgentFiles } from '@/lib/agent-access-defaults';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { createNotebookRegistration, notebookRepository } from '@features/memo/services';
 import { useI18n } from '@/lib/i18n';
-import { notebookCreateErrorMessage } from '@platform/tauri/errors';
 import type { DshRuntimeInstallerState } from '@features/preferences/public/system-api';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -44,10 +43,7 @@ import {
   AgentSection,
   type AgentSectionModelFormActions,
 } from '@features/preferences/sections/agent';
-import {
-  initializeNotebookTemplate,
-  useNotebookTemplates,
-} from './notebook-templates';
+import { useNotebookTemplates } from './notebook-templates';
 import { NotebookTemplateIcon } from './notebook-template-icon';
 import { OnboardingTitlebarMac } from './onboarding-titlebar-mac';
 
@@ -435,23 +431,18 @@ export function OnboardingScreen({ dshInstaller, onFinish }: OnboardingScreenPro
         name,
         path: notebookPath ?? undefined,
         icon: notebookIcon,
+        templateId: selectedTemplateId,
         reuseExisting: true,
       });
       const notebook = registration.notebook;
-      if (selectedTemplateId) {
-        try {
-          await initializeNotebookTemplate(notebook.id, selectedTemplateId, registration.created);
-        } catch (value) {
-          console.error('[Onboarding] Failed to initialize notebook template:', value);
-          setError(notebookCreateErrorMessage(value, t));
-          return;
-        }
+      if (registration.setupJob?.templateId) {
+        setSelectedTemplateId(registration.setupJob.templateId);
       }
       setDefaultPath(notebook.path);
       const latest = await notebookRepository.list();
-      useMemoStore.getState().setNotebooks(latest);
+      useNoteStore.getState().setNotebooks(latest);
       setCreatedNotebook(notebook);
-      setShouldStartImport(registration.needsImport);
+      setShouldStartImport(registration.needsImport && !registration.hasTemplateSetup);
       await loadAgentAccess();
       setStep(1);
     } catch (value) {
@@ -459,7 +450,7 @@ export function OnboardingScreen({ dshInstaller, onFinish }: OnboardingScreenPro
     } finally {
       setIsCreatingNotebook(false);
     }
-  }, [loadAgentAccess, notebookIcon, notebookName, notebookPath, selectedTemplateId, t]);
+  }, [loadAgentAccess, notebookIcon, notebookName, notebookPath, selectedTemplateId]);
 
   const addRepository = useCallback(async () => {
     if (!createdNotebook) return;

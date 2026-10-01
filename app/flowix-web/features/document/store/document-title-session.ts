@@ -17,6 +17,8 @@ export interface MemoTitleSessionSnapshot {
   draft: string;
   saving: boolean;
   error: string | null;
+  /** Uncommitted input kept separately from the filename-backed title. */
+  recoverableDraft?: string | null;
 }
 
 export interface RenameDocumentTitleOptions {
@@ -58,7 +60,10 @@ export function getTitleDraft(displayId: string) {
     const restored = findDocumentSession(displayId)?.restoredTitle;
     return restored ? { ...restored, revision: 0 } : null;
   }
-  if (session.draft === displayTitleFromFilename(session.filename)) return null;
+  if (session.draft === displayTitleFromFilename(session.filename)) {
+    const recovered = findDocumentSession(displayId)?.restoredTitle;
+    return recovered ? { ...recovered, revision: session.revision } : null;
+  }
   return { draft: session.draft, filename: session.filename, revision: session.revision };
 }
 export function isTitleSaving(displayId: string): boolean { return findDocumentSession(displayId)?.title?.saving ?? false; }
@@ -77,8 +82,12 @@ export function flushTitleDraft(displayId: string): Promise<boolean> {
 }
 export function restoreTitleDraft(displayId: string, title: { draft: string; filename: string }) {
   const session = findDocumentSession(displayId)?.title;
-  if (session && !hasTitleDraft(displayId)) updateSnapshot(session, { draft: title.draft });
-  else if (!session) getDocumentSession(displayId).restoredTitle = title;
+  if (session && session.draft !== displayTitleFromFilename(session.filename)) return;
+  // Recovery preserves input, but must never rename a file or replace its
+  // displayed title without a new editing action from the user.
+  if (title.draft === displayTitleFromFilename(session?.filename ?? title.filename)) return;
+  getDocumentSession(displayId).restoredTitle = title;
+  if (session) notify(session);
 }
 
 
@@ -95,7 +104,6 @@ function discardSession(displayId: string, session: MemoTitleSession): void {
 }
 
 subscribeFileDisplayRelease((displayId) => {
-  if (findDocumentSession(displayId)) getDocumentSession(displayId).restoredTitle = undefined;
   const session = findDocumentSession(displayId)?.title;
   if (!session) return;
   if (session.error) {
@@ -118,6 +126,7 @@ function notify(session: MemoTitleSession) {
     draft: session.draft,
     saving: session.saving,
     error: session.error,
+    recoverableDraft: findDocumentSession(session.displayId)?.restoredTitle?.draft ?? null,
   };
   for (const subscriber of session.subscribers) subscriber();
   for (const listener of listeners) listener(session.displayId, false);
@@ -165,8 +174,7 @@ function getOrCreateSession(
     },
   };
   const restored = findDocumentSession(displayId)?.restoredTitle;
-  if (findDocumentSession(displayId)) getDocumentSession(displayId).restoredTitle = undefined;
-  if (restored) { session.draft = restored.draft; session.snapshot.draft = restored.draft; }
+  session.snapshot.recoverableDraft = restored?.draft ?? null;
   getDocumentSession(displayId).title = session;
   return session;
 }
@@ -211,12 +219,7 @@ async function runQueue(displayId: string, session: MemoTitleSession): Promise<b
         if (!renamedFilename) {
           succeeded = false;
           session.pendingTitle = null;
-          // Boundary edits have already moved text between title and body.
-          // Keep that draft visible if the rename is refused, so the text is
-          // still available for a retry instead of being silently discarded.
-          session.error = translate(getCurrentAppLanguage(), 'document.save.titleFailed');
-          session.restoreDraftAfterFlight = false;
-          notify(session);
+          rejectTitle(session, translate(getCurrentAppLanguage(), 'document.save.titleFailed'));
           break;
         }
         session.filename = renamedFilename;
@@ -246,11 +249,9 @@ async function runQueue(displayId: string, session: MemoTitleSession): Promise<b
     } catch (error) {
       session.pendingTitle = null;
       const message = error instanceof Error ? error.message : String(error);
-      const draft = session.restoreDraftAfterFlight
-        ? displayTitleFromFilename(session.filename)
-        : session.draft;
-      session.restoreDraftAfterFlight = false;
-      updateSnapshot(session, { draft, error: message, saving: false });
+      rejectTitle(session, message.includes('FILE_EXISTS')
+        ? translate(getCurrentAppLanguage(), 'memo.fileTree.nameConflict')
+        : message);
       succeeded = false;
     } finally {
       session.inFlight = null;
@@ -263,6 +264,17 @@ async function runQueue(displayId: string, session: MemoTitleSession): Promise<b
 
   session.inFlight = run;
   return run;
+}
+
+function rejectTitle(session: MemoTitleSession, message: string) {
+  const confirmedTitle = displayTitleFromFilename(session.filename);
+  if (!session.restoreDraftAfterFlight && session.draft !== confirmedTitle) {
+    getDocumentSession(session.displayId).restoredTitle = {
+      draft: session.draft, filename: session.filename,
+    };
+  }
+  session.restoreDraftAfterFlight = false;
+  updateSnapshot(session, { draft: confirmedTitle, error: message, saving: false });
 }
 
 export function useMemoTitleSession(
@@ -295,14 +307,27 @@ export function useMemoTitleSession(
       // A fresh edit supersedes a prior Escape/empty-blur restoration request.
       session.renameTitle = renameTitle;
       session.restoreDraftAfterFlight = false;
-      if (session.draft !== value) for (const listener of listeners) listener(displayId, true);
+      const changed = session.draft !== value;
+      if (changed) {
+        getDocumentSession(displayId).restoredTitle = undefined;
+        for (const listener of listeners) listener(displayId, true);
+      }
       updateSnapshot(session, { draft: value, error: null });
+    },
+    recoverDraft() {
+      const recovered = findDocumentSession(displayId)?.restoredTitle;
+      if (!recovered) return;
+      getDocumentSession(displayId).restoredTitle = undefined;
+      session.renameTitle = renameTitle;
+      for (const listener of listeners) listener(displayId, true);
+      updateSnapshot(session, { draft: recovered.draft, error: null });
     },
     commit(options?: RenameDocumentTitleOptions) {
       session.renameTitle = renameTitle;
       return commitMemoTitle(displayId, session, { restoreEmpty: true, options });
     },
     cancel() {
+      getDocumentSession(displayId).restoredTitle = undefined;
       session.pendingTitle = null;
       session.restoreDraftAfterFlight = session.inFlight !== null;
       updateSnapshot(session, {

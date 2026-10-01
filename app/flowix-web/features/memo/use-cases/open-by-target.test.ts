@@ -8,13 +8,16 @@ const { openExternalTarget, store } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@features/memo/store/memo-store', () => ({ useMemoStore: { getState: () => store } }));
+vi.mock('@features/memo/store/note-store', () => ({ useNoteStore: { getState: () => store } }));
 vi.mock('@features/workspace/use-cases/workspace-navigation', () => ({
   clearWorkspaceDocument: vi.fn(),
   openExternalTarget,
 }));
 vi.mock('@features/memo/public/workspace-api', () => ({ setCurrentWorkspaceNotebook: vi.fn() }));
-vi.mock('@platform/tauri/client', () => ({ memos: { resolveMarkdownLocation: vi.fn() } }));
+vi.mock('@platform/tauri/client', () => ({ notes: {
+  resolveLocation: vi.fn(),
+  pathStatus: vi.fn().mockResolvedValue('present'),
+} }));
 
 import { openNoteByDeepLink } from './open-by-target';
 

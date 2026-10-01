@@ -22,7 +22,7 @@ const memo: MemoItem = {
 };
 
 function filter(operator: CustomFilter['operator'], key: string, value: string): CustomFilter {
-  return { id: 'filter-1', name: 'test', operator, key, value };
+  return { id: 'filter-1', name: 'test', documentType: 'note', operator, key, value };
 }
 
 describe('memoMatchesCustomFilter', () => {
@@ -37,4 +37,3 @@ describe('memoMatchesCustomFilter', () => {
     expect(memoMatchesCustomFilter(memo, filter('equals', 'labels', 'work'))).toBe(true);
   });
 });
-

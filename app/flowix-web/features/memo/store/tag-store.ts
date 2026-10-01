@@ -44,7 +44,7 @@ interface TagStore {
    * - 调用方在成功后清理文档库元数据缓存
    *
    * selectedTagId 处理**不**放在 store 里 ── store 不感知 UI 维度
-   * (activeFilter 来自 memo-store), 跟 moveTag 把 selectedTagId 重写
+   * (activeFilter 来自 note-store), 跟 moveTag 把 selectedTagId 重写
    * 留在 panel 里是同一原则。
    */
   deleteTag: (

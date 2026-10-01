@@ -12,13 +12,13 @@
 import type { AgentTypeKey, RuntimeConfig } from "@/types/agent";
 import { DEFAULT_AGENT_TYPE_KEY } from "@/lib/agent-types";
 import { useAgentAccessStore } from "@features/agent/store/agent-access-store";
-import { useMemoStore } from "@features/memo/store/memo-store";
+import { useNoteStore } from "@features/memo/store/note-store";
 
 export function buildInitialInstanceRuntimeConfig(
   agentType: AgentTypeKey = DEFAULT_AGENT_TYPE_KEY,
 ): RuntimeConfig {
   const accessState = useAgentAccessStore.getState();
-  const notebookId = useMemoStore.getState().selectedNotebook?.id ?? undefined;
+  const notebookId = useNoteStore.getState().selectedNotebook?.id ?? undefined;
   const defaultRuntime = accessState.config.defaults?.runtime?.[agentType];
 
   return {

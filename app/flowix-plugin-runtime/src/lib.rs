@@ -596,14 +596,13 @@ fn create_artifact_from_definition(
         let artifact_path = output_file_path(&output_dir, &parsed.title, "md");
         let document = serialize_artifact_document(
             request.plugin_id, version, "markdown", &parsed.content,
-            request.producer, request.source_note,
         );
         atomic_write_bytes(&artifact_path, document.as_bytes())
             .map_err(|error| format!("write mindmap document: {error}"))?;
         let relative_path = artifact_path.strip_prefix(&notebook_path)
             .map_err(|_| "mindmap escaped notebook root".to_string())?
             .to_string_lossy().replace('\\', "/");
-        memo_file.refresh_v2_note_path(&notebook.id, &relative_path)
+        memo_file.refresh_note_path(&notebook.id, &relative_path)
             .map_err(|error| format!("index mindmap document: {error}"))?;
         let note_path = artifact_path.to_string_lossy().to_string();
         return Ok(CreatedPluginArtifact {
@@ -634,7 +633,7 @@ fn create_artifact_from_definition(
     let relative_path = artifact_path.strip_prefix(&notebook_path)
         .map_err(|_| "plugin document escaped notebook root".to_string())?
         .to_string_lossy().replace('\\', "/");
-    memo_file.refresh_v2_note_path(&notebook.id, &relative_path)
+    memo_file.refresh_note_path(&notebook.id, &relative_path)
         .map_err(|error| format!("index plugin document: {error}"))?;
     let note_path = artifact_path.to_string_lossy().to_string();
     Ok(CreatedPluginArtifact {
@@ -766,39 +765,22 @@ pub fn serialize_artifact_document(
     plugin_version: &str,
     format: &str,
     content: &str,
-    producer: &str,
-    source_note: Option<&str>,
 ) -> String {
     if format != "markdown" {
         return content.to_string();
     }
     #[derive(Serialize)]
-    #[serde(rename_all = "camelCase")]
-    struct ArtifactMetadata<'a> {
-        #[serde(rename = "flowix_plugin")]
-        flowix_plugin: &'a str,
-        plugin_version: &'a str,
-        agent_type: &'a str,
-        created_at: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        source_note: Option<&'a str>,
+    struct PluginMetadata<'a> {
+        id: &'a str,
+        version: &'a str,
     }
 
-    let source_note = source_note.map(str::trim).filter(|value| !value.is_empty());
-    let producer = producer.trim();
-    let metadata = ArtifactMetadata {
-        flowix_plugin: plugin_id,
-        plugin_version,
-        agent_type: if producer.is_empty() {
-            "agent-cli"
-        } else {
-            producer
-        },
-        created_at: chrono::Local::now().to_rfc3339(),
-        source_note,
+    let metadata = PluginMetadata {
+        id: plugin_id,
+        version: plugin_version,
     };
-    let yaml = serde_yaml::to_string(&metadata).expect("artifact metadata is serializable");
-    format!("---\n{yaml}---\n\n{content}")
+    let json = serde_json::to_string(&metadata).expect("artifact metadata is serializable");
+    format!("---\nflowix_plugin: {json}\n---\n\n{content}")
 }
 
 pub fn serialize_path_plugin_document(
@@ -876,8 +858,7 @@ mod tests {
     #[test]
     fn serializes_markdown_artifact_without_extra_trailing_newline() {
         let content = "# Root\n\n## Branch";
-        let document =
-            serialize_artifact_document("mindmap", "0.2.0", "markdown", content, "codex", None);
+        let document = serialize_artifact_document("mindmap", "0.2.0", "markdown", content);
         assert!(document.ends_with(content));
         assert!(!document.ends_with(&format!("{content}\n")));
     }
@@ -927,8 +908,9 @@ mod tests {
         assert!(Path::new(&created.artifact_path).is_file());
         assert!(Path::new(&created.note_path).is_file());
         let artifact = std::fs::read_to_string(&created.artifact_path).unwrap();
-        assert!(artifact.contains("flowix_plugin: mindmap"));
-        assert!(artifact.contains("agentType: codex"));
+        assert!(artifact.starts_with(
+            "---\nflowix_plugin: {\"id\":\"mindmap\",\"version\":\"0.2.0\"}\n---\n\n"
+        ));
         assert!(artifact.contains("# Product Plan"));
         assert_eq!(created.note_path, created.artifact_path);
         assert!(created.artifact_path.contains("Mindmaps"));

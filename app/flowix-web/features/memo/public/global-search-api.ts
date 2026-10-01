@@ -1,18 +1,17 @@
 import { useShallow } from 'zustand/react/shallow';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { useTagStore } from '@features/memo/store/tag-store';
 
 export { NotebookIcon } from '@features/memo/components/notebook-icon';
-export type { Notebook } from '@features/memo/store/memo-store';
+export type { Notebook } from '@features/memo/store/note-store';
 
 export function useGlobalSearchMemoViewModel() {
-  const memo = useMemoStore(useShallow((state) => ({
+  const memo = useNoteStore(useShallow((state) => ({
     selectedNotebook: state.selectedNotebook,
     notebooks: state.notebooks,
     activeFilter: state.activeFilter,
     setActiveFilter: state.setActiveFilter,
-    createMemo: state.createMemo,
-    handleMemoCreated: state.handleMemoCreated,
+    createNote: state.createNote,
   })));
   const setSelectedTagId = useTagStore((state) => state.setSelectedTagId);
   return { ...memo, setSelectedTagId };

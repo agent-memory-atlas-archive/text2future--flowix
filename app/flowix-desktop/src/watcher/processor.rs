@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flowix_core::memo_file::{
-    is_ignored_notebook_relative_path, notebook_relative_path, MemoFile,
+    media_kind_for_path, FileManagementPolicy, notebook_relative_path, MemoFile,
 };
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -23,12 +23,15 @@ pub(crate) enum DispatchOutcome {
     PathIndexed { relative_path: String },
 }
 
+fn is_markdown_path(path: &Path) -> bool {
+    path.extension().and_then(|value| value.to_str())
+        .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "md" | "markdown"))
+}
+
 fn indexable_relative_path(ctx: &NotebookWatchContext, path: &Path) -> Result<String, String> {
     let relative_path = notebook_relative_path(&ctx.root, path)?;
     let relative = Path::new(&relative_path);
-    let markdown = relative.extension().and_then(|value| value.to_str())
-        .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "md" | "markdown"));
-    if !markdown || is_ignored_notebook_relative_path(relative) {
+    if !is_markdown_path(relative) || FileManagementPolicy::from_notebook_root(&ctx.root).is_ignored_at(&ctx.root, relative) {
         return Err("not an indexable Markdown path".to_string());
     }
     Ok(relative_path)
@@ -50,7 +53,7 @@ fn refresh_path(
     path: &Path,
 ) -> Result<DispatchOutcome, String> {
     let relative_path = indexable_relative_path(ctx, path)?;
-    memo_file.refresh_v2_note_path(&ctx.notebook_id, &relative_path)
+    memo_file.refresh_note_path(&ctx.notebook_id, &relative_path)
         .map_err(|error| error.to_string())?;
     Ok(DispatchOutcome::PathIndexed { relative_path })
 }
@@ -61,6 +64,67 @@ fn emit_path_changed(app: &AppHandle, ctx: &NotebookWatchContext, relative_path:
         "relativePath": relative_path,
         "deleted": deleted,
     }));
+}
+
+fn refresh_media_path(memo_file: &MemoFile, ctx: &NotebookWatchContext, path: &Path) -> Result<(), String> {
+    let relative_path = notebook_relative_path(&ctx.root, path)?;
+    if FileManagementPolicy::from_notebook_root(&ctx.root)
+        .is_ignored_at(&ctx.root, Path::new(&relative_path)) {
+        return Ok(());
+    }
+    memo_file.refresh_media_resource_path(&ctx.notebook_id, &relative_path)
+        .map_err(|error| error.to_string())
+}
+
+fn process_media_event(
+    event: &RawFsEvent,
+    memo_file: &Arc<std::sync::RwLock<MemoFile>>,
+    ctx: &NotebookWatchContext,
+) -> bool {
+    if matches!(event.kind, FsEventKind::DirectoryChange) {
+        return false;
+    }
+    let old_media = event.rename_from.as_ref().is_some_and(|path| media_kind_for_path(path).is_some());
+    let new_media = media_kind_for_path(&event.path).is_some();
+    if !old_media && !new_media {
+        return false;
+    }
+    let Ok(memo_file) = memo_file.read() else { return true; };
+    let Ok(_write_guard) = memo_file.acquire_cross_process_write_lock() else { return true; };
+    if old_media && new_media {
+        if let Some(old_path) = event.rename_from.as_ref() {
+            if event.rename_from_notebook_id.as_ref().is_none_or(|id| id == &ctx.notebook_id) {
+                let old_root = event.rename_from_root.as_ref().unwrap_or(&ctx.root);
+                if let (Ok(old_relative), Ok(new_relative)) = (
+                    notebook_relative_path(old_root, old_path),
+                    notebook_relative_path(&ctx.root, &event.path),
+                ) {
+                    match memo_file.move_media_resource_path(&ctx.notebook_id, &old_relative, &new_relative) {
+                        Ok(true) => return true,
+                        Ok(false) => {},
+                        Err(error) => tracing::warn!("media rename refresh failed: {error}"),
+                    }
+                }
+            }
+        }
+    }
+    if new_media {
+        if let Err(error) = refresh_media_path(&memo_file, ctx, &event.path) {
+            tracing::warn!(path = %event.path.display(), "media path refresh failed: {error}");
+        }
+    }
+    if let Some(old_path) = event.rename_from.as_ref().filter(|_| old_media) {
+        let old_ctx = NotebookWatchContext {
+            notebook_id: event.rename_from_notebook_id.clone().unwrap_or_else(|| ctx.notebook_id.clone()),
+            root: event.rename_from_root.clone().unwrap_or_else(|| ctx.root.clone()),
+        };
+        if let Err(error) = refresh_media_path(&memo_file, &old_ctx, old_path) {
+            tracing::warn!(path = %old_path.display(), "old media path refresh failed: {error}");
+        }
+    }
+    // A type-changing rename may also add or remove a Markdown note.
+    !is_markdown_path(&event.path)
+        && !event.rename_from.as_ref().is_some_and(|path| is_markdown_path(path))
 }
 
 /// Ignore attachments even when a user preference broadens the watcher filter.
@@ -97,7 +161,13 @@ impl PathNoteEventProcessor {
         memo_file: &Arc<std::sync::RwLock<MemoFile>>,
         ctx: &NotebookWatchContext,
     ) {
-        if event.rename_from.is_none() && is_under_attachments_dir(ctx, &event.path) { return; }
+        if process_media_event(event, memo_file, ctx) {
+            return;
+        }
+        if event.rename_from.is_none()
+            && is_under_attachments_dir(ctx, &event.path)
+            && FileManagementPolicy::from_notebook_root(&ctx.root)
+                .is_ignored_at(&ctx.root, Path::new("attachments")) { return; }
         if let (Some(old_path), Some(old_notebook_id), Some(old_root)) = (
             event.rename_from.as_ref(),
             event.rename_from_notebook_id.as_ref(),
@@ -128,7 +198,7 @@ impl PathNoteEventProcessor {
         if let Some(old_path) = &event.rename_from {
             let rebase = notebook_relative_path(&ctx.root, old_path).ok()
                 .zip(notebook_relative_path(&ctx.root, &event.path).ok());
-            if let Err(error) = memo_file.reconcile_v2_note_index(&ctx.notebook_id) {
+            if let Err(error) = memo_file.reconcile_note_index(&ctx.notebook_id) {
                 tracing::warn!(notebook_id = %ctx.notebook_id, "path rename reconciliation failed: {error}");
             }
             let mut emitted = false;
@@ -176,7 +246,7 @@ impl PathNoteEventProcessor {
     }
 
     fn reconcile_directory_change(app: &AppHandle, memo_file: &MemoFile, ctx: &NotebookWatchContext) {
-        match memo_file.reconcile_v2_note_index(&ctx.notebook_id) {
+        match memo_file.reconcile_note_index(&ctx.notebook_id) {
             Ok(report) => tracing::info!(notebook_id = %ctx.notebook_id,
                 added = report.added, updated = report.updated, removed = report.removed,
                 "path index reconciliation completed"),
@@ -184,6 +254,10 @@ impl PathNoteEventProcessor {
                 "path index reconciliation failed: {error}"),
         }
         emit_path_changed(app, ctx, "", false);
+        match memo_file.reconcile_media_resources(&ctx.notebook_id) {
+            Ok(count) => tracing::debug!(notebook_id = %ctx.notebook_id, count, "media catalog reconciliation completed"),
+            Err(error) => tracing::warn!(notebook_id = %ctx.notebook_id, "media catalog reconciliation failed: {error}"),
+        }
     }
 
     pub(crate) fn unregister_and_emit(
@@ -192,6 +266,14 @@ impl PathNoteEventProcessor {
         ctx: &NotebookWatchContext,
         path: &Path,
     ) {
+        if media_kind_for_path(path).is_some() {
+            let Ok(memo_file) = memo_file.read() else { return; };
+            let Ok(_write_guard) = memo_file.acquire_cross_process_write_lock() else { return; };
+            if let Err(error) = refresh_media_path(&memo_file, ctx, path) {
+                tracing::warn!(path = %path.display(), "media removal refresh failed: {error}");
+            }
+            return;
+        }
         let Ok(memo_file) = memo_file.read() else { return; };
         let Ok(_write_guard) = memo_file.acquire_cross_process_write_lock() else { return; };
         if let Ok(DispatchOutcome::PathIndexed { relative_path }) = refresh_path(&memo_file, ctx, path) {

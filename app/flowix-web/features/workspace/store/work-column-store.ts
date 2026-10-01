@@ -12,7 +12,7 @@ import {
  *
  * This store owns target intent and navigation transactions only. Document
  * data and editable sessions remain in DocumentStore; list and notebook
- * selection remain in MemoStore.
+ * selection remain in NoteLibraryStore.
  */
 export interface WorkColumnStore {
   navigation: WorkColumnNavigationState;

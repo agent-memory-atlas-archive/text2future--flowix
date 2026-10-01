@@ -122,7 +122,7 @@ installMemoDedup();
 /**
  * 给 `useExternalDocumentChangeWatch` 等外部组件使用的注册接口。
  * 等价于 `memoDispatcher.subscribe` 但带命名空间前缀, 阅读时一眼看出
- * "这是 reload 类 handler, 不是 memo-store 类"。
+ * "这是 reload 类 handler, 不是 note-store 类"。
  */
 export function registerMemoEventHandler(
   handler: (event: MemoEvent) => void,

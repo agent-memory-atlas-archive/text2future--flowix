@@ -16,7 +16,7 @@ use crate::watcher::{
     NotebookWatchContext, RawFsEvent, WhitelistConfig,
 };
 use flowix_core::memo_file::{
-    is_ignored_notebook_relative_path, MemoFile, NotebookConfig,
+    media_kind_for_path, FileManagementPolicy, MemoFile, NotebookConfig,
 };
 
 const REMOVE_TOMBSTONE_DELAY: Duration = Duration::from_millis(450);
@@ -93,6 +93,9 @@ impl MemoWatcher {
     /// Add one newly registered notebook without restarting every existing watch.
     /// Return false when the watcher has not started, so the caller can bind all roots.
     pub fn add_notebook_root(&mut self, config: &NotebookConfig) -> bool {
+        if self.is_watching(&config.id) {
+            return true;
+        }
         let Some(watcher) = self._watcher.as_mut() else {
             return false;
         };
@@ -106,13 +109,23 @@ impl MemoWatcher {
         if watcher.watch(&root, RecursiveMode::Recursive).is_err() {
             return false;
         }
-        if let Ok(mut roots) = self.watched_roots.write() {
-            roots.push(NotebookWatchContext {
-                notebook_id: config.id.clone(),
-                root,
-            });
+        match self.watched_roots.write() {
+            Ok(mut roots) => {
+                roots.push(NotebookWatchContext { notebook_id: config.id.clone(), root });
+                true
+            }
+            Err(_) => {
+                let _ = watcher.unwatch(&root);
+                false
+            }
         }
-        true
+    }
+
+    pub fn is_watching(&self, notebook_id: &str) -> bool {
+        self._watcher.is_some()
+            && self.watched_roots.read().is_ok_and(|roots| {
+                roots.iter().any(|context| context.notebook_id == notebook_id)
+            })
     }
 
     pub fn new(memo_file: Arc<std::sync::RwLock<MemoFile>>) -> Self {
@@ -133,7 +146,13 @@ impl MemoWatcher {
     /// �?���?`Arc<RwLock<WhitelistConfig>>` 共享�?
     pub fn set_whitelist(&self, new_cfg: WhitelistConfig) {
         if let Ok(mut g) = self.whitelist.write() {
-            *g = new_cfg;
+            let mut config = new_cfg;
+            // Legacy name rules are migrated into each notebook policy.
+            config.skip_dirs = vec![".flowix".into(), ".plugin-output".into()];
+            config.skip_files.clear();
+            config.allowed_filename_patterns.clear();
+            config.watch_hidden = true;
+            *g = config;
         }
     }
 
@@ -180,9 +199,7 @@ impl MemoWatcher {
                 })
             })
             .collect();
-        if let Ok(mut watched) = self.watched_roots.write() {
-            *watched = roots.clone();
-        }
+        if let Ok(mut watched) = self.watched_roots.write() { watched.clear(); }
         if roots.is_empty() {
             return;
         }
@@ -208,6 +225,10 @@ impl MemoWatcher {
                 let Ok(event) = res else {
                     return;
                 };
+                let removed_known_directories: std::collections::HashSet<PathBuf> = event.paths.iter()
+                    .filter(|path| rename_tracker.was_directory(path))
+                    .cloned()
+                    .collect();
                 let event = rename_tracker.correlate(event);
                 handle_notify_event(
                     &remove_coalescer_for_callback,
@@ -215,6 +236,7 @@ impl MemoWatcher {
                     &watched_roots,
                     &worker_tx_for_callback,
                     event,
+                    removed_known_directories,
                 );
             }) {
                 Ok(w) => w,
@@ -235,6 +257,13 @@ impl MemoWatcher {
                 ctx.notebook_id,
                 ctx.root.display()
             );
+            if let Ok(mut watched) = self.watched_roots.write() {
+                watched.push(ctx.clone());
+            } else {
+                tracing::error!("[MemoWatcher] failed to record watched notebook root");
+                let _ = watcher.unwatch(&ctx.root);
+                continue;
+            }
             watched_count += 1;
         }
         if watched_count == 0 {
@@ -321,6 +350,7 @@ fn handle_notify_event(
     watched_roots: &Arc<std::sync::RwLock<Vec<NotebookWatchContext>>>,
     worker_tx: &std::sync::mpsc::Sender<(RawFsEvent, NotebookWatchContext)>,
     event: notify::Event,
+    removed_known_directories: std::collections::HashSet<PathBuf>,
 ) {
     let path_filter = PathFilter {
         whitelist: whitelist.clone(),
@@ -362,14 +392,22 @@ fn handle_notify_event(
                 let new_allowed = new
                     .strip_prefix(&ctx.root)
                     .ok()
-                    .is_some_and(|p| !is_ignored_notebook_relative_path(p));
+                    .is_some_and(|p| !FileManagementPolicy::from_notebook_root(&ctx.root).is_ignored_at(&ctx.root, p));
                 let old_allowed = old
                     .strip_prefix(&ctx.root)
                     .ok()
-                    .is_some_and(|p| !is_ignored_notebook_relative_path(p));
+                    .is_some_and(|p| !FileManagementPolicy::from_notebook_root(&ctx.root).is_ignored_at(&ctx.root, p));
                 let new_markdown = new.extension().is_some_and(|extension| {
                     extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
                 });
+                if !new.is_dir() && ((old_allowed && media_kind_for_path(old).is_some())
+                    || (new_allowed && media_kind_for_path(new).is_some())) {
+                    remove_coalescer.cancel_path(old);
+                    let mut raw = RawFsEvent::new(FsEventKind::Modify, new.clone());
+                    raw.rename_from = Some(old.clone());
+                    let _ = worker_tx.send((raw, ctx));
+                    return;
+                }
                 if old_allowed && !new_markdown && !new.is_dir() {
                     let _ = worker_tx.send((RawFsEvent::new(FsEventKind::DirectoryChange, old.clone()), ctx));
                     return;
@@ -407,7 +445,7 @@ fn handle_notify_event(
             Ok(relative) => relative,
             Err(_) => continue,
         };
-        if is_ignored_notebook_relative_path(relative) {
+        if FileManagementPolicy::from_notebook_root(&ctx.root).is_ignored_at(&ctx.root, relative) {
             tracing::debug!(
                 "[MemoWatcher] ignored hidden/internal notebook path: {}",
                 path.display()
@@ -418,11 +456,8 @@ fn handle_notify_event(
         // self-write suppression and dedup happen after the worker observes a
         // stable file snapshot.
         let mut fs_kind = FsEventKind::from_notify(&event.kind);
-        let removed_non_markdown = matches!(fs_kind, FsEventKind::Remove)
-            && !path.extension().is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
-            });
-        if path.is_dir() || removed_non_markdown {
+        let removed_directory = matches!(event.kind, notify::EventKind::Remove(notify::event::RemoveKind::Folder));
+        if path.is_dir() || removed_directory || (removed_known_directories.contains(&path) && matches!(fs_kind, FsEventKind::Remove)) {
             fs_kind = FsEventKind::DirectoryChange;
         }
         if matches!(fs_kind, FsEventKind::Create | FsEventKind::Modify) {
@@ -444,7 +479,8 @@ fn handle_notify_event(
             continue;
         }
         let raw = RawFsEvent::new(fs_kind, path.clone());
-        match if matches!(fs_kind, FsEventKind::DirectoryChange) {
+        match if matches!(fs_kind, FsEventKind::DirectoryChange)
+            || media_kind_for_path(&path).is_some() {
             crate::watcher::event::FilterDecision::Pass
         } else {
             crate::watcher::filter::run_pipeline(&raw, &path_filter)
@@ -494,10 +530,16 @@ fn should_process_stable_event(
                 return true;
             }
             crate::watcher::processor::wait_for_markdown_copy_to_settle(&event.path);
-            let Some(revision) = FileRevision::read(&event.path) else {
+            let media = media_kind_for_path(&event.path).is_some();
+            let revision = if media {
+                FileRevision::read_metadata(&event.path)
+            } else {
+                FileRevision::read(&event.path)
+            };
+            let Some(revision) = revision else {
                 return true;
             };
-            if crate::watcher::filter::self_write::is_exact_self_write(
+            if !media && crate::watcher::filter::self_write::is_exact_self_write(
                 &event.path,
                 &revision,
                 recent_self_writes,

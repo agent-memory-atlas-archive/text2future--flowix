@@ -1,15 +1,16 @@
 export {
-  useMemoStore,
+  useNoteStore,
   getVisibleCreateFilter,
-  MEMO_COLORS,
-  MEMO_COLOR_HEX,
-  type MemoStore,
+  NOTE_COLORS,
+  NOTE_COLOR_HEX,
+  type NoteLibraryStore,
+  type NoteLibraryStartupPhase,
   type Notebook,
   type ColorFilterValue,
   type ExtendedFilterType,
-  type MemoLibraryStartupPhase,
-} from '@features/memo/store/memo-store';
-export { type MemoItem, type MemoListItem, type PathNoteListItem, type MemoColor } from '@/types/memo-item';
+} from '@features/memo/store/note-store';
+export { type MemoItem } from '@/types/memo-item';
+export { type NoteListItem, type NoteColor } from '@/types/note-item';
 export { useTagStore, type MemoTagItem } from '@features/memo/store/tag-store';
 export { useTodoCountStore } from '@features/memo/store/todo-count-store';
 export {

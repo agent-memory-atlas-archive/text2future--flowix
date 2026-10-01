@@ -3,12 +3,12 @@
 import { memo, useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { ChevronRight, ListTodo } from 'lucide-react';
 import { PushPin } from '@phosphor-icons/react';
-import { MEMO_COLORS, MEMO_COLOR_HEX, useMemoStore } from '@features/memo/store/memo-store';
+import { NOTE_COLORS, NOTE_COLOR_HEX, useNoteStore } from '@features/memo/store/note-store';
 import {
-  memoListItemRelativePath,
-  type MemoColor,
-  type MemoListItem,
-} from '@/types/memo-item';
+  noteListItemRelativePath,
+  type NoteColor,
+  type NoteListItem,
+} from '@/types/note-item';
 import { cn } from '@/lib/utils';
 import { getAgentType } from '@/lib/agent-types';
 import type { AgentTypeKey } from '@/types/agent';
@@ -21,7 +21,7 @@ import {
   ContextMenuContent,
   ContextMenuItem,
 } from '@shared/ui/context-menu';
-import { getMemoColorLabel, MemoCardActions } from '@features/memo/components/memo-card-actions';
+import { getNoteColorLabel, MemoCardActions } from '@features/memo/components/memo-card-actions';
 import { buildMemoCardContextMenuItems } from '@features/memo/menus/memo-card-context-menu';
 import { assetUrl, decodeStorageKey } from '@features/editor/extensions/attachment-link/utils';
 import { TagIcon } from '@shared/ui/tag-icon';
@@ -38,19 +38,19 @@ const MEMO_CARD_NATIVE_ICON_NAMES = [
 ] as const;
 
 interface MemoCardProps {
-  memo: MemoListItem;
+  memo: NoteListItem;
   tagMap: Record<string, string>;
   isSelected: boolean;
-  onSelect: (memo: MemoListItem) => void;
-  onOpenInWindow?: (memo: MemoListItem) => void;
-  onFavoriteToggle: (memo: MemoListItem) => void;
-  onDelete: (memo: MemoListItem) => void;
-  onColorsChange?: (memo: MemoListItem, colors: MemoColor[]) => void;
+  onSelect: (memo: NoteListItem) => void;
+  onOpenInWindow?: (memo: NoteListItem) => void;
+  onFavoriteToggle: (memo: NoteListItem) => void;
+  onDelete: (memo: NoteListItem) => void;
+  onColorsChange?: (memo: NoteListItem, colors: NoteColor[]) => void;
   runningAgentType?: AgentTypeKey;
 }
 
 interface MemoCardBodyProps {
-  memo: MemoListItem;
+  memo: NoteListItem;
   tagMap: Record<string, string>;
   title: string;
   timeLabel: string;
@@ -64,14 +64,14 @@ interface MemoCardBodyProps {
 }
 
 interface MemoCardShellProps {
-  memo: MemoListItem;
+  memo: NoteListItem;
   isSelected: boolean;
   children: ReactNode;
-  onSelect: (memo: MemoListItem) => void;
-  onOpenInWindow?: (memo: MemoListItem) => void;
-  onFavoriteToggle: (memo: MemoListItem) => void;
-  onDelete: (memo: MemoListItem) => void;
-  onColorsChange?: (memo: MemoListItem, colors: MemoColor[]) => void;
+  onSelect: (memo: NoteListItem) => void;
+  onOpenInWindow?: (memo: NoteListItem) => void;
+  onFavoriteToggle: (memo: NoteListItem) => void;
+  onDelete: (memo: NoteListItem) => void;
+  onColorsChange?: (memo: NoteListItem, colors: NoteColor[]) => void;
 }
 
 function thumbnailSrc(thumbnail: string | null | undefined): string | null {
@@ -80,7 +80,7 @@ function thumbnailSrc(thumbnail: string | null | undefined): string | null {
   return storageKey ? assetUrl(storageKey) : thumbnail;
 }
 
-function memoFolderDisplayPath(memo: Pick<MemoListItem, 'filename' | 'relativePath'>): string[] | null {
+function memoFolderDisplayPath(memo: Pick<NoteListItem, 'filename' | 'relativePath'>): string[] | null {
   const relativePath = (memo.relativePath?.trim() || memo.filename).replace(/\\/g, '/');
   const pathSegments = relativePath.split('/').filter((segment) => segment && segment !== '.');
   if (pathSegments.length < 2) return null;
@@ -128,7 +128,7 @@ function AgentTodoIcons({
   );
 }
 
-function ColorDots({ colors, limit, className }: { colors: MemoListItem['colors']; limit?: number; className?: string }) {
+function ColorDots({ colors, limit, className }: { colors: NoteListItem['colors']; limit?: number; className?: string }) {
   const visibleColors = limit ? colors.slice(0, limit) : colors;
   if (visibleColors.length === 0) return null;
   return (
@@ -137,7 +137,7 @@ function ColorDots({ colors, limit, className }: { colors: MemoListItem['colors'
         <span
           key={color}
           className="h-2 w-2 rounded-full"
-          style={{ backgroundColor: MEMO_COLOR_HEX[color] }}
+          style={{ backgroundColor: NOTE_COLOR_HEX[color] }}
         />
       ))}
     </span>
@@ -163,8 +163,8 @@ function MemoCardShell({
   }, [memo.favorited]);
 
   const resolvePath = () => {
-    const notebook = useMemoStore.getState().selectedNotebook;
-    const relativePath = memoListItemRelativePath(memo);
+    const notebook = useNoteStore.getState().selectedNotebook;
+    const relativePath = noteListItemRelativePath(memo);
     return notebook?.path
       ? joinNotebookMemoPath(notebook.path, relativePath)
       : relativePath;
@@ -172,7 +172,7 @@ function MemoCardShell({
   const openProperties = () => {
     const path = resolvePath();
     window.dispatchEvent(new CustomEvent('flowix:open-note-properties', {
-      detail: { path, scopePath: useMemoStore.getState().selectedNotebook?.path ?? null },
+      detail: { path, scopePath: useNoteStore.getState().selectedNotebook?.path ?? null },
     }));
   };
 
@@ -224,14 +224,14 @@ function MemoCardShell({
           colorGroup: t('memo.list.filterColorGroup'),
           clearColor: t('document.color.clear'),
           delete: t('memo.action.delete'),
-          colors: Object.fromEntries(MEMO_COLORS.map((color) => [color, getMemoColorLabel(color, language)])) as Record<MemoColor, string>,
+          colors: Object.fromEntries(NOTE_COLORS.map((color) => [color, getNoteColorLabel(color, language)])) as Record<NoteColor, string>,
         },
         onOpenInSplit: onOpenInWindow ? () => onOpenInWindow(memo) : undefined,
         onFavoriteToggle: () => onFavoriteToggle(memo),
         onOpenProperties: openProperties,
         onCopyLink: () => {
           const path = resolvePath();
-          const link = path ? buildNoteOpenLinkFromPath(path, useMemoStore.getState().notebooks) : null;
+          const link = path ? buildNoteOpenLinkFromPath(path, useNoteStore.getState().notebooks) : null;
           if (link) void writeClipboardText(link).catch(() => toast.error(t('document.command.copyFailed')));
           else toast.error(t('document.command.copyFailed'));
         },

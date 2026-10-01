@@ -27,8 +27,8 @@
 	 *   3) 极轻浮 / 沉的 hover / 选中面 (ΔL < 0.02, 几乎不可见)
 	 * - memo 7 色褪到 pastel 档 (L 普遍 +0.04–0.06), hue 身份稳定 ── 在
 	 *   白底上读作"柔色块", 不抢主色焦点。
-	 * - 与 mist 的 "暖白纸 + 绿锚" 形成 "暖白 vs 冷白 + 暖锚 vs 冷锚" 双
-	 *   向对照; 与 light 的 "冷蓝紫整体染" 形成 "白纸 vs 染纸" 对照。 */
+	 * - 与 rock 的暖橄榄灰形成冷暖对照; 与 light 的 "冷蓝紫整体染" 形成
+	 *   "白纸 vs 染纸" 对照。 */
 
 	--neutral-hue: 50;
 	--brand-hue: 32;
@@ -46,7 +46,7 @@
 	--text-hint: #0F8C25;
 
 	/* 背景: L=0.985 + chroma 0.005 ── "近白暖纸", 比 v1 (0.972) 抬 0.013,
-	 * 比 mist (0.996 纯灰) 略沉一档, 留一丝日光暖意 (chroma 0.005 几乎不
+	 * 比纯白略沉一档, 留一丝日光暖意 (chroma 0.005 几乎不
 	 * 可见, 仅在并置时透出色温)。 */
 	--background: oklch(0.985 0.005 var(--neutral-hue));
 	--frame-bg: var(--background);
@@ -75,12 +75,12 @@
 	--muted-foreground: oklch(0.62 0.008 var(--neutral-hue));
 	--accent: oklch(0.95 0.004 var(--neutral-hue));
 
-	/* 描边: L=0.945 + chroma 0.005 ── 比 mist (0.92) 浅, ΔL vs bg = 0.040;
+	/* 描边: L=0.945 + chroma 0.005 ── ΔL vs bg = 0.040;
 	 * 在白底上读作"几乎透明的纸痕", 仅元素相邻时感知。 */
 	--border: oklch(0.945 0.005 var(--neutral-hue));
 	--border-popup: oklch(0.880 0.005 var(--neutral-hue));
 	--input: var(--border);
-	/* 分割线: 与 light / mist / rock 同档 (L=0.932, 比 --border 深
+	/* 分割线: 与 light / rock 同档 (L=0.932, 比 --border 深
 	 * 0.013) ── 跨主题切换时分割线权重一致, 在近白暖纸面上 ΔL vs bg
 	 * ≈ 0.056, 撑起面板分隔, 又不抢珊瑚橙焦点。 chroma 跟 --border
 	 * 走 0.005 而非 0.006, 维持 ember 暖色谱一致. */
@@ -120,7 +120,7 @@
 	--memo-color-blue:   oklch(60% 0.150 258);
 	--memo-color-gray:   oklch(62% 0.008 50);
 
-	/* editor-block-bg: v2.1 从 1.0 → 0.982 ── 参考 mist (0.982 纯灰)
+	/* editor-block-bg: v2.1 从 1.0 → 0.982 ──
 	 * 的 ΔL=0.018 "轻微沉底"语义: agent 卡片 / 代码块在白纸面上需要
 	 * 视觉锚点, 但不与 --accent (0.950) 冲突, 不与 --muted (0.945)
 	 * 抢 hover 层级。

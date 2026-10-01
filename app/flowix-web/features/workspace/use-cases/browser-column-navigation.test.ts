@@ -16,7 +16,7 @@ import {
   registerBrowserColumnDocumentFlush,
   resetBrowserColumnCoordinator,
 } from './browser-column-coordinator';
-import { memos } from '@platform/tauri/client';
+import { notes } from '@platform/tauri/client';
 
 function resetWorkspace() {
   useWorkColumnStore.setState({
@@ -295,7 +295,7 @@ describe('browser column navigation', () => {
 });
 
 it('moves a folder selection to the main column even when a separate file tab already exists', async () => {
-  const location = vi.spyOn(memos, 'resolveMarkdownLocation').mockResolvedValue({
+  const location = vi.spyOn(notes, 'resolveLocation').mockResolvedValue({
     path: '/workspace/readme.md', notebookId: null, notebookPath: null,
     relativePath: null, indexable: false,
   });

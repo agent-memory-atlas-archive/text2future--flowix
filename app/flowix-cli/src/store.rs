@@ -1,6 +1,6 @@
 //! Notebook configuration shared by the path-addressed CLI and MCP commands.
 use crate::{errors::CliError, fmt, paths};
-use flowix_core::{memo_file::{MemoFile, NotebookConfig}, MemoService};
+use flowix_core::{memo_file::{MemoFile, NotebookConfig}, MemoService, NoteService};
 use std::collections::HashMap;
 
 pub fn open() -> Result<MemoFile, CliError> {
@@ -19,8 +19,8 @@ pub(crate) fn notebook_note_counts(configs: &[NotebookConfig]) -> Result<HashMap
     let mf = open()?;
     let mut counts = HashMap::new();
     for config in configs {
-        mf.reconcile_v2_note_index(&config.id)?;
-        counts.insert(config.id.clone(), MemoService::new(&mf).list_notes_by_path(&config.id)?.len());
+        mf.reconcile_note_index(&config.id)?;
+        counts.insert(config.id.clone(), NoteService::new(&mf).list(&config.id)?.len());
     }
     Ok(counts)
 }
@@ -53,7 +53,7 @@ pub(crate) fn notebook_tags(notebook: Option<&str>) -> Result<serde_json::Value,
     let key = resolve_notebook_key(notebook)?;
     let mf = open()?;
     let config = MemoService::new(&mf).resolve_notebook(&key)?;
-    mf.reconcile_v2_note_index(&config.id)?;
+    mf.reconcile_note_index(&config.id)?;
     let tags = mf.read_used_tag_ids_for_notebook_id(Some(&config.id))?;
     Ok(serde_json::json!({"ok": true, "action": "tags", "notebook": config.name,
         "notebookId": config.id, "total": tags.len(), "tags": tags}))

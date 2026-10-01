@@ -143,6 +143,14 @@ pub fn update_watcher_config(
     state: State<AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
+    let previous = state.user_config.get_preference().watcher;
+    if config.skip_dirs != previous.skip_dirs
+        || config.skip_files != previous.skip_files
+        || config.allowed_filename_patterns != previous.allowed_filename_patterns
+        || config.watch_hidden != previous.watch_hidden
+    {
+        return Err("WATCHER_PATH_RULES_MOVED_TO_FILE_MANAGEMENT".to_string());
+    }
     state
         .user_config
         .patch_preference(serde_json::json!({ "watcher": config }))

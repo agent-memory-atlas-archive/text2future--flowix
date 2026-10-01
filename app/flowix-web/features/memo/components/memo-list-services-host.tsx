@@ -10,16 +10,23 @@ import {
   files,
   listenToCloudStateChanges,
   mediaResources,
-  memos,
+  notes,
+  notebooks as notebooksClient,
   windows as tauriWindows,
   type CloudNotebook,
+  type NotebookSetupJob,
+  type NotebookSetupReport,
 } from '@platform/tauri/client';
 import { useTauriRpc } from '@platform/tauri/use-tauri-rpc';
-import { cloudSyncErrorMessage, isInvalidRefreshTokenError } from '@platform/tauri/errors';
+import {
+  cloudSyncErrorMessage,
+  isInvalidRefreshTokenError,
+  notebookCreateErrorMessage,
+} from '@platform/tauri/errors';
 import { useCreateNotebookFlow } from '@features/memo/hooks/use-create-notebook-flow';
-import { memoRepository, notebookRepository } from '@features/memo/services/memo-repository';
-import { getVisibleCreateFilter, useMemoStore, useTagStore, type MemoListItem, type Notebook } from '@features/memo/store';
-import { memoListItemRelativePath } from '@/types/memo-item';
+import { noteRepository, notebookRepository } from '@features/memo/services/note-repository';
+import { getVisibleCreateFilter, useNoteStore, useTagStore, type NoteListItem, type Notebook } from '@features/memo/store';
+import { noteListItemRelativePath } from '@/types/note-item';
 import { getNotebookIconOption } from '@features/memo/components/notebook-icon';
 import { openNotebookNote } from '@features/memo/use-cases/open-notebook-note';
 import { clearWorkspaceDocument } from '@features/workspace/use-cases/workspace-navigation';
@@ -143,8 +150,8 @@ function BlockingOperationStatus({ text, stacked }: { text: string; stacked: boo
 
 function ExternalMarkdownOpenDialog() {
   const { t } = useI18n();
-  const selectedNotebook = useMemoStore((state) => state.selectedNotebook);
-  const notebooks = useMemoStore((state) => state.notebooks);
+  const selectedNotebook = useNoteStore((state) => state.selectedNotebook);
+  const notebooks = useNoteStore((state) => state.notebooks);
   const [request, setRequest] = useState<ExternalMarkdownOpenRequest | null>(null);
   const [notebookId, setNotebookId] = useState('');
   const [opening, setOpening] = useState(false);
@@ -186,16 +193,16 @@ function ExternalMarkdownOpenDialog() {
       const imported: string[] = [];
       for (const filePath of request.filePaths) {
         const content = await externalDocuments.read(filePath, null);
-        const created = await memos.importExternalDocumentByPath(filePath, content, notebookId);
+        const created = await notes.importDocument(filePath, content, notebookId);
         imported.push(created.path);
       }
-      await useMemoStore.getState().loadPathNotes({ notebookId });
+      await useNoteStore.getState().loadNotes({ notebookId });
       setRequest(null);
       if (request.destination === 'browser-column') {
         await setCurrentWorkspaceNotebook(notebookId);
         for (const path of imported) await openBrowserColumnMarkdown(path);
       } else {
-        const notebook = useMemoStore.getState().notebooks.find((item) => item.id === notebookId);
+        const notebook = useNoteStore.getState().notebooks.find((item) => item.id === notebookId);
         if (notebook) await openNotebookNote(imported[imported.length - 1], notebook);
       }
     } catch (error) {
@@ -290,10 +297,10 @@ export function MemoListServicesHost({
 }) {
   const { request } = useTauriRpc();
   const { t } = useI18n();
-  const selectedNotebook = useMemoStore((state) => state.selectedNotebook);
-  const notebooks = useMemoStore((state) => state.notebooks);
-  const activeFilter = useMemoStore((state) => state.activeFilter);
-  const startupPhase = useMemoStore((state) => state.startupPhase);
+  const selectedNotebook = useNoteStore((state) => state.selectedNotebook);
+  const notebooks = useNoteStore((state) => state.notebooks);
+  const activeFilter = useNoteStore((state) => state.activeFilter);
+  const startupPhase = useNoteStore((state) => state.startupPhase);
   const selectedTagId = useTagStore((state) => state.selectedTagId);
   const setSelectedTagId = useTagStore((state) => state.setSelectedTagId);
   const {
@@ -301,7 +308,7 @@ export function MemoListServicesHost({
     setNotebooks,
     setActiveFilter,
     triggerRefresh,
-  } = useMemoStore(
+  } = useNoteStore(
     useShallow((state) => ({
       setSelectedNotebook: state.setSelectedNotebook,
       setNotebooks: state.setNotebooks,
@@ -310,7 +317,7 @@ export function MemoListServicesHost({
     })),
   );
 
-  const [deleteMemo, setDeleteMemo] = useState<MemoListItem | null>(null);
+  const [deleteMemo, setDeleteMemo] = useState<NoteListItem | null>(null);
   const [deleteMedia, setDeleteMedia] = useState<MediaDeleteRequest | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -335,6 +342,10 @@ export function MemoListServicesHost({
   const [originalEditCloudSync, setOriginalEditCloudSync] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [cloudSyncAvailable, setCloudSyncAvailable] = useState(false);
+  const [notebookSetupJob, setNotebookSetupJob] = useState<NotebookSetupJob | null>(null);
+  const [notebookSetupNotice, setNotebookSetupNotice] = useState<NotebookSetupReport | null>(null);
+  const [retryingNotebookSetup, setRetryingNotebookSetup] = useState(false);
+  const notebookSetupJobRef = useRef<NotebookSetupJob | null>(null);
   const emptyNotebookPromptedRef = useRef(false);
 
   const { creationState, createNotebook } = useCreateNotebookFlow({
@@ -342,6 +353,56 @@ export function MemoListServicesHost({
     onMemoListQueryReset: () => undefined,
     onMemoListLoadingChange: () => undefined,
   });
+
+  useEffect(() => {
+    const notebookId = selectedNotebook?.id;
+    notebookSetupJobRef.current = null;
+    setNotebookSetupJob(null);
+    setNotebookSetupNotice(null);
+    if (!notebookId) return;
+
+    let active = true;
+    const applyJob = (job: NotebookSetupJob) => {
+      if (!active || job.notebookId !== notebookId) return;
+      const previous = notebookSetupJobRef.current;
+      if (previous && previous.updatedAt > job.updatedAt) return;
+      if (previous?.status === 'completed' && job.status === 'running') return;
+      const justCompleted = previous?.status === 'running' && job.status === 'completed';
+      notebookSetupJobRef.current = job;
+      setNotebookSetupJob(job);
+      if (justCompleted && (job.report?.skippedExistingFiles ?? 0) > 0) {
+        setNotebookSetupNotice(job.report ?? null);
+      }
+    };
+    const unlisten = subscribe<NotebookSetupJob>('notebook-setup-status', applyJob);
+
+    void notebooksClient.startTemplateSetup(notebookId)
+      .then((job) => {
+        if (active && job) applyJob(job);
+      })
+      .catch((error) => {
+        if (active) console.warn('[MemoList] Failed to load notebook setup status:', error);
+      });
+
+    return () => {
+      active = false;
+      unlisten();
+    };
+  }, [onRefresh, selectedNotebook?.id]);
+
+  const retryNotebookSetup = useCallback(async () => {
+    const notebookId = selectedNotebook?.id;
+    if (!notebookId || retryingNotebookSetup) return;
+    setRetryingNotebookSetup(true);
+    try {
+      const job = await notebooksClient.startTemplateSetup(notebookId, true);
+      if (job) setNotebookSetupJob(job);
+    } catch (error) {
+      toast.error(notebookCreateErrorMessage(error, t));
+    } finally {
+      setRetryingNotebookSetup(false);
+    }
+  }, [retryingNotebookSetup, selectedNotebook?.id, t]);
 
   const resetCreateState = useCallback(() => {
     setCreateOpen(false);
@@ -481,7 +542,7 @@ export function MemoListServicesHost({
       setEditOpen(true);
     };
     const handleDeleteMemo = (event: Event) => {
-      const memo = (event as CustomEvent<MemoListItem>).detail;
+      const memo = (event as CustomEvent<NoteListItem>).detail;
       if (memo) setDeleteMemo(memo);
     };
     const handleDeleteMedia = (event: Event) => {
@@ -514,14 +575,14 @@ export function MemoListServicesHost({
       setActiveFilter(createFilter);
     }
     const tagId = createFilter === 'tagged' ? selectedTagId : null;
-    let created: Awaited<ReturnType<typeof memoRepository.create>>;
+    let created: Awaited<ReturnType<typeof noteRepository.create>>;
     try {
-      created = await memoRepository.create(tagId ?? undefined, selectedNotebook.id);
+      created = await noteRepository.create(tagId ?? undefined, selectedNotebook.id);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
       return;
     }
-    await useMemoStore.getState().loadPathNotes({ notebookId: selectedNotebook.id, filter: createFilter });
+    useNoteStore.getState().upsertCreatedNote(created);
     const shouldSelectNewMemo =
       createFilter === 'all' ||
       (createFilter === 'tagged' && Boolean(tagId)) ||
@@ -530,6 +591,20 @@ export function MemoListServicesHost({
     if (shouldSelectNewMemo) {
       void openNotebookNote(created.path, selectedNotebook, { initialFocus: 'title' });
     }
+    void useNoteStore.getState().loadNotes({ notebookId: selectedNotebook.id, filter: createFilter })
+      .then((loaded) => {
+        if (!loaded) return;
+        const state = useNoteStore.getState();
+        if (state.selectedNotebook?.id !== selectedNotebook.id
+          || state.activeFilter !== createFilter
+          || (createFilter === 'tagged' && useTagStore.getState().selectedTagId !== tagId)) return;
+        if (!state.notes.some((note) => (
+          note.notebookId === created.notebookId && note.relativePath === created.relativePath
+        ))) state.upsertCreatedNote(created);
+      })
+      .catch((error) => {
+        console.warn('Failed to refresh note list after create', error);
+      });
   }, [activeFilter, selectedNotebook, selectedTagId, setActiveFilter, setSelectedTagId]);
 
   useEffect(() => {
@@ -544,7 +619,7 @@ export function MemoListServicesHost({
     setDeleteMemo(null);
     void (async () => {
       const path = selectedNotebook
-        ? joinNotebookMemoPath(selectedNotebook.path, memoListItemRelativePath(memo))
+        ? joinNotebookMemoPath(selectedNotebook.path, noteListItemRelativePath(memo))
         : null;
       if (!path) return;
       const flushed = await flushWorkspaceDocumentPath(
@@ -553,17 +628,21 @@ export function MemoListServicesHost({
         selectedNotebook?.path ?? null,
       );
       if (flushed === false) {
-        toast.error(t('document.save.failed', { message: '当前页签保存失败，未删除笔记' }));
-        return;
+        const status = await notes.pathStatus(path);
+        if (status === 'present') {
+          toast.error(t('document.save.failed', { message: '当前页签保存失败，未删除笔记' }));
+          return;
+        }
       }
-      if (!await memoRepository.delete(path)) return;
+      const outcome = await noteRepository.delete(path);
       removeBrowserColumnTabsByPath(path);
-      const selected = useMemoStore.getState().selectedPathNote;
+      const selected = useNoteStore.getState().selectedNote;
       if (selected?.notebookId === memo.notebookId && selected.relativePath === memo.relativePath) {
-        useMemoStore.getState().setSelectedPathNote(null);
+        useNoteStore.getState().setSelectedNote(null);
         await clearWorkspaceDocument();
       }
       triggerRefresh();
+      if (outcome === 'missingCleaned') toast.success(t('memo.delete.missingCleaned'));
     })().catch((error) => {
       toast.error(error instanceof Error ? error.message : String(error));
     });
@@ -698,8 +777,8 @@ export function MemoListServicesHost({
           throw new Error(t('notebook.edit.agents.saveFailed'));
         }
       }
-      setNotebooks(useMemoStore.getState().notebooks.map((item) => item.id === updated.id ? updated : item));
-      if (useMemoStore.getState().selectedNotebook?.id === updated.id) setSelectedNotebook(updated);
+      setNotebooks(useNoteStore.getState().notebooks.map((item) => item.id === updated.id ? updated : item));
+      if (useNoteStore.getState().selectedNotebook?.id === updated.id) setSelectedNotebook(updated);
       if (cloudChanged && editCloudSync) {
         void cloud.syncNow(editingNotebook.id).catch((error) => {
           toast.error(cloudSyncErrorMessage(error, t));
@@ -715,6 +794,70 @@ export function MemoListServicesHost({
 
   return (
     <>
+      {notebookSetupJob?.status === 'running' && (
+        <div
+          className="fixed bottom-16 right-4 z-[180] flex max-w-sm items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--foreground)] shadow-xl"
+          role="status"
+          aria-live="polite"
+        >
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[var(--primary)]" aria-hidden="true" />
+          <span>
+            {notebookSetupJob.stage === 'indexing'
+              ? t('notebook.setup.indexing')
+              : t('notebook.setup.applyingTemplate')}
+          </span>
+        </div>
+      )}
+      {notebookSetupNotice && (
+        <div
+          className="fixed bottom-16 right-4 z-[180] max-w-sm rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3 text-sm text-[var(--muted-foreground)] shadow-xl"
+          role="status"
+          aria-live="polite"
+        >
+          {t('notebook.setup.completedWithSkips', {
+            written: notebookSetupNotice.writtenFiles,
+            existing: notebookSetupNotice.skippedExistingFiles,
+          })}
+        </div>
+      )}
+      {(notebookSetupJob?.status === 'partial' || notebookSetupJob?.status === 'failed') && (
+        <div
+          className="fixed bottom-16 right-4 z-[180] flex max-w-md items-center gap-3 rounded-xl border border-destructive/30 bg-[var(--card)] px-4 py-3 text-sm text-[var(--foreground)] shadow-xl"
+          role="alert"
+        >
+          <span className="min-w-0 flex-1">
+            <strong className="block">
+              {notebookSetupJob.status === 'partial'
+                ? t('notebook.setup.partial')
+                : t('notebook.setup.failed')}
+            </strong>
+            {(notebookSetupJob.report?.failedFiles ?? 0) > 0 && (
+              <small className="mt-1 block break-words text-[var(--muted-foreground)]">
+                {t('notebook.setup.partialSummary', {
+                  written: notebookSetupJob.report?.writtenFiles ?? 0,
+                  existing: notebookSetupJob.report?.skippedExistingFiles ?? 0,
+                  failed: notebookSetupJob.report?.failedFiles ?? 0,
+                  path: notebookSetupJob.report?.firstFailurePath ?? '',
+                  reason: notebookSetupJob.report?.firstFailureReason ?? '',
+                })}
+              </small>
+            )}
+            {notebookSetupJob.message && (
+              <small className="mt-1 block break-words text-[var(--muted-foreground)]">
+                {notebookCreateErrorMessage(notebookSetupJob.message, t)}
+              </small>
+            )}
+          </span>
+          <button
+            type="button"
+            className="shrink-0 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs text-[var(--primary-foreground)] disabled:opacity-60"
+            onClick={() => void retryNotebookSetup()}
+            disabled={retryingNotebookSetup}
+          >
+            {retryingNotebookSetup ? t('notebook.setup.retrying') : t('notebook.setup.retry')}
+          </button>
+        </div>
+      )}
       <ExternalMarkdownOpenDialog />
 
       {cloudImporting && (

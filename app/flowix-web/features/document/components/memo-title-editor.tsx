@@ -42,7 +42,7 @@ export interface MemoTitleBodyNavigation {
 
 export interface MemoTitleEditorHandle {
   focusEnd: () => void;
-  appendBodyLine: (title: string) => boolean;
+  appendBodyLine: (title: string) => Promise<boolean>;
 }
 
 export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditorProps>(function MemoTitleEditor({
@@ -67,6 +67,7 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
   const propertiesMenuButtonRef = useRef<HTMLButtonElement>(null);
   const propertiesMenuRef = useRef<HTMLDivElement>(null);
   const documentTitleComposingRef = useRef(false);
+  const bodyMergeRef = useRef<Promise<boolean> | null>(null);
   const [propertiesMenuOpen, setPropertiesMenuOpen] = useState(false);
   const [propertiesMenuPosition, setPropertiesMenuPosition] = useState<{ left: number; top: number } | null>(null);
   const [propertiesMenuIndex, setPropertiesMenuIndex] = useState(0);
@@ -221,15 +222,21 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
       : (textareaRef.current?.value.length ?? 0));
   }, [focusAt, useDocumentSelection]);
 
-  const appendBodyLine = useCallback((title: string) => {
+  const appendBodyLine = useCallback(async (title: string) => {
+    if (bodyMergeRef.current) return bodyMergeRef.current;
     const currentTitle = useDocumentSelection
       ? (documentTitleRef.current?.textContent ?? snapshot.draft)
       : (textareaRef.current?.value ?? snapshot.draft);
     const caretPosition = currentTitle.length;
     session.setDraft(`${currentTitle}${title}`);
-    void session.commit({ expectBodyMutation: true });
-    requestAnimationFrame(() => focusAt(caretPosition));
-    return true;
+    const merge = session.commit({ expectBodyMutation: true }).then((saved) => {
+      if (saved) requestAnimationFrame(() => focusAt(caretPosition));
+      return saved;
+    }).finally(() => {
+      if (bodyMergeRef.current === merge) bodyMergeRef.current = null;
+    });
+    bodyMergeRef.current = merge;
+    return merge;
   }, [focusAt, session, snapshot.draft, useDocumentSelection]);
 
   useImperativeHandle(ref, () => ({
@@ -366,7 +373,9 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
   const handleDocumentTitleKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (documentTitleComposingRef.current || titleInput.isComposingKeyboardEvent(event.nativeEvent)) return;
     const selection = getDocumentSelection();
-    if (event.key === 'ArrowDown' && selection.start === selection.value.length && selection.end === selection.value.length) {
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowRight')
+      && selection.start === selection.value.length
+      && selection.end === selection.value.length) {
       if (!editable && !allowReadOnlyBoundaryNavigation) return;
       event.preventDefault();
       if (!editable) {
@@ -487,7 +496,7 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
         onKeyDown={(event) => {
           if (titleInput.isComposingKeyboardEvent(event.nativeEvent)) return;
           if (
-            event.key === 'ArrowDown'
+            (event.key === 'ArrowDown' || event.key === 'ArrowRight')
             && event.currentTarget.selectionStart === event.currentTarget.value.length
             && event.currentTarget.selectionEnd === event.currentTarget.value.length
           ) {
@@ -520,6 +529,19 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
           }
         }}
       />
+      )}
+      {editable && snapshot.recoverableDraft != null && (
+        <button
+          type="button"
+          className="text-xs text-muted-foreground hover:text-foreground"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            session.recoverDraft();
+            requestAnimationFrame(focusEnd);
+          }}
+        >
+          {t('document.save.recoverTitle')}
+        </button>
       )}
     </div>
   );

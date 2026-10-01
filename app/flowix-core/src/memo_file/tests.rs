@@ -85,9 +85,9 @@ fn notebook_json_is_migrated_to_index_db() {
     let configs = mf.read_notebook_configs().expect("read notebooks");
     assert_eq!(configs.len(), 1);
     assert_eq!(configs[0].id, "nb_test");
-    assert!(mf.get_index_db_path().exists());
+    assert!(mf.registry_db_path().exists());
 
-    let conn = rusqlite::Connection::open(mf.get_index_db_path()).unwrap();
+    let conn = rusqlite::Connection::open(mf.registry_db_path()).unwrap();
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM notebooks", [], |row| row.get(0))
         .unwrap();
@@ -207,7 +207,7 @@ fn content_revision_is_created_and_advanced_only_for_changed_bytes() {
 #[test]
 fn opening_legacy_index_creates_content_revision_table() {
     let (mf, _tmp) = fresh_memo_file();
-    let conn = rusqlite::Connection::open(mf.get_index_db_path()).unwrap();
+    let conn = rusqlite::Connection::open(mf.registry_db_path()).unwrap();
     conn.execute_batch("DROP TABLE IF EXISTS memo_content_revisions;")
         .unwrap();
     drop(conn);
@@ -215,7 +215,7 @@ fn opening_legacy_index_creates_content_revision_table() {
     // Any memo-index operation runs the additive schema migration.
     mf.invalidate_caches();
     let _ = mf.read_index();
-    let conn = rusqlite::Connection::open(mf.get_index_db_path()).unwrap();
+    let conn = rusqlite::Connection::open(mf.registry_db_path()).unwrap();
     let exists: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'memo_content_revisions'",
@@ -229,18 +229,10 @@ fn opening_legacy_index_creates_content_revision_table() {
 #[test]
 fn pending_data_migrations_run_once_and_persist_version() {
     let (mf, base) = fresh_memo_file();
-    fs::create_dir_all(base.join(".metadata/versions/note1")).unwrap();
-    fs::write(
-        base.join(".metadata/versions/note1/v_1.md"),
-        "legacy version",
-    )
-    .unwrap();
-
     let first = mf.run_pending_data_migrations().unwrap();
     assert_eq!(first.from_version, 0);
     assert_eq!(first.to_version, super::LATEST_DATA_MIGRATION_VERSION);
     assert_eq!(first.applied, super::LATEST_DATA_MIGRATION_VERSION as usize);
-    assert!(base.join(".flowix/versions/note1/v_1.md").is_file());
     assert!(base.join(".flowix/notebook.json").is_file());
 
     let second = mf.run_pending_data_migrations().unwrap();
@@ -280,7 +272,7 @@ fn relative_path_migration_recovers_populated_replacement_table() {
     let (mf, _tmp) = fresh_memo_file();
     let memo = mf.create_memo("Recovered", "body", None).unwrap();
 
-    let conn = rusqlite::Connection::open(mf.get_index_db_path()).unwrap();
+    let conn = rusqlite::Connection::open(mf.registry_db_path()).unwrap();
     let state_before: i64 = conn
         .query_row(
             "SELECT last_updated FROM memo_index_state WHERE notebook_id = 'nb_test'",
@@ -322,7 +314,7 @@ fn relative_path_migration_recovers_populated_replacement_table() {
     assert_eq!(recovered.memos.len(), 1);
     assert_eq!(recovered.memos[0].id, memo.id);
 
-    let conn = rusqlite::Connection::open(mf.get_index_db_path()).unwrap();
+    let conn = rusqlite::Connection::open(mf.registry_db_path()).unwrap();
     let replacement_exists: i64 = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memos_relative_paths_v1')",
@@ -432,7 +424,7 @@ fn writing_notebook_configs_preserves_existing_memo_rows() {
     mf.write_notebook_configs(&configs)
         .expect("write notebooks");
 
-    let conn = rusqlite::Connection::open(mf.get_index_db_path()).unwrap();
+    let conn = rusqlite::Connection::open(mf.registry_db_path()).unwrap();
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM memos WHERE notebook_id = 'nb_test' AND id = ?1",
@@ -518,7 +510,7 @@ fn register_existing_file_for_other_notebook_does_not_switch_current_notebook() 
     assert_eq!(current_memos.len(), 1);
     assert_eq!(current_memos[0].id, current_memo.id);
 
-    let conn = rusqlite::Connection::open(mf.notebook_index_db_path("nb_other").unwrap()).unwrap();
+    let conn = rusqlite::Connection::open(mf.notebook_db_path("nb_other").unwrap()).unwrap();
     let notebook_id: String = conn
         .query_row(
             "SELECT notebook_id FROM memos WHERE id = ?1",
@@ -786,7 +778,7 @@ fn create_memo_writes_memo_row_to_index_db() {
         .create_memo("DB Note", "# DB Note\n#body-only\n- [ ] todo", Some("tag"))
         .unwrap();
 
-    let conn = rusqlite::Connection::open(mf.get_index_db_path()).unwrap();
+    let conn = rusqlite::Connection::open(mf.registry_db_path()).unwrap();
     let row: (String, String, i64) = conn
         .query_row(
             "SELECT notebook_id, filename, favorited FROM memos WHERE id = ?1",
@@ -823,7 +815,7 @@ fn reloading_a_memo_preserves_todo_metadata() {
     let memo = mf
         .create_memo("Todo metadata", "- [ ] keep this task\n", None)
         .unwrap();
-    let conn = rusqlite::Connection::open(mf.get_index_db_path()).unwrap();
+    let conn = rusqlite::Connection::open(mf.registry_db_path()).unwrap();
     conn.execute(
         "UPDATE memo_todos SET priority = 'high', time_range = 'tomorrow', owner = 'me', assignee = 'you', created_at = 11, updated_at = 12 WHERE memo_id = ?1 AND content = ?2",
         rusqlite::params![memo.id, "keep this task"],
@@ -888,7 +880,7 @@ fn write_index_persists_to_memos_table() {
     );
     assert_eq!(loaded.memos[0].properties["status"], "draft");
 
-    let conn = rusqlite::Connection::open(mf.get_index_db_path()).unwrap();
+    let conn = rusqlite::Connection::open(mf.registry_db_path()).unwrap();
     let (filename, properties): (String, String) = conn
         .query_row(
             "SELECT filename, properties FROM memos WHERE id = 'abc123'",
@@ -1083,7 +1075,7 @@ fn create_memo_persists_frontmatter_properties_to_index_db() {
     assert_eq!(from_index.properties["status"], "draft");
     assert_eq!(from_index.properties["tags"][0], "ppt");
 
-    let conn = rusqlite::Connection::open(mf.get_index_db_path()).unwrap();
+    let conn = rusqlite::Connection::open(mf.registry_db_path()).unwrap();
     let properties: String = conn
         .query_row(
             "SELECT properties FROM memos WHERE id = ?1",
@@ -1105,7 +1097,7 @@ fn read_index_backfills_missing_properties_from_frontmatter() {
         .expect("create ok");
 
     {
-        let conn = rusqlite::Connection::open(mf.get_index_db_path()).unwrap();
+        let conn = rusqlite::Connection::open(mf.registry_db_path()).unwrap();
         conn.execute(
             "UPDATE memos SET properties = '{}' WHERE id = ?1",
             rusqlite::params![memo.id],
@@ -1117,7 +1109,7 @@ fn read_index_backfills_missing_properties_from_frontmatter() {
     let from_index = mf.read_memo(&memo.id).expect("memo in index");
     assert_eq!(from_index.properties["status"], "review");
 
-    let conn = rusqlite::Connection::open(mf.get_index_db_path()).unwrap();
+    let conn = rusqlite::Connection::open(mf.registry_db_path()).unwrap();
     let properties: String = conn
         .query_row(
             "SELECT properties FROM memos WHERE id = ?1",
@@ -1533,13 +1525,8 @@ fn delete_memo_removes_version_history() {
         .unwrap();
     let version_dir = base.join(".flowix/versions").join(&memo.id);
     assert!(version_dir.join(format!("{}.md", version.id)).exists());
-    let legacy_dir = base.join(".metadata/versions").join(&memo.id);
-    fs::create_dir_all(&legacy_dir).unwrap();
-    fs::write(legacy_dir.join("legacy.md"), "legacy snapshot").unwrap();
-
     assert!(mf.delete_memo_result(&memo.id).unwrap());
     assert!(!version_dir.exists());
-    assert!(!legacy_dir.exists());
     assert!(mf.read_memo(&memo.id).is_none());
 }
 
@@ -1704,14 +1691,14 @@ fn reconcile_picks_up_orphan_files() {
 }
 
 #[test]
-fn reconcile_skips_metadata_dir() {
+fn reconcile_skips_hidden_directory() {
     let (mf, base) = fresh_memo_file();
-    let metadata = base.join(".metadata");
-    fs::create_dir_all(&metadata).unwrap();
-    fs::write(metadata.join("memo index"), "{}").unwrap();
-    fs::write(metadata.join("todo metadata"), "{}").unwrap();
+    let hidden = base.join(".hidden");
+    fs::create_dir_all(&hidden).unwrap();
+    fs::write(hidden.join("memo index"), "{}").unwrap();
+    fs::write(hidden.join("todo metadata"), "{}").unwrap();
     let added = mf.reconcile_with_disk().expect("reconcile ok");
-    assert_eq!(added, 0, ".metadata/ should be skipped");
+    assert_eq!(added, 0, "hidden directories should be skipped");
 }
 
 #[test]
@@ -1747,7 +1734,7 @@ fn reconcile_registers_root_and_nested_markdown_files() {
 }
 
 #[test]
-fn reconcile_indexes_root_agents_but_skips_hidden_paths_and_generated_directories() {
+fn reconcile_excludes_agents_files_unless_included_by_file_policy() {
     let (mf, base) = fresh_memo_file();
     for directory in [
         ".hidden",
@@ -1766,13 +1753,14 @@ fn reconcile_indexes_root_agents_but_skips_hidden_paths_and_generated_directorie
     fs::write(base.join("docs/public/Visible.md"), "# Visible\n").unwrap();
 
     let report = mf.reconcile_with_disk_bidirectional().unwrap();
-    assert_eq!(report.added, 2);
+    assert_eq!(report.added, 1);
     let indexed_paths = mf
         .read_all_memos()
         .into_iter()
         .map(|memo| memo.relative_path)
         .collect::<std::collections::HashSet<_>>();
-    assert!(indexed_paths.contains("AGENTS.md"));
+    assert!(!indexed_paths.contains("AGENTS.md"));
+    assert!(!indexed_paths.contains("docs/AGENTS.md"));
     assert!(indexed_paths.contains("docs/public/Visible.md"));
 }
 
@@ -1881,7 +1869,7 @@ fn reconcile_bidirectional_empty_dir_clears_all_entries() {
     let _b = mf.create_memo("B", "y", None).unwrap();
     assert_eq!(mf.read_all_memos().len(), 2);
 
-    // 用户把 base 下所有 .md 删空 (含 .metadata/ 不算 — 我们用物理删除 + 绕过目录)
+    // 用户把 base 下所有 .md 删空 (我们用物理删除 + 绕过目录)
     fs::remove_file(base.join("A.md")).unwrap();
     fs::remove_file(base.join("B.md")).unwrap();
 
@@ -1926,13 +1914,12 @@ fn reconcile_bidirectional_no_op_when_consistent() {
 }
 
 #[test]
-fn reconcile_bidirectional_skips_metadata_dir() {
-    // .metadata/ 里的 memo index / todo metadata 不应被当成 .md 注册
+fn reconcile_bidirectional_skips_hidden_directory() {
     let (mf, base) = fresh_memo_file();
-    let metadata = base.join(".metadata");
-    fs::create_dir_all(&metadata).unwrap();
-    fs::write(metadata.join("memo index"), "{}").unwrap();
-    fs::write(metadata.join("todo metadata"), "{}").unwrap();
+    let hidden = base.join(".hidden");
+    fs::create_dir_all(&hidden).unwrap();
+    fs::write(hidden.join("memo index"), "{}").unwrap();
+    fs::write(hidden.join("todo metadata"), "{}").unwrap();
     // memo index 里没任何 entry, 也不应该被注册 (不是 .md)
     let report = mf.reconcile_with_disk_bidirectional().unwrap();
     assert_eq!(report.added, 0);
@@ -2282,7 +2269,7 @@ fn independent_instances_create_without_lost_rows_or_file_overwrites() {
 
     let (first, base) = fresh_memo_file();
     let config_dir = first
-        .get_index_db_path()
+        .registry_db_path()
         .parent()
         .expect("config dir")
         .to_path_buf();
@@ -2338,7 +2325,7 @@ fn independent_instances_create_without_lost_rows_or_file_overwrites() {
 fn independent_instance_writes_are_visible_after_local_cache_was_populated() {
     let (first, _base) = fresh_memo_file();
     let config_dir = first
-        .get_index_db_path()
+        .registry_db_path()
         .parent()
         .expect("config dir")
         .to_path_buf();
@@ -2708,7 +2695,7 @@ fn atomic_write_bytes_no_tmp_file_leaks() {
 // 内存缓存 (P0 性能修复后新增)
 // =====================================================================
 //
-// 覆盖 `MemoFile` 内 `index_cache` / `notebook_configs_cache` 的语义:
+// 覆盖 MemoFile 的 memo-index cache 和 NotebookRegistry 的 config cache:
 // - 命中: 走内存, 不读盘
 // - 失效: `set_current_notebook` 改 id 时清空 (memo index 路径变了)
 // - 同步: `write_index` / `write_notebook_configs` 落盘成功后回填 cache,
@@ -2804,7 +2791,7 @@ fn notebook_configs_cache_populated_on_first_read() {
     let configs = mf.read_notebook_configs().expect("read ok");
     assert_eq!(configs.len(), 1);
     assert!(
-        mf.notebook_configs_cache.read().unwrap().is_some(),
+        mf.registry.configs_cache.read().unwrap().is_some(),
         "cache should be populated after first read"
     );
 }
@@ -2838,15 +2825,15 @@ fn notebook_configs_cache_updates_on_write() {
 fn notebook_configs_cache_survives_notebook_switch() {
     let (mf, _base) = fresh_memo_file();
     let _ = mf.read_notebook_configs().expect("read ok");
-    assert!(mf.notebook_configs_cache.read().unwrap().is_some());
+    assert!(mf.registry.configs_cache.read().unwrap().is_some());
 
     // notebook registry 位置固定 (`index.db`), 切 notebook 不应清 cache
     let mut mf = mf;
     mf.set_current_notebook(Some("nb_test".to_string()));
     mf.set_current_notebook(Some("nb_other".to_string()));
     assert!(
-        mf.notebook_configs_cache.read().unwrap().is_some(),
-        "notebook_configs_cache should survive notebook switch (path is fixed)"
+        mf.registry.configs_cache.read().unwrap().is_some(),
+        "registry config cache should survive notebook switch (registry path is fixed)"
     );
 }
 
@@ -2856,11 +2843,11 @@ fn invalidate_caches_clears_both() {
     mf.create_memo("A", "x", None).unwrap();
     let _ = mf.read_notebook_configs().expect("read ok");
     assert!(mf.index_cache.read().unwrap().is_some());
-    assert!(mf.notebook_configs_cache.read().unwrap().is_some());
+    assert!(mf.registry.configs_cache.read().unwrap().is_some());
 
     mf.invalidate_caches();
     assert!(mf.index_cache.read().unwrap().is_none());
-    assert!(mf.notebook_configs_cache.read().unwrap().is_none());
+    assert!(mf.registry.configs_cache.read().unwrap().is_none());
 }
 
 #[test]
@@ -2881,7 +2868,7 @@ fn read_index_returns_none_for_missing_file_without_caching() {
 // =====================================================================
 
 fn read_memo_tags(mf: &MemoFile, memo_id: &str) -> Vec<String> {
-    let conn = rusqlite::Connection::open(mf.get_index_db_path()).unwrap();
+    let conn = rusqlite::Connection::open(mf.registry_db_path()).unwrap();
     let mut stmt = conn
         .prepare("SELECT tag FROM memo_tags WHERE memo_id = ?1 ORDER BY rowid ASC")
         .unwrap();

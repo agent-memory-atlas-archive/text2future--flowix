@@ -27,7 +27,7 @@ import {
 import { useAgentAccessStore } from "@features/agent/store/agent-access-store";
 import { useAgentSessionStore } from "@features/agent/store/agent-session-store";
 import { loadDshModelConfigs } from "@features/agent/store/dsh-model-config-store";
-import { useMemoStore } from "@features/memo/store/memo-store";
+import { useNoteStore } from "@features/memo/store/note-store";
 import { FeaturedNotesController } from './featured-notes-controller';
 import { resolvePrimaryWorkspace } from "@features/agent/runtime/primary-workspace";
 import { normalizeWorkspacePath } from "@features/agent/runtime/workspace-path";
@@ -738,7 +738,7 @@ export class ExternalAgentSettingsController {
     return instance?.runtimeConfig?.notebookId
       ?? instance?.runtimeConfig?.workspaceSnapshot?.notebookId
       ?? instance?.source.notebookId
-      ?? useMemoStore.getState().selectedNotebook?.id
+      ?? useNoteStore.getState().selectedNotebook?.id
       ?? null;
   }
 
@@ -979,8 +979,8 @@ export class ExternalAgentSettingsController {
     const configuredNotebookId = instance?.runtimeConfig?.notebookId;
     const notebook =
       (configuredNotebookId
-        ? useMemoStore.getState().notebooks.find((item) => item.id === configuredNotebookId)
-        : null) ?? useMemoStore.getState().selectedNotebook;
+        ? useNoteStore.getState().notebooks.find((item) => item.id === configuredNotebookId)
+        : null) ?? useNoteStore.getState().selectedNotebook;
     if (entry?.name?.trim()) return entry.name.trim();
     if (notebook && normalize(notebook.path) === normalize(path) && notebook.name?.trim()) {
       return notebook.name.trim();
@@ -999,7 +999,7 @@ export class ExternalAgentSettingsController {
         ? snapshot.cwd.trim()
         : "";
     const configuredNotebookId = runtimeConfig?.notebookId;
-    const memoState = useMemoStore.getState();
+    const memoState = useNoteStore.getState();
     const notebook =
       (configuredNotebookId
         ? memoState.notebooks.find((item) => item.id === configuredNotebookId)
@@ -1028,7 +1028,7 @@ export class ExternalAgentSettingsController {
     const snapshot = state?.applied ?? state?.desired ?? runtimeConfig?.workspaceSnapshot;
     const cwdPath = normalizeWorkspacePath(snapshot?.cwd ?? this.getCurrentWorkspacePath());
     const configuredNotebookId = runtimeConfig?.notebookId ?? snapshot?.notebookId;
-    const memoState = useMemoStore.getState();
+    const memoState = useNoteStore.getState();
     const notebook =
       (configuredNotebookId
         ? memoState.notebooks.find((item) => item.id === configuredNotebookId)
@@ -1384,7 +1384,7 @@ export class ExternalAgentSettingsController {
       ? useAgentSessionStore.getState().getInstance(this.getInstanceId()!)
       : undefined;
     const runtimeConfig = instance?.runtimeConfig;
-    const memoState = useMemoStore.getState();
+    const memoState = useNoteStore.getState();
     const configuredNotebookId = runtimeConfig?.notebookId;
     const notebook =
       (configuredNotebookId
@@ -1546,7 +1546,7 @@ export class ExternalAgentSettingsController {
     const snapshot = state?.applied ?? state?.desired ?? runtimeConfig?.workspaceSnapshot;
     const configuredNotebookId = runtimeConfig?.notebookId ?? snapshot?.notebookId;
     if (configuredNotebookId) return configuredNotebookId;
-    return useMemoStore.getState().selectedNotebook?.id ?? undefined;
+    return useNoteStore.getState().selectedNotebook?.id ?? undefined;
   }
 
   schedulePosition(): void {

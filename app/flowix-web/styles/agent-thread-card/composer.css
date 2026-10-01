@@ -641,6 +641,9 @@
  * 避免全局编辑器背景覆盖输入框外层的统一底色。 */
 .markdown-editor .agent-thread-card__composer-editor {
   background: transparent !important;
+  /* The composer is part of the agent UI, so it follows the product font
+   * even when its surrounding note uses a custom editor font. */
+  font-family: var(--font-sans);
 }
 
 .markdown-editor .agent-thread-card__composer-input > p {

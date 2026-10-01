@@ -407,14 +407,11 @@
   color: currentColor;
 }
 
-/* 侧边栏对话详情 (AgentConversationDetail) 是独立 surface, 不在
- * .markdown-editor .ProseMirror:not(.agent-thread-card__composer-editor) 内, 消息/输入框的 font-family 会退化为
- * body 的 --font-sans, 与文档内嵌 Thread Card (经 .ProseMirror 继承
- * --app-font-family) 不一致。这里在 surface 根显式消费同一变量, 让整个
- * 详情面 (header / 消息 / composer) 与文档内卡片走同一条字体继承链;
- * 未配置自定义字体时回退 --font-sans, 与默认现状一致。 */
+/* Keep the standalone Agent conversation surface on the product font, like
+ * embedded Thread Cards. The nested Tiptap composer opts into the user font
+ * on its own editor element. */
 .markdown-editor.agent-conversation-detail {
-  font-family: var(--app-font-family, var(--font-sans));
+  font-family: var(--font-sans);
 }
 
 /* 右侧列对话详情 (AgentConversationDetail) header ── 与内嵌 Thread Card

@@ -1,10 +1,12 @@
 /** Open Markdown by notebook ID and relative path or by a physical file path. */
 
-import { memos as memosClient } from '@platform/tauri/client';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { notes as notesClient } from '@platform/tauri/client';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { setCurrentWorkspaceNotebook } from '@features/memo/public/workspace-api';
 import { canonicalDirectoryPath, canonicalPath, joinNotebookMemoPath } from '@/lib/path';
 import { clearWorkspaceDocument, openExternalTarget } from '@features/workspace/use-cases/workspace-navigation';
+import { translate } from '@/lib/i18n';
+import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
 
 function hasHiddenNotebookDirectory(path: string, notebookPath: string): boolean {
   const absolutePath = canonicalPath(path);
@@ -37,7 +39,7 @@ function physicalPathFromTarget(rawPath: string): string {
 
 function hiddenNotebookForPhysicalTarget(rawPath: string): { path: string; notebookPath: string } | null {
   const path = physicalPathFromTarget(rawPath);
-  const notebook = useMemoStore.getState().notebooks.find((item) => (
+  const notebook = useNoteStore.getState().notebooks.find((item) => (
     hasHiddenNotebookDirectory(path, item.path)
   ));
   return notebook ? { path, notebookPath: notebook.path } : null;
@@ -46,14 +48,14 @@ function hiddenNotebookForPhysicalTarget(rawPath: string): { path: string; noteb
 /** Resolve a path link through the notebook path index and open the document. */
 export async function openNoteByDeepLink(url: string): Promise<void> {
   if (/^flowix:\/\/open\?/i.test(url.trim())) {
-    const target = new URL(url.trim());
+    const target = new URL(url.trim().replace(/&amp;/gi, '&'));
     const book = target.searchParams.get('b') ?? target.searchParams.get('book');
     const file = target.searchParams.get('f') ?? target.searchParams.get('file');
     if (book && file) {
-      let notebooks = useMemoStore.getState().notebooks;
+      let notebooks = useNoteStore.getState().notebooks;
       if (!notebooks.some((item) => item.name === book)) {
-        await useMemoStore.getState().loadNotebooks();
-        notebooks = useMemoStore.getState().notebooks;
+        await useNoteStore.getState().loadNotebooks();
+        notebooks = useNoteStore.getState().notebooks;
       }
       const matches = notebooks.filter((item) => item.name === book);
       if (matches.length !== 1) throw new Error(`Notebook link is unavailable or ambiguous: ${book}`);
@@ -78,7 +80,7 @@ export async function openNoteByDeepLink(url: string): Promise<void> {
   }
   const physicalPath = physicalPathFromTarget(url);
   if (/\.(?:md|markdown)$/i.test(physicalPath)) {
-    const location = await memosClient.resolveMarkdownLocation(physicalPath).catch(() => null);
+    const location = await notesClient.resolveLocation(physicalPath).catch(() => null);
     if (location?.indexable && location.notebookId && location.relativePath) {
       await openNoteByNotebookPath(location.notebookId, location.relativePath);
       return;
@@ -107,14 +109,19 @@ export async function openNoteByNotebookPath(notebookId: string, relativePath: s
   if (!normalized || normalized.startsWith('/') || normalized.split('/').some((part) => !part || part === '.' || part === '..')) {
     throw new Error('Invalid notebook-relative note path');
   }
-  let notebook = useMemoStore.getState().notebooks.find((item) => item.id === notebookId);
+  let notebook = useNoteStore.getState().notebooks.find((item) => item.id === notebookId);
   if (!notebook) {
-    await useMemoStore.getState().loadNotebooks();
-    notebook = useMemoStore.getState().notebooks.find((item) => item.id === notebookId);
+    await useNoteStore.getState().loadNotebooks();
+    notebook = useNoteStore.getState().notebooks.find((item) => item.id === notebookId);
   }
   if (!notebook) throw new Error(`Notebook is unavailable: ${notebookId}`);
   const path = joinNotebookMemoPath(notebook.path, normalized);
   if (!path) throw new Error('Invalid notebook-relative note path');
+  if (await notesClient.pathStatus(path) === 'missing') {
+    throw new Error(translate(getCurrentAppLanguage(), 'memo.open.missing', {
+      path: `${notebook.name}/${normalized}`,
+    }));
+  }
   await openExternalTarget(path, { scopePath: notebook.path, destination: 'main-third' });
 }
 
@@ -125,16 +132,16 @@ export async function openNoteByPhysicalPath(rawPath: string): Promise<void> {
 
 /** Open a notebook by its explicit notebook link. */
 export async function openNotebookById(notebookId: string): Promise<boolean> {
-  const store = useMemoStore.getState();
+  const store = useNoteStore.getState();
   let notebook = store.notebooks.find((item) => item.id === notebookId);
   if (!notebook) {
     await store.loadNotebooks();
-    notebook = useMemoStore.getState().notebooks.find((item) => item.id === notebookId);
+    notebook = useNoteStore.getState().notebooks.find((item) => item.id === notebookId);
   }
   if (!notebook) return false;
   await clearWorkspaceDocument();
   await setCurrentWorkspaceNotebook(notebook);
-  useMemoStore.getState().setSelectedNotebook(notebook);
-  await useMemoStore.getState().loadPathNotes({ notebookId: notebook.id });
+  useNoteStore.getState().setSelectedNotebook(notebook);
+  await useNoteStore.getState().loadNotes({ notebookId: notebook.id });
   return true;
 }

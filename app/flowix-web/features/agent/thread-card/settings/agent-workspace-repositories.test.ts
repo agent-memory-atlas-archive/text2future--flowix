@@ -35,8 +35,8 @@ vi.mock("@platform/tauri/event-bus", () => ({
   subscribe: vi.fn(() => vi.fn()),
 }));
 
-vi.mock("@features/memo/store/memo-store", () => ({
-  useMemoStore: {
+vi.mock("@features/memo/store/note-store", () => ({
+  useNoteStore: {
     getState: () => ({
       selectedNotebook: { id: "notebook-1", name: "项目", path: "/repo/project" },
       notebooks: [{ id: "notebook-1", name: "项目", path: "/repo/project" }],

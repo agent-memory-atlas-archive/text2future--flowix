@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { PathNoteListItem } from '@/types/memo-item';
-import { MEMO_COLORS } from '@features/memo/store/memo-store';
+import type { NoteListItem } from '@/types/note-item';
+import { NOTE_COLORS } from '@features/memo/store/note-store';
 import type { NativeMenuIconImage } from '@platform/tauri/native-menu-icons';
 import { buildMemoCardContextMenuItems } from './memo-card-context-menu';
 
@@ -11,7 +11,7 @@ const memo = {
   title: 'Note',
   favorited: true,
   colors: ['blue'],
-} as PathNoteListItem;
+} as NoteListItem;
 
 const labels = {
   openInSplit: 'Open in split',
@@ -24,7 +24,7 @@ const labels = {
   colorGroup: 'Color',
   clearColor: 'Clear color',
   delete: 'Delete',
-  colors: Object.fromEntries(MEMO_COLORS.map((color) => [color, color])) as Record<typeof MEMO_COLORS[number], string>,
+  colors: Object.fromEntries(NOTE_COLORS.map((color) => [color, color])) as Record<typeof NOTE_COLORS[number], string>,
 };
 
 describe('memo card context menu builder', () => {

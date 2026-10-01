@@ -30,7 +30,7 @@ describe('MemoListViewTabs', () => {
   it('commits a pointer tab intent before the later click phase', async () => {
     const onChange = vi.fn();
     await act(async () => {
-      root.render(<MemoListViewTabs activeTab="notes" onChange={onChange} />);
+      root.render(<MemoListViewTabs activeTab="cards" onChange={onChange} />);
     });
 
     const button = host.querySelector<HTMLButtonElement>(
@@ -57,7 +57,7 @@ describe('MemoListViewTabs', () => {
   it('keeps keyboard activation on the click path', async () => {
     const onChange = vi.fn();
     await act(async () => {
-      root.render(<MemoListViewTabs activeTab="notes" onChange={onChange} />);
+      root.render(<MemoListViewTabs activeTab="cards" onChange={onChange} />);
     });
 
     const button = host.querySelector<HTMLButtonElement>(

@@ -148,26 +148,8 @@ pub fn media_kind_for_path(path: &Path) -> Option<MediaResourceKind> {
 }
 
 impl MemoFile {
-    /// Location of the notebook-owned index database. The file is internal
-    /// data and is intentionally not exposed by the notebook file tree.
-    pub fn notebook_index_db_path(&self, notebook_id: &str) -> std::io::Result<PathBuf> {
-        let notebook = self.get_notebook_config_by_id(notebook_id).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "notebook not found")
-        })?;
-        let root = PathBuf::from(notebook.path);
-        if !root.is_dir() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("notebook directory missing: {}", root.display()),
-            ));
-        }
-        let flowix_dir = root.join(".flowix");
-        fs::create_dir_all(&flowix_dir)?;
-        Ok(flowix_dir.join("notebook.db"))
-    }
-
-    pub(crate) fn open_notebook_index_db(&self, notebook_id: &str) -> std::io::Result<Connection> {
-        let path = self.notebook_index_db_path(notebook_id)?;
+    pub(crate) fn open_notebook_db(&self, notebook_id: &str) -> std::io::Result<Connection> {
+        let path = self.notebook_db_path(notebook_id)?;
         let mut conn = Connection::open(path).map_err(sqlite_to_io)?;
         conn.busy_timeout(std::time::Duration::from_secs(10))
             .map_err(sqlite_to_io)?;
@@ -276,7 +258,7 @@ impl MemoFile {
         notebook_id: &str,
         relative_path: &str,
     ) -> std::io::Result<Option<MediaResourceRecord>> {
-        let conn = self.open_notebook_index_db(notebook_id)?;
+        let conn = self.open_notebook_db(notebook_id)?;
         let resource = conn
             .query_row(
                 "SELECT id, notebook_id, relative_path, kind, size_bytes, modified_ms,
@@ -345,7 +327,7 @@ impl MemoFile {
         let size_bytes = metadata.len();
         let modified = modified_ms(absolute_path);
         let fingerprint = stable_fingerprint(absolute_path, size_bytes);
-        let conn = self.open_notebook_index_db(notebook_id)?;
+        let conn = self.open_notebook_db(notebook_id)?;
         let legacy_import_pending = conn
             .query_row(
                 "SELECT 1 FROM notebook_index_meta
@@ -498,7 +480,7 @@ impl MemoFile {
                 "media properties must be a mapping",
             ));
         }
-        let conn = self.open_notebook_index_db(notebook_id)?;
+        let conn = self.open_notebook_db(notebook_id)?;
         let updated_at = now_ms();
         let serialized = serde_json::to_string(properties)
             .map_err(|error| std::io::Error::other(error.to_string()))?;
@@ -560,7 +542,7 @@ impl MemoFile {
         notebook_id: &str,
         resource_id: &str,
     ) -> std::io::Result<bool> {
-        let conn = self.open_notebook_index_db(notebook_id)?;
+        let conn = self.open_notebook_db(notebook_id)?;
         let now = now_ms();
         let changed = conn
             .execute(
@@ -574,6 +556,146 @@ impl MemoFile {
         Ok(changed > 0)
     }
 
+    /// Refresh or retire one media catalog path after a filesystem event.
+    /// File bytes remain untouched; a missing resource is retained briefly so
+    /// a rename can preserve its identity and user properties.
+    pub fn refresh_media_resource_path(
+        &self,
+        notebook_id: &str,
+        relative_path: &str,
+    ) -> std::io::Result<()> {
+        let root = self
+            .memo_base_for_notebook_id_result(notebook_id)
+            .map_err(std::io::Error::other)?;
+        let relative = Path::new(relative_path);
+        if self
+            .file_management_policy(notebook_id)
+            .is_ignored_at(&root, relative)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "media path is excluded by notebook policy",
+            ));
+        }
+        let absolute = super::notebook_path_from_relative(&root, relative_path)
+            .map_err(std::io::Error::other)?;
+        match fs::symlink_metadata(&absolute) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "media resource is not a regular file",
+                    ));
+                }
+                let canonical_root = fs::canonicalize(&root)?;
+                let canonical_path = fs::canonicalize(&absolute)?;
+                if !canonical_path.starts_with(&canonical_root) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "media path leaves notebook",
+                    ));
+                }
+                let Some(kind) = media_kind_for_path(&absolute) else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "unsupported media resource type",
+                    ));
+                };
+                self.ensure_media_resource(notebook_id, relative_path, kind, &absolute)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let conn = self.open_notebook_db(notebook_id)?;
+                let now = now_ms();
+                conn.execute(
+                    "UPDATE media_resources
+                     SET missing_since = COALESCE(missing_since, ?1),
+                         deleted_at = ?1, updated_at = ?1
+                     WHERE notebook_id = ?2 AND relative_path = ?3",
+                    params![now, notebook_id, relative_path],
+                )
+                .map_err(sqlite_to_io)?;
+            }
+            Err(error) => return Err(error),
+        }
+        Ok(())
+    }
+
+    /// Preserve identity for a confirmed same-notebook filesystem rename.
+    /// Returns false when the old path is unknown or the destination already
+    /// has a catalog record; callers can then use ordinary path refresh.
+    pub fn move_media_resource_path(
+        &self,
+        notebook_id: &str,
+        old_relative_path: &str,
+        new_relative_path: &str,
+    ) -> std::io::Result<bool> {
+        if old_relative_path == new_relative_path {
+            return Ok(false);
+        }
+        let root = self
+            .memo_base_for_notebook_id_result(notebook_id)
+            .map_err(std::io::Error::other)?;
+        let policy = self.file_management_policy(notebook_id);
+        if policy.is_ignored_at(&root, Path::new(old_relative_path))
+            || policy.is_ignored_at(&root, Path::new(new_relative_path))
+        {
+            return Ok(false);
+        }
+        let new_absolute = super::notebook_path_from_relative(&root, new_relative_path)
+            .map_err(std::io::Error::other)?;
+        let metadata = fs::symlink_metadata(&new_absolute)?;
+        if metadata.file_type().is_symlink() || !metadata.is_file()
+            || !fs::canonicalize(&new_absolute)?.starts_with(fs::canonicalize(&root)?)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "renamed media path is not a regular notebook file",
+            ));
+        }
+        let kind = media_kind_for_path(&new_absolute).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "unsupported media resource type")
+        })?;
+        let size = metadata.len();
+        let modified = modified_ms(&new_absolute);
+        let fingerprint = stable_fingerprint(&new_absolute, size);
+        let mut conn = self.open_notebook_db(notebook_id)?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_to_io)?;
+        let destination_exists = tx
+            .query_row(
+                "SELECT 1 FROM media_resources WHERE notebook_id=?1 AND relative_path=?2",
+                params![notebook_id, new_relative_path],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(sqlite_to_io)?
+            .is_some();
+        if destination_exists {
+            return Ok(false);
+        }
+        let changed = tx
+            .execute(
+                "UPDATE media_resources SET relative_path=?1, kind=?2, size_bytes=?3,
+                    modified_ms=?4, fingerprint=?5, missing_since=NULL, deleted_at=NULL,
+                    updated_at=?6
+                 WHERE notebook_id=?7 AND relative_path=?8",
+                params![
+                    new_relative_path,
+                    kind.as_str(),
+                    size as i64,
+                    modified as i64,
+                    fingerprint,
+                    now_ms(),
+                    notebook_id,
+                    old_relative_path,
+                ],
+            )
+            .map_err(sqlite_to_io)?;
+        tx.commit().map_err(sqlite_to_io)?;
+        Ok(changed > 0)
+    }
+
     /// Rebuild the media catalog from notebook files. The media file remains
     /// on disk, while resource properties are restored from the notebook
     /// database and are not regenerated from sibling files.
@@ -584,7 +706,7 @@ impl MemoFile {
         // Snapshot the catalog once. Unchanged files need neither another
         // SQLite connection nor a fingerprint read and write on every launch.
         let existing: HashMap<String, (String, u64, u64, bool)> = {
-            let conn = self.open_notebook_index_db(notebook_id)?;
+            let conn = self.open_notebook_db(notebook_id)?;
             let mut statement = conn
                 .prepare(
                     "SELECT relative_path, kind, size_bytes, modified_ms,
@@ -607,15 +729,15 @@ impl MemoFile {
                 .map_err(sqlite_to_io)?;
             rows.collect::<Result<_, _>>().map_err(sqlite_to_io)?
         };
+        let policy = self.file_management_policy(notebook_id);
         let mut seen = HashSet::new();
         let mut indexed = 0usize;
         for entry in walkdir::WalkDir::new(&root)
             .follow_links(false)
             .into_iter()
             .filter_entry(|entry| {
-                entry.file_name() != ".flowix"
-                    && entry.file_name() != "attachments"
-                    && entry.file_name() != "attachments-cache"
+                entry.path().strip_prefix(&root)
+                    .is_ok_and(|relative| relative.as_os_str().is_empty() || !policy.is_ignored_at(&root, relative))
             })
         {
             let entry = match entry {
@@ -660,7 +782,7 @@ impl MemoFile {
             }
         }
 
-        let conn = self.open_notebook_index_db(notebook_id)?;
+        let conn = self.open_notebook_db(notebook_id)?;
         let mut statement = conn
             .prepare(
                 "SELECT id, relative_path, missing_since, deleted_at
@@ -678,6 +800,9 @@ impl MemoFile {
         let now = now_ms();
         for (id, relative, missing_since, deleted_at) in stale {
             if !seen.contains(&relative) {
+                if policy.is_ignored_at(&root, Path::new(&relative)) {
+                    continue;
+                }
                 let first_missing_at = missing_since.unwrap_or(now);
                 conn.execute(
                     "UPDATE media_resources
@@ -714,6 +839,33 @@ impl MemoFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_refresh_preserves_media_properties_across_rename_and_removal() {
+        let (memo_file, _temp, root) = fixture();
+        let old = root.join("old.png");
+        let new = root.join("new.png");
+        fs::write(&old, b"image bytes").unwrap();
+        memo_file.refresh_media_resource_path("nb_media_test", "old.png").unwrap();
+        let resource = memo_file.read_media_resource("nb_media_test", "old.png")
+            .unwrap().unwrap();
+        let properties = serde_json::json!({"caption": "Keep me"});
+        memo_file.update_media_resource_properties(
+            "nb_media_test", &resource.id, &properties,
+        ).unwrap();
+
+        fs::rename(&old, &new).unwrap();
+        memo_file.refresh_media_resource_path("nb_media_test", "new.png").unwrap();
+        memo_file.refresh_media_resource_path("nb_media_test", "old.png").unwrap();
+        let renamed = memo_file.read_media_resource("nb_media_test", "new.png")
+            .unwrap().unwrap();
+        assert_eq!(renamed.id, resource.id);
+        assert_eq!(renamed.properties, properties);
+
+        fs::remove_file(&new).unwrap();
+        memo_file.refresh_media_resource_path("nb_media_test", "new.png").unwrap();
+        assert!(memo_file.read_media_resource("nb_media_test", "new.png").unwrap().is_none());
+    }
 
     fn fixture() -> (MemoFile, tempfile::TempDir, PathBuf) {
         let temp = tempfile::tempdir().unwrap();
@@ -792,7 +944,7 @@ mod tests {
 
         assert_eq!(resource.relative_path, "photo.png");
         assert_eq!(
-            memo_file.notebook_index_db_path("nb_media_test").unwrap(),
+            memo_file.notebook_db_path("nb_media_test").unwrap(),
             root.join(".flowix/notebook.db")
         );
         assert!(root.join(".flowix/notebook.db").is_file());
@@ -866,7 +1018,7 @@ mod tests {
                 .unwrap(),
             1
         );
-        let db = memo_file.notebook_index_db_path("nb_media_test").unwrap();
+        let db = memo_file.notebook_db_path("nb_media_test").unwrap();
         fs::remove_file(&db).unwrap();
         for suffix in ["-wal", "-shm"] {
             let _ = fs::remove_file(format!("{}{}", db.display(), suffix));
@@ -916,7 +1068,7 @@ mod tests {
             .reconcile_media_resources("nb_media_test")
             .unwrap();
         {
-            let conn = memo_file.open_notebook_index_db("nb_media_test").unwrap();
+            let conn = memo_file.open_notebook_db("nb_media_test").unwrap();
             conn.execute(
                 "UPDATE media_resources SET updated_at = 123 WHERE relative_path = 'photo.png'",
                 [],

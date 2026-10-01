@@ -1,6 +1,6 @@
 import { resolveNotebookAgentFiles } from "@/lib/agent-access-defaults";
 import { useAgentAccessStore } from "@features/agent/store/agent-access-store";
-import { useMemoStore } from "@features/memo/store/memo-store";
+import { useNoteStore } from "@features/memo/store/note-store";
 import type { ComposerFolderReference } from "./composer-folder-controller";
 
 function comparablePath(path: string): string {
@@ -14,7 +14,7 @@ function fallbackFolderName(path: string): string {
 
 /** Read the folders configured for the notebook that owns the current note. */
 export function getCurrentNotebookComposerFolders(): readonly ComposerFolderReference[] {
-  const memoState = useMemoStore.getState();
+  const memoState = useNoteStore.getState();
   const notebook = memoState.selectedNotebook;
   if (!notebook) return [];
 

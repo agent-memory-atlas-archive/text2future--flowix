@@ -37,7 +37,7 @@ fn external_markdown_is_indexed_without_a_memo_id() {
 
     let outcome = dispatch_modify_event(&memo_file, &ctx, &path, FsEventKind::Create).unwrap();
     assert_path_indexed(outcome, "docs/guide/Reference.md");
-    let entry = memo_file.read_v2_note_entry_by_path("nb_test", "docs/guide/Reference.md")
+    let entry = memo_file.read_note_entry_by_path("nb_test", "docs/guide/Reference.md")
         .unwrap().expect("path entry");
     assert_eq!(entry.title, "Reference");
     assert!(entry.preview.contains("External body"));
@@ -60,7 +60,7 @@ fn external_edit_refreshes_the_same_path_entry() {
         dispatch_modify_event(&memo_file, &ctx, &path, FsEventKind::Modify).unwrap(),
         "Note.md",
     );
-    let entry = memo_file.read_v2_note_entry_by_path("nb_test", "Note.md")
+    let entry = memo_file.read_note_entry_by_path("nb_test", "Note.md")
         .unwrap().expect("updated path entry");
     assert!(entry.preview.contains("After"));
     assert!(memo_file.read_all_memos().is_empty());
@@ -81,8 +81,8 @@ fn removed_markdown_drops_only_its_path_entry() {
         dispatch_modify_event(&memo_file, &ctx, &removed, FsEventKind::Remove).unwrap(),
         "Removed.md",
     );
-    assert!(memo_file.read_v2_note_entry_by_path("nb_test", "Removed.md").unwrap().is_none());
-    assert!(memo_file.read_v2_note_entry_by_path("nb_test", "Kept.md").unwrap().is_some());
+    assert!(memo_file.read_note_entry_by_path("nb_test", "Removed.md").unwrap().is_none());
+    assert!(memo_file.read_note_entry_by_path("nb_test", "Kept.md").unwrap().is_some());
     assert!(memo_file.read_all_memos().is_empty());
 }
 
@@ -98,5 +98,5 @@ fn external_copy_keeps_authored_yaml_without_using_it_as_identity() {
     );
     assert_eq!(fs::read_to_string(&path).unwrap(), original);
     assert!(memo_file.read_all_memos().is_empty());
-    assert!(memo_file.read_v2_note_entry_by_path("nb_test", "Copied.md").unwrap().is_some());
+    assert!(memo_file.read_note_entry_by_path("nb_test", "Copied.md").unwrap().is_some());
 }

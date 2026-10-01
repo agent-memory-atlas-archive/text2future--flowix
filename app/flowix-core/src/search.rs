@@ -26,7 +26,8 @@
 //! 也会被守卫跳过 — 这是一致性优先的取舍, 换取不阻塞主线程.
 
 use std::collections::{BTreeSet, HashMap};
-use std::sync::Arc;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::Serialize;
 
@@ -518,7 +519,6 @@ pub fn search_notebooks_with_tag_filter(
         };
     }
 
-    let tokenizer = Arc::new(BigramTokenizer);
     let mut hits: Vec<NotebookSearchHit> = Vec::new();
 
     for notebook in configs.iter().filter(|config| {
@@ -526,10 +526,8 @@ pub fn search_notebooks_with_tag_filter(
             .map(|filter| config.id == filter || config.name == filter)
             .unwrap_or(true)
     }) {
-        let mut index = MemoIndex::new(tokenizer.clone());
-        rebuild_index_from_store(&mut index, memo_file, notebook.id.clone());
-
-        for hit in index.search_with_tag_filter(query, tag_filter, limit) {
+        let notebook_hits = search_cached_notebook(memo_file, notebook, query, tag_filter, limit);
+        for hit in notebook_hits {
             hits.push(NotebookSearchHit {
                 notebook_id: notebook.id.clone(),
                 notebook_name: notebook.name.clone(),
@@ -558,6 +556,71 @@ pub fn search_notebooks_with_tag_filter(
         hits,
         total,
     }
+}
+
+struct CachedNotebookIndex {
+    fingerprint: u64,
+    index: MemoIndex,
+}
+
+static NOTEBOOK_SEARCH_CACHE: OnceLock<Mutex<HashMap<String, CachedNotebookIndex>>> =
+    OnceLock::new();
+
+fn search_cached_notebook(
+    memo_file: &MemoFile,
+    notebook: &NotebookConfig,
+    query: &str,
+    tag_filter: Option<&str>,
+    limit: usize,
+) -> Vec<MemoSearchHit> {
+    // The metadata index is cheap to read and changes on normal note writes.
+    // Keep the expensive body index until its source metadata changes.
+    let entries = memo_file
+        .read_index_for_notebook_id(Some(&notebook.id))
+        .ok()
+        .flatten()
+        .map(|index| index.memos)
+        .unwrap_or_default();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    notebook.path.hash(&mut hasher);
+    for entry in &entries {
+        entry.id.hash(&mut hasher);
+        entry.relative_path.hash(&mut hasher);
+        entry.filename.hash(&mut hasher);
+        entry.preview.hash(&mut hasher);
+        entry.tags.hash(&mut hasher);
+        entry.updated_at.hash(&mut hasher);
+        if let Ok(path) =
+            notebook_path_from_relative(std::path::Path::new(&notebook.path), &entry.relative_path)
+        {
+            if let Ok(metadata) = std::fs::metadata(path) {
+                metadata.len().hash(&mut hasher);
+                metadata.modified().ok().hash(&mut hasher);
+            }
+        }
+    }
+    let fingerprint = hasher.finish();
+    let cache = NOTEBOOK_SEARCH_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Bound retained full-body indexes when many notebooks are queried.
+    if !cache.contains_key(&notebook.id) && cache.len() >= 4 {
+        if let Some(evicted) = cache.keys().next().cloned() {
+            cache.remove(&evicted);
+        }
+    }
+    let slot = cache
+        .entry(notebook.id.clone())
+        .or_insert_with(|| CachedNotebookIndex {
+            fingerprint: u64::MAX,
+            index: MemoIndex::new(Arc::new(BigramTokenizer)),
+        });
+    if slot.fingerprint != fingerprint {
+        rebuild_index_from_store(&mut slot.index, memo_file, notebook.id.clone());
+        slot.fingerprint = fingerprint;
+    }
+    slot.index.search_with_tag_filter(query, tag_filter, limit)
 }
 
 fn make_snippet(entry: &SearchIndexEntry, query_lower: &str, field: &MatchField) -> String {

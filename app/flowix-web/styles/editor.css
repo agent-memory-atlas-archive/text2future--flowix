@@ -32,6 +32,7 @@ html[data-os="windows"] .markdown-editor .tag-node.tag-node-prefix {
 }
 
 .markdown-editor {
+  --table-header-fill: color-mix(in srgb, var(--muted) 32%, var(--background));
   display: block;
   height: 100%;
   width: 100%;
@@ -267,6 +268,8 @@ html[data-os="windows"] .markdown-editor .tag-node.tag-node-prefix {
 }
 
 .memo-date-line {
+  min-height: 25px;
+  box-sizing: border-box;
   padding: 4px 0;
   color: var(--muted-foreground);
   font-family: var(--app-font-family, var(--font-sans));
@@ -426,12 +429,16 @@ html[data-os="windows"] .markdown-editor .tag-node.tag-node-prefix {
   53%, 100% { opacity: 0; }
 }
 
-.markdown-editor .ProseMirror:not(.agent-thread-card__composer-editor) > :nth-child(1 of :not(.agent-thread-card, .frontmatter-property-node)) {
-  margin-top: 0;
+.markdown-editor .ProseMirror:not(.agent-thread-card__composer-editor) > :nth-child(1 of :not(.agent-thread-card, .frontmatter-property-node)):is(h1, h2, h3, h4, h5, h6, p) {
+  padding-top: 0.8rem !important;
 }
 
-.markdown-editor .ProseMirror:not(.agent-thread-card__composer-editor) > .frontmatter-property-node:not([hidden]) + :not(.agent-thread-card, .frontmatter-property-node) {
-  padding-top: 0.8rem !important;
+.markdown-editor .ProseMirror:not(.agent-thread-card__composer-editor) > :nth-child(1 of :not(.agent-thread-card, .frontmatter-property-node)):not(h1, h2, h3, h4, h5, h6, p) {
+  margin-top: 0.8rem !important;
+}
+
+.markdown-editor .ProseMirror:not(.agent-thread-card__composer-editor) > .agent-thread-card:first-child:not(.agent-thread-card--fullscreen) {
+  margin-top: 0.8rem !important;
 }
 
 .markdown-editor .tiptap:not(.agent-thread-card__composer-editor) h1:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
@@ -725,7 +732,7 @@ html[data-os="windows"] .markdown-editor .tag-node.tag-node-prefix {
 }
 
 .markdown-editor .tiptap:not(.agent-thread-card__composer-editor) table th:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
-  background: color-mix(in srgb, var(--muted) 32%, transparent);
+  background: var(--table-header-fill);
   font-weight: 600;
   text-align: left;
 }
@@ -866,7 +873,7 @@ html[data-os="windows"] .markdown-editor .tag-node.tag-node-prefix {
   padding: 0;
   margin: 0;
   border-radius: 6px;
-  background: var(--card, var(--background, #fff));
+  background: var(--table-header-fill);
   color: var(--muted-foreground, #6b7280);
   cursor: pointer;
   opacity: 1;
@@ -907,7 +914,7 @@ html[data-os="windows"] .markdown-editor .tag-node.tag-node-prefix {
 }
 
 .markdown-editor .table-edge-insert-button:hover {
-  background: color-mix(in oklch, var(--card, var(--background, #fff)), var(--muted, #f3f4f6) 50%);
+  background: var(--table-header-fill);
   color: var(--foreground, #111827);
 }
 
@@ -1453,9 +1460,14 @@ html[data-os="windows"] .markdown-editor .tag-node.tag-node-prefix {
   display: flex;
   justify-content: center;
   padding: 1px 0;
+  pointer-events: none;
   /* 低于 dialog 蒙层 (z-1300): 删除等弹窗打开时, 工具栏需沉到蒙层之下,
    * 避免遮住弹窗背景或视觉上"漂浮"在确认框之上。 */
   z-index: 48;
+}
+
+.editor-toolbar > * {
+  pointer-events: auto;
 }
 
 .editor-toolbar .toolbar-content {

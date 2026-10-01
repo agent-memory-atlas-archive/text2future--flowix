@@ -1,23 +1,25 @@
 //! Match split OS rename events using live filesystem identity, never document text.
 use super::processor::NotebookWatchContext;
-use flowix_core::memo_file::{filesystem_identity, is_ignored_notebook_relative_path};
+use flowix_core::memo_file::{filesystem_identity, media_kind_for_path, FileManagementPolicy};
 use notify::{
     event::{ModifyKind, RenameMode},
     Event, EventKind,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 #[derive(Default)]
 pub struct RenameTracker {
     known: HashMap<PathBuf, (u64, u64)>,
+    known_directories: HashSet<PathBuf>,
     pending: HashMap<PathBuf, ((u64, u64), Instant)>,
 }
 impl RenameTracker {
     pub fn seed(roots: &[NotebookWatchContext]) -> Self {
         let mut tracker = Self::default();
         for root in roots {
+            let policy = FileManagementPolicy::from_notebook_root(&root.root);
             for entry in walkdir::WalkDir::new(&root.root)
                 .follow_links(false)
                 .into_iter()
@@ -25,7 +27,7 @@ impl RenameTracker {
                     entry
                         .path()
                         .strip_prefix(&root.root)
-                        .is_ok_and(|relative| !is_ignored_notebook_relative_path(relative))
+                        .is_ok_and(|relative| !policy.is_ignored_at(&root.root, relative))
                 })
                 .filter_map(Result::ok)
             {
@@ -34,6 +36,7 @@ impl RenameTracker {
                         .path()
                         .extension()
                         .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                    || media_kind_for_path(entry.path()).is_some()
                 {
                     tracker.observe(entry.path());
                 }
@@ -44,7 +47,13 @@ impl RenameTracker {
     fn observe(&mut self, path: &Path) {
         if let Some(identity) = filesystem_identity(path) {
             self.known.insert(path.to_path_buf(), identity);
+            if path.is_dir() {
+                self.known_directories.insert(path.to_path_buf());
+            }
         }
+    }
+    pub fn was_directory(&self, path: &Path) -> bool {
+        self.known_directories.contains(path)
     }
     pub fn correlate(&mut self, event: Event) -> Event {
         self.pending
@@ -92,7 +101,10 @@ impl RenameTracker {
                         .collect();
                     for (previous, next, id) in rebased {
                         self.known.remove(&previous);
-                        self.known.insert(next, id);
+                        self.known.insert(next.clone(), id);
+                        if self.known_directories.remove(&previous) {
+                            self.known_directories.insert(next);
+                        }
                     }
                     self.observe(path);
                     return Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
@@ -105,6 +117,7 @@ impl RenameTracker {
             self.observe(path);
         } else if matches!(event.kind, EventKind::Remove(_)) {
             self.known.remove(path);
+            self.known_directories.remove(path);
         }
         event
     }

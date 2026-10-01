@@ -1,4 +1,8 @@
-//! Memo index storage backed by the global `index.db`.
+//! Legacy memo-ID records and metadata stored in the notebook-local database.
+//!
+//! The Note projection is path-keyed in `note_index`; this module remains
+//! for callers and records that still require memo IDs. Older global rows are
+//! imported from the user-level registry database during notebook setup.
 
 use std::fs;
 use std::path::PathBuf;

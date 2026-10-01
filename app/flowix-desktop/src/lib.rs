@@ -21,6 +21,7 @@ mod document_io;
 mod document_derived;
 mod dsh;
 mod events;
+mod frame_scrollbar;
 mod lock_utils;
 mod maintenance;
 mod memo_events;

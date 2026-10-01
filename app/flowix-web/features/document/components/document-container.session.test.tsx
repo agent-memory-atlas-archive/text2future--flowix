@@ -8,7 +8,7 @@ import { I18nProvider } from '@/lib/i18n';
 import { ShortcutsProvider } from '@features/shortcuts';
 import '@features/shortcuts/actions';
 import { Toaster } from 'sonner';
-import { useMemoStore } from '@features/memo/store/memo-store';
+import { useNoteStore } from '@features/memo/store/note-store';
 import { useWorkspaceFocusStore } from '@features/workspace/store/workspace-focus-store';
 import { ensureFileDisplayIdentity, reconcileFileDisplays, findFileDisplayPath, rebaseFileDisplayPath } from '@/lib/file-display-registry';
 import { getDocumentSession } from '../store/document-runtime-session';
@@ -85,7 +85,7 @@ describe('real document container session lifecycle', () => {
     mocks.recoveryRead.mockReset().mockResolvedValue(null);
     mocks.write.mockReset().mockImplementation(async request => ({ status: 'saved', path: request.path, content: request.content }));
     mocks.rename.mockReset(); mocks.publish.mockReset();
-    vi.spyOn(useMemoStore.getState(), 'handleMemoUpdated').mockImplementation(() => {});
+    vi.spyOn(useNoteStore.getState(), 'handleMemoEvent').mockImplementation(() => {});
     useWorkspaceFocusStore.getState().focusHost('main-third');
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} unobserve() {} });
     Object.defineProperties(Range.prototype, {

@@ -56,8 +56,6 @@ pub fn theme_background_color(
         Theme::Dark => tauri::utils::config::Color(0x0E, 0x10, 0x14, A),
         // rock   oklch(0.988 0.006 92)  -> #FCFBF7
         Theme::Rock => tauri::utils::config::Color(0xFC, 0xFB, 0xF7, A),
-        // mist   oklch(0.988 0.006 78)  -> #FDFBF7
-        Theme::Mist => tauri::utils::config::Color(0xFD, 0xFB, 0xF7, A),
         // ember  oklch(0.985 0.005 50)  -> #FDF9F7
         Theme::Ember => tauri::utils::config::Color(0xFD, 0xF9, 0xF7, A),
         Theme::System => match system {
@@ -73,14 +71,14 @@ pub fn theme_background_color(
 /// 顶部画浅色分隔线 (表现为深色模式下顶部白线)�?///
 /// 分类 (按各主�? `--background` 明暗, �?`theme_background_color`):
 /// - `Dark` -> `Dark`
-/// - `Light` / `Rock` / `Mist` / `Ember` -> `Light` (鍧囦负娴呭簳涓婚)
+/// - `Light` / `Rock` / `Ember` -> `Light` (鍧囦负娴呭簳涓婚)
 /// - `System` -> `None` (璺熼殢 OS 澶栬, 淇濈暀 `ThemeChanged` 瀹炴椂璺熼殢)
 ///
 /// 注意: macOS �?`set_theme` �?app-wide (非单窗口), 任一窗口设置即全局生效�?
 pub fn os_theme_for(theme: Theme) -> Option<tauri::Theme> {
     match theme {
         Theme::Dark => Some(tauri::Theme::Dark),
-        Theme::Light | Theme::Rock | Theme::Mist | Theme::Ember => Some(tauri::Theme::Light),
+        Theme::Light | Theme::Rock | Theme::Ember => Some(tauri::Theme::Light),
         Theme::System => None,
     }
 }

@@ -13,7 +13,7 @@
  */
 (function () {
   try {
-    var VALID_RESOLVED_THEMES = ['dark', 'light', 'rock', 'mist', 'ember'];
+    var VALID_RESOLVED_THEMES = ['dark', 'light', 'rock', 'ember'];
     var params = new URLSearchParams(window.location.search || '');
     var bootTheme = params.get('bootTheme');
     var cached = bootTheme || localStorage.getItem('flowix-theme');
@@ -36,6 +36,11 @@
       window.history.replaceState(null, document.title, nextUrl);
     }
   } catch (_) {
-    // Fall back to light.css :root defaults.
+    // Invalid cache / storage read errors should still resolve to the default.
+    try {
+      var root = document.documentElement;
+      root.setAttribute('data-theme', 'rock');
+      root.style.colorScheme = 'light';
+    } catch (_) {}
   }
 })();

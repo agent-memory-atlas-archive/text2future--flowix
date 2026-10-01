@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
-import { useMemoStore, type Notebook } from '@features/memo/store/memo-store';
+import { useNoteStore, type Notebook } from '@features/memo/store/note-store';
 import { TagTree } from '@features/memo/components/tag-tree';
 
 interface MemoListNavigationDrawerProps {
@@ -23,7 +23,7 @@ export function MemoListNavigationDrawer({
   const drawerRef = useRef<HTMLElement>(null);
   const closeTimerRef = useRef<number | null>(null);
   const [isClosing, setIsClosing] = useState(false);
-  const setActiveFilter = useMemoStore((state) => state.setActiveFilter);
+  const setActiveFilter = useNoteStore((state) => state.setActiveFilter);
 
   useEffect(() => {
     if (open) setIsClosing(false);
@@ -120,7 +120,6 @@ export function MemoListNavigationDrawer({
           </div>
           <TagTree
             selectedNotebook={selectedNotebook}
-            onCountsChange={() => undefined}
             onSelectTag={selectTag}
             hideSelectionStyle
             hideSectionHeader

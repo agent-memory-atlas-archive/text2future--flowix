@@ -8,15 +8,15 @@ import {
   type UIEvent,
 } from 'react';
 
-import type { ColorFilterValue } from '@features/memo/store/memo-store';
-import { memoListItemKey, type MemoListItem } from '@/types/memo-item';
+import type { ColorFilterValue } from '@features/memo/store/note-store';
+import { noteListItemKey, type NoteListItem } from '@/types/note-item';
 
 const INITIAL_RENDER_COUNT = 120;
 const RENDER_BATCH_SIZE = 80;
 const LOAD_MORE_THRESHOLD_PX = 720;
 
 interface MemoListWindowOptions {
-  memos: MemoListItem[];
+  memos: NoteListItem[];
   activeFilter: string;
   colorFilter: ColorFilterValue;
   selectedItemKey?: string;
@@ -65,7 +65,7 @@ export function useMemoListWindow({
   const selectedIndex = useMemo(
     () =>
       selectedItemKey
-        ? filteredMemos.findIndex((memo) => memoListItemKey(memo) === selectedItemKey)
+        ? filteredMemos.findIndex((memo) => noteListItemKey(memo) === selectedItemKey)
         : -1,
     [filteredMemos, selectedItemKey],
   );

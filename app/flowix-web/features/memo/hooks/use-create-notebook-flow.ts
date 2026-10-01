@@ -4,13 +4,14 @@ import { toast } from '@/lib/toast';
 import { useI18n } from '@/lib/i18n';
 import { notebookCreateErrorMessage } from '@platform/tauri/errors';
 import { listenToNotebookImportStatus } from '@platform/tauri/client';
-import { notebookRepository } from '@features/memo/services/memo-repository';
+import { notebookRepository } from '@features/memo/services/note-repository';
 import {
   resolveNotebookImportStatusEffect,
   type NotebookCreationState,
 } from '@features/memo/hooks/create-notebook-flow-state';
-import { useMemoStore, useTagStore, type Notebook } from '@features/memo/store';
+import { useNoteStore, useTagStore, type Notebook } from '@features/memo/store';
 import { clearWorkspaceDocument } from '@features/workspace/use-cases/workspace-navigation';
+import { setCurrentWorkspaceNotebook } from '@features/memo/public/workspace-api';
 import { createNotebookRegistration } from '@features/memo/services/notebook-creation-service';
 
 const NOTEBOOK_IMPORT_POLL_INTERVAL_MS = 500;
@@ -116,8 +117,10 @@ export function useCreateNotebookFlow({
             notebook: await notebookRepository.createFromCloud(cloudNotebookId, notebookName, notebookPath ?? '', icon),
             created: true,
             needsImport: false,
+            hasTemplateSetup: false,
+            setupJob: null,
           }
-          : await createNotebookRegistration({ name: notebookName, path: notebookPath, icon });
+          : await createNotebookRegistration({ name: notebookName, path: notebookPath, icon, templateId });
         const created = registration.notebook as Notebook | null;
 
         if (!created) {
@@ -126,21 +129,16 @@ export function useCreateNotebookFlow({
           return null;
         }
 
-        if (!cloudNotebookId && templateId) {
-          const { initializeNotebookTemplate } = await import('@features/onboarding/notebook-templates');
-          await initializeNotebookTemplate(created.id, templateId, registration.created);
-        }
-
-        const memoStore = useMemoStore.getState();
+        const memoStore = useNoteStore.getState();
         const existingNotebooks = memoStore.notebooks;
         const nextNotebooks = existingNotebooks.some((notebook) => notebook.id === created.id)
           ? existingNotebooks.map((notebook) => notebook.id === created.id ? created : notebook)
           : [...existingNotebooks, created];
 
         await clearWorkspaceDocument();
+        await setCurrentWorkspaceNotebook(created);
         memoStore.setNotebooks(nextNotebooks);
         memoStore.setSelectedNotebook(created);
-        memoStore.setMemos([]);
         useTagStore.getState().setSelectedTagId(null);
         onMemoListQueryReset();
         onMemoListLoadingChange(true);
@@ -148,7 +146,7 @@ export function useCreateNotebookFlow({
 
         if (cloudNotebookId) {
           setCreationState({ status: 'idle' });
-        } else if (registration.needsImport) {
+        } else if (registration.needsImport && !registration.hasTemplateSetup) {
           const generation = ++importMonitorGenerationRef.current;
           activeImportNotebookIdRef.current = created.id;
           setCreationState({ status: 'importing', notebookId: created.id });
@@ -170,7 +168,7 @@ export function useCreateNotebookFlow({
         // complete list refresh is best-effort and must not delay selection.
         void notebookRepository.list()
           .then((freshNotebooks) => {
-            useMemoStore.getState().setNotebooks(freshNotebooks as Notebook[]);
+            useNoteStore.getState().setNotebooks(freshNotebooks as Notebook[]);
           })
           .catch((error) => {
             console.warn('[MemoList] Failed to refresh notebook list:', error);

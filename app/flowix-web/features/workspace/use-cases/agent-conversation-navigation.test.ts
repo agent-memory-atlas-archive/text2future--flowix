@@ -33,8 +33,8 @@ vi.mock('@features/document/store/document-store', () => ({
   },
 }));
 
-vi.mock('@features/memo/store/memo-store', () => ({
-  useMemoStore: {
+vi.mock('@features/memo/store/note-store', () => ({
+  useNoteStore: {
     getState: () => ({
       activeFilter: mocks.activeFilter,
       setActivePluginId: mocks.setActivePluginId,

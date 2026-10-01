@@ -9,6 +9,7 @@
  */
 export type SettingsTab =
   | 'general'
+  | 'fileDisplayRules'
   | 'format'
   | 'theme'
   | 'noteSettings'

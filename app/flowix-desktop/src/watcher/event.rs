@@ -82,8 +82,8 @@ pub enum DropReason {
     PathBlacklisted,
     /// 闅愯棌鏂囦欢 (`.xxx`), `watch_hidden = false`
     PathNotWhitelisted,
-    /// `.metadata/` 等内部目�?
-    MetadataDirectory,
+    /// `.flowix/` notebook-internal directory
+    InternalDirectory,
     /// 鏂囦欢瓒呰繃 `max_file_size`
     FileTooLarge,
 }
@@ -95,7 +95,7 @@ impl DropReason {
             Self::ExtensionMismatch => "ext-mismatch",
             Self::PathBlacklisted => "path-blacklisted",
             Self::PathNotWhitelisted => "path-not-whitelisted",
-            Self::MetadataDirectory => "metadata-dir",
+            Self::InternalDirectory => "internal-dir",
             Self::FileTooLarge => "file-too-large",
         }
     }

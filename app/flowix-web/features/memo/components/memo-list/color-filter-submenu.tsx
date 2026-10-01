@@ -1,11 +1,11 @@
 import { Check } from 'lucide-react';
-import { MEMO_COLORS, MEMO_COLOR_HEX, type ColorFilterValue } from '@features/memo/store/memo-store';
-import type { MemoColor } from '@/types/memo-item';
+import { NOTE_COLORS, NOTE_COLOR_HEX, type ColorFilterValue } from '@features/memo/store/note-store';
+import type { NoteColor } from '@/types/note-item';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { DROPDOWN_DIVIDER_SKIN } from '@shared/ui/dropdown-divider';
 
-export const COLOR_LABEL_KEYS: Record<MemoColor, import('@/lib/i18n').I18nKey> = {
+export const COLOR_LABEL_KEYS: Record<NoteColor, import('@/lib/i18n').I18nKey> = {
   red: 'document.color.red',
   orange: 'document.color.orange',
   yellow: 'document.color.yellow',
@@ -74,14 +74,14 @@ export function ColorFilterSubmenuContent({
         'none',
       )}
       <hr className={cn('mx-2 my-1 border-0', DROPDOWN_DIVIDER_SKIN)} />
-      {MEMO_COLORS.map((color) =>
+      {NOTE_COLORS.map((color) =>
         renderRow(
           color,
           t(COLOR_LABEL_KEYS[color]),
           <span
             className="block h-3.5 w-3.5 rounded-full"
             style={{
-              backgroundColor: `color-mix(in oklch, ${MEMO_COLOR_HEX[color]} 67%, white)`,
+              backgroundColor: `color-mix(in oklch, ${NOTE_COLOR_HEX[color]} 67%, white)`,
             }}
           />,
           color,

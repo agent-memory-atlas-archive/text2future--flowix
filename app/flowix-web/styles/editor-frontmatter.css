@@ -98,6 +98,11 @@ html.frontmatter-property--dragging .markdown-editor .frontmatter-property__disp
   flex: 0 0 18px;
 }
 
+.markdown-editor .frontmatter-property__type-icon--boolean .frontmatter-property__svg-icon {
+  box-sizing: border-box;
+  padding: 1px;
+}
+
 .markdown-editor .frontmatter-property__type-icon--number .frontmatter-property__svg-icon {
   width: 18px;
   flex-basis: 18px;
@@ -221,7 +226,7 @@ html.frontmatter-property--dragging .markdown-editor .frontmatter-property__disp
   border-radius: 0.75rem;
   background: var(--card);
   box-shadow: 0 8px 28px -6px rgb(0 0 0 / 24%);
-  font-family: var(--app-font-family, var(--font-sans));
+  font-family: var(--font-sans);
   font-size: var(--app-font-size, 15px);
   line-height: var(--app-line-height, 1.8);
   padding: 0.5rem 0.6rem;
@@ -240,7 +245,7 @@ html.frontmatter-property--dragging .markdown-editor .frontmatter-property__disp
   border-radius: 12px;
   background: var(--card);
   box-shadow: 0 0 24px -3px rgb(0 0 0 / 24%);
-  font-family: var(--app-font-family, var(--font-sans));
+  font-family: var(--font-sans);
   font-size: var(--app-font-size, 15px);
   line-height: var(--app-line-height, 1.8);
   padding: 4px;
@@ -342,6 +347,8 @@ html.frontmatter-property--dragging .markdown-editor .frontmatter-property__disp
 
 .frontmatter-property__preset-menu .frontmatter-property__edit-key-option {
   border-radius: 8px;
+  font-size: 14px;
+  line-height: 20px;
 }
 
 .frontmatter-property__date-picker-popover {

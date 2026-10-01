@@ -1,6 +1,7 @@
 import type { PropertyFieldConfig } from '@/lib/constants';
 import { canonicalizePropertyKey } from '@features/document/properties/property-key';
 import {
+  FrontmatterPropertyError,
   replaceVisibleFrontmatterProperties,
   SYSTEM_FRONTMATTER_KEYS,
 } from '@features/document/properties/frontmatter-model';
@@ -44,6 +45,7 @@ export function inferType(value: unknown): PropertyType {
 
 export function stringifyValue(value: unknown, type: PropertyType): string {
   if (type === 'Boolean') return value === true ? 'true' : value === false ? 'false' : '';
+  if (value && typeof value === 'object' && !Array.isArray(value)) return JSON.stringify(value);
   if (type === 'MultiSelect' || type === 'Tag' || type === 'Tags' || type === 'Color') {
     return Array.isArray(value) ? value.map((item) => String(item)).join(', ') : String(value ?? '');
   }
@@ -82,6 +84,16 @@ export function rowsFromData(
 
 export function convertRowValue(row: PropertyRow): unknown {
   const value = row.value.trim();
+  if (row.key === 'flowix_plugin') {
+    try {
+      const plugin: unknown = JSON.parse(value);
+      if (plugin && typeof plugin === 'object' && !Array.isArray(plugin)
+        && typeof (plugin as Record<string, unknown>).id === 'string') return plugin;
+    } catch {
+      // Report the same validation error for malformed JSON and missing ids.
+    }
+    throw new FrontmatterPropertyError('invalid-yaml', 'Plugin metadata must include an id');
+  }
   switch (row.type) {
     case 'Boolean':
       return value === 'true' ? true : value === 'false' ? false : '';
