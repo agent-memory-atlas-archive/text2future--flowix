@@ -250,7 +250,7 @@ fn read_dir_single_level_with_policy(
             let name = entry.file_name().to_string_lossy().to_string();
 
             if let Some((root, rules)) = policy {
-                if path.strip_prefix(root).is_ok_and(|relative| rules.is_ignored_at(root, relative)) {
+                if path.strip_prefix(root).is_ok_and(|relative| rules.is_tree_hidden_at(root, relative)) {
                     continue;
                 }
             }
@@ -355,6 +355,24 @@ pub struct NotebookViewPreferences {
     pub refresh_pending: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotebookFolderOption {
+    pub relative_path: String,
+    pub depth: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotebookSettingsTreeEntry {
+    pub relative_path: String,
+    pub is_directory: bool,
+    pub locked: bool,
+    pub hidden: bool,
+    pub default_hidden: bool,
+    pub collapsed: bool,
+}
+
 fn is_false(value: &bool) -> bool { !*value }
 
 fn notebook_preferences_path(root: &Path) -> Result<std::path::PathBuf, String> {
@@ -440,6 +458,20 @@ fn normalize_relative_folder_paths(folders: Vec<String>) -> Result<Vec<String>, 
         let value = path.to_string_lossy().replace('\\', "/");
         if !normalized.contains(&value) {
             normalized.push(value);
+        }
+    }
+    Ok(normalized)
+}
+
+fn normalize_excluded_index_paths(folders: Vec<String>) -> Result<Vec<String>, String> {
+    let mut normalized: Vec<String> = Vec::new();
+    for folder in folders {
+        if folder.is_empty() {
+            if !normalized.iter().any(|path| path.is_empty()) {
+                normalized.push(folder);
+            }
+        } else {
+            normalized.extend(normalize_relative_folder_paths(vec![folder])?);
         }
     }
     Ok(normalized)
@@ -552,6 +584,111 @@ pub fn get_file_management_candidates(
     Ok(candidates)
 }
 
+fn collect_notebook_folders(
+    root: &Path,
+    directory: &Path,
+    policy: &FileManagementPolicy,
+    folders: &mut Vec<NotebookFolderOption>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory).map_err(|error| error.to_string())?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else { continue; };
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || FileManagementPolicy::has_hidden_attribute(&path) {
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(root) else { continue; };
+        if policy.is_ignored_at(root, relative) {
+            continue;
+        }
+        let relative_path = relative.to_string_lossy().replace('\\', "/");
+        let depth = relative.components().count();
+        folders.push(NotebookFolderOption { relative_path, depth });
+        collect_notebook_folders(root, &path, policy, folders)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_notebook_folder_options(
+    notebook_path: String,
+    state: State<AppState>,
+) -> Result<Vec<NotebookFolderOption>, String> {
+    let root = Path::new(&notebook_path);
+    if !is_registered_notebook_root(root, &state) {
+        return Err("NOTEBOOK_NOT_REGISTERED".to_string());
+    }
+    let policy = read_notebook_view_preferences(root).file_management;
+    let mut folders = Vec::new();
+    collect_notebook_folders(root, root, &policy, &mut folders)?;
+    folders.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(folders)
+}
+
+fn collect_notebook_settings_tree(
+    root: &Path,
+    directory: &Path,
+    policy: &FileManagementPolicy,
+    entries: &mut Vec<NotebookSettingsTreeEntry>,
+) -> Result<(), String> {
+    let children = fs::read_dir(directory).map_err(|error| error.to_string())?;
+    for child in children.flatten() {
+        let path = child.path();
+        let Ok(metadata) = fs::symlink_metadata(&path) else { continue; };
+        if metadata.file_type().is_symlink() { continue; }
+        let Ok(relative) = path.strip_prefix(root) else { continue; };
+        let relative_path = relative.to_string_lossy().replace('\\', "/");
+        let hidden = policy.is_tree_hidden_at(root, relative);
+        let default_hidden = FileManagementPolicy::default().is_ignored_at(root, relative)
+            || policy.matches_legacy_entry(&path)
+            || FileManagementPolicy::has_hidden_attribute(&path);
+        if metadata.is_dir() {
+            let is_flowix_dir = relative_path == ".flowix";
+            let collapsed = is_flowix_dir || default_hidden || hidden;
+            let locked = relative_path == ".flowix"
+                || relative_path == ".plugin-output"
+                || relative_path.starts_with(".flowix/")
+                || relative_path.starts_with(".plugin-output/");
+            entries.push(NotebookSettingsTreeEntry { relative_path, is_directory: true, locked, hidden, default_hidden, collapsed });
+            if !collapsed {
+                collect_notebook_settings_tree(root, &path, policy, entries)?;
+            }
+        } else if relative.components().count() == 1
+            && matches!(child.file_name().to_string_lossy().as_ref(), "AGENTS.md" | ".DS_Store")
+        {
+            entries.push(NotebookSettingsTreeEntry {
+                relative_path,
+                is_directory: false,
+                locked: false,
+                hidden,
+                default_hidden,
+                collapsed: false,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_notebook_settings_tree(
+    notebook_path: String,
+    state: State<AppState>,
+) -> Result<Vec<NotebookSettingsTreeEntry>, String> {
+    let root = Path::new(&notebook_path);
+    if !is_registered_notebook_root(root, &state) {
+        return Err("NOTEBOOK_NOT_REGISTERED".to_string());
+    }
+    let policy = read_notebook_view_preferences(root).file_management;
+    let mut entries = Vec::new();
+    collect_notebook_settings_tree(root, root, &policy, &mut entries)?;
+    entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(entries)
+}
+
 #[tauri::command]
 pub fn set_notebook_view_preferences(
     notebook_path: String,
@@ -566,7 +703,8 @@ pub fn set_notebook_view_preferences(
     let root = fs::canonicalize(root)
         .map_err(|error| format!("resolve notebook directory failed: {error}"))?;
     migrate_legacy_watcher_rules(&root, &state.user_config.get_preference().watcher)?;
-    let previous_policy = read_notebook_view_preferences(&root).file_management;
+    let previous_preferences = read_notebook_view_preferences(&root);
+    let previous_policy = previous_preferences.file_management.clone();
     let path = notebook_preferences_path(&root)?;
     let parent = path
         .parent()
@@ -577,6 +715,8 @@ pub fn set_notebook_view_preferences(
         default_create_folder: normalize_default_create_folder(preferences.default_create_folder)?,
         file_management: FileManagementPolicy {
             included_paths: normalize_relative_folder_paths(preferences.file_management.included_paths)?,
+            hidden_paths: normalize_relative_folder_paths(preferences.file_management.hidden_paths)?,
+            excluded_index_paths: normalize_excluded_index_paths(preferences.file_management.excluded_index_paths)?,
             legacy_skip_dirs: previous_policy.legacy_skip_dirs.clone(),
             legacy_skip_files: previous_policy.legacy_skip_files.clone(),
             legacy_watcher_migrated: previous_policy.legacy_watcher_migrated,
@@ -585,13 +725,24 @@ pub fn set_notebook_view_preferences(
     };
     let bytes = serde_json::to_vec_pretty(&preferences)
         .map_err(|error| format!("serialize notebook preferences failed: {error}"))?;
+    let tree_visibility_changed = previous_policy.hidden_paths != preferences.file_management.hidden_paths;
+    let default_create_folder_changed = previous_preferences.default_create_folder != preferences.default_create_folder;
     let refresh_marker = root.join(".flowix/file-management-refresh-pending");
-    if previous_policy.included_paths != preferences.file_management.included_paths {
+    if previous_policy.included_paths != preferences.file_management.included_paths
+        || previous_policy.excluded_index_paths != preferences.file_management.excluded_index_paths
+    {
         flowix_core::memo_file::atomic_write_bytes(&refresh_marker, b"pending")
             .map_err(|error| format!("mark index refresh pending failed: {error}"))?;
     }
     flowix_core::memo_file::atomic_write_bytes(&path, &bytes)
         .map_err(|error| format!("write notebook preferences failed: {error}"))?;
+    if tree_visibility_changed || default_create_folder_changed {
+        let _ = app.emit("notebook-view-preferences-changed", serde_json::json!({
+            "notebookPath": notebook_path,
+            "treeVisibilityChanged": tree_visibility_changed,
+            "defaultCreateFolderChanged": default_create_folder_changed,
+        }));
+    }
     if refresh_marker.exists() {
         refresh_file_management_indexes(&root, &state, &app)?;
     }

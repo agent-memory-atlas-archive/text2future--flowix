@@ -101,7 +101,8 @@ impl MemoFile {
                 } else {
                     &entry.relative_path
                 };
-                !policy.is_ignored_at(root, std::path::Path::new(relative_path))
+                let relative = std::path::Path::new(relative_path);
+                !policy.is_index_ignored_at(root, relative)
             })
             .map(MemoFile::index_entry_to_memo)
             .collect();
@@ -272,9 +273,11 @@ impl MemoFile {
             .and_then(|id| self.get_notebook_config_by_id(id))
             .map(|config| std::path::PathBuf::from(config.path))
             .unwrap_or_else(|| self.get_memo_base());
+        let policy = super::FileManagementPolicy::from_notebook_root(&base);
         list.memos
             .into_iter()
             .filter(|e| !e.id.is_empty())
+            .filter(|entry| !policy.is_index_ignored_at(&base, std::path::Path::new(&entry.relative_path)))
             .map(|entry| {
                 let path = super::notebook_path_from_relative(&base, &entry.relative_path)
                     .unwrap_or_else(|_| base.join(&entry.filename));

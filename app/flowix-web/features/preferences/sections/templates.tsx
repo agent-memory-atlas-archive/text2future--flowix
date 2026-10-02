@@ -68,7 +68,7 @@ export function TemplatesSection() {
           <p className="text-sm text-[var(--muted-foreground)]">{t('preferences.templates.empty')}</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-2">
           {templates.map((template) => (
             <div
               key={template.id}

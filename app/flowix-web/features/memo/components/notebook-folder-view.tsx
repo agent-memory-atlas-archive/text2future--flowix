@@ -114,6 +114,15 @@ export function NotebookFolderView({
     if (isActive && notebookId === notebook.id) void tree.reload();
   }), [isActive, notebook.id, tree.reload]);
 
+  useEffect(() => subscribe<{ notebookPath: string; treeVisibilityChanged: boolean }>(
+    'notebook-view-preferences-changed',
+    ({ notebookPath, treeVisibilityChanged }) => {
+      if (isActive && treeVisibilityChanged && canonicalDirectoryPath(notebookPath) === canonicalDirectoryPath(notebook.path)) {
+        void tree.reload();
+      }
+    },
+  ), [isActive, notebook.path, tree.reload]);
+
   useEffect(() => {
     if (!isActive) return;
     let disposed = false;

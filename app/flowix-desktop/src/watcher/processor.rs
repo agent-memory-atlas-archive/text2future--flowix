@@ -31,7 +31,7 @@ fn is_markdown_path(path: &Path) -> bool {
 fn indexable_relative_path(ctx: &NotebookWatchContext, path: &Path) -> Result<String, String> {
     let relative_path = notebook_relative_path(&ctx.root, path)?;
     let relative = Path::new(&relative_path);
-    if !is_markdown_path(relative) || FileManagementPolicy::from_notebook_root(&ctx.root).is_ignored_at(&ctx.root, relative) {
+    if !is_markdown_path(relative) || FileManagementPolicy::from_notebook_root(&ctx.root).is_index_ignored_at(&ctx.root, relative) {
         return Err("not an indexable Markdown path".to_string());
     }
     Ok(relative_path)

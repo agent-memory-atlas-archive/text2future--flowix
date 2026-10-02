@@ -47,8 +47,22 @@ export interface DocTreeItem {
 
 export interface NotebookViewPreferences {
   defaultCreateFolder: string | null;
-  fileManagement: { includedPaths: string[]; legacySkipDirs?: string[]; legacySkipFiles?: string[]; legacyWatcherMigrated?: boolean };
+  fileManagement: { includedPaths: string[]; hiddenPaths: string[]; excludedIndexPaths: string[]; legacySkipDirs?: string[]; legacySkipFiles?: string[]; legacyWatcherMigrated?: boolean };
   refreshPending?: boolean;
+}
+
+export interface NotebookFolderOption {
+  relativePath: string;
+  depth: number;
+}
+
+export interface NotebookSettingsTreeEntry {
+  relativePath: string;
+  isDirectory: boolean;
+  locked: boolean;
+  hidden: boolean;
+  defaultHidden: boolean;
+  collapsed: boolean;
 }
 
 export interface DocumentPageItem {
@@ -85,6 +99,10 @@ export const files = {
     invoke<NotebookViewPreferences>('get_notebook_view_preferences', { notebookPath }),
   getFileManagementCandidates: (notebookPath: string) =>
     invoke<Array<{ relativePath: string; isDirectory: boolean; locked: boolean }>>('get_file_management_candidates', { notebookPath }),
+  getNotebookFolderOptions: (notebookPath: string) =>
+    invoke<NotebookFolderOption[]>('get_notebook_folder_options', { notebookPath }),
+  getNotebookSettingsTree: (notebookPath: string) =>
+    invoke<NotebookSettingsTreeEntry[]>('get_notebook_settings_tree', { notebookPath }),
   setNotebookViewPreferences: (notebookPath: string, preferences: NotebookViewPreferences) =>
     invoke<void>('set_notebook_view_preferences', { notebookPath, preferences }),
   watchRoot: (rootPath: string) =>

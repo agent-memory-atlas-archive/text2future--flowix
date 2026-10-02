@@ -404,11 +404,11 @@ fn handle_notify_event(
                 let new_allowed = new
                     .strip_prefix(&ctx.root)
                     .ok()
-                    .is_some_and(|p| !FileManagementPolicy::from_notebook_root(&ctx.root).is_ignored_at(&ctx.root, p));
+                    .is_some_and(|p| !FileManagementPolicy::from_notebook_root(&ctx.root).is_index_ignored_at(&ctx.root, p));
                 let old_allowed = old
                     .strip_prefix(&ctx.root)
                     .ok()
-                    .is_some_and(|p| !FileManagementPolicy::from_notebook_root(&ctx.root).is_ignored_at(&ctx.root, p));
+                    .is_some_and(|p| !FileManagementPolicy::from_notebook_root(&ctx.root).is_index_ignored_at(&ctx.root, p));
                 let new_markdown = new.extension().is_some_and(|extension| {
                     extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
                 });
@@ -457,7 +457,7 @@ fn handle_notify_event(
             Ok(relative) => relative,
             Err(_) => continue,
         };
-        if FileManagementPolicy::from_notebook_root(&ctx.root).is_ignored_at(&ctx.root, relative) {
+        if FileManagementPolicy::from_notebook_root(&ctx.root).is_index_ignored_at(&ctx.root, relative) {
             tracing::debug!(
                 "[MemoWatcher] ignored hidden/internal notebook path: {}",
                 path.display()

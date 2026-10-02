@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useAppUpdater } from '@features/shell/hooks/use-app-updater';
 import {
   Select,
@@ -22,13 +22,14 @@ import { LANGUAGE_OPTIONS, useI18n, type AppLanguage } from '@/lib/i18n';
 
 interface GeneralSectionProps {
   language: AppLanguage;
+  afterGeneral?: ReactNode;
   updateSettings: (updates: {
     language?: AppLanguage;
     productUpdates?: Partial<{ lastCheckedAt: number }>;
   }) => Promise<void>;
 }
 
-export function GeneralSection({ language, updateSettings }: GeneralSectionProps) {
+export function GeneralSection({ language, afterGeneral, updateSettings }: GeneralSectionProps) {
   const { t } = useI18n();
   const [productInfo, setProductInfo] = useState<ProductInfo | null>(null);
   const updater = useAppUpdater();
@@ -80,7 +81,7 @@ export function GeneralSection({ language, updateSettings }: GeneralSectionProps
     : null;
 
   return (
-    <div className="space-y-6 pb-16">
+    <div className="space-y-6">
       <SectionHeader title={t('preferences.general.title')} />
 
       <FieldRow
@@ -102,6 +103,8 @@ export function GeneralSection({ language, updateSettings }: GeneralSectionProps
           </SelectContent>
         </Select>
       </FieldRow>
+
+      {afterGeneral}
 
       <SectionHeader title={t('preferences.general.about')} />
 

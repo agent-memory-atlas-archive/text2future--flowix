@@ -40,8 +40,6 @@ export function NoteNavigationPanelHeaderWin({
     >
       <div className="ml-1 flex items-center">
         <NotebookIconMenu
-          noteNavigationVisible
-          onToggleNoteNavigation={onTogglePanel}
           onOpenPreferences={onOpenPreferences}
           buttonClassName="h-6 w-6"
         />

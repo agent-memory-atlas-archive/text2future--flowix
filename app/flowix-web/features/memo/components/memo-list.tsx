@@ -191,6 +191,21 @@ export function MemoList({
       useNoteStore.getState().triggerRefresh();
     }
   }), []);
+  useEffect(() => subscribe<{ notebookPath: string; defaultCreateFolderChanged: boolean }>(
+    'notebook-view-preferences-changed',
+    ({ notebookPath, defaultCreateFolderChanged }) => {
+      if (!defaultCreateFolderChanged) return;
+      const selectedNotebook = useNoteStore.getState().selectedNotebook;
+      if (!selectedNotebook || canonicalDirectoryPath(selectedNotebook.path) !== canonicalDirectoryPath(notebookPath)) return;
+      void fileApi.getNotebookViewPreferences(selectedNotebook.path).then((preferences) => {
+        if (useNoteStore.getState().selectedNotebook?.id === selectedNotebook.id) {
+          setDefaultCreateFolder(preferences.defaultCreateFolder ?? null);
+        }
+      }).catch((error) => {
+        logger.warn('refresh notebook default create folder failed', { error, notebookId: selectedNotebook.id });
+      });
+    },
+  ), []);
   const selectedListItemKey = selectedNote
       ? `path:${selectedNote.notebookId}:${selectedNote.relativePath}`
       : undefined;

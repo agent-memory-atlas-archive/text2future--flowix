@@ -1015,7 +1015,7 @@ fn collect_markdown_paths(
             }
         };
         let path = entry.path();
-        if policy.is_ignored_at(base, path.strip_prefix(base).unwrap_or(&path)) {
+        if policy.is_index_ignored_at(base, path.strip_prefix(base).unwrap_or(&path)) {
             continue;
         }
         let file_type = match entry.file_type() {

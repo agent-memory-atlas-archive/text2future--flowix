@@ -558,7 +558,7 @@ impl MemoFile {
         let normalized = relative_path.replace('\\', "/");
         let relative = Path::new(&normalized);
         if normalized != relative_path
-            || super::FileManagementPolicy::from_notebook_root(root).is_ignored_at(root, relative)
+            || super::FileManagementPolicy::from_notebook_root(root).is_index_ignored_at(root, relative)
             || !is_markdown_note_path(relative)
         {
             return Err(io::Error::new(
@@ -1830,7 +1830,7 @@ impl MemoFile {
                     || entry
                         .path()
                         .strip_prefix(&root)
-                        .map(|relative| !policy.is_ignored_at(&root, relative))
+                        .map(|relative| !policy.is_index_ignored_at(&root, relative))
                         .unwrap_or(false)
             })
         {
@@ -1851,11 +1851,8 @@ impl MemoFile {
             .get_notebook_config_by_id(notebook_id)
             .map(|config| std::path::PathBuf::from(config.path))
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "notebook not found"))?;
-        if self
-            .file_management_policy(notebook_id)
-            .is_ignored_at(&root, relative)
-            || !is_markdown_note_path(relative)
-        {
+        let policy = self.file_management_policy(notebook_id);
+        if policy.is_index_ignored_at(&root, relative) || !is_markdown_note_path(relative) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "not a notebook note path",
@@ -1927,7 +1924,9 @@ impl MemoFile {
                     || entry
                         .path()
                         .strip_prefix(&root)
-                        .map(|relative| !policy.is_ignored_at(&root, relative))
+                        .map(|relative| {
+                            !policy.is_index_ignored_at(&root, relative)
+                        })
                         .unwrap_or(false)
             })
         {
@@ -2006,7 +2005,8 @@ impl MemoFile {
         report: &mut NoteIndexReconcileReport,
     ) -> io::Result<()> {
         let relative = notebook_relative_path(root, path).map_err(io::Error::other)?;
-        if !path.exists() {
+        let policy = super::FileManagementPolicy::from_notebook_root(root);
+        if !path.exists() || policy.is_index_ignored_at(root, Path::new(&relative)) {
             conn.execute(
                 "DELETE FROM note_search_fts WHERE relative_path = ?1",
                 params![relative],

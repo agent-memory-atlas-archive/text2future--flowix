@@ -95,7 +95,7 @@ export function McpSection() {
   );
 
   return (
-    <div className="space-y-5 pb-6">
+    <div className="space-y-5">
       <SectionHeader title={t('preferences.mcp.title')} />
 
       <div className="space-y-4">

@@ -8,18 +8,13 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@shared/ui/dropdown-menu';
-import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
 import { useI18n } from '@/lib/i18n';
-import { ArrowLeftToLine, ArrowRightToLine } from 'lucide-react';
 import { PREFERENCE_TAB_GROUPS } from '@features/preferences/public/app-api';
-import { ShortcutKbd } from '@shared/ui/shortcut-kbd';
 import productLogo from '@/assets/productlogo.png';
 import { cn } from '@/lib/utils';
 import { openUrl } from '@platform/tauri/opener';
 
 interface NotebookIconMenuProps {
-  noteNavigationVisible: boolean;
-  onToggleNoteNavigation: () => void;
   /** 打开偏好设置窗口; 可传入偏好 tab id (如 'theme' / 'dsh' / 'mcp' / 'aiAgent')。 */
   onOpenPreferences: (tab?: string) => void;
   buttonClassName?: string;
@@ -33,7 +28,7 @@ const HOVER_CLOSE_DELAY_MS = 150;
 const NOTEBOOK_ICON_MENU_CLASS =
   'w-[12.8rem] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]';
 const NOTEBOOK_ICON_MENU_ITEM_CLASS =
-  'group h-7 items-center justify-start gap-1.5 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]';
+  'group h-7 items-center justify-start gap-1.5 rounded-lg px-2 py-0 text-left hover:bg-[var(--hover-bg)] hover:text-[var(--foreground)]';
 const OFFICIAL_SITE_URL = 'https://flowix.cc';
 const COMMUNITY_URL = 'https://github.com/text2future/flowix';
 
@@ -43,8 +38,6 @@ const COMMUNITY_URL = 'https://github.com/text2future/flowix';
  * - 点击整个产品图标按钮 → 展示下拉菜单
  */
 export function NotebookIconMenu({
-  noteNavigationVisible,
-  onToggleNoteNavigation,
   onOpenPreferences,
   buttonClassName,
   productIconClassName,
@@ -138,29 +131,6 @@ export function NotebookIconMenu({
         onMouseEnter={cancelClose}
         onMouseLeave={scheduleClose}
       >
-        <DropdownMenuItem
-          onClick={onToggleNoteNavigation}
-          className={NOTEBOOK_ICON_MENU_ITEM_CLASS}
-        >
-          {noteNavigationVisible ? (
-            <ArrowLeftToLine className="h-4 w-4 shrink-0" />
-          ) : (
-            <ArrowRightToLine className="h-4 w-4 shrink-0" />
-          )}
-          <span>
-            {t(
-              noteNavigationVisible
-                ? 'memo.list.notebookMenu.collapseNavigation'
-                : 'memo.list.notebookMenu.expandNavigation',
-            )}
-          </span>
-          <ShortcutKbd
-            actionId="panel.noteNavigation.toggle"
-            className="ml-auto text-[var(--muted-foreground)] group-hover:text-[var(--primary-foreground)]"
-          />
-        </DropdownMenuItem>
-        {/* 与筛选/排序等其它下拉窗一致的分割线样式 */}
-        <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
         {visiblePreferenceGroups.map((group) => (
           <div key={group.labelKey}>
             <DropdownMenuLabel className="shrink-0 px-2 py-1 text-xs font-normal uppercase tracking-wider text-[var(--muted-foreground)]">
@@ -178,7 +148,6 @@ export function NotebookIconMenu({
             ))}
           </div>
         ))}
-        <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
         <DropdownMenuLabel className="shrink-0 px-2 py-1 text-xs font-normal uppercase tracking-wider text-[var(--muted-foreground)]">
           {t('memo.list.notebookMenu.about')}
         </DropdownMenuLabel>

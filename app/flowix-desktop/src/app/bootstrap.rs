@@ -588,6 +588,8 @@ pub fn run() {
             commands::document_list::list_document_page,
             commands::file::get_notebook_view_preferences,
             commands::file::get_file_management_candidates,
+            commands::file::get_notebook_folder_options,
+            commands::file::get_notebook_settings_tree,
             commands::file::set_notebook_view_preferences,
             commands::file::read_file,
             commands::file::read_image_file,

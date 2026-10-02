@@ -30,25 +30,19 @@ interface ListColumnProps {
 function ListColumnTitlebar({
   previewVisible,
   selectedNotebook,
-  noteNavigationPhase,
   onCollapseMemoList,
-  onToggleNoteNavigation,
   onOpenPreferences,
 }: Pick<
   ListColumnProps,
   | 'previewVisible'
   | 'selectedNotebook'
-  | 'noteNavigationPhase'
   | 'onCollapseMemoList'
-  | 'onToggleNoteNavigation'
   | 'onOpenPreferences'
 >) {
   const props = {
     isPreview: previewVisible,
     selectedNotebook,
-    noteNavigationVisible: noteNavigationPhase !== 'closed',
     onCollapseMemoList,
-    onToggleNoteNavigation,
     onOpenPreferences,
   };
 
@@ -177,12 +171,10 @@ export function ListColumn({
         <ListColumnTitlebar
           previewVisible={previewVisible}
           selectedNotebook={selectedNotebook}
-          noteNavigationPhase={noteNavigationPhase}
           // In the hover preview the same control closes the popover. The
           // memo list is already hidden, so collapsing it again would not
           // dismiss the preview.
           onCollapseMemoList={previewVisible ? onPreviewLeave : onCollapseMemoList}
-          onToggleNoteNavigation={onToggleNoteNavigation}
           onOpenPreferences={onOpenPreferences}
         />
         <div className="relative min-h-0 flex-1">

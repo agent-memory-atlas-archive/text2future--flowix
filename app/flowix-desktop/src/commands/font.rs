@@ -193,7 +193,11 @@ pub fn get_font_cache_status() -> Vec<FontCacheStatus> {
         .iter()
         .map(|definition| FontCacheStatus {
             font_id: definition.id.to_string(),
-            cached: cached_font_result(definition).is_some(),
+            // This is called when the typography preferences page opens.
+            // Avoid hashing whole font files here; a cache presence check is
+            // enough for the UI hint, while full integrity validation remains
+            // in ensure_font_cached and get_cached_font_bytes.
+            cached: cached_font_metadata_present(definition),
         })
         .collect()
 }
@@ -450,6 +454,24 @@ fn cached_font_result(definition: &FontDefinition) -> Option<CachedFontResult> {
         return None;
     }
     Some(font_result(definition, false))
+}
+
+fn cached_font_metadata_present(definition: &FontDefinition) -> bool {
+    let dir = font_dir(definition.id);
+    for font in definition.archive_files {
+        let Ok(metadata) = fs::metadata(dir.join(font.file_name)) else {
+            return false;
+        };
+        if !metadata.is_file()
+            || !(4..=MAX_CACHED_FONT_FILE_BYTES).contains(&metadata.len())
+        {
+            return false;
+        }
+    }
+    let Ok(license) = fs::metadata(dir.join("OFL.txt")) else {
+        return false;
+    };
+    license.is_file() && (1..=MAX_FONT_LICENSE_BYTES).contains(&license.len())
 }
 
 fn install_font_cache(tmp_dir: &Path, final_dir: &Path) -> Result<(), String> {

@@ -34,5 +34,5 @@ pub use v2::{
     V2SyncedNotebook, PROTOCOL_EPOCH,
 };
 
-pub const DEFAULT_CLOUD_API_BASE: &str = "https://cloud.flowix-memo.com";
+pub const DEFAULT_CLOUD_API_BASE: &str = "https://cloud.flowix.cc";
 pub mod text_merge;

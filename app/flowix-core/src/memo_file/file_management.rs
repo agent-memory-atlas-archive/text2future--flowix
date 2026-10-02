@@ -9,6 +9,14 @@ use serde::{Deserialize, Serialize};
 pub struct FileManagementPolicy {
     #[serde(default)]
     pub included_paths: Vec<String>,
+    /// Explicit paths hidden from the notebook file tree, including folders
+    /// with descendants that should also remain hidden.
+    #[serde(default)]
+    pub hidden_paths: Vec<String>,
+    /// Folder subtrees that remain visible in the notebook but are skipped by
+    /// the Markdown note index.
+    #[serde(default)]
+    pub excluded_index_paths: Vec<String>,
     #[serde(default)]
     pub legacy_skip_dirs: Vec<String>,
     #[serde(default)]
@@ -117,5 +125,50 @@ impl FileManagementPolicy {
             { return true; }
         }
         false
+    }
+
+    /// Return whether a path should be omitted from the notebook file tree.
+    pub fn is_tree_hidden_at(&self, root: &Path, relative: &Path) -> bool {
+        if self.is_ignored_at(root, relative) { return true; }
+        let key = relative.to_string_lossy().replace('\\', "/");
+        self.hidden_paths.iter().any(|hidden| {
+            key == hidden.as_str()
+                || key.strip_prefix(hidden.as_str()).is_some_and(|suffix| suffix.starts_with('/'))
+        })
+    }
+
+    /// Return whether a relative path belongs to a folder subtree excluded
+    /// from the note index. This does not hide the path from the file tree.
+    pub fn is_index_excluded_at(&self, root: &Path, relative: &Path) -> bool {
+        let is_root_agents = relative.components().count() == 1
+            && relative.file_name().is_some_and(|name| name.to_string_lossy() == "AGENTS.md");
+        let default_policy = FileManagementPolicy::default();
+        if !is_root_agents
+            && (default_policy.is_ignored_at(root, relative)
+                || self.matches_legacy_entry(&root.join(relative)))
+        {
+            return true;
+        }
+        if self.excluded_index_paths.iter().any(|excluded| excluded.is_empty()) {
+            return true;
+        }
+        let key = relative.to_string_lossy().replace('\\', "/");
+        self.excluded_index_paths.iter().any(|excluded| {
+            key == excluded.as_str()
+                || key.strip_prefix(excluded.as_str()).is_some_and(|suffix| suffix.starts_with('/'))
+        })
+    }
+
+    /// Resolve index participation independently from tree visibility. The
+    /// notebook root AGENTS.md is special: it can be indexed even while its
+    /// tree display remains hidden by default.
+    pub fn is_index_ignored_at(&self, root: &Path, relative: &Path) -> bool {
+        let is_root_agents = relative.components().count() == 1
+            && relative.file_name().is_some_and(|name| name.to_string_lossy() == "AGENTS.md");
+        if is_root_agents {
+            self.is_index_excluded_at(root, relative)
+        } else {
+            self.is_ignored_at(root, relative) || self.is_index_excluded_at(root, relative)
+        }
     }
 }

@@ -10,19 +10,15 @@ import type { Notebook } from '../store';
 
 interface MemoListTitlebarWinProps {
   isPreview?: boolean;
-  noteNavigationVisible: boolean;
   selectedNotebook: Notebook | null;
   onCollapseMemoList: () => void;
-  onToggleNoteNavigation: () => void;
   onOpenPreferences: (tab?: string) => void;
 }
 
 export function MemoListTitlebarWin({
   isPreview = false,
-  noteNavigationVisible,
   selectedNotebook,
   onCollapseMemoList,
-  onToggleNoteNavigation,
   onOpenPreferences,
 }: MemoListTitlebarWinProps) {
   const { t } = useI18n();
@@ -34,8 +30,6 @@ export function MemoListTitlebarWin({
       <div className="flex items-center">
         {!isPreview && selectedNotebook && (
           <NotebookIconMenu
-            noteNavigationVisible={noteNavigationVisible}
-            onToggleNoteNavigation={onToggleNoteNavigation}
             onOpenPreferences={onOpenPreferences}
             buttonClassName="h-6 w-6 [-webkit-app-region:no-drag]"
             productIconClassName="-translate-x-[3px]"

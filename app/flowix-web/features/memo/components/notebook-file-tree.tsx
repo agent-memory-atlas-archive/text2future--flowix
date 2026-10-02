@@ -394,13 +394,9 @@ function AgentRepositoryItem({
                 <ChevronRight className={cn(
                   'absolute left-1/2 top-1/2 h-[15px] w-[15px] -translate-x-1/2 -translate-y-1/2 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] opacity-100 transition-[opacity,transform]',
                   expanded && 'rotate-90',
-                  expanded && 'text-[var(--brand)]',
                 )} aria-hidden="true" />
               </span>
-              <span className={cn(
-                'ml-1.5 min-w-0 flex-1 truncate opacity-[0.82]',
-                expanded && 'text-[var(--brand)] opacity-100',
-              )}>
+              <span className="ml-1.5 min-w-0 flex-1 truncate opacity-[0.82]">
                 {repository.name}
               </span>
           </button>

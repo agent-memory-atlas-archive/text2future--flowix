@@ -247,7 +247,7 @@ impl<'a> MemoService<'a> {
             } else {
                 &entry.relative_path
             };
-            !policy.is_ignored(Path::new(relative_path))
+            !policy.is_index_ignored_at(Path::new(&notebook.path), Path::new(relative_path))
         });
         Ok(entries)
     }

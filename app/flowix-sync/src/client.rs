@@ -79,19 +79,25 @@ impl CloudClient {
 
     async fn decode<T: DeserializeOwned>(response: reqwest::Response) -> Result<T, SyncError> {
         let status = response.status();
+        let request_id = response.headers().get("x-request-id")
+            .and_then(|value| value.to_str().ok()).map(str::to_owned);
         let bytes = response.bytes().await?;
         if !status.is_success() {
             let parsed = serde_json::from_slice::<ApiErrorEnvelope>(&bytes).ok();
+            let mut message = parsed
+                .as_ref()
+                .map(|value| value.error.message.clone())
+                .unwrap_or_else(|| String::from_utf8_lossy(&bytes).into_owned());
+            if let Some(request_id) = request_id {
+                message.push_str(&format!(" (request id: {request_id})"));
+            }
             return Err(SyncError::Api {
                 status: status.as_u16(),
                 code: parsed
                     .as_ref()
                     .map(|value| value.error.code.clone())
                     .unwrap_or_else(|| "HTTP_ERROR".to_string()),
-                message: parsed
-                    .as_ref()
-                    .map(|value| value.error.message.clone())
-                    .unwrap_or_else(|| String::from_utf8_lossy(&bytes).into_owned()),
+                message,
                 details: parsed.and_then(|value| value.error.details),
             });
         }

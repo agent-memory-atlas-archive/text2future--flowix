@@ -17,8 +17,9 @@ export const FIELD_INPUT_CLASS =
  *  `size`:
  *  - `default` (默认): 顶层 tab 标题 ── `text-base font-medium` + 分割线
  *  - `compact`:         嵌在卡片里当子标题用 ── `text-sm font-semibold` 前
- *                       景色, 不带分割线也不带 pb (靠父级的 `space-y-*` 拉开
- *                       间距, 避免跟下面的字段叠出两段空白) */
+ *                       景色, 不带分割线也不带 pb
+ *  - `field`:           与表单字段标签一致 ── `text-sm font-normal` 前景色,
+ *                       不带分割线也不带 pb */
 export function SectionHeader({
   title,
   description,
@@ -28,20 +29,22 @@ export function SectionHeader({
   title: string;
   description?: string;
   className?: string;
-  size?: 'default' | 'compact';
+  size?: 'default' | 'compact' | 'field';
 }) {
   return (
     <div
       className={cn(
-        size === 'compact' ? 'space-y-1' : 'space-y-1 pb-3 border-b border-[var(--divider)]',
+        size === 'default' ? 'space-y-1 pb-3 border-b border-[var(--divider)]' : 'space-y-1',
         className,
       )}
     >
       <h3
         className={cn(
-          size === 'compact'
-            ? 'text-sm font-semibold text-[var(--foreground)]'
-            : SECTION_HEADER_TITLE_CLASS,
+          size === 'default'
+            ? SECTION_HEADER_TITLE_CLASS
+            : size === 'field'
+              ? FIELD_TITLE_CLASS
+              : 'text-sm font-semibold text-[var(--foreground)]',
         )}
       >
         {title}

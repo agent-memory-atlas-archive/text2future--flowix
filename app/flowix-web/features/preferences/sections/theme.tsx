@@ -12,6 +12,8 @@ interface ThemeSectionProps {
   updateSettings: (updates: Partial<{ theme: ThemeId }>) => Promise<void>;
 }
 
+const THEME_DISPLAY_ORDER: readonly ThemeId[] = ['system', 'rock', 'light', 'dark', 'ember'];
+
 /**
  * 主题预览卡片。点击即应用; 当前激活卡片有强边框 + 右上角对勾。
  * 预览区根据主题画一个迷你窗口 (标题栏 + 内容区 + 主色按钮),
@@ -36,10 +38,10 @@ function ThemeCard({
       type="button"
       onClick={onSelect}
       className={cn(
-        'group relative w-full rounded-xl border border-transparent bg-transparent p-2 text-left transition-all',
-        'hover:bg-white hover:shadow-sm',
+        'group relative w-full rounded-[var(--radius)] border border-transparent bg-transparent text-left transition-all',
+        'hover:shadow-sm',
         active
-          ? 'border-[var(--primary)] bg-white'
+          ? 'border-[var(--primary)]'
           : ''
       )}
     >
@@ -52,10 +54,10 @@ function ThemeCard({
 
       {/* Preview mock window */}
       <div
-        className="relative h-24 w-full overflow-hidden rounded-lg border"
+        className="relative h-24 w-full overflow-hidden rounded-[var(--radius)] border"
         style={{
           background: preview.background,
-          borderColor: preview.accent,
+          borderColor: id === 'system' ? '#e8eaed' : preview.accent,
         }}
       >
         {id === 'system' ? (
@@ -100,16 +102,16 @@ function ThemeCard({
         )}
       </div>
 
-      <div className="mt-2 space-y-0.5">
+      <div className="mt-1 space-y-0.5">
         <div className="flex items-center gap-1.5">
-          <span className={cn(FIELD_TITLE_CLASS)}>{t(labelKey)}</span>
+          <span className={cn(FIELD_TITLE_CLASS, 'text-xs pl-[0.5em]')}>{t(labelKey)}</span>
           {isDefault && (
             <span className="rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] leading-none text-[var(--muted-foreground)]">
               {t('preferences.theme.default')}
             </span>
           )}
         </div>
-        <div className={cn(FIELD_DESC_CLASS, 'line-clamp-1')}>
+        <div className={cn(FIELD_DESC_CLASS, 'line-clamp-1 text-xs pl-[0.5em] pb-1')}>
           {t(descriptionKey)}
         </div>
       </div>
@@ -120,33 +122,40 @@ function ThemeCard({
 export function ThemeSection({ settings, updateSettings }: ThemeSectionProps) {
   const { t } = useI18n();
   const active = sanitizeTheme(settings.theme ?? DEFAULT_THEME_ID);
+  const options = [...THEME_OPTIONS].sort(
+    (left, right) => THEME_DISPLAY_ORDER.indexOf(left.id) - THEME_DISPLAY_ORDER.indexOf(right.id),
+  );
 
   return (
-    <div className="space-y-6 pb-16">
-      <SectionHeader
-        title={t('preferences.theme.title')}
-      />
+    <div className="space-y-6">
+      <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-1">
+        <SectionHeader
+          title={t('preferences.theme.title')}
+          size="field"
+        />
+        <div className="min-w-0 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            {options.map((opt) => (
+              <ThemeCard
+                key={opt.id}
+                option={opt}
+                active={active === opt.id}
+                isDefault={opt.id === DEFAULT_THEME_ID}
+                onSelect={() => updateSettings({ theme: opt.id })}
+              />
+            ))}
+          </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        {THEME_OPTIONS.map((opt) => (
-          <ThemeCard
-            key={opt.id}
-            option={opt}
-            active={active === opt.id}
-            isDefault={opt.id === DEFAULT_THEME_ID}
-            onSelect={() => updateSettings({ theme: opt.id })}
-          />
-        ))}
-      </div>
-
-      <div className="flex justify-start">
-        <Button
-          variant="outline"
-          className="px-3"
-          onClick={() => updateSettings({ theme: DEFAULT_THEME_ID })}
-        >
-          {t('preferences.resetDefaults')}
-        </Button>
+          <div className="flex justify-start">
+            <Button
+              variant="outline"
+              className="px-3"
+              onClick={() => updateSettings({ theme: DEFAULT_THEME_ID })}
+            >
+              {t('preferences.resetDefaults')}
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );

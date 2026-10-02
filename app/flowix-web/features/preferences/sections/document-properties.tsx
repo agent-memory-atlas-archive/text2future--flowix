@@ -224,7 +224,7 @@ export function DocumentPropertiesSection() {
   };
 
   return (
-    <div className="space-y-4 pb-[100px] pt-2">
+    <div className="space-y-4 pt-2">
       <SectionHeader title={t('preferences.documentProperties.title')} />
       <p className="text-sm text-[var(--muted-foreground)]">
         {t('preferences.documentProperties.description')}
