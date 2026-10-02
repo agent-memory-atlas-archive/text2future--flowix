@@ -29,6 +29,149 @@ fn v2_note_fingerprint(note: &crate::v2::V2LocalNote) -> Result<String, SyncErro
 }
 
 impl SyncManager {
+    pub fn record_v2_local_move(
+        &self,
+        notebook_id: &str,
+        from_path: &str,
+        to_path: &str,
+    ) -> Result<bool, SyncError> {
+        if !self.store.v2_notebooks(true)?.iter().any(|item| item.notebook_id == notebook_id) {
+            return Ok(false);
+        }
+        self.store.enqueue_v2_move(notebook_id, from_path, to_path)
+    }
+
+    pub fn v2_pending_moves(&self) -> Result<Vec<crate::v2::V2PendingMove>, SyncError> {
+        self.store.v2_pending_moves()
+    }
+
+    pub fn v2_pending_move(&self, operation_id: &str) -> Result<Option<crate::v2::V2PendingMove>, SyncError> {
+        self.store.v2_pending_move(operation_id)
+    }
+
+    pub fn discard_v2_move_after_conflict(
+        &self,
+        movement: &crate::v2::V2PendingMove,
+    ) -> Result<(), SyncError> {
+        self.store.discard_v2_move_after_conflict(movement)
+    }
+
+    async fn push_v2_pending_moves(
+        &self,
+        access_token: &str,
+        notebook_scope: Option<&str>,
+        generation: u64,
+    ) -> Result<HashSet<i64>, SyncError> {
+        let mut self_sync_seqs = HashSet::new();
+        for movement in self.store.v2_pending_moves()?
+            .into_iter().filter(|item| notebook_scope.is_none_or(|scope| scope == item.notebook_id)) {
+            drop(self.require_auth_generation(generation)?);
+            let result = self.client.v2_push(access_token, &[V2PushOperation::NoteMove {
+                operation_id: movement.operation_id.clone(),
+                base_revision: Some(movement.base_revision.clone()),
+                notebook_id: movement.notebook_id.clone(),
+                from_note_id: movement.from_note_id.clone(),
+                from_path: movement.from_path.clone(),
+                to_note_id: movement.to_note_id.clone(),
+                to_path: movement.to_path.clone(),
+            }]).await?;
+            let response = result.results.into_iter().next()
+                .ok_or_else(|| SyncError::InvalidState("move result omitted".into()))?;
+            if !response.ok {
+                let error = response.error.ok_or_else(|| SyncError::InvalidState("move error omitted".into()))?;
+                if (response.status == 409 && matches!(error.code.as_str(), "REVISION_CONFLICT" | "PATH_CONFLICT"))
+                    || (response.status == 404 && error.code == "FILE_NOT_FOUND")
+                {
+                    return Err(SyncError::MoveConflict {
+                        notebook_id: movement.notebook_id.clone(),
+                        operation_id: movement.operation_id.clone(),
+                        from_path: movement.from_path.clone(),
+                        to_path: movement.to_path.clone(),
+                    });
+                }
+                return Err(SyncError::Api {
+                    status: response.status, code: error.code, message: error.message,
+                    details: error.details,
+                });
+            }
+            let data = response.data.ok_or_else(|| SyncError::InvalidState("move data omitted".into()))?;
+            drop(self.require_auth_generation(generation)?);
+            self.store.acknowledge_v2_move(&movement, &data)?;
+            self_sync_seqs.insert(data.sync_seq);
+            if let Some(source_seq) = data.source_sync_seq { self_sync_seqs.insert(source_seq); }
+        }
+        Ok(self_sync_seqs)
+    }
+
+    pub async fn v2_conflict_material(
+        &self,
+        notebook_id: &str,
+        note_id: &str,
+        operation_id: &str,
+    ) -> Result<crate::v2::V2ConflictMaterial, SyncError> {
+        let generation = self.auth_generation();
+        let token = self.access_token(generation).await?;
+        let baseline = self.store.v2_note_state(note_id)?;
+        let bootstrap = self.client.v2_bootstrap(&token).await?;
+        let remote = bootstrap.notes.iter().cloned()
+            .find(|note| note.id == note_id && note.notebook_id == notebook_id)
+            .ok_or_else(|| SyncError::InvalidState(format!("conflicting cloud file {note_id} disappeared")))?;
+        let mut relocated = None;
+        if remote.deleted {
+            let mut predecessor = note_id.to_string();
+            for _ in 0..bootstrap.notes.len() {
+                let Some(next) = bootstrap.notes.iter().find(|note|
+                    note.notebook_id == notebook_id
+                        && note.moved_from_note_id.as_deref() == Some(predecessor.as_str())) else { break };
+                if !next.deleted {
+                    relocated = Some(next.clone());
+                    break;
+                }
+                predecessor = next.id.clone();
+            }
+        }
+        let base_content = match baseline.as_ref().and_then(|state| state.content_hash.as_deref()) {
+            Some(hash) => match self.download_verified_v2_blob(&token, note_id, hash).await {
+                Ok(content) => Some(content),
+                // Revision retention can remove the common ancestor while the
+                // current cloud head remains available. A missing base means
+                // merge is unsafe; let the desktop preserve a conflict copy.
+                Err(SyncError::Api { status: 404, .. }) => None,
+                Err(error) => return Err(error),
+            },
+            None => None,
+        };
+        let remote_content = match relocated.as_ref().unwrap_or(&remote).content_hash.as_deref() {
+            Some(hash) => Some(self.download_verified_v2_blob(&token, note_id, hash).await?),
+            None => None,
+        };
+        drop(self.require_auth_generation(generation)?);
+        Ok(crate::v2::V2ConflictMaterial {
+            notebook_id: notebook_id.to_string(),
+            note_id: note_id.to_string(),
+            operation_id: operation_id.to_string(),
+            remote,
+            relocated,
+            base_content,
+            remote_content,
+        })
+    }
+
+    pub fn v2_rebase_after_conflict(
+        &self,
+        remote: &crate::v2::V2BootstrapNote,
+    ) -> Result<(), SyncError> {
+        self.store.rebase_v2_note_after_conflict(remote)
+    }
+
+    pub fn v2_rebase_moved_conflict(
+        &self,
+        source: &crate::v2::V2BootstrapNote,
+        target: &crate::v2::V2BootstrapNote,
+    ) -> Result<(), SyncError> {
+        self.store.rebase_v2_moved_conflict(source, target)
+    }
+
     pub fn v2_notebook(
         &self,
         notebook_id: &str,
@@ -48,6 +191,32 @@ impl SyncManager {
         note_id: &str,
     ) -> Result<Option<crate::v2::V2NoteState>, SyncError> {
         self.store.v2_note_state(note_id)
+    }
+
+    pub async fn v2_history(&self, note_id: &str) -> Result<crate::v2::V2History, SyncError> {
+        let generation = self.auth_generation();
+        let token = self.access_token(generation).await?;
+        let history = self.client.v2_history(&token, note_id).await?;
+        let _guard = self.require_auth_generation(generation)?;
+        Ok(history)
+    }
+
+    pub async fn v2_historical_bytes(&self, note_id: &str, revision: &str)
+        -> Result<(crate::v2::V2History, Vec<u8>), SyncError> {
+        let generation = self.auth_generation();
+        let token = self.access_token(generation).await?;
+        let history = self.client.v2_history(&token, note_id).await?;
+        let entry = history.revisions.iter().find(|entry| entry.revision == revision && !entry.deleted)
+            .ok_or_else(|| SyncError::InvalidState("history revision is unavailable".into()))?;
+        let hash = entry.content_hash.as_deref()
+            .ok_or_else(|| SyncError::InvalidState("history revision has no content".into()))?;
+        let bytes = self.download_verified_v2_blob(&token, note_id, hash).await?;
+        let _guard = self.require_auth_generation(generation)?;
+        Ok((history, bytes))
+    }
+
+    pub fn v2_all_note_states(&self) -> Result<Vec<crate::v2::V2NoteState>, SyncError> {
+        self.store.v2_all_note_states()
     }
 
     pub fn v2_enabled_notebooks(&self) -> Result<Vec<crate::v2::V2SyncedNotebook>, SyncError> {
@@ -141,6 +310,12 @@ impl SyncManager {
             .iter()
             .any(|notebook| notebook.notebook_id == notebook_id)
         {
+            return Ok(false);
+        }
+        if matches!(operation, LocalChangeKind::Delete)
+            && self.store.v2_note_state(note_id)?.is_none_or(|state| state.deleted)
+        {
+            self.store.discard_v2_unsynced_note(note_id)?;
             return Ok(false);
         }
         let (_dirty, changed) = self.store.mark_v2_dirty_with_change(
@@ -365,6 +540,7 @@ impl SyncManager {
             .iter()
             .map(|notebook| notebook.notebook_id.as_str())
             .collect();
+        let mut self_sync_seqs = self.push_v2_pending_moves(access_token, notebook_scope, generation).await?;
         {
             let _generation = self.require_auth_generation(generation)?;
             self.reconcile_v2_snapshot(&enabled_ids, notebooks, notes)?;
@@ -378,9 +554,10 @@ impl SyncManager {
                 .v2_inflight_due_for_notebook(Utc::now().timestamp_millis(), scope)?,
             None => self.store.v2_inflight_due(Utc::now().timestamp_millis())?,
         };
-        let (uploaded, deleted, self_sync_seqs) = self
+        let (uploaded, deleted, pushed_seqs) = self
             .push_v2_inflight(access_token, &due, generation)
             .await?;
+        self_sync_seqs.extend(pushed_seqs);
 
         let bootstrap_required = enabled_notebooks
             .iter()
@@ -576,6 +753,8 @@ impl SyncManager {
                         operation_id: operation_id.clone(),
                         base_revision: base_revision.clone(),
                         notebook_id: dirty.entity_id.clone(),
+                        base_tree_seq: self.store.v2_notebook_cursor(&dirty.entity_id)?
+                            .max(self.store.v2_cursor()?),
                     }
                 }
                 (V2EntityType::Note, V2OperationKind::Put) => {
@@ -591,8 +770,8 @@ impl SyncManager {
                             i64::try_from(note.content.len()).map_err(|_| {
                                 SyncError::InvalidState("memo content length exceeds i64".into())
                             })?,
-                            "note",
-                            "text/markdown; charset=utf-8",
+                            if note.filename.starts_with("attachments/") { "attachment" } else { "note" },
+                            if note.filename.starts_with("attachments/") { "application/octet-stream" } else { "text/markdown; charset=utf-8" },
                         )
                         .await?;
                     drop(self.require_auth_generation(generation)?);
@@ -600,7 +779,7 @@ impl SyncManager {
                         .v2_upload_blob(
                             access_token,
                             &reservation.upload,
-                            "text/markdown; charset=utf-8",
+                            if note.filename.starts_with("attachments/") { "application/octet-stream" } else { "text/markdown; charset=utf-8" },
                             note.content.clone(),
                         )
                         .await?;
@@ -633,6 +812,11 @@ impl SyncManager {
                             id: note.id.clone(),
                             notebook_id: note.notebook_id.clone(),
                             filename: note.filename.clone(),
+                            file_kind: if note.filename.starts_with("attachments/") {
+                                "attachment".into()
+                            } else {
+                                "markdown".into()
+                            },
                             content_hash,
                             size_bytes: i64::try_from(note.content.len()).map_err(|_| {
                                 SyncError::InvalidState("memo content length exceeds i64".into())
@@ -721,7 +905,8 @@ impl SyncManager {
                         V2PushOperation::NotebookPut { operation_id, .. }
                         | V2PushOperation::NotebookDelete { operation_id, .. }
                         | V2PushOperation::NotePut { operation_id, .. }
-                        | V2PushOperation::NoteDelete { operation_id, .. } => operation_id,
+                        | V2PushOperation::NoteDelete { operation_id, .. }
+                        | V2PushOperation::NoteMove { operation_id, .. } => operation_id,
                     };
                     (operation_id.as_str(), operation)
                 })
@@ -762,6 +947,29 @@ impl SyncManager {
                         V2OperationKind::Delete => deleted += 1,
                     }
                 } else {
+                    if response.status == 409
+                        && response.error.as_ref().is_some_and(|error| error.code == "REVISION_CONFLICT")
+                    {
+                        // Never pull and acknowledge the newer cloud head while
+                        // this frozen local edit still targets an older base.
+                        // Doing so would cause the next scan to upload the local
+                        // bytes as a fresh edit and silently replace the peer.
+                        return Err(SyncError::RevisionConflict {
+                            notebook_id: operations_by_id.get(item.operation_id.as_str())
+                                .and_then(|operation| match operation {
+                                    V2PushOperation::NotePut { note, .. } => Some(note.notebook_id.clone()),
+                                    _ => None,
+                                }).unwrap_or_default(),
+                            note_id: item.entity_id.clone(),
+                            operation_id: item.operation_id.clone(),
+                            operation_kind: item.operation_kind.as_str().to_string(),
+                            current_revision: response.error.as_ref()
+                                .and_then(|error| error.details.as_ref())
+                                .and_then(|details| details.get("currentRevision"))
+                                .and_then(|value| value.as_str())
+                                .unwrap_or_default().to_string(),
+                        });
+                    }
                     let message = response
                         .error
                         .as_ref()
@@ -1267,6 +1475,7 @@ mod tests {
             operation_id: operation_id.clone(),
             base_revision: None,
             notebook_id: notebook.id.clone(),
+            base_tree_seq: 0,
         })
         .unwrap();
         manager

@@ -59,11 +59,62 @@ fn refresh_path(
 }
 
 fn emit_path_changed(app: &AppHandle, ctx: &NotebookWatchContext, relative_path: &str, deleted: bool) {
+    emit_path_changed_ui(app, ctx, relative_path, deleted);
+    record_cloud_path_change(app, ctx, relative_path, deleted);
+}
+
+fn emit_path_changed_ui(app: &AppHandle, ctx: &NotebookWatchContext, relative_path: &str, deleted: bool) {
     let _ = app.emit("flowix:path-note-changed", serde_json::json!({
         "notebookId": ctx.notebook_id,
         "relativePath": relative_path,
         "deleted": deleted,
     }));
+}
+
+fn record_cloud_path_change(app: &AppHandle, ctx: &NotebookWatchContext, relative_path: &str, deleted: bool) {
+    if !relative_path.is_empty() {
+        if let Some(state) = app.try_state::<crate::app::state::AppState>() {
+            let cloud_id = flowix_sync::v2_path_note_id(&ctx.notebook_id, relative_path);
+            let fingerprint = if deleted {
+                "deleted".to_string()
+            } else {
+                std::fs::read(ctx.root.join(relative_path))
+                    .map(|bytes| flowix_sync::v2_content_hash(&bytes))
+                    .unwrap_or_else(|_| "unobserved".to_string())
+            };
+            match state.cloud_sync.record_v2_local_change(
+                &ctx.notebook_id,
+                &cloud_id,
+                if deleted { flowix_sync::LocalChangeKind::Delete } else { flowix_sync::LocalChangeKind::Put },
+                &fingerprint,
+            ) {
+                Ok(changed) => crate::commands::cloud::schedule_notebook_sync_observation(
+                    app.clone(), ctx.notebook_id.clone(), changed,
+                ),
+                Err(error) => tracing::warn!("failed to record cloud path change: {error}"),
+            }
+        }
+    }
+}
+
+fn record_confirmed_cloud_move(
+    app: &AppHandle,
+    notebook_id: &str,
+    from_path: &str,
+    to_path: &str,
+) -> bool {
+    let Some(state) = app.try_state::<crate::app::state::AppState>() else { return false };
+    match state.cloud_sync.record_v2_local_move(notebook_id, from_path, to_path) {
+        Ok(true) => {
+            crate::commands::cloud::schedule_notebook_sync(app.clone(), notebook_id.to_string());
+            true
+        }
+        Ok(false) => false,
+        Err(error) => {
+            tracing::warn!("failed to record cloud move: {error}");
+            false
+        }
+    }
 }
 
 fn refresh_media_path(memo_file: &MemoFile, ctx: &NotebookWatchContext, path: &Path) -> Result<(), String> {
@@ -162,6 +213,34 @@ impl PathNoteEventProcessor {
         ctx: &NotebookWatchContext,
     ) {
         if process_media_event(event, memo_file, ctx) {
+            let old_media_path = event.rename_from.as_ref().and_then(|old_path| {
+                let old_ctx = NotebookWatchContext {
+                    notebook_id: event.rename_from_notebook_id.clone().unwrap_or_else(|| ctx.notebook_id.clone()),
+                    root: event.rename_from_root.clone().unwrap_or_else(|| ctx.root.clone()),
+                };
+                notebook_relative_path(&old_ctx.root, old_path).ok()
+                    .filter(|path| path.starts_with("attachments/") && old_ctx.notebook_id == ctx.notebook_id)
+            });
+            let new_media_path = notebook_relative_path(&ctx.root, &event.path).ok()
+                .filter(|path| path.starts_with("attachments/"));
+            let moved = old_media_path.as_ref().zip(new_media_path.as_ref())
+                .is_some_and(|(old, new)| record_confirmed_cloud_move(app, &ctx.notebook_id, old, new));
+            if let Ok(relative) = notebook_relative_path(&ctx.root, &event.path) {
+                if relative.starts_with("attachments/") && !moved {
+                    record_cloud_path_change(app, ctx, &relative, !event.path.exists());
+                }
+            }
+            if let Some(old_path) = &event.rename_from {
+                let old_ctx = NotebookWatchContext {
+                    notebook_id: event.rename_from_notebook_id.clone().unwrap_or_else(|| ctx.notebook_id.clone()),
+                    root: event.rename_from_root.clone().unwrap_or_else(|| ctx.root.clone()),
+                };
+                if let Ok(relative) = notebook_relative_path(&old_ctx.root, old_path) {
+                    if relative.starts_with("attachments/") && !moved {
+                        record_cloud_path_change(app, &old_ctx, &relative, true);
+                    }
+                }
+            }
             return;
         }
         if event.rename_from.is_none()
@@ -198,16 +277,20 @@ impl PathNoteEventProcessor {
         if let Some(old_path) = &event.rename_from {
             let rebase = notebook_relative_path(&ctx.root, old_path).ok()
                 .zip(notebook_relative_path(&ctx.root, &event.path).ok());
+            let cloud_move = rebase.as_ref().is_some_and(|(old, new)|
+                record_confirmed_cloud_move(app, &ctx.notebook_id, old, new));
             if let Err(error) = memo_file.reconcile_note_index(&ctx.notebook_id) {
                 tracing::warn!(notebook_id = %ctx.notebook_id, "path rename reconciliation failed: {error}");
             }
             let mut emitted = false;
             if let Ok(relative_path) = indexable_relative_path(ctx, old_path) {
-                emit_path_changed(app, ctx, &relative_path, true);
+                if cloud_move { emit_path_changed_ui(app, ctx, &relative_path, true); }
+                else { emit_path_changed(app, ctx, &relative_path, true); }
                 emitted = true;
             }
             if let Ok(relative_path) = indexable_relative_path(ctx, &event.path) {
-                emit_path_changed(app, ctx, &relative_path, false);
+                if cloud_move { emit_path_changed_ui(app, ctx, &relative_path, false); }
+                else { emit_path_changed(app, ctx, &relative_path, false); }
                 emitted = true;
             }
             if !emitted { emit_path_changed(app, ctx, "", false); }

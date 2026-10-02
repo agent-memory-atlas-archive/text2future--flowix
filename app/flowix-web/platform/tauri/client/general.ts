@@ -304,6 +304,7 @@ export interface NotebookCustomViews {
 
 export interface NotebookFileTreePreferences {
   sectionOrder: string[];
+  hiddenSections: string[];
 }
 
 // System metadata (backend ~/.flowix/boot/system.json).
@@ -335,8 +336,8 @@ export const system = {
     invoke<void>('set_custom_views', { notebookId, views }),
   getNotebookFileTreePreferences: (notebookId: string) =>
     invoke<NotebookFileTreePreferences>('get_notebook_file_tree_preferences', { notebookId }),
-  setNotebookFileTreeSectionOrder: (notebookId: string, sectionOrder: string[]) =>
-    invoke<void>('set_notebook_file_tree_section_order', { notebookId, sectionOrder }),
+  setNotebookFileTreeSectionOrder: (notebookId: string, sectionOrder: string[], hiddenSections?: string[]) =>
+    invoke<void>('set_notebook_file_tree_section_order', { notebookId, sectionOrder, hiddenSections }),
 };
 
 // Memos

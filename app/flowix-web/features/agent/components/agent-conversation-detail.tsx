@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type UIEventHandler, type WheelEventHandler } from 'react';
 
 import { DEFAULT_AGENT_TYPE_KEY } from '@/lib/agent-types';
 import type { AgentTypeKey } from '@/types/agent';
@@ -41,6 +41,7 @@ import { selectAndOpenAgentConversation } from '@features/workspace/use-cases/ag
 import { openPath, openUrl } from '@platform/tauri/opener';
 import { dialogs } from '@platform/tauri/client/desktop';
 import { isEditableTextFilePath } from '@features/editor/code-file';
+import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
 import { openNoteByDeepLink } from '@features/memo/use-cases/open-by-target';
 import {
   agentFileScopePathForRuntime,
@@ -818,32 +819,50 @@ export function AgentConversationDetail({
     );
   }
 
+  const handleBodyScroll: UIEventHandler<HTMLDivElement> = (event) => {
+    const target = event.currentTarget;
+    setShowScrollTopHint(target.scrollTop > SCROLL_DELTA_EPSILON_PX);
+    messagesControllerRef.current?.handleScroll();
+  };
+  const handleBodyWheel: WheelEventHandler<HTMLDivElement> = (event) => {
+    messagesControllerRef.current?.handleUserScrollIntent(event.deltaY);
+  };
+  const loadingIndicator = (
+    <div ref={loadingIndicatorRef} className="agent-thread-card__loading-indicator" role="status" aria-live="polite">
+      <span className="agent-thread-card__loading-cells" aria-hidden="true">
+        {[0, 1, 2, 3].map((step) => (
+          <span key={step} className="agent-thread-card__loading-cell" style={{ '--cell-step': String(step) } as CSSProperties} />
+        ))}
+      </span>
+      <span className="agent-thread-card__loading-text" />
+    </div>
+  );
+
   return (
     <section className="agent-conversation-detail markdown-editor flex h-full min-h-0 flex-col">
       <div ref={domRef} className="agent-thread-card agent-conversation-detail__card flex min-h-0 flex-1 flex-col">
-        <div className="agent-conversation-detail__body-shell">
-          <div
-            ref={bodyRef}
-            className="agent-thread-card__body"
-            data-no-context-menu-scroll
-            onScroll={(event) => {
-              const target = event.currentTarget;
-              setShowScrollTopHint(target.scrollTop > SCROLL_DELTA_EPSILON_PX);
-              messagesControllerRef.current?.handleScroll();
-            }}
-            onWheel={(event) => {
-              messagesControllerRef.current?.handleUserScrollIntent(event.deltaY);
-            }}
-          >
-            <div ref={loadingIndicatorRef} className="agent-thread-card__loading-indicator" role="status" aria-live="polite">
-              <span className="agent-thread-card__loading-cells" aria-hidden="true">
-                {[0, 1, 2, 3].map((step) => (
-                  <span key={step} className="agent-thread-card__loading-cell" style={{ '--cell-step': String(step) } as CSSProperties} />
-                ))}
-              </span>
-              <span className="agent-thread-card__loading-text" />
+        <div className="agent-conversation-detail__body-shell" data-no-context-menu-scroll>
+          {document.documentElement.dataset.platform === 'mac' ? (
+            <OverlayScrollbar
+              className="agent-conversation-detail__body-frame h-full"
+              scrollerClassName="agent-thread-card__body h-full"
+              observeContent
+              scrollerRef={bodyRef}
+              onScroll={handleBodyScroll}
+              onWheel={handleBodyWheel}
+            >
+              {loadingIndicator}
+            </OverlayScrollbar>
+          ) : (
+            <div
+              ref={bodyRef}
+              className="agent-thread-card__body"
+              onScroll={handleBodyScroll}
+              onWheel={handleBodyWheel}
+            >
+              {loadingIndicator}
             </div>
-          </div>
+          )}
           <div
             aria-hidden="true"
             className={[

@@ -227,15 +227,25 @@ async fn sync_v2_account_pass(
         "snapshot",
         None,
     );
-    for notebook in enabled {
-        let exists = read_lock(&state.memo_file, "memo_file")
-            .get_notebook_config_by_id(&notebook.notebook_id)
-            .is_some();
-        if exists {
-            canonicalize_local_keys(state, app, &notebook.notebook_id)?;
+    let (mut notebooks, mut notes) = v2_account_snapshot(state, full_local_snapshot, notebook_scope)?;
+    if full_local_snapshot {
+        let present: HashSet<_> = notes.iter().map(|note| note.id.as_str()).collect();
+        let moving: HashSet<_> = state.cloud_sync.v2_pending_moves().map_err(sync_error)?
+            .into_iter().map(|item| item.from_note_id).collect();
+        let enabled_ids: HashSet<_> = enabled.iter().map(|item| item.notebook_id.as_str()).collect();
+        for previous in state.cloud_sync.v2_all_note_states().map_err(sync_error)? {
+            if !previous.deleted && enabled_ids.contains(previous.notebook_id.as_str())
+                && notebook_scope.is_none_or(|scope| scope == previous.notebook_id)
+                && !present.contains(previous.note_id.as_str())
+                && !moving.contains(&previous.note_id)
+            {
+                state.cloud_sync.record_v2_local_change(
+                    &previous.notebook_id, &previous.note_id,
+                    flowix_sync::LocalChangeKind::Delete, "deleted",
+                ).map_err(sync_error)?;
+            }
         }
     }
-    let (notebooks, notes) = v2_account_snapshot(state, full_local_snapshot, notebook_scope)?;
     emit_activity_status(
         app,
         activity,
@@ -244,10 +254,37 @@ async fn sync_v2_account_pass(
         "transfer",
         None,
     );
-    let report_result = state
-        .cloud_sync
-        .sync_v2_snapshot_at_generation(notebook_scope, notebooks, notes, generation)
-        .await;
+    let mut conflict_attempts = 0;
+    let report_result = loop {
+        let result = state.cloud_sync
+            .sync_v2_snapshot_at_generation(notebook_scope, notebooks, notes, generation)
+            .await;
+        match result {
+            Err(SyncError::MoveConflict { operation_id, .. }) if conflict_attempts < 3 => {
+                conflict_attempts += 1;
+                let movement = state.cloud_sync.v2_pending_move(&operation_id)
+                    .map_err(sync_error)?
+                    .ok_or_else(|| "CLOUD_MOVE_CONFLICT_QUEUE_MISSING".to_string())?;
+                resolve_v2_move_conflict(state, app, &movement)?;
+                (notebooks, notes) = v2_account_snapshot(state, true, notebook_scope)?;
+            }
+            Err(SyncError::RevisionConflict {
+                notebook_id, note_id, operation_id, operation_kind, ..
+            }) if matches!(operation_kind.as_str(), "put" | "delete") && conflict_attempts < 3 => {
+                conflict_attempts += 1;
+                let material = state.cloud_sync
+                    .v2_conflict_material(&notebook_id, &note_id, &operation_id)
+                    .await.map_err(cloud_error)?;
+                if operation_kind == "delete" {
+                    resolve_v2_delete_conflict(state, app, &material)?;
+                } else {
+                    resolve_v2_markdown_conflict(state, app, &material)?;
+                }
+                (notebooks, notes) = v2_account_snapshot(state, true, notebook_scope)?;
+            }
+            other => break other,
+        }
+    };
     persist_rotated_token(state)?;
     let report = report_result.map_err(cloud_error)?;
     emit_activity_status(

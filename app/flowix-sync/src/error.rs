@@ -21,6 +21,21 @@ pub enum SyncError {
     NotebookDisabled,
     #[error("invalid cloud state: {0}")]
     InvalidState(String),
+    #[error("cloud revision conflict for {notebook_id}/{note_id}")]
+    RevisionConflict {
+        notebook_id: String,
+        note_id: String,
+        operation_id: String,
+        operation_kind: String,
+        current_revision: String,
+    },
+    #[error("cloud move conflict for {notebook_id}: {from_path} -> {to_path}")]
+    MoveConflict {
+        notebook_id: String,
+        operation_id: String,
+        from_path: String,
+        to_path: String,
+    },
 }
 
 impl SyncError {

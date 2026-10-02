@@ -42,12 +42,17 @@ html[data-os="windows"] .markdown-editor .tag-node.tag-node-prefix {
   -webkit-overflow-scrolling: touch;
 }
 
-/* Windows uses the shared overlay scrollbar wrapper. Keep the wrapper at the
- * same viewport size as the former editor scroller so ProseMirror, sticky
+/* The shared overlay scrollbar wrapper keeps the former editor scroller's
+ * viewport size so ProseMirror, sticky
  * decorations, and the toolbar keep their existing layout contract. */
 .markdown-editor .editor-content-frame {
   height: 100%;
   min-height: 0;
+}
+
+/* Stop the editor thumb above the rounded bottom corner. */
+html[data-platform="mac"] .markdown-editor .editor-content-frame > .overlay-scrollbar-track {
+  bottom: 12px;
 }
 
 .markdown-editor .editor-content {
@@ -59,6 +64,10 @@ html[data-os="windows"] .markdown-editor .tag-node.tag-node-prefix {
   overflow-y: auto;
   /* 固定滚动条 gutter 宽度, 避免 ProseMirror 内容区在滚动条出现/隐藏时抖动 */
   scrollbar-gutter: stable;
+}
+
+html[data-platform="mac"] .markdown-editor .editor-content {
+  scrollbar-gutter: auto;
 }
 
 /* Keep the blank document surface clickable all the way to the bottom of the

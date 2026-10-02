@@ -275,6 +275,25 @@ pub(crate) fn emit_with_recorded_commit_from_window(
     }
     if let Some((notebook_id, note_id, operation)) = sync_change {
         if let Some(state) = app.try_state::<crate::app::state::AppState>() {
+            let relative_path = match &event {
+                MemoEvent::Created { memo, .. } | MemoEvent::Updated { memo, .. } => {
+                    Some(memo.relative_path.clone())
+                }
+                MemoEvent::Deleted { path, .. } => {
+                    let memo_file = read_lock(&state.memo_file, "memo_file");
+                    memo_file.get_notebook_config_by_id(&notebook_id).and_then(|notebook| {
+                        flowix_core::memo_file::notebook_relative_path(
+                            std::path::Path::new(&notebook.path), std::path::Path::new(path),
+                        ).ok()
+                    })
+                }
+                _ => None,
+            };
+            let Some(relative_path) = relative_path else {
+                tracing::warn!(notebook_id, memo_id = %note_id, "cloud change has no valid notebook-relative path");
+                return commit;
+            };
+            let note_id = flowix_sync::v2_path_note_id(&notebook_id, &relative_path);
             let fingerprint = commit
                 .as_ref()
                 .map(|commit| commit.content_hash.as_str())

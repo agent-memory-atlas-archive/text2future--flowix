@@ -99,6 +99,21 @@ export interface CloudCheckout {
   expiresAt?: number | null;
 }
 
+export interface CloudNoteHistory {
+  noteId: string;
+  notebookId: string;
+  currentRevision: string;
+  revisions: Array<{
+    revision: string;
+    deleted: boolean;
+    relativePath: string | null;
+    contentHash: string | null;
+    sizeBytes: number;
+    syncSeq: number;
+    createdAt: number;
+  }>;
+}
+
 export const cloud = {
   getState: () => invoke<CloudState>('cloud_get_state'),
   register: (email: string, password: string, displayName: string) =>
@@ -126,6 +141,18 @@ export const cloud = {
     invoke<CloudCheckout>('cloud_create_checkout', { productId }),
   syncNow: (notebookId?: string) =>
     invoke<CloudSyncResult>('cloud_sync_now', { notebookId }),
+  noteHistory: (notebookId: string, relativePath: string) =>
+    invoke<CloudNoteHistory>('cloud_note_history', { notebookId, relativePath }),
+  previewNoteRevision: (notebookId: string, relativePath: string, revision: string) =>
+    invoke<string>('cloud_preview_note_revision', { notebookId, relativePath, revision }),
+  restoreNoteRevision: (notebookId: string, relativePath: string, revision: string) =>
+    invoke<void>('cloud_restore_note_revision', { notebookId, relativePath, revision }),
+  listConflicts: (notebookId: string) =>
+    invoke<string[]>('cloud_list_conflicts', { notebookId }),
+  resolveMarkdownConflict: (notebookId: string, relativePath: string, conflictPath: string, useLocal: boolean) =>
+    invoke<void>('cloud_resolve_markdown_conflict', { notebookId, relativePath, conflictPath, useLocal }),
+  resolveAttachmentConflict: (notebookId: string, relativePath: string, conflictPath: string, useLocal: boolean) =>
+    invoke<void>('cloud_resolve_attachment_conflict', { notebookId, relativePath, conflictPath, useLocal }),
 };
 
 export function listenToCloudStateChanges(

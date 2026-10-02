@@ -188,6 +188,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
   private notebookAgentSettingsDialog = new NotebookAgentSettingsDialogController();
   private isCreating = false;
   private isDestroyed = false;
+  private disposeBodyScrollbar: () => void = () => {};
   // Guards late async completions (thread creation) from
   // writing attrs after a newer submit or a document lifecycle change.
   private submitGeneration = 0;
@@ -412,6 +413,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
     this.actionsDivider = domParts.actionsDivider;
     this.collapseButton = domParts.collapseButton;
     this.body = domParts.body;
+    this.disposeBodyScrollbar = domParts.disposeBodyScrollbar;
     this.loadingIndicator = domParts.loadingIndicator;
     this.queuedMessages = domParts.queuedMessages;
     this.composer = domParts.composer;
@@ -2004,6 +2006,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
     this.interestedThreadId = null;
     this.surface.dispose();
     this.body.removeEventListener("scroll", this.boundHandleBodyScroll);
+    this.disposeBodyScrollbar();
     this.runtime.dispose();
     this.externalAgentSettings.dispose();
     this.notePicker.dispose();

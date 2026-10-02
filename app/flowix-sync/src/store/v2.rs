@@ -85,6 +85,16 @@ impl SyncStore {
                 last_error TEXT,
                 updated_at INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS v2_pending_moves (
+                from_note_id TEXT PRIMARY KEY,
+                operation_id TEXT NOT NULL UNIQUE,
+                notebook_id TEXT NOT NULL,
+                from_path TEXT NOT NULL,
+                to_note_id TEXT NOT NULL,
+                to_path TEXT NOT NULL,
+                base_revision TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            );
             "#,
         )?;
         let has_fingerprint = connection
@@ -142,6 +152,7 @@ impl SyncStore {
             transaction.execute_batch(
                 r#"
                 DELETE FROM v2_retry_state;
+                DELETE FROM v2_pending_moves;
                 DELETE FROM v2_inflight_operations;
                 DELETE FROM v2_dirty_entities;
                 DELETE FROM v2_note_states;
@@ -173,6 +184,7 @@ impl SyncStore {
         transaction.execute_batch(
             r#"
             DELETE FROM v2_retry_state;
+            DELETE FROM v2_pending_moves;
             DELETE FROM v2_inflight_operations;
             DELETE FROM v2_dirty_entities;
             DELETE FROM v2_note_states;
@@ -537,6 +549,80 @@ impl SyncStore {
         Ok(())
     }
 
+    pub fn discard_v2_unsynced_note(&self, note_id: &str) -> Result<(), SyncError> {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM v2_inflight_operations WHERE entity_type = 'note' AND entity_id = ?1",
+            [note_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM v2_dirty_entities WHERE entity_type = 'note' AND entity_id = ?1",
+            [note_id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Replace a rejected local operation's base with the remote head only
+    /// after the desktop adapter has safely merged or preserved the local bytes.
+    pub fn rebase_v2_note_after_conflict(
+        &self,
+        remote: &crate::v2::V2BootstrapNote,
+    ) -> Result<(), SyncError> {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM v2_inflight_operations WHERE entity_type = 'note' AND entity_id = ?1",
+            [&remote.id],
+        )?;
+        transaction.execute(
+            "DELETE FROM v2_dirty_entities WHERE entity_type = 'note' AND entity_id = ?1",
+            [&remote.id],
+        )?;
+        Self::write_v2_note_state(&transaction, &V2NoteState {
+            note_id: remote.id.clone(),
+            notebook_id: remote.notebook_id.clone(),
+            revision: remote.revision.clone(),
+            content_hash: remote.content_hash.clone(),
+            filename: remote.filename.clone(),
+            deleted: remote.deleted,
+            last_seq: remote.sync_seq,
+            attachments: remote.attachments.clone(),
+        })?;
+        transaction.execute(
+            "UPDATE v2_synced_notebooks SET bootstrap_required = 1, updated_at = ?2 WHERE notebook_id = ?1 AND enabled = 1",
+            params![remote.notebook_id, chrono::Utc::now().timestamp_millis()],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn rebase_v2_moved_conflict(
+        &self,
+        source: &crate::v2::V2BootstrapNote,
+        target: &crate::v2::V2BootstrapNote,
+    ) -> Result<(), SyncError> {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        transaction.execute("DELETE FROM v2_inflight_operations WHERE entity_type = 'note' AND entity_id = ?1", [&source.id])?;
+        transaction.execute("DELETE FROM v2_dirty_entities WHERE entity_type = 'note' AND entity_id = ?1", [&source.id])?;
+        for remote in [source, target] {
+            Self::write_v2_note_state(&transaction, &V2NoteState {
+                note_id: remote.id.clone(), notebook_id: remote.notebook_id.clone(),
+                revision: remote.revision.clone(), content_hash: remote.content_hash.clone(),
+                filename: remote.filename.clone(), deleted: remote.deleted,
+                last_seq: remote.sync_seq, attachments: remote.attachments.clone(),
+            })?;
+        }
+        transaction.execute(
+            "UPDATE v2_synced_notebooks SET bootstrap_required = 1, updated_at = ?2 WHERE notebook_id = ?1 AND enabled = 1",
+            params![source.notebook_id, chrono::Utc::now().timestamp_millis()],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// A notebook delete supersedes every queued note operation below it.
     /// Leaving a stale note put behind could otherwise recreate a note after
     /// the parent notebook has been deleted remotely.
@@ -686,6 +772,9 @@ impl SyncStore {
                     },
                 )?;
             }
+            crate::v2::V2PushOperation::NoteMove { .. } => {
+                return Err(SyncError::InvalidState("move requires its own two-head acknowledgement".into()));
+            }
         }
         transaction.execute(
             "DELETE FROM v2_inflight_operations WHERE operation_id = ?1",
@@ -705,6 +794,135 @@ impl SyncStore {
 
     pub fn v2_note_state(&self, note_id: &str) -> Result<Option<V2NoteState>, SyncError> {
         Self::read_v2_note_state(&self.open()?, note_id)
+    }
+
+    pub fn v2_all_note_states(&self) -> Result<Vec<V2NoteState>, SyncError> {
+        let connection = self.open()?;
+        let mut statement = connection.prepare("SELECT note_id FROM v2_note_states")?;
+        let ids = statement.query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.iter().map(|id| Self::read_v2_note_state(&connection, id).map(Option::unwrap)).collect()
+    }
+
+    pub fn enqueue_v2_move(
+        &self,
+        notebook_id: &str,
+        from_path: &str,
+        to_path: &str,
+    ) -> Result<bool, SyncError> {
+        if from_path == to_path || from_path.starts_with("attachments/") != to_path.starts_with("attachments/") {
+            return Ok(false);
+        }
+        let from_note_id = crate::v2::v2_path_note_id(notebook_id, from_path);
+        let to_note_id = crate::v2::v2_path_note_id(notebook_id, to_path);
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        let Some(source) = Self::read_v2_note_state(&transaction, &from_note_id)? else {
+            return Ok(false);
+        };
+        if source.deleted || source.filename != from_path {
+            return Ok(false);
+        }
+        if let Some(target) = Self::read_v2_note_state(&transaction, &to_note_id)? {
+            // A path keeps its deterministic ID after deletion. Reusing that
+            // tombstone is the normal way to move a file back to an earlier
+            // path; only a live or mismatched target blocks the move.
+            if !target.deleted || target.notebook_id != notebook_id || target.filename != to_path {
+                return Ok(false);
+            }
+        }
+        let operation_id = crate::v2::new_v2_operation_id();
+        let inserted = transaction.execute(
+            r#"INSERT OR IGNORE INTO v2_pending_moves
+                 (from_note_id, operation_id, notebook_id, from_path, to_note_id, to_path, base_revision, created_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
+            params![from_note_id, operation_id, notebook_id, from_path, to_note_id, to_path,
+                source.revision, chrono::Utc::now().timestamp_millis()],
+        )?;
+        if inserted > 0 {
+            transaction.execute("DELETE FROM v2_inflight_operations WHERE entity_type = 'note' AND entity_id = ?1", [&from_note_id])?;
+            transaction.execute("DELETE FROM v2_dirty_entities WHERE entity_type = 'note' AND entity_id = ?1", [&from_note_id])?;
+        }
+        transaction.commit()?;
+        Ok(inserted > 0)
+    }
+
+    pub fn v2_pending_moves(&self) -> Result<Vec<crate::v2::V2PendingMove>, SyncError> {
+        let connection = self.open()?;
+        let mut statement = connection.prepare(
+            "SELECT operation_id, notebook_id, from_note_id, from_path, to_note_id, to_path, base_revision FROM v2_pending_moves ORDER BY created_at",
+        )?;
+        let rows = statement.query_map([], |row| Ok(crate::v2::V2PendingMove {
+            operation_id: row.get(0)?, notebook_id: row.get(1)?, from_note_id: row.get(2)?,
+            from_path: row.get(3)?, to_note_id: row.get(4)?, to_path: row.get(5)?,
+            base_revision: row.get(6)?,
+        }))?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(SyncError::from)
+    }
+
+    pub fn v2_pending_move(&self, operation_id: &str) -> Result<Option<crate::v2::V2PendingMove>, SyncError> {
+        Ok(self.v2_pending_moves()?.into_iter().find(|item| item.operation_id == operation_id))
+    }
+
+    /// A rejected move is converted into a local conflict copy by the desktop
+    /// adapter. Once those bytes are safe, discard the stale move and force a
+    /// fresh tree snapshot so the current cloud paths are restored locally.
+    pub fn discard_v2_move_after_conflict(
+        &self,
+        movement: &crate::v2::V2PendingMove,
+    ) -> Result<(), SyncError> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM v2_pending_moves WHERE operation_id = ?1",
+            [&movement.operation_id],
+        )?;
+        for note_id in [&movement.from_note_id, &movement.to_note_id] {
+            transaction.execute(
+                "DELETE FROM v2_inflight_operations WHERE entity_type = 'note' AND entity_id = ?1",
+                [note_id],
+            )?;
+            transaction.execute(
+                "DELETE FROM v2_dirty_entities WHERE entity_type = 'note' AND entity_id = ?1",
+                [note_id],
+            )?;
+        }
+        transaction.execute(
+            "UPDATE v2_synced_notebooks SET bootstrap_required = 1, updated_at = ?2 WHERE notebook_id = ?1 AND enabled = 1",
+            params![movement.notebook_id, now],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn acknowledge_v2_move(
+        &self,
+        movement: &crate::v2::V2PendingMove,
+        data: &crate::v2::V2OperationData,
+    ) -> Result<(), SyncError> {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        let source = Self::read_v2_note_state(&transaction, &movement.from_note_id)?
+            .ok_or_else(|| SyncError::InvalidState("move source lost its local base".into()))?;
+        let source_revision = data.source_revision.as_ref()
+            .ok_or_else(|| SyncError::InvalidState("move response omitted source revision".into()))?;
+        let source_seq = data.source_sync_seq
+            .ok_or_else(|| SyncError::InvalidState("move response omitted source sequence".into()))?;
+        Self::write_v2_note_state(&transaction, &V2NoteState {
+            note_id: movement.from_note_id.clone(), notebook_id: movement.notebook_id.clone(),
+            revision: source_revision.clone(), content_hash: None, filename: movement.from_path.clone(),
+            deleted: true, last_seq: source_seq, attachments: Vec::new(),
+        })?;
+        Self::write_v2_note_state(&transaction, &V2NoteState {
+            note_id: movement.to_note_id.clone(), notebook_id: movement.notebook_id.clone(),
+            revision: data.revision.clone(), content_hash: source.content_hash,
+            filename: movement.to_path.clone(), deleted: false, last_seq: data.sync_seq,
+            attachments: source.attachments,
+        })?;
+        transaction.execute("DELETE FROM v2_pending_moves WHERE operation_id = ?1", [&movement.operation_id])?;
+        transaction.commit()?;
+        Ok(())
     }
 
     pub fn v2_notebook_state(

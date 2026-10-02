@@ -26,6 +26,8 @@ import {
   MoreHorizontal,
   Settings2,
   FolderPlus,
+  GripVertical,
+  PanelsTopLeft,
 } from 'lucide-react';
 
 import {
@@ -44,6 +46,8 @@ import { useI18n } from '@/lib/i18n';
 import { useComposingValue } from '@shared/hooks/use-composing-value';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
 import { Button } from '@shared/ui/button';
+import { Popover, PopoverContent } from '@shared/ui/popover';
+import { DialogHeader, DialogTitle } from '@shared/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -86,6 +90,7 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@shared/ui/context-menu';
 
@@ -440,6 +445,15 @@ export function NotebookFileTree({
   const [viewsCollapsed, setViewsCollapsed] = useState(false);
   const [filesCollapsed, setFilesCollapsed] = useState(false);
   const [sectionOrder, setSectionOrder] = useState<NotebookTreeSection[]>(DEFAULT_TREE_SECTION_ORDER);
+  const [hiddenSections, setHiddenSections] = useState<NotebookTreeSection[]>([]);
+  const [customizeOpen, setCustomizeOpen] = useState(false);
+  const [customizeAnchorRect, setCustomizeAnchorRect] = useState<DOMRect | null>(null);
+  const [customizeOrder, setCustomizeOrder] = useState<NotebookTreeSection[]>(DEFAULT_TREE_SECTION_ORDER);
+  const [customizeHidden, setCustomizeHidden] = useState<NotebookTreeSection[]>([]);
+  const draggedSection = useRef<NotebookTreeSection | null>(null);
+  const sectionDragPointerId = useRef<number | null>(null);
+  const sectionDropTargetRef = useRef<{ section: NotebookTreeSection; after: boolean } | null>(null);
+  const [sectionDropTarget, setSectionDropTarget] = useState<{ section: NotebookTreeSection; after: boolean } | null>(null);
   const [agentSectionHeight, setAgentSectionHeight] = useState(0);
   const [draft, setDraft] = useState<NotebookTreeDraftState | null>(null);
   const [selectedFilePaths, setSelectedFilePaths] = useState<string[]>([]);
@@ -467,9 +481,12 @@ export function NotebookFileTree({
     if (!isActive) return;
     let cancelled = false;
     setSectionOrder(DEFAULT_TREE_SECTION_ORDER);
+    setHiddenSections([]);
     if (!notebookId) return () => { cancelled = true; };
     void system.getNotebookFileTreePreferences(notebookId).then((preferences) => {
-      if (!cancelled) setSectionOrder(normalizeTreeSectionOrder(preferences.sectionOrder));
+      if (cancelled) return;
+      setSectionOrder(normalizeTreeSectionOrder(preferences.sectionOrder));
+      setHiddenSections((preferences.hiddenSections ?? []).filter((item): item is NotebookTreeSection => DEFAULT_TREE_SECTION_ORDER.includes(item as NotebookTreeSection)));
     }).catch((error) => {
       logger.warn('failed to load notebook file tree preferences', { error, notebookId });
     });
@@ -477,11 +494,11 @@ export function NotebookFileTree({
   }, [isActive, notebookId]);
 
   const visibleSectionOrder = useMemo(() => sectionOrder.filter((section) => (
-    section === 'files'
+    !hiddenSections.includes(section) && (section === 'files'
     || (section === 'agents' && Boolean(notebookId) && agentSectionHeight > 0)
     || (section === 'pinned' && pinnedItems.length > 0)
-    || (section === 'views' && customFilters.length > 0)
-  )), [agentSectionHeight, customFilters.length, notebookId, pinnedItems.length, sectionOrder]);
+    || (section === 'views' && customFilters.length > 0))
+  )), [agentSectionHeight, customFilters.length, hiddenSections, notebookId, pinnedItems.length, sectionOrder]);
 
   const moveTreeSection = useCallback((section: NotebookTreeSection, direction: -1 | 1) => {
     if (!notebookId) return;
@@ -601,7 +618,7 @@ export function NotebookFileTree({
   };
   const treeContentOffset = TREE_HEADER_HEIGHT + sectionOrder
     .slice(0, sectionOrder.indexOf('files'))
-    .reduce((height, section) => height + sectionHeights[section], 0);
+    .reduce((height, section) => height + (hiddenSections.includes(section) ? 0 : sectionHeights[section]), 0);
   const handleAgentSectionHeightChange = useCallback((height: number) => {
     setAgentSectionHeight((current) => current === height ? current : height);
   }, []);
@@ -1453,7 +1470,7 @@ export function NotebookFileTree({
           <ContextMenu>
             <ContextMenuTrigger asChild>
               <div className="flex min-h-full flex-col">
-          {notebookId && (
+          {notebookId && !hiddenSections.includes('agents') && (
             <AgentTasksSection
               notebookId={notebookId}
               edgeGutter={TREE_EDGE_GUTTER}
@@ -1469,7 +1486,7 @@ export function NotebookFileTree({
               )}
             />
           )}
-          {pinnedItems.length > 0 && <section
+          {pinnedItems.length > 0 && !hiddenSections.includes('pinned') && <section
             className="pb-3"
             aria-label={t('memo.fileTree.pinnedSectionTitle')}
             data-notebook-pinned-section="true"
@@ -1529,7 +1546,7 @@ export function NotebookFileTree({
                 />
               ))}
           </section>}
-          {customFilters.length > 0 && <section
+          {customFilters.length > 0 && !hiddenSections.includes('views') && <section
             className="pb-3"
             aria-label={t('memo.fileTree.viewsSectionTitle')}
             data-notebook-views-section="true"
@@ -1597,7 +1614,7 @@ export function NotebookFileTree({
               </button>
             ))}
           </section>}
-          <section
+          {!hiddenSections.includes('files') && <section
             className="flex min-h-0 flex-col pb-3"
             aria-label={t('memo.fileTree.sectionTitle')}
             data-notebook-files-section="true"
@@ -1764,7 +1781,7 @@ export function NotebookFileTree({
               ))}
             </div>
           </div>}
-          </section>
+          </section>}
               </div>
             </ContextMenuTrigger>
             <ContextMenuContent className="w-[180px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
@@ -1790,6 +1807,19 @@ export function NotebookFileTree({
               >
                 <ListPlus className="mr-2 h-4 w-4" aria-hidden="true" />
                 {t('memo.customFilter.title')}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                onClick={(event) => {
+                  setCustomizeAnchorRect(event.currentTarget.getBoundingClientRect());
+                  setCustomizeOrder([...sectionOrder]);
+                  setCustomizeHidden([...hiddenSections]);
+                  setCustomizeOpen(true);
+                }}
+                className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left transition-colors hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
+              >
+                <PanelsTopLeft className="mr-2 h-4 w-4" aria-hidden="true" />
+                自定义展示
               </ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>
@@ -1820,6 +1850,86 @@ export function NotebookFileTree({
           )}
         />
       </div>
+      <Popover open={customizeOpen} onOpenChange={setCustomizeOpen} anchorRect={customizeAnchorRect}>
+        <PopoverContent side="right" align="start" sideOffset={8} className="w-[190px] max-w-[calc(100vw-16px)] rounded-2xl p-[5px] shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
+          <DialogHeader className="mb-0 flex min-h-8 items-center justify-between px-1">
+            <DialogTitle>自定义展示</DialogTitle>
+            <button type="button" className="rounded-md px-2 py-1 text-sm font-medium text-[var(--primary)] transition-colors hover:bg-[var(--muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]" onClick={() => {
+              setSectionOrder(customizeOrder);
+              setHiddenSections(customizeHidden);
+              if (notebookId) {
+                void system.setNotebookFileTreeSectionOrder(notebookId, customizeOrder, customizeHidden).catch((error) => logger.warn('failed to save notebook file tree preferences', { error, notebookId }));
+              }
+              setCustomizeOpen(false);
+            }}>完成</button>
+          </DialogHeader>
+          <div className="space-y-0.5" aria-label="文件树分区展示与顺序">
+            {customizeOrder.map((section) => {
+              const labels: Record<NotebookTreeSection, string> = { agents: '对话', pinned: '置顶', views: '视图', files: '文件' };
+              const selected = !customizeHidden.includes(section);
+              return <div key={section} data-customize-section={section} className={cn('group relative flex h-8 items-center gap-2 rounded-lg px-2 transition-colors hover:bg-[var(--muted)]', draggedSection.current === section && 'opacity-50')}>
+                {sectionDropTarget?.section === section && draggedSection.current !== section && <span aria-hidden="true" className={cn('pointer-events-none absolute inset-x-1 z-10 h-0.5 rounded-full bg-[var(--primary)]', sectionDropTarget.after ? '-bottom-0.5' : '-top-0.5')} />}
+                <button type="button" role="checkbox" aria-checked={selected} aria-label={`展示${labels[section]}`} onClick={() => setCustomizeHidden((current) => selected ? [...current, section] : current.filter((item) => item !== section))} className={cn('notebook-file-tree__display-checkbox focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]', selected && 'notebook-file-tree__display-checkbox--checked')}>
+                  {selected && <span className="notebook-file-tree__display-checkbox-mark" aria-hidden="true" />}
+                </button>
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--foreground)]">{labels[section]}</span>
+                <button type="button" onPointerDown={(event) => {
+                  if (event.button !== 0) return;
+                  draggedSection.current = section;
+                  sectionDragPointerId.current = event.pointerId;
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  event.preventDefault();
+                }} onPointerMove={(event) => {
+                  if (sectionDragPointerId.current !== event.pointerId) return;
+                  const row = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-customize-section]');
+                  const target = row?.dataset.customizeSection as NotebookTreeSection | undefined;
+                  if (!row || !target || target === draggedSection.current) {
+                    sectionDropTargetRef.current = null;
+                    setSectionDropTarget(null);
+                    return;
+                  }
+                  const bounds = row.getBoundingClientRect();
+                  const next = { section: target, after: event.clientY >= bounds.top + bounds.height / 2 };
+                  sectionDropTargetRef.current = next;
+                  setSectionDropTarget(next);
+                }} onPointerUp={(event) => {
+                  if (sectionDragPointerId.current !== event.pointerId) return;
+                  const source = draggedSection.current;
+                  const target = sectionDropTargetRef.current;
+                  if (source && target) setCustomizeOrder((current) => {
+                    const next = current.filter((item) => item !== source);
+                    next.splice(next.indexOf(target.section) + (target.after ? 1 : 0), 0, source);
+                    return next;
+                  });
+                  draggedSection.current = null;
+                  sectionDragPointerId.current = null;
+                  sectionDropTargetRef.current = null;
+                  setSectionDropTarget(null);
+                }} onPointerCancel={() => {
+                  draggedSection.current = null;
+                  sectionDragPointerId.current = null;
+                  sectionDropTargetRef.current = null;
+                  setSectionDropTarget(null);
+                }} onKeyDown={(event) => {
+                  const direction = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+                  if (!direction) return;
+                  event.preventDefault();
+                  setCustomizeOrder((current) => {
+                    const index = current.indexOf(section);
+                    const target = index + direction;
+                    if (target < 0 || target >= current.length) return current;
+                    const next = [...current];
+                    [next[index], next[target]] = [next[target], next[index]];
+                    return next;
+                  });
+                }} aria-label={`排序${labels[section]}，使用上下方向键调整`} className="flex h-7 w-7 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)] active:cursor-grabbing">
+                  <GripVertical className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>;
+            })}
+          </div>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }

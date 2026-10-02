@@ -12,10 +12,15 @@ use flowix_core::memo_file::types::{DeleteTagReport, MoveTagReport};
 use crate::app::state::AppState;
 
 fn mark_tagged_memos_cloud_dirty(state: &AppState, notebook_id: &str, memo_ids: &[String]) {
+    let memo_file = read_lock(&state.memo_file, "memo_file");
     for memo_id in memo_ids {
+        let Some(memo) = memo_file.read_memo_for_notebook_id(notebook_id, memo_id) else {
+            continue;
+        };
+        let cloud_id = flowix_sync::v2_path_note_id(notebook_id, &memo.relative_path);
         if let Err(error) = state.cloud_sync.record_v2_local_change(
             notebook_id,
-            memo_id,
+            &cloud_id,
             flowix_sync::LocalChangeKind::Put,
             "unobserved",
         ) {

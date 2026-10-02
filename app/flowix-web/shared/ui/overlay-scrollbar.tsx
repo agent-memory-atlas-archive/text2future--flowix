@@ -9,6 +9,7 @@ import {
   type RefCallback,
   type MouseEventHandler,
   type UIEventHandler,
+  type WheelEventHandler,
 } from 'react';
 import { cn } from '@/lib/utils';
 import { useOverlayScrollbar, type OverlayScrollbarSyncOptions } from '@shared/hooks';
@@ -21,10 +22,15 @@ export interface OverlayScrollbarHandle {
 interface OverlayScrollbarProps {
   children: ReactNode;
   className?: string;
+  /** Use the shared overlay scrollbar on macOS. Defaults to true; opt out for native scrolling. */
+  customOnMac?: boolean;
+  /** Recalculate the thumb when content is changed outside React. */
+  observeContent?: boolean;
   scrollerClassName?: string;
   scrollerRef?: MutableRefObject<HTMLDivElement | null> | RefCallback<HTMLDivElement>;
   onScroll?: UIEventHandler<HTMLDivElement>;
   onMouseDown?: MouseEventHandler<HTMLDivElement>;
+  onWheel?: WheelEventHandler<HTMLDivElement>;
 }
 
 export const OverlayScrollbar = forwardRef<OverlayScrollbarHandle, OverlayScrollbarProps>(
@@ -32,10 +38,13 @@ export const OverlayScrollbar = forwardRef<OverlayScrollbarHandle, OverlayScroll
     {
       children,
       className,
+      customOnMac = true,
+      observeContent = false,
       scrollerClassName,
       scrollerRef,
       onScroll,
       onMouseDown,
+      onWheel,
     },
     ref,
   ) {
@@ -45,6 +54,7 @@ export const OverlayScrollbar = forwardRef<OverlayScrollbarHandle, OverlayScroll
       overlayScrollbarThumbProps,
       updateOverlayScrollbar,
       scheduleOverlayScrollbar,
+      hasUserScrollIntent,
     } = useOverlayScrollbar();
 
     const setScrollerRef = useCallback((node: HTMLDivElement | null) => {
@@ -75,21 +85,40 @@ export const OverlayScrollbar = forwardRef<OverlayScrollbarHandle, OverlayScroll
       }
     });
 
+    useLayoutEffect(() => {
+      const scroller = internalScrollerRef.current;
+      if (!observeContent || !scroller) return;
+      const sync = () => scheduleOverlayScrollbar(scroller, { reveal: false, schedule: false });
+      const contentObserver = new MutationObserver(sync);
+      contentObserver.observe(scroller, { childList: true, characterData: true, subtree: true });
+      const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(sync);
+      resizeObserver?.observe(scroller);
+      return () => {
+        contentObserver.disconnect();
+        resizeObserver?.disconnect();
+      };
+    }, [observeContent, scheduleOverlayScrollbar]);
+
     const handleScroll: UIEventHandler<HTMLDivElement> = useCallback((event) => {
-      scheduleOverlayScrollbar(event.currentTarget);
+      const userInitiated = hasUserScrollIntent();
+      scheduleOverlayScrollbar(event.currentTarget, {
+        reveal: userInitiated,
+        schedule: userInitiated,
+      });
       onScroll?.(event);
-    }, [onScroll, scheduleOverlayScrollbar]);
+    }, [hasUserScrollIntent, onScroll, scheduleOverlayScrollbar]);
 
     return (
       <div
         ref={overlayScrollbarFrameRef}
-        className={cn('overlay-scrollbar-frame', className)}
+        className={cn('overlay-scrollbar-frame', customOnMac && 'overlay-scrollbar-frame--custom-mac', className)}
       >
         <div
           ref={setScrollerRef}
           className={cn('overlay-scrollbar', scrollerClassName)}
           onScroll={handleScroll}
           onMouseDown={onMouseDown}
+          onWheel={onWheel}
         >
           {children}
         </div>

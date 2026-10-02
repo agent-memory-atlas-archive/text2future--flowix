@@ -8,6 +8,7 @@ export interface OverlayScrollbarDomController {
 interface OverlayScrollbarDomOptions {
   frameClassName?: string;
   scrollerClassName?: string;
+  observeContent?: boolean;
 }
 
 export function createOverlayScrollbarDom(
@@ -36,6 +37,8 @@ export function createOverlayScrollbarDom(
 
   const ownerWindow = ownerDocument.defaultView;
   let hideTimer: number | null = null;
+  let updateFrame: number | null = null;
+  let userScrollIntentUntil = 0;
   let drag: {
     pointerId: number;
     startY: number;
@@ -81,6 +84,15 @@ export function createOverlayScrollbarDom(
 
     if (syncOptions.reveal !== false) frame.dataset.scrolling = 'true';
     if (syncOptions.schedule !== false) scheduleHide();
+  };
+
+  const markUserScrollIntent = () => {
+    userScrollIntentUntil = Date.now() + 200;
+  };
+  const handleKeyDown = (event: KeyboardEvent) => {
+    if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
+      markUserScrollIntent();
+    }
   };
 
   const finishDrag = (event: PointerEvent) => {
@@ -142,19 +154,64 @@ export function createOverlayScrollbarDom(
       return;
     }
     event.preventDefault();
+    markUserScrollIntent();
     scroller.scrollTop += event.deltaY;
     update();
   };
 
-  const handleScroll = () => update();
+  const handleScroll = () => {
+    const userInitiated = Date.now() <= userScrollIntentUntil;
+    update({ reveal: userInitiated, schedule: userInitiated });
+  };
   const handleResize = () => update({ reveal: false, schedule: false });
+  const handleTrackPointerMove = (event: PointerEvent) => {
+    if (event.pointerType === 'mouse' || event.pointerType === 'pen') {
+      frame.dataset.trackHover = 'true';
+    }
+  };
+  const clearTrackHover = () => { delete frame.dataset.trackHover; };
+  const handleTrackPointerLeave = (event: PointerEvent) => {
+    if (event.relatedTarget !== track && event.relatedTarget !== thumb) clearTrackHover();
+  };
+  const handleAncestorScroll = (event: Event) => {
+    const target = event.target;
+    if (target instanceof Node && target !== scroller && target.contains(frame)) {
+      clearTrackHover();
+    }
+  };
+
+  const scheduleQuietUpdate = () => {
+    if (!ownerWindow || updateFrame !== null) return;
+    updateFrame = ownerWindow.requestAnimationFrame(() => {
+      updateFrame = null;
+      update({ reveal: false, schedule: false });
+    });
+  };
+  const contentObserver = options.observeContent && typeof MutationObserver !== 'undefined'
+    ? new MutationObserver(scheduleQuietUpdate)
+    : null;
+  contentObserver?.observe(scroller, { childList: true, characterData: true, subtree: true });
+  const resizeObserver = options.observeContent && typeof ResizeObserver !== 'undefined'
+    ? new ResizeObserver(scheduleQuietUpdate)
+    : null;
+  resizeObserver?.observe(scroller);
+  if (options.observeContent) scheduleQuietUpdate();
 
   scroller.addEventListener('scroll', handleScroll);
+  scroller.addEventListener('wheel', markUserScrollIntent, { passive: true });
+  scroller.addEventListener('touchmove', markUserScrollIntent, { passive: true });
+  scroller.addEventListener('keydown', handleKeyDown);
   frame.addEventListener('wheel', handleWheel, { passive: false });
   thumb.addEventListener('pointerdown', handlePointerDown);
   thumb.addEventListener('pointermove', handlePointerMove);
   thumb.addEventListener('pointerup', finishDrag);
   thumb.addEventListener('pointercancel', finishDrag);
+  track.addEventListener('pointermove', handleTrackPointerMove);
+  thumb.addEventListener('pointermove', handleTrackPointerMove);
+  track.addEventListener('pointerleave', handleTrackPointerLeave);
+  thumb.addEventListener('pointerleave', handleTrackPointerLeave);
+  frame.addEventListener('pointerleave', clearTrackHover);
+  ownerDocument.addEventListener('scroll', handleAncestorScroll, true);
   ownerWindow?.addEventListener('resize', handleResize);
 
   return {
@@ -163,12 +220,24 @@ export function createOverlayScrollbarDom(
     update,
     destroy: () => {
       clearHideTimer();
+      if (updateFrame !== null) ownerWindow?.cancelAnimationFrame(updateFrame);
+      contentObserver?.disconnect();
+      resizeObserver?.disconnect();
       scroller.removeEventListener('scroll', handleScroll);
+      scroller.removeEventListener('wheel', markUserScrollIntent);
+      scroller.removeEventListener('touchmove', markUserScrollIntent);
+      scroller.removeEventListener('keydown', handleKeyDown);
       frame.removeEventListener('wheel', handleWheel);
       thumb.removeEventListener('pointerdown', handlePointerDown);
       thumb.removeEventListener('pointermove', handlePointerMove);
       thumb.removeEventListener('pointerup', finishDrag);
       thumb.removeEventListener('pointercancel', finishDrag);
+      track.removeEventListener('pointermove', handleTrackPointerMove);
+      thumb.removeEventListener('pointermove', handleTrackPointerMove);
+      track.removeEventListener('pointerleave', handleTrackPointerLeave);
+      thumb.removeEventListener('pointerleave', handleTrackPointerLeave);
+      frame.removeEventListener('pointerleave', clearTrackHover);
+      ownerDocument.removeEventListener('scroll', handleAncestorScroll, true);
       ownerWindow?.removeEventListener('resize', handleResize);
     },
   };

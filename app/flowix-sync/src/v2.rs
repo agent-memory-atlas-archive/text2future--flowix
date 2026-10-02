@@ -9,6 +9,12 @@ pub fn v2_content_hash(bytes: &[u8]) -> String {
     base64_url_no_pad(&Sha256::digest(bytes))
 }
 
+/// Cloud association derived from a notebook-relative path, independent of
+/// the rebuildable memo index ID and any Markdown frontmatter.
+pub fn v2_path_note_id(notebook_id: &str, relative_path: &str) -> String {
+    v2_content_hash(format!("{notebook_id}\0{relative_path}").as_bytes())
+}
+
 /// Decide whether a local file must be preserved instead of applying a pulled
 /// Cloud head. A persisted dirty generation is authoritative. Comparing the
 /// current bytes with the last acknowledged server hash also closes the short
@@ -474,6 +480,31 @@ pub struct V2Bootstrap {
     pub notebooks: Vec<V2BootstrapNotebook>,
     pub notes: Vec<V2BootstrapNote>,
     pub usage: V2Usage,
+    #[serde(default)]
+    pub next_page_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct V2History {
+    pub note_id: String,
+    pub notebook_id: String,
+    pub current_revision: String,
+    pub revisions: Vec<V2HistoryRevision>,
+    #[serde(default)]
+    pub next_before_seq: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct V2HistoryRevision {
+    pub revision: String,
+    pub deleted: bool,
+    pub relative_path: Option<String>,
+    pub content_hash: Option<String>,
+    pub size_bytes: i64,
+    pub sync_seq: i64,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -496,6 +527,8 @@ pub struct V2BootstrapNote {
     pub id: String,
     pub notebook_id: String,
     pub filename: String,
+    #[serde(default)]
+    pub moved_from_note_id: Option<String>,
     pub revision: String,
     pub content_hash: Option<String>,
     pub size_bytes: i64,
@@ -505,6 +538,28 @@ pub struct V2BootstrapNote {
     pub updated_at: i64,
     #[serde(default)]
     pub attachments: Vec<V2Attachment>,
+}
+
+#[derive(Debug, Clone)]
+pub struct V2ConflictMaterial {
+    pub notebook_id: String,
+    pub note_id: String,
+    pub operation_id: String,
+    pub remote: V2BootstrapNote,
+    pub relocated: Option<V2BootstrapNote>,
+    pub base_content: Option<Vec<u8>>,
+    pub remote_content: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct V2PendingMove {
+    pub operation_id: String,
+    pub notebook_id: String,
+    pub from_note_id: String,
+    pub from_path: String,
+    pub to_note_id: String,
+    pub to_path: String,
+    pub base_revision: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -592,6 +647,7 @@ pub enum V2PushOperation {
         operation_id: String,
         base_revision: Option<String>,
         notebook_id: String,
+        base_tree_seq: i64,
     },
     #[serde(rename = "note.put")]
     NotePut {
@@ -604,6 +660,16 @@ pub enum V2PushOperation {
         operation_id: String,
         base_revision: Option<String>,
         note_id: String,
+    },
+    #[serde(rename = "note.move")]
+    NoteMove {
+        operation_id: String,
+        base_revision: Option<String>,
+        notebook_id: String,
+        from_note_id: String,
+        from_path: String,
+        to_note_id: String,
+        to_path: String,
     },
 }
 
@@ -622,6 +688,7 @@ pub struct V2NotePut {
     pub id: String,
     pub notebook_id: String,
     pub filename: String,
+    pub file_kind: String,
     pub content_hash: String,
     pub size_bytes: i64,
     #[serde(default)]
@@ -662,6 +729,10 @@ pub struct V2OperationData {
     pub replaced_revision: Option<String>,
     #[serde(default)]
     pub content_hash: Option<String>,
+    #[serde(default)]
+    pub source_revision: Option<String>,
+    #[serde(default)]
+    pub source_sync_seq: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -676,8 +747,20 @@ pub struct V2PushResult {
 mod tests {
     use super::{
         collect_v2_attachments, new_v2_operation_id, v2_content_hash, v2_local_content_diverged,
-        V2NotePut, V2PushOperation,
+        v2_path_note_id, V2NotePut, V2PushOperation,
     };
+
+    #[test]
+    fn cloud_note_id_tracks_notebook_relative_path_without_memo_id() {
+        assert_eq!(
+            v2_path_note_id("nb_test", "Projects/Plan.md"),
+            v2_content_hash(b"nb_test\0Projects/Plan.md"),
+        );
+        assert_ne!(
+            v2_path_note_id("nb_test", "Projects/Plan.md"),
+            v2_path_note_id("nb_test", "Archive/Plan.md"),
+        );
+    }
 
     #[test]
     fn content_hash_matches_web_crypto_base64_url_without_padding() {
@@ -725,6 +808,7 @@ mod tests {
                 id: "abc12345".into(),
                 notebook_id: "nb_0198f1aa-7b22-7def-8123-0123456789ab".into(),
                 filename: "abc12345.md".into(),
+                file_kind: "markdown".into(),
                 content_hash: "A".repeat(43),
                 size_bytes: 12,
                 attachments: Vec::new(),
@@ -740,6 +824,11 @@ mod tests {
         );
         assert_eq!(value["note"]["sizeBytes"], 12);
         assert!(value.get("operation_id").is_none());
+        let deletion = serde_json::to_value(V2PushOperation::NotebookDelete {
+            operation_id: "op_delete_123".into(), base_revision: Some("rev_1".into()),
+            notebook_id: "nb_1".into(), base_tree_seq: 42,
+        }).unwrap();
+        assert_eq!(deletion["baseTreeSeq"], 42);
     }
 
     #[test]

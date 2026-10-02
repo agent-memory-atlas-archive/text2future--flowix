@@ -481,6 +481,12 @@ pub fn run() {
             commands::cloud::cloud_list_products,
             commands::cloud::cloud_create_checkout,
             commands::cloud::cloud_sync_now,
+            commands::cloud::cloud_note_history,
+            commands::cloud::cloud_preview_note_revision,
+            commands::cloud::cloud_list_conflicts,
+            commands::cloud::cloud_resolve_markdown_conflict,
+            commands::cloud::cloud_resolve_attachment_conflict,
+            commands::cloud::cloud_restore_note_revision,
             // agent 鍙闂洰褰?(JSON, 璧?agent_access)
             commands::agent_access::get_agent_access,
             commands::agent_access::set_agent_access,

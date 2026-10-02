@@ -12,6 +12,7 @@ export function useOverlayScrollbar() {
   const frameRef = useRef<HTMLDivElement | null>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
   const timerRef = useRef<number | null>(null);
+  const userScrollIntentUntilRef = useRef(0);
   const syncFrameRef = useRef<number | null>(null);
   const pendingSyncRef = useRef<{
     scroller: HTMLElement;
@@ -43,6 +44,14 @@ export function useOverlayScrollbar() {
     }, 700);
   }, [clearHideTimer]);
 
+  const markUserScrollIntent = useCallback(() => {
+    userScrollIntentUntilRef.current = Date.now() + 200;
+  }, []);
+  const hasUserScrollIntent = useCallback(
+    () => Date.now() <= userScrollIntentUntilRef.current,
+    [],
+  );
+
   const syncOverlayScrollbar = useCallback((
     scroller: HTMLElement,
     options: OverlayScrollbarSyncOptions = {},
@@ -62,11 +71,12 @@ export function useOverlayScrollbar() {
       return;
     }
 
-    const thumbHeight = Math.max(
+    const trackHeight = frame.querySelector(':scope > .overlay-scrollbar-track')?.clientHeight || scroller.clientHeight;
+    const thumbHeight = Math.min(trackHeight, Math.max(
       24,
-      Math.round((scroller.clientHeight / scroller.scrollHeight) * scroller.clientHeight),
-    );
-    const thumbTravel = Math.max(0, scroller.clientHeight - thumbHeight);
+      Math.round((scroller.clientHeight / scroller.scrollHeight) * trackHeight),
+    ));
+    const thumbTravel = Math.max(0, trackHeight - thumbHeight);
     const thumbTop = Math.round((scroller.scrollTop / maxScrollTop) * thumbTravel);
 
     frame.style.setProperty('--overlay-scrollbar-thumb-height', `${thumbHeight}px`);
@@ -95,6 +105,8 @@ export function useOverlayScrollbar() {
     scroller: HTMLElement,
     options: OverlayScrollbarSyncOptions = {},
   ) => {
+    // Effects bind wheel/touch/key listeners before the queued animation frame runs.
+    scrollerRef.current = scroller;
     const previous = pendingSyncRef.current;
     pendingSyncRef.current = {
       scroller,
@@ -144,11 +156,12 @@ export function useOverlayScrollbar() {
       if (!frame || !scroller || frame.dataset.scrollable !== 'true') return;
 
       const maxScrollTop = scroller.scrollHeight - scroller.clientHeight;
-      const thumbHeight = Math.max(
+      const trackHeight = frame.querySelector(':scope > .overlay-scrollbar-track')?.clientHeight || scroller.clientHeight;
+      const thumbHeight = Math.min(trackHeight, Math.max(
         24,
-        Math.round((scroller.clientHeight / scroller.scrollHeight) * scroller.clientHeight),
-      );
-      const thumbTravel = Math.max(1, scroller.clientHeight - thumbHeight);
+        Math.round((scroller.clientHeight / scroller.scrollHeight) * trackHeight),
+      ));
+      const thumbTravel = Math.max(1, trackHeight - thumbHeight);
 
       event.preventDefault();
       event.stopPropagation();
@@ -183,15 +196,29 @@ export function useOverlayScrollbar() {
   }), [clearHideTimer, finishDrag, syncOverlayScrollbar]);
 
   useEffect(() => {
+    const scroller = scrollerRef.current;
     const handleWindowResize = () => {
       if (scrollerRef.current) {
         syncOverlayScrollbar(scrollerRef.current, { reveal: false, schedule: false });
       }
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
+        markUserScrollIntent();
+      }
+    };
 
     window.addEventListener('resize', handleWindowResize);
-    return () => window.removeEventListener('resize', handleWindowResize);
-  }, [syncOverlayScrollbar]);
+    scroller?.addEventListener('wheel', markUserScrollIntent, { passive: true });
+    scroller?.addEventListener('touchmove', markUserScrollIntent, { passive: true });
+    scroller?.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('resize', handleWindowResize);
+      scroller?.removeEventListener('wheel', markUserScrollIntent);
+      scroller?.removeEventListener('touchmove', markUserScrollIntent);
+      scroller?.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [markUserScrollIntent, syncOverlayScrollbar]);
 
   // track / thumb 是 frame 的子节点, scroller 的兄弟节点 ── 滚轮落在它们
   // 上面时, 浏览器找不到 overflow:auto 的祖先, 默认不会滚动内容。
@@ -200,6 +227,33 @@ export function useOverlayScrollbar() {
   useEffect(() => {
     const frame = frameRef.current;
     if (!frame) return;
+
+    const track = frame.querySelector(':scope > .overlay-scrollbar-track');
+    const thumb = frame.querySelector(':scope > .overlay-scrollbar-thumb');
+    const ownerDocument = frame.ownerDocument;
+    const handleTrackPointerMove = (event: Event) => {
+      const pointer = event as globalThis.PointerEvent;
+      if (pointer.pointerType === 'mouse' || pointer.pointerType === 'pen') {
+        frame.dataset.trackHover = 'true';
+      }
+    };
+    const clearTrackHover = () => { delete frame.dataset.trackHover; };
+    const handleTrackPointerLeave = (event: Event) => {
+      const next = (event as globalThis.PointerEvent).relatedTarget;
+      if (next !== track && next !== thumb) clearTrackHover();
+    };
+    const handleAncestorScroll = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Node && target !== scrollerRef.current && target.contains(frame)) {
+        clearTrackHover();
+      }
+    };
+    track?.addEventListener('pointermove', handleTrackPointerMove);
+    thumb?.addEventListener('pointermove', handleTrackPointerMove);
+    track?.addEventListener('pointerleave', handleTrackPointerLeave);
+    thumb?.addEventListener('pointerleave', handleTrackPointerLeave);
+    frame.addEventListener('pointerleave', clearTrackHover);
+    ownerDocument.addEventListener('scroll', handleAncestorScroll, true);
 
     const handleWheel = (event: WheelEvent) => {
       const scroller = scrollerRef.current;
@@ -211,12 +265,22 @@ export function useOverlayScrollbar() {
       }
 
       event.preventDefault();
+      markUserScrollIntent();
       scroller.scrollTop += event.deltaY;
+      scheduleOverlayScrollbar(scroller);
     };
 
     frame.addEventListener('wheel', handleWheel, { passive: false });
-    return () => frame.removeEventListener('wheel', handleWheel);
-  }, []);
+    return () => {
+      frame.removeEventListener('wheel', handleWheel);
+      track?.removeEventListener('pointermove', handleTrackPointerMove);
+      thumb?.removeEventListener('pointermove', handleTrackPointerMove);
+      track?.removeEventListener('pointerleave', handleTrackPointerLeave);
+      thumb?.removeEventListener('pointerleave', handleTrackPointerLeave);
+      frame.removeEventListener('pointerleave', clearTrackHover);
+      ownerDocument.removeEventListener('scroll', handleAncestorScroll, true);
+    };
+  }, [markUserScrollIntent, scheduleOverlayScrollbar]);
 
   useEffect(() => {
     return () => {
@@ -234,5 +298,6 @@ export function useOverlayScrollbar() {
     overlayScrollbarThumbProps,
     updateOverlayScrollbar,
     scheduleOverlayScrollbar,
+    hasUserScrollIntent,
   };
 }

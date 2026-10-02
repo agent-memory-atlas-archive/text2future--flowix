@@ -24,7 +24,7 @@
 @import './pdf-print.css';
 
 /* 自定义滚动条 ── 全局 webkit 滚动条 + .overlay-scrollbar-* 组件样式。
- * 非 Mac 平台门控在文件内部, 详见 overlay-scrollbar.css 顶部注释。 */
+ * macOS 主文档全局外观和组件自绘样式见 overlay-scrollbar.css。 */
 @import './overlay-scrollbar.css';
 @import './cloud-status-icon.css';
 @import './plugin-markmap.css';
@@ -1011,4 +1011,30 @@
     animation: none;
     border-color: color-mix(in oklch, var(--brand) 50%, transparent);
   }
+}
+/* Match the editor task checkbox in the file tree display popover. */
+.notebook-file-tree__display-checkbox {
+  position: relative;
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--brand);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.notebook-file-tree__display-checkbox--checked {
+  border-color: var(--muted-foreground);
+}
+
+.notebook-file-tree__display-checkbox-mark {
+  width: 11px;
+  height: 9px;
+  background: var(--muted-foreground);
+  mask: var(--flowix-hand-check-mask) center / contain no-repeat;
 }

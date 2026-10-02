@@ -55,7 +55,7 @@ fn remote_delete_preserves_edits_before_watcher_marks_dirty() {
     let baseline = sync.v2_note_state(&id).unwrap();
     let cursor = sync.store().v2_cursor().unwrap();
     let _guard = store.acquire_cross_process_write_lock().unwrap();
-    let error = delete_cloud_note_locked(&store, &sync, "work", &id, |_| {
+    let error = delete_cloud_note_locked(&store, &sync, "work", &id, None, |_| {
         panic!("must not acknowledge a rejected deletion")
     })
     .unwrap_err();
@@ -82,7 +82,7 @@ fn remote_delete_preserves_pending_changes_even_when_body_hash_matches() {
         .unwrap();
     let dirty_before = sync.store().v2_dirty_entities().unwrap();
     let _guard = store.acquire_cross_process_write_lock().unwrap();
-    assert!(delete_cloud_note_locked(&store, &sync, "work", &id, |_| {})
+    assert!(delete_cloud_note_locked(&store, &sync, "work", &id, None, |_| {})
         .unwrap_err()
         .starts_with("CLOUD_DELETE_CONFLICT:"));
     assert_eq!(std::fs::read(&path).unwrap(), original);
@@ -97,7 +97,7 @@ fn remote_delete_removes_unchanged_file_and_index_entry() {
     let (_directory, store, sync, id, path) = fixture();
     let mut acknowledged = false;
     let _guard = store.acquire_cross_process_write_lock().unwrap();
-    let removed = delete_cloud_note_locked(&store, &sync, "work", &id, |actual_path| {
+    let removed = delete_cloud_note_locked(&store, &sync, "work", &id, None, |actual_path| {
         assert_eq!(actual_path, path.as_path());
         acknowledged = true;
     })
@@ -106,7 +106,7 @@ fn remote_delete_removes_unchanged_file_and_index_entry() {
     assert_eq!(removed.unwrap().id, id);
     assert!(!path.exists());
     assert!(store.resolve_memo_location(&id).unwrap().is_none());
-    assert!(delete_cloud_note_locked(&store, &sync, "work", &id, |_| {})
+    assert!(delete_cloud_note_locked(&store, &sync, "work", &id, None, |_| {})
         .unwrap()
         .is_none());
 }
@@ -117,7 +117,7 @@ fn remote_delete_does_not_treat_read_failure_as_a_missing_file() {
     std::fs::remove_file(&path).unwrap();
     std::fs::create_dir(&path).unwrap();
     let _guard = store.acquire_cross_process_write_lock().unwrap();
-    assert!(delete_cloud_note_locked(&store, &sync, "work", &id, |_| {})
+    assert!(delete_cloud_note_locked(&store, &sync, "work", &id, None, |_| {})
         .unwrap_err()
         .starts_with("CLOUD_DELETE_READ_FAILED:"));
     assert!(path.is_dir());
@@ -129,7 +129,7 @@ fn remote_delete_rejects_a_note_belonging_to_another_notebook() {
     let (_directory, store, sync, id, path) = fixture();
     let _guard = store.acquire_cross_process_write_lock().unwrap();
     assert!(
-        delete_cloud_note_locked(&store, &sync, "other", &id, |_| {})
+        delete_cloud_note_locked(&store, &sync, "other", &id, None, |_| {})
             .unwrap_err()
             .starts_with("CLOUD_NOTE_ID_COLLISION:")
     );
@@ -145,7 +145,7 @@ fn remote_delete_preserves_a_local_file_without_an_acknowledged_hash() {
     sync.store().save_v2_note_state(&baseline).unwrap();
     let original = std::fs::read(&path).unwrap();
     let _guard = store.acquire_cross_process_write_lock().unwrap();
-    assert!(delete_cloud_note_locked(&store, &sync, "work", &id, |_| {})
+    assert!(delete_cloud_note_locked(&store, &sync, "work", &id, None, |_| {})
         .unwrap_err()
         .starts_with("CLOUD_DELETE_CONFLICT:"));
     assert_eq!(std::fs::read(&path).unwrap(), original);
@@ -157,7 +157,7 @@ fn remote_delete_cleans_an_already_missing_file_from_the_index() {
     let (_directory, store, sync, id, path) = fixture();
     store.delete_file(&path).unwrap();
     let _guard = store.acquire_cross_process_write_lock().unwrap();
-    assert!(delete_cloud_note_locked(&store, &sync, "work", &id, |_| {})
+    assert!(delete_cloud_note_locked(&store, &sync, "work", &id, None, |_| {})
         .unwrap()
         .is_some());
     assert!(store.resolve_memo_location(&id).unwrap().is_none());

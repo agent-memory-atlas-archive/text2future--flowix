@@ -169,6 +169,7 @@ pub fn get_notebook_file_tree_preferences(
 pub fn set_notebook_file_tree_section_order(
     notebook_id: String,
     section_order: Vec<String>,
+    hidden_sections: Option<Vec<String>>,
     state: State<AppState>,
 ) -> Result<(), String> {
     if section_order.len() != FILE_TREE_SECTIONS.len()
@@ -179,10 +180,25 @@ pub fn set_notebook_file_tree_section_order(
     {
         return Err("file tree section order must contain agents, pinned, views, and files once each".to_string());
     }
+    if let Some(hidden) = &hidden_sections {
+        if hidden.iter().any(|section| !FILE_TREE_SECTIONS.contains(&section.as_str()))
+            || FILE_TREE_SECTIONS
+                .iter()
+                .any(|section| hidden.iter().filter(|item| item.as_str() == *section).count() > 1)
+        {
+            return Err("invalid file tree hidden sections".to_string());
+        }
+    }
     let mut file = load_notebook_system(&notebook_id, &state)?;
+    let previous_hidden = file.file_tree.notebooks.get(&notebook_id)
+        .map(|preferences| preferences.hidden_sections.clone())
+        .unwrap_or_default();
     file.file_tree.notebooks.insert(
         notebook_id.clone(),
-        NotebookFileTreePreferences { section_order },
+        NotebookFileTreePreferences {
+            section_order,
+            hidden_sections: hidden_sections.unwrap_or(previous_hidden),
+        },
     );
     persist_notebook_system(&notebook_id, &state, &file)
 }

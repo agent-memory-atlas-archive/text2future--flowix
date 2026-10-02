@@ -8,22 +8,26 @@ pub(super) fn delete_cloud_note_locked(
     sync: &SyncManager,
     notebook_id: &str,
     note_id: &str,
+    relative_path: Option<&str>,
     before_delete: impl FnOnce(&Path),
 ) -> Result<Option<Memo>, String> {
-    let Some(location) = memo_file
-        .resolve_memo_location(note_id)
-        .map_err(|error| error.to_string())?
-    else {
-        return Ok(None);
+    let memo = if let Some(path) = relative_path {
+        memo_file.find_memo_by_relative_path_for_notebook_id(notebook_id, path)
+    } else {
+        let location = memo_file.resolve_memo_location(note_id).map_err(|error| error.to_string())?;
+        if location.as_ref().is_some_and(|location| location.notebook.id != notebook_id) {
+            return Err(format!("CLOUD_NOTE_ID_COLLISION: {note_id}"));
+        }
+        location.and_then(|_| memo_file.read_memo_for_notebook_id(notebook_id, note_id))
     };
-    if location.notebook.id != notebook_id {
-        return Err(format!("CLOUD_NOTE_ID_COLLISION: {note_id}"));
-    }
+    let Some(memo) = memo else { return Ok(None) };
+    let notebook = memo_file.get_notebook_config_by_id(notebook_id)
+        .ok_or_else(|| "NOTEBOOK_NOT_FOUND".to_string())?;
     let path = notebook_path_from_relative(
-        Path::new(&location.notebook.path),
-        &location.memo.relative_path,
+        Path::new(&notebook.path),
+        &memo.relative_path,
     )
-    .unwrap_or_else(|_| Path::new(&location.notebook.path).join(&location.memo.filename));
+    .unwrap_or_else(|_| Path::new(&notebook.path).join(&memo.filename));
     let local_hash = match std::fs::read(&path) {
         Ok(bytes) => Some(v2_content_hash(&bytes)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -52,12 +56,9 @@ pub(super) fn delete_cloud_note_locked(
             path.display()
         ));
     }
-    let memo = memo_file
-        .read_memo_for_notebook_id(notebook_id, note_id)
-        .ok_or_else(|| format!("CLOUD_NOTE_NOT_FOUND: {note_id}"))?;
     before_delete(&path);
     if memo_file
-        .delete_memo_result_for_notebook_id(notebook_id, note_id)
+        .delete_memo_result_for_notebook_id(notebook_id, &memo.id)
         .map_err(|error| error.to_string())?
     {
         Ok(Some(memo))

@@ -14,6 +14,8 @@ import {
   listenToCloudStateChanges,
   type CloudProduct,
   type CloudState,
+  type CloudNotebookSyncState,
+  type CloudNoteHistory,
 } from '@platform/tauri/client';
 import { Button } from '@shared/ui/button';
 import { Input } from '@shared/ui/input';
@@ -25,6 +27,10 @@ function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function originalPathFromConflictCopy(path: string): string {
+  return path.replace(/ \(Flowix conflict [^)]+\)(?=(?:\.[^./]+)?$)/u, '');
 }
 
 function Toggle({
@@ -70,6 +76,13 @@ export function CloudSyncSection() {
   const [legacyLoginOpen, setLegacyLoginOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [syncedNotebooks, setSyncedNotebooks] = useState<CloudNotebookSyncState[]>([]);
+  const [notebookNames, setNotebookNames] = useState<Record<string, string>>({});
+  const [selectedNotebook, setSelectedNotebook] = useState('');
+  const [relativePath, setRelativePath] = useState('');
+  const [history, setHistory] = useState<CloudNoteHistory | null>(null);
+  const [preview, setPreview] = useState<{ revision: string; content: string } | null>(null);
+  const [conflicts, setConflicts] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -80,6 +93,13 @@ export function CloudSyncSection() {
       ]);
       setState(nextState);
       setProducts(nextProducts);
+      if (nextState.authenticated) {
+        const notebooks = (await cloud.listNotebookStates().catch(() => [])).filter((notebook) => notebook.enabled);
+        setSyncedNotebooks(notebooks);
+        setSelectedNotebook((current) => current || notebooks[0]?.notebookId || '');
+        const remote = await cloud.listNotebooks().catch(() => []);
+        setNotebookNames(Object.fromEntries(remote.map((notebook) => [notebook.id, notebook.name])));
+      }
     } catch (error) {
       setLoadError(errorMessage(error));
     }
@@ -109,11 +129,40 @@ export function CloudSyncSection() {
       const next = await task();
       setState(next);
       setPassword('');
+      if (next.authenticated) {
+        const notebooks = (await cloud.listNotebookStates().catch(() => [])).filter((notebook) => notebook.enabled);
+        setSyncedNotebooks(notebooks);
+        setSelectedNotebook((current) => notebooks.some((notebook) => notebook.notebookId === current)
+          ? current : notebooks[0]?.notebookId || '');
+        const remote = await cloud.listNotebooks().catch(() => []);
+        setNotebookNames(Object.fromEntries(remote.map((notebook) => [notebook.id, notebook.name])));
+      } else {
+        setSyncedNotebooks([]);
+        setSelectedNotebook('');
+        setNotebookNames({});
+        setHistory(null);
+        setPreview(null);
+        setConflicts([]);
+      }
     } catch (error) {
       toast.error(cloudSyncErrorMessage(error, t));
     } finally {
       setBusy(false);
     }
+  };
+
+  const resolveConflict = (path: string, useLocal: boolean) => {
+    setBusy(true);
+    const resolve = path.startsWith('attachments/')
+      ? cloud.resolveAttachmentConflict
+      : cloud.resolveMarkdownConflict;
+    void resolve(selectedNotebook, relativePath.trim(), path, useLocal)
+      .then(() => {
+        setConflicts((current) => current.filter((item) => item !== path));
+        toast.success(t('preferences.cloud.conflictResolved'));
+      })
+      .catch((error) => toast.error(errorMessage(error)))
+      .finally(() => setBusy(false));
   };
 
   const submitLegacyLogin = () => {
@@ -311,6 +360,111 @@ export function CloudSyncSection() {
               <RefreshCw className={cn('h-4 w-4', busy && 'animate-spin')} />
               {t('preferences.cloud.syncNow')}
             </Button>
+          </div>
+
+          <div className="space-y-3 rounded-xl border border-[var(--border)] p-4">
+            <div className="text-sm font-medium">{t('preferences.cloud.recoveryTitle')}</div>
+            <p className="text-xs text-[var(--muted-foreground)]">{t('preferences.cloud.recoveryDescription')}</p>
+            <select
+              aria-label={t('preferences.cloud.recoveryNotebook')}
+              value={selectedNotebook}
+              onChange={(event) => {
+                setSelectedNotebook(event.target.value);
+                setHistory(null);
+                setPreview(null);
+                setConflicts([]);
+              }}
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] p-2 text-sm"
+            >
+              {syncedNotebooks.map((notebook) => (
+                <option key={notebook.notebookId} value={notebook.notebookId}>
+                  {notebookNames[notebook.notebookId] || notebook.notebookId}
+                </option>
+              ))}
+            </select>
+            <Input
+              aria-label={t('preferences.cloud.recoveryPath')}
+              value={relativePath}
+              onChange={(event) => {
+                setRelativePath(event.target.value);
+                setHistory(null);
+                setPreview(null);
+              }}
+              placeholder={t('preferences.cloud.recoveryPath')}
+            />
+            <div className="flex gap-2">
+              <Button variant="outline" disabled={busy || !selectedNotebook || !relativePath.trim()}
+                onClick={() => {
+                  setBusy(true);
+                  void cloud.noteHistory(selectedNotebook, relativePath.trim())
+                    .then((result) => {
+                      setHistory(result);
+                      setPreview(null);
+                    })
+                    .catch((error) => toast.error(errorMessage(error)))
+                    .finally(() => setBusy(false));
+                }}>{t('preferences.cloud.viewHistory')}</Button>
+              <Button variant="outline" disabled={busy || !selectedNotebook}
+                onClick={() => {
+                  setBusy(true);
+                  void cloud.listConflicts(selectedNotebook)
+                    .then(setConflicts)
+                    .catch((error) => toast.error(errorMessage(error)))
+                    .finally(() => setBusy(false));
+                }}>{t('preferences.cloud.viewConflicts')}</Button>
+            </div>
+            {history && <div className="space-y-2 text-xs">
+              {history.revisions.map((entry) => <div key={entry.revision}
+                className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border)] p-2">
+                <span>{new Date(entry.createdAt).toLocaleString()} · {entry.revision}
+                  {` · ${formatBytes(entry.sizeBytes)}`}
+                  {entry.deleted ? ` · ${t('preferences.cloud.deletedRevision')}` : ''}</span>
+                {!entry.deleted && <div className="flex gap-2">
+                  {!relativePath.startsWith('attachments/') && <Button size="sm" variant="outline" disabled={busy}
+                    onClick={() => {
+                      setBusy(true);
+                      void cloud.previewNoteRevision(selectedNotebook, relativePath.trim(), entry.revision)
+                        .then((content) => setPreview({ revision: entry.revision, content }))
+                        .catch((error) => toast.error(errorMessage(error)))
+                        .finally(() => setBusy(false));
+                    }}>{t('preferences.cloud.previewRevision')}</Button>}
+                  <Button size="sm" variant="outline" disabled={busy}
+                  onClick={() => {
+                    setBusy(true);
+                    void cloud.restoreNoteRevision(selectedNotebook, relativePath.trim(), entry.revision)
+                      .then(() => {
+                        toast.success(t('preferences.cloud.restoreQueued'));
+                        setHistory(null);
+                        setPreview(null);
+                      })
+                      .catch((error) => toast.error(errorMessage(error)))
+                      .finally(() => setBusy(false));
+                  }}>{t('preferences.cloud.restoreRevision')}</Button>
+                </div>}
+              </div>)}
+              {preview && <div className="space-y-1">
+                <div className="font-medium">{t('preferences.cloud.previewRevision')} · {preview.revision}</div>
+                <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-[var(--muted)] p-3">{preview.content}</pre>
+              </div>}
+            </div>}
+            {conflicts.length > 0 && <div className="space-y-1 text-xs">
+              <div className="font-medium">{t('preferences.cloud.conflictCopies')}</div>
+              {conflicts.map((path) => <div key={path} className="space-y-2 break-all rounded-lg bg-[var(--muted)] p-2">
+                <button type="button" className="text-left underline-offset-2 hover:underline"
+                  onClick={() => {
+                    setRelativePath(originalPathFromConflictCopy(path));
+                    setHistory(null);
+                    setPreview(null);
+                  }}>{path}</button>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="outline" disabled={busy || !relativePath.trim()}
+                    onClick={() => resolveConflict(path, true)}>{t('preferences.cloud.useConflictCopy')}</Button>
+                  <Button size="sm" variant="outline" disabled={busy || !relativePath.trim()}
+                    onClick={() => resolveConflict(path, false)}>{t('preferences.cloud.keepCloudVersion')}</Button>
+                </div>
+              </div>)}
+              <p className="text-[var(--muted-foreground)]">{t('preferences.cloud.conflictHint')}</p>
+            </div>}
           </div>
 
           <div className="space-y-3">

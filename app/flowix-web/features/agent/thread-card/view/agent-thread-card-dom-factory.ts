@@ -5,6 +5,7 @@ import {
   createTrashIcon,
 } from "@features/agent/thread-card/agent-thread-card-icons";
 import { createAgentComposerDom } from "@features/agent/thread-card/composer";
+import { createOverlayScrollbarDom } from "@shared/ui/overlay-scrollbar-dom";
 
 export interface AgentThreadCardDomFactoryOptions {
   inputDraft: string;
@@ -39,6 +40,7 @@ export interface AgentThreadCardDomParts {
   fullscreenButton: HTMLButtonElement;
   collapseButton: HTMLButtonElement;
   body: HTMLElement;
+  disposeBodyScrollbar: () => void;
   loadingIndicator: HTMLDivElement;
   queuedMessages: HTMLDivElement;
   composer: HTMLElement;
@@ -149,8 +151,15 @@ export function createAgentThreadCardDom(
   );
   header.append(agentWrap, actions);
 
-  const body = document.createElement("div");
-  body.className = "agent-thread-card__body";
+  const bodyScrollbar = document.documentElement.dataset.platform === "mac"
+    ? createOverlayScrollbarDom(document, {
+        frameClassName: "agent-thread-card__body-frame overlay-scrollbar-frame--custom-mac",
+        scrollerClassName: "agent-thread-card__body",
+        observeContent: true,
+      })
+    : null;
+  const body = bodyScrollbar?.scroller ?? document.createElement("div");
+  if (!bodyScrollbar) body.className = "agent-thread-card__body";
   // streaming 期间 MessageViewportController 每帧写 body.scrollTop, scroll 事件
   // capture 冒泡到 window 会触发 ContextMenu 的 setOpen(false) ── 标记为豁免
   // 容器, 让右键菜单不被自身内容增长牵连关闭。
@@ -158,6 +167,7 @@ export function createAgentThreadCardDom(
   body.addEventListener("click", options.onBodyClick);
   body.addEventListener("scroll", options.onBodyScroll, { passive: true });
   body.addEventListener("wheel", options.onBodyWheel, { passive: true });
+  const disposeBodyScrollbar = () => bodyScrollbar?.destroy();
 
   const loadingIndicator = document.createElement("div");
   loadingIndicator.className = "agent-thread-card__loading-indicator";
@@ -231,7 +241,7 @@ export function createAgentThreadCardDom(
   queuedMessages.className = "agent-background-terminals agent-thread-card__queued-messages";
   queuedMessages.hidden = true;
   dom.append(container);
-  container.append(header, body, queuedMessages, composer);
+  container.append(header, bodyScrollbar?.frame ?? body, queuedMessages, composer);
 
   return {
     dom,
@@ -249,6 +259,7 @@ export function createAgentThreadCardDom(
     fullscreenButton,
     collapseButton,
     body,
+    disposeBodyScrollbar,
     loadingIndicator,
     queuedMessages,
     composer,

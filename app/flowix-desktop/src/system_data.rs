@@ -40,6 +40,8 @@ pub struct FileTreeSystemData {
 pub struct NotebookFileTreePreferences {
     #[serde(default)]
     pub section_order: Vec<String>,
+    #[serde(default)]
+    pub hidden_sections: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

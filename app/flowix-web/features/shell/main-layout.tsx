@@ -640,7 +640,7 @@ export function MainLayout({
           {/* List <-> Memo detail divider */}
           {!isMemoListHidden && (
             <div className="relative z-10 h-full w-px shrink-0 cursor-col-resize bg-[var(--divider)]" onMouseDown={handleListDividerMouseDown}>
-              <div className="absolute inset-y-0 -left-[5px] w-[11px] bg-transparent" />
+              <div className="absolute inset-y-0 left-0 w-[11px] bg-transparent" />
             </div>
           )}
           <div

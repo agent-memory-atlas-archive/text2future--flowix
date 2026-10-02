@@ -8,7 +8,7 @@ use crate::models::{
     CloudProduct, DataEnvelope, EntitlementData, MeData, RefreshData,
 };
 use crate::v2::{
-    V2BlobDownloadEnvelope, V2BlobReservationEnvelope, V2Bootstrap, V2ChangesPage, V2PushOperation,
+    V2BlobDownloadEnvelope, V2BlobReservationEnvelope, V2Bootstrap, V2ChangesPage, V2History, V2PushOperation,
     V2PushResult, V2SyncStatus, PROTOCOL_EPOCH,
 };
 
@@ -287,14 +287,56 @@ impl CloudClient {
     }
 
     pub async fn v2_bootstrap(&self, access_token: &str) -> Result<V2Bootstrap, SyncError> {
-        self.send::<DataEnvelope<V2Bootstrap>>(
+        let mut result = self.send::<DataEnvelope<V2Bootstrap>>(
             Method::GET,
-            "/v2/sync/bootstrap",
+            "/v2/sync/bootstrap?limit=500",
             Some(access_token),
             None,
         )
         .await
-        .map(|value| value.data)
+        .map(|value| value.data)?;
+        let mut pages = 0;
+        while let Some(token) = result.next_page_token.take() {
+            pages += 1;
+            if pages > 10_000 {
+                return Err(SyncError::InvalidState("bootstrap exceeded page limit".into()));
+            }
+            let page = self.send::<DataEnvelope<V2Bootstrap>>(
+                Method::GET,
+                &format!("/v2/sync/bootstrap?limit=500&pageToken={token}"),
+                Some(access_token), None,
+            ).await?.data;
+            if page.cursor != result.cursor {
+                return Err(SyncError::InvalidState("bootstrap snapshot cursor changed".into()));
+            }
+            result.notes.extend(page.notes);
+            result.next_page_token = page.next_page_token;
+        }
+        Ok(result)
+    }
+
+    pub async fn v2_history(&self, access_token: &str, note_id: &str) -> Result<V2History, SyncError> {
+        let mut history = self.send::<DataEnvelope<V2History>>(
+            Method::GET, &format!("/v2/sync/history?noteId={note_id}&limit=200"), Some(access_token), None,
+        ).await?.data;
+        let mut pages = 0;
+        while let Some(before) = history.next_before_seq.take() {
+            pages += 1;
+            if pages > 10_000 {
+                return Err(SyncError::InvalidState("history exceeded page limit".into()));
+            }
+            let page = self.send::<DataEnvelope<V2History>>(
+                Method::GET,
+                &format!("/v2/sync/history?noteId={note_id}&limit=200&beforeSeq={before}"),
+                Some(access_token), None,
+            ).await?.data;
+            if page.note_id != history.note_id || page.current_revision != history.current_revision {
+                return Err(SyncError::InvalidState("history head changed during pagination".into()));
+            }
+            history.revisions.extend(page.revisions);
+            history.next_before_seq = page.next_before_seq;
+        }
+        Ok(history)
     }
 
     pub async fn v2_reserve_blob(

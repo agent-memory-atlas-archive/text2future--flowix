@@ -277,6 +277,16 @@
     opacity 120ms ease;
 }
 
+html[data-platform="mac"] .markdown-editor .agent-thread-card__body-frame {
+  min-height: 0;
+  height: 100%;
+}
+
+html[data-platform="mac"] .markdown-editor .agent-thread-card__body-frame > .agent-thread-card__body {
+  height: 100%;
+  scrollbar-gutter: auto;
+}
+
 .markdown-editor .agent-thread-card--fullscreen .agent-thread-card__body {
   overflow-y: scroll;
   scrollbar-gutter: stable both-edges;
@@ -459,6 +469,10 @@
   padding-inline: 0;
 }
 
+html[data-platform="mac"] .agent-conversation-detail .agent-thread-card__body {
+  scrollbar-gutter: auto;
+}
+
 .agent-conversation-detail__composer-stack {
   flex: 0 0 auto;
   width: 100%;
@@ -526,6 +540,10 @@
 }
 
 .markdown-editor .agent-thread-card--collapsed .agent-thread-card__body {
+  display: none;
+}
+
+html[data-platform="mac"] .markdown-editor .agent-thread-card--collapsed .agent-thread-card__body-frame {
   display: none;
 }
 

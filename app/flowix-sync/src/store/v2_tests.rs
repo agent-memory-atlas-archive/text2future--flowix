@@ -133,6 +133,7 @@ fn v2_dirty_generation_does_not_lose_an_edit_that_arrives_during_upload() {
             id: "abc12345".into(),
             notebook_id: "nb_1".into(),
             filename: "abc12345.md".into(),
+            file_kind: "markdown".into(),
             content_hash: "hash-a".into(),
             size_bytes: 6,
             attachments: Vec::new(),
@@ -148,6 +149,8 @@ fn v2_dirty_generation_does_not_lose_an_edit_that_arrives_during_upload() {
         base_revision: Some("rev_1".into()),
         replaced_revision: Some("rev_1".into()),
         content_hash: Some("hash-a".into()),
+        source_revision: None,
+        source_sync_seq: None,
     };
 
     store
@@ -200,6 +203,95 @@ fn v2_note_state_tracks_server_revision_not_client_time() {
     };
     store.save_v2_note_state(&state).unwrap();
     assert_eq!(store.v2_note_state("abc12345").unwrap(), Some(state));
+}
+
+#[test]
+fn pending_move_survives_reopen_and_acknowledges_both_heads() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = temp.path().join("sync.db");
+    let store = SyncStore::new(&database).unwrap();
+    let notebook = "nb_1";
+    let old = "folder/old.md";
+    let new = "folder/new.md";
+    let old_id = crate::v2::v2_path_note_id(notebook, old);
+    let new_id = crate::v2::v2_path_note_id(notebook, new);
+    store.save_v2_note_state(&V2NoteState {
+        note_id: old_id.clone(), notebook_id: notebook.into(), revision: "rev_2".into(),
+        content_hash: Some("hash-a".into()), filename: old.into(), deleted: false,
+        last_seq: 2, attachments: Vec::new(),
+    }).unwrap();
+    assert!(store.enqueue_v2_move(notebook, old, new).unwrap());
+    assert!(!store.enqueue_v2_move(notebook, old, new).unwrap());
+    drop(store);
+    let reopened = SyncStore::new(&database).unwrap();
+    let queued = reopened.v2_pending_moves().unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].base_revision, "rev_2");
+    let data = V2OperationData {
+        entity_type: "note".into(), entity_id: new_id.clone(), revision: "rev_4".into(),
+        sync_seq: 4, deleted: false, resolution: "fast_forward".into(),
+        base_revision: Some("rev_2".into()), replaced_revision: None,
+        content_hash: Some("hash-a".into()), source_revision: Some("rev_3".into()),
+        source_sync_seq: Some(3),
+    };
+    reopened.acknowledge_v2_move(&queued[0], &data).unwrap();
+    assert!(reopened.v2_pending_moves().unwrap().is_empty());
+    let source = reopened.v2_note_state(&old_id).unwrap().unwrap();
+    let target = reopened.v2_note_state(&new_id).unwrap().unwrap();
+    assert!(source.deleted);
+    assert_eq!(source.revision, "rev_3");
+    assert_eq!(target.revision, "rev_4");
+    assert_eq!(target.content_hash.as_deref(), Some("hash-a"));
+}
+
+#[test]
+fn moving_back_reuses_the_prior_path_tombstone() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = SyncStore::new(temp.path().join("sync.db")).unwrap();
+    let notebook = "nb_1";
+    let old = "folder/old.md";
+    let current = "folder/current.md";
+    let old_id = crate::v2::v2_path_note_id(notebook, old);
+    let current_id = crate::v2::v2_path_note_id(notebook, current);
+    store.save_v2_note_state(&V2NoteState {
+        note_id: old_id.clone(), notebook_id: notebook.into(), revision: "rev_3".into(),
+        content_hash: None, filename: old.into(), deleted: true, last_seq: 3,
+        attachments: Vec::new(),
+    }).unwrap();
+    store.save_v2_note_state(&V2NoteState {
+        note_id: current_id.clone(), notebook_id: notebook.into(), revision: "rev_4".into(),
+        content_hash: Some("hash-current".into()), filename: current.into(), deleted: false,
+        last_seq: 4, attachments: Vec::new(),
+    }).unwrap();
+
+    assert!(store.enqueue_v2_move(notebook, current, old).unwrap());
+    let queued = store.v2_pending_moves().unwrap();
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].from_note_id, current_id);
+    assert_eq!(queued[0].to_note_id, old_id);
+}
+
+#[test]
+fn rejected_move_is_removed_only_with_a_required_bootstrap() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = SyncStore::new(temp.path().join("sync.db")).unwrap();
+    let notebook = "nb_1";
+    let from = "old.md";
+    let to = "new.md";
+    store.set_v2_notebook(notebook, true).unwrap();
+    store.complete_v2_notebook_bootstrap(notebook).unwrap();
+    store.save_v2_note_state(&V2NoteState {
+        note_id: crate::v2::v2_path_note_id(notebook, from), notebook_id: notebook.into(),
+        revision: "rev_2".into(), content_hash: Some("base-hash".into()),
+        filename: from.into(), deleted: false, last_seq: 2, attachments: Vec::new(),
+    }).unwrap();
+    assert!(store.enqueue_v2_move(notebook, from, to).unwrap());
+    let movement = store.v2_pending_moves().unwrap().remove(0);
+
+    store.discard_v2_move_after_conflict(&movement).unwrap();
+
+    assert!(store.v2_pending_moves().unwrap().is_empty());
+    assert!(store.v2_notebooks(true).unwrap()[0].bootstrap_required);
 }
 
 #[test]
