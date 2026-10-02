@@ -645,6 +645,7 @@ pub fn run() {
             commands::agent::chat::agent_background_jobs,
             commands::agent::chat::agent_external_events,
             commands::agent::chat::codex_approval_respond,
+            commands::agent::chat::codex_approval_pending,
             commands::agent::chat::codex_thread_settings_update,
             commands::agent::chat::codex_slash_command,
             // thread

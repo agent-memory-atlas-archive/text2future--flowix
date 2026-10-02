@@ -137,11 +137,6 @@
 	border-bottom-color: color-mix(in srgb, var(--border-popup) 60%, transparent);
 }
 
-.flowix-global-search-command [cmdk-separator] {
-	background: var(--border-popup);
-	opacity: 0.6;
-}
-
 .flowix-global-search-filter-panel {
 	border-bottom-color: color-mix(in srgb, var(--border-popup) 60%, transparent);
 }

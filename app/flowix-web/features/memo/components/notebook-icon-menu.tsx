@@ -8,6 +8,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@shared/ui/dropdown-menu';
+import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
 import { useI18n } from '@/lib/i18n';
 import { ArrowLeftToLine, ArrowRightToLine } from 'lucide-react';
 import { PREFERENCE_TAB_GROUPS } from '@features/preferences/public/app-api';
@@ -33,7 +34,6 @@ const NOTEBOOK_ICON_MENU_CLASS =
   'w-[12.8rem] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]';
 const NOTEBOOK_ICON_MENU_ITEM_CLASS =
   'group h-7 items-center justify-start gap-1.5 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]';
-const NOTEBOOK_ICON_MENU_DIVIDER_CLASS = 'mx-1 my-1 h-px bg-[var(--border-popup)] opacity-60';
 const OFFICIAL_SITE_URL = 'https://flowix.cc';
 const COMMUNITY_URL = 'https://github.com/text2future/flowix';
 
@@ -160,7 +160,7 @@ export function NotebookIconMenu({
           />
         </DropdownMenuItem>
         {/* 与筛选/排序等其它下拉窗一致的分割线样式 */}
-        <div role="separator" aria-hidden="true" className={NOTEBOOK_ICON_MENU_DIVIDER_CLASS} />
+        <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
         {visiblePreferenceGroups.map((group) => (
           <div key={group.labelKey}>
             <DropdownMenuLabel className="shrink-0 px-2 py-1 text-xs font-normal uppercase tracking-wider text-[var(--muted-foreground)]">
@@ -178,7 +178,7 @@ export function NotebookIconMenu({
             ))}
           </div>
         ))}
-        <div role="separator" aria-hidden="true" className={NOTEBOOK_ICON_MENU_DIVIDER_CLASS} />
+        <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
         <DropdownMenuLabel className="shrink-0 px-2 py-1 text-xs font-normal uppercase tracking-wider text-[var(--muted-foreground)]">
           {t('memo.list.notebookMenu.about')}
         </DropdownMenuLabel>

@@ -63,20 +63,6 @@
   opacity: 0.6;
 }
 
-/* 分隔线 ── 跟文档标题栏 "…more" 下拉菜单里的 <hr> 同源:
- *  `mx-2 border-t border-[var(--border)] opacity-50`
- *  (document-titlebar-shared.tsx → DROPDOWN_DIVIDER_SKIN)。
- *  这里写死成 CSS class 方便 popover 内部多处复用 (搜索框与第一组
- *  之间、第一组与第二组之间)。 hr 元素自带 1px 高度 + tailwind
- *  preflight 把默认 border 清零, 实际可见的就只剩我们显式画的
- *  border-top。 */
-.agent-thread-card__composer-note-search-divider {
-  margin: 0 8px;
-  border: 0;
-  border-top: 1px solid var(--border-popup);
-  opacity: 0.6;
-}
-
 /* 列表容器 — 仅承担垂直 padding, 不画外框; 水平方向不加 padding,
  * 让 item 自身的 6px 8px padding 与菜单项对齐。容器自身
  * 设置 max-height + overflow-y, 当 hits 数量过多时弹窗内部可滚动,

@@ -19,6 +19,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from '@shared/ui/dropdown-menu';
+import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
 import { Tooltip } from '@shared/ui/tooltip';
 import {
   Dialog,
@@ -303,7 +304,7 @@ export function ExternalDocumentActions({
         </DropdownMenuItem>
         {(canSaveAsTemplate || canExportContent) && (
           <>
-            <div role="separator" aria-hidden="true" className="mx-2 my-1 h-px bg-[var(--border-popup)] opacity-60" />
+            <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
             {canSaveAsTemplate && (
               <DropdownMenuItem onClick={onSaveAsTemplate} className={itemClass}>
                 <SwatchesIcon className="mr-2 h-4 w-4" /> {t('document.action.saveAsTemplate')}
@@ -324,7 +325,7 @@ export function ExternalDocumentActions({
             )}
           </>
         )}
-        <div role="separator" aria-hidden="true" className="mx-2 my-1 h-px bg-[var(--border-popup)] opacity-60" />
+        <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
         {canViewVersionHistory && session?.notebookId && session.relativePath && (
           <>
             <DropdownMenuItem className={itemClass} onClick={() => {
@@ -995,7 +996,7 @@ export function MediaActions({
           <FolderOpenIcon className="mr-2 h-4 w-4" />
           {t('memo.fileTree.reveal')}
         </DropdownMenuItem>
-        <div role="separator" aria-hidden="true" className="mx-2 my-1 h-px bg-[var(--border-popup)] opacity-60" />
+        <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
         <DropdownMenuItem
           onClick={onRequestDelete}
           className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-transparent hover:text-[var(--destructive)]"

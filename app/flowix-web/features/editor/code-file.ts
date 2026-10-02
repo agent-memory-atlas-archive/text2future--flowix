@@ -14,8 +14,9 @@ export type ExternalFileViewKind = 'code' | 'markdown' | 'image' | 'video' | 'ht
 // Keep this list aligned with the extension allowlist in
 // `supported_text_document_path` in the desktop external-document command.
 // All entries, including Markdown, are rendered as source text by CodeMirror
-// when opened from the file tree. Extensionless files are handled separately
-// below because their content type is determined by the desktop reader.
+// when opened from the file tree. Unknown extensions are also sent to the text
+// editor; the desktop reader validates their contents as UTF-8 text before
+// opening them.
 const CODE_TEXT_EXTENSIONS = new Set([
   'txt', 'text', 'log',
   'json', 'jsonc', 'json5', 'yaml', 'yml', 'toml', 'xml',
@@ -45,10 +46,10 @@ export function isCodeTextFilePath(path: string): boolean {
   const extension = fileExtension(path);
   if (CODE_TEXT_EXTENSIONS.has(extension)) return true;
 
-  // The file tree backend probes extensionless files as UTF-8 text and rejects
-  // binary content. Treat those files as CodeMirror candidates so files such
-  // as LICENSE, Makefile, and Dockerfile can be opened in the same editor.
-  return extension === '';
+  // The desktop reader probes unknown extensions and extensionless files as
+  // UTF-8 text and rejects binary content. Treat them as CodeMirror candidates
+  // so files such as LICENSE, Makefile, and custom template formats can open.
+  return true;
 }
 
 export function isEditableTextFilePath(path: string): boolean {

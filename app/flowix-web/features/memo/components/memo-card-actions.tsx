@@ -22,6 +22,7 @@ import {
 import {
   DropdownMenuContext,
 } from '@shared/ui/dropdown-menu';
+import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
 import {
   NOTE_COLORS,
   NOTE_COLOR_HEX,
@@ -59,12 +60,13 @@ interface MemoCardActionsProps<T extends NoteListItem> {
    * rendered where a split target makes no sense; the item hides when absent.
    */
   onOpenInSplit?: (memo: T) => void;
+  /** Optional tree-specific action rendered immediately before delete. */
+  beforeDelete?: React.ReactNode;
   Item: MenuItemComponent;
 }
 
 const ITEM_BASE =
   "h-7 items-center justify-start rounded-lg px-2 py-0 text-left transition-colors hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]";
-const POPUP_DIVIDER_CLASS = 'mx-1 my-1 h-px bg-[var(--border-popup)] opacity-60';
 
 // Inline color grid that lives at the top of the memo card right-click menu.
 // Visually matches the popup above the document titlebar (same swatch order,
@@ -209,6 +211,7 @@ export function MemoCardActions<T extends NoteListItem>({
   onDelete,
   onColorsChange,
   onOpenInSplit,
+  beforeDelete,
   Item,
 }: MemoCardActionsProps<T>) {
   const { t } = useI18n();
@@ -304,14 +307,15 @@ export function MemoCardActions<T extends NoteListItem>({
       <Item onClick={handleRevealInFileManager} className={ITEM_BASE}>
         <FolderOpenIcon className="w-4 h-4 mr-2" /> {t('memo.fileTree.reveal')}
       </Item>
-      <div role="separator" aria-hidden="true" className={POPUP_DIVIDER_CLASS} />
+      <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
       {onColorsChange && (
         <MemoCardColorRow
           colors={memo.colors}
           onChange={(next) => onColorsChange(memo, next)}
         />
       )}
-      <div role="separator" aria-hidden="true" className={POPUP_DIVIDER_CLASS} />
+      <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
+      {beforeDelete}
       <Item
         onClick={() => onDelete(memo)}
         className={cn(ITEM_BASE, 'hover:bg-transparent hover:text-[var(--destructive)]')}

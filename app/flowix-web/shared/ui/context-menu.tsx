@@ -1,6 +1,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
+import { POPUP_SEPARATOR_CLASS } from "@shared/ui/popup-separator";
 
 interface ContextMenuTriggerChildProps extends React.HTMLAttributes<HTMLElement> {}
 
@@ -294,7 +295,7 @@ function ContextMenuLabel({
 }
 
 function ContextMenuSeparator() {
-	return <div role="separator" className="h-px bg-[var(--border)] my-1" />;
+	return <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />;
 }
 
 function ContextMenuShortcut({ children }: { children: React.ReactNode }) {

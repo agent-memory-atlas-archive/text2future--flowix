@@ -1,5 +1,6 @@
 import { Fragment, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react'
 import { Kbd } from '@shared/ui/shortcut-kbd'
+import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator'
 import { useSelectedItemScroll } from '@features/editor/extensions/shared/use-selected-item-scroll'
 import type { BlockMenuAction } from '@features/editor/components/drag-context-menu/block-menu-actions'
 
@@ -54,7 +55,7 @@ export function BlockActionMenu({
           return (
             <Fragment key={action.id}>
               {index > 0 && actions[index - 1]?.group !== action.group && (
-                <hr className="mx-2 my-1 border-t border-[var(--border-popup)] opacity-60" />
+                <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
               )}
               <button
                 ref={(node) => {

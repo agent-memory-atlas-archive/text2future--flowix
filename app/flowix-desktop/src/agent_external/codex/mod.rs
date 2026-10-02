@@ -19,5 +19,6 @@ pub(crate) fn parse_codex_version(value: &str) -> Option<(u64, u64, u64)> {
 
 // Long-lived Codex App Server runtime.
 pub use app_server::CodexAppServerManager;
+pub use app_server::CodexApprovalRequest;
 pub(crate) use binary::resolve_codex_binary;
 pub(crate) use command::{build_codex_entrypoint, preflight_codex};

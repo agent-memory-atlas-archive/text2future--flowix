@@ -5,6 +5,7 @@ import shieldCheckOutlineSvg from "@/assets/shield-check-outline.svg?raw";
 import type { AppLanguage, I18nKey, I18nParams } from "@/lib/i18n";
 import { translate } from "@/lib/i18n";
 import { resolveNotebookAgentFiles } from "@/lib/agent-access-defaults";
+import { getWorkspaceAgentRepositories } from "@features/agent/public/workspace-api";
 import type {
   AgentCodexModel,
   AgentCodexReasoningEffort,
@@ -33,6 +34,7 @@ import { resolvePrimaryWorkspace } from "@features/agent/runtime/primary-workspa
 import { normalizeWorkspacePath } from "@features/agent/runtime/workspace-path";
 import { normalizeConversationWorkspaceState } from "@features/agent/runtime/conversation-workspace";
 import { agent, dshIntegration } from "@platform/tauri/client";
+import { POPUP_SEPARATOR_CLASS } from "@shared/ui/popup-separator";
 import { subscribe, type UnlistenFn } from "@platform/tauri/event-bus";
 import {
   applyPopoverPosition,
@@ -1379,7 +1381,6 @@ export class ExternalAgentSettingsController {
 
   /** 仓库列表的数据源: 当前笔记本的 add-dirs, 叠加全局 entries 的元数据。 */
   private getRepositories(): Array<{ path: string; name: string; missing: boolean }> {
-    const config = useAgentAccessStore.getState().config;
     const instance = this.getInstanceId()
       ? useAgentSessionStore.getState().getInstance(this.getInstanceId()!)
       : undefined;
@@ -1391,25 +1392,7 @@ export class ExternalAgentSettingsController {
         ? memoState.notebooks.find((item) => item.id === configuredNotebookId)
         : null) ?? memoState.selectedNotebook;
     const notebookId = configuredNotebookId ?? notebook?.id;
-    const files = resolveNotebookAgentFiles(
-      config,
-      useAgentAccessStore.getState().notebookConfigs,
-      notebookId,
-    );
-    return (files?.folders ?? []).map((path) => {
-      const key = normalizeWorkspacePath(path).toLowerCase();
-      const entry = config.entries.find(
-        (item) => normalizeWorkspacePath(item.path).toLowerCase() === key,
-      );
-      const trimmed = path.replace(/[\\/]+$/, "");
-      return {
-        path,
-        name: entry?.name?.trim() || trimmed.split(/[\\/]/).pop() || trimmed,
-        // 全局 entries 里已经没有这条 path 时按缺失处理, 但行仍然显示, 让用户
-        // 能把它从列表里删掉, 而不是留一条看不见的脏数据。
-        missing: entry ? entry.missing === true : true,
-      };
-    });
+    return getWorkspaceAgentRepositories(notebookId ?? null);
   }
 
   /**
@@ -1967,8 +1950,10 @@ export class ExternalAgentSettingsController {
 
     if (!this.supportsRuntimeSetting("reasoning")) return;
 
-    const divider = document.createElement("hr");
-    divider.className = "agent-thread-card__codex-settings-divider";
+    const divider = document.createElement("div");
+    divider.setAttribute("role", "separator");
+    divider.setAttribute("aria-hidden", "true");
+    divider.className = POPUP_SEPARATOR_CLASS;
     this.popover.append(divider);
 
     const reasoningSection = document.createElement("div");

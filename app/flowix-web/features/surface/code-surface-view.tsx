@@ -40,6 +40,7 @@ export function CodeSurfaceView({
     : undefined;
   return <FileBrowserView surface={{
     ...fileTree,
+    fileTreeEnabled: false,
     content,
   }} />;
 }

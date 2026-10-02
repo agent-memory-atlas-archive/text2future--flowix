@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 
 import { MemoListViewTabs, type MemoListViewTab } from '@features/memo/components/memo-list-view-tabs';
 import { useI18n } from '@/lib/i18n';
+import { ListSurfaceLoadingState } from '@shared/ui/list-surface';
 
 interface ListColumnContentProps {
   activeView: MemoListViewTab;
@@ -38,13 +39,10 @@ export function ListColumnContent({
       </div>
       <div className="absolute inset-0">{children}</div>
       {conversationLoading && (
-        <div
-          className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center text-sm text-[var(--muted-foreground)]"
-          role="status"
-          aria-live="polite"
-        >
-          {t('status.agent.loadingConversations')}
-        </div>
+        <ListSurfaceLoadingState
+          label={t('status.agent.loadingConversations')}
+          className="pointer-events-none absolute inset-0 z-20"
+        />
       )}
     </div>
   );

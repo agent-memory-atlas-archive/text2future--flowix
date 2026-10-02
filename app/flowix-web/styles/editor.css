@@ -1468,7 +1468,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   right: 0;
   display: flex;
   justify-content: center;
-  padding: 1px 0;
+  padding: 1px 0 2px;
   pointer-events: none;
   /* 低于 dialog 蒙层 (z-1300): 删除等弹窗打开时, 工具栏需沉到蒙层之下,
    * 避免遮住弹窗背景或视觉上"漂浮"在确认框之上。 */

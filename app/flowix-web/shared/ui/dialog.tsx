@@ -116,7 +116,7 @@ export function DialogContent({ children, className, showOverlay = true, showClo
 					{showCloseButton && (
 						<button
 							onClick={() => onOpenChange(false)}
-							className="absolute top-4 right-4 p-1 rounded-md hover:bg-[var(--hover-bg)]"
+							className="absolute top-4 right-4 z-20 inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0 text-[var(--muted-foreground)] shadow-sm transition-colors duration-150 hover:border-[color-mix(in_oklch,var(--border)_65%,var(--muted-foreground))] hover:text-[color-mix(in_oklch,var(--muted-foreground)_75%,var(--foreground))]"
 						>
 							<X className="w-4 h-4" />
 						</button>

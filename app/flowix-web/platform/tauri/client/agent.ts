@@ -174,6 +174,7 @@ export interface AgentExternalEvent {
 export interface CodexApprovalRequest {
   requestId: string;
   method: string;
+  flowixThreadId?: string | null;
   threadId?: string | null;
   turnId?: string | null;
   itemId?: string | null;
@@ -570,6 +571,7 @@ export const agent = {
     invoke<ThreadInfo | null>('thread_update_title', { threadId, title, agentType }),
   codexApprovalRespond: (requestId: string, result: unknown) =>
     invoke<void>('codex_approval_respond', { requestId, result }),
+  codexApprovalPending: () => invoke<CodexApprovalRequest[]>('codex_approval_pending'),
 };
 
 export interface CachedAgentImage {

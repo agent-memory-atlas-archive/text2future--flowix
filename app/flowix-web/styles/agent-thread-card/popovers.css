@@ -174,13 +174,6 @@
   letter-spacing: 0;
 }
 
-.agent-thread-card__access-divider {
-  margin: 4px 8px;
-  border: 0;
-  border-top: 1px solid var(--border-popup);
-  opacity: 0.6;
-}
-
 .agent-thread-card__access-row {
   display: flex;
   align-items: center;

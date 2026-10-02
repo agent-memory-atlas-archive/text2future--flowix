@@ -3,7 +3,7 @@ import { NOTE_COLORS, NOTE_COLOR_HEX, type ColorFilterValue } from '@features/me
 import type { NoteColor } from '@/types/note-item';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
-import { DROPDOWN_DIVIDER_SKIN } from '@shared/ui/dropdown-divider';
+import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
 
 export const COLOR_LABEL_KEYS: Record<NoteColor, import('@/lib/i18n').I18nKey> = {
   red: 'document.color.red',
@@ -73,7 +73,7 @@ export function ColorFilterSubmenuContent({
         <span className="inline-flex h-3.5 w-3.5 rounded-full border border-[var(--border)] bg-transparent" />,
         'none',
       )}
-      <hr className={cn('mx-2 my-1 border-0', DROPDOWN_DIVIDER_SKIN)} />
+      <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
       {NOTE_COLORS.map((color) =>
         renderRow(
           color,

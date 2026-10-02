@@ -4,11 +4,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowBendDownRightIcon } from '@phosphor-icons/react';
 import { useI18n } from '@/lib/i18n';
 import { agentClient } from '@features/agent/store/agent-client';
-import {
-  agent,
-  listenToCodexApprovalRequests,
-  type CodexApprovalRequest,
-} from '@platform/tauri/client';
 
 interface BackgroundTerminal {
   id: string;
@@ -37,30 +32,6 @@ export function AgentBackgroundTerminals({ threadId, agentType, enabled, queuedM
   const [terminals, setTerminals] = useState<BackgroundTerminal[]>([]);
   const [expanded, setExpanded] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [approval, setApproval] = useState<CodexApprovalRequest | null>(null);
-  const [approvalError, setApprovalError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (agentType !== 'codex') return;
-    return listenToCodexApprovalRequests((request) => {
-      setApproval((current) => current ?? request);
-    });
-  }, [agentType]);
-
-  const respondToApproval = async (decision: 'accept' | 'decline') => {
-    if (!approval) return;
-    const request = approval;
-    setApproval(null);
-    setApprovalError(null);
-    try {
-      await agent.codexApprovalRespond(request.requestId, approvalResult(request, decision));
-    } catch (error) {
-      setApproval((current) => current ?? request);
-      setApprovalError(error instanceof Error ? error.message : String(error));
-      console.warn('[AgentBackgroundTerminals] Codex approval response failed:', error);
-    }
-  };
-
   useEffect(() => {
     let disposed = false;
     let running = false;
@@ -113,36 +84,11 @@ export function AgentBackgroundTerminals({ threadId, agentType, enabled, queuedM
   }, [agentType, enabled, threadId]);
 
   const countLabel = useMemo(() => t('agent.backgroundTerminals.count', { count: terminals.length }), [t, terminals.length]);
-  if (!enabled || failed || (terminals.length === 0 && !approval && queuedMessages.length === 0)) return null;
-
-  if (approval) {
-    return (
-      <div className="agent-background-terminals agent-background-terminals--approval" role="status" aria-live="assertive">
-        <div className="agent-background-terminals__approval">
-          <span className="agent-background-terminals__approval-dot" aria-hidden="true" />
-          <div className="agent-background-terminals__approval-copy">
-            <strong>Codex 请求确认</strong>
-            <span>
-              {approval.method === 'item/fileChange/requestApproval'
-                ? 'Codex 请求应用文件变更。'
-                : 'Codex 请求执行需要确认的操作。'}
-            </span>
-            <code>{formatApprovalParams(approval.params)}</code>
-            {approvalError && <span className="agent-background-terminals__approval-error">确认失败：{approvalError}</span>}
-          </div>
-          <div className="agent-background-terminals__approval-actions">
-            <button type="button" onClick={() => void respondToApproval('decline')}>取消</button>
-            <button type="button" onClick={() => void respondToApproval('accept')}>确认执行</button>
-          </div>
-        </div>
-        {queuedMessages.length > 0 && <QueuedMessages messages={queuedMessages} label={t('agent.backgroundTerminals.queued')} />}
-      </div>
-    );
-  }
+  if (!enabled || ((failed || terminals.length === 0) && queuedMessages.length === 0)) return null;
 
   return (
     <div className="agent-background-terminals" data-expanded={expanded}>
-      {terminals.length > 0 && <button
+      {!failed && terminals.length > 0 && <button
         type="button"
         className="agent-background-terminals__summary"
         aria-expanded={expanded}
@@ -155,7 +101,7 @@ export function AgentBackgroundTerminals({ threadId, agentType, enabled, queuedM
           <path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" />
         </svg>
       </button>}
-      {expanded && terminals.length > 0 && (
+      {!failed && expanded && terminals.length > 0 && (
         <div className="agent-background-terminals__details">
           {terminals.map((terminal) => (
             <div className="agent-background-terminals__row" key={terminal.id}>
@@ -185,32 +131,4 @@ function QueuedMessages({ messages, label }: { messages: string[]; label: string
       ))}
     </div>
   );
-}
-
-function formatApprovalParams(params: Record<string, unknown>): string {
-  const command = params.command;
-  const cwd = params.cwd;
-  if (Array.isArray(command) || typeof command === 'string') {
-    return [Array.isArray(command) ? command.join(' ') : command, cwd ? `cwd: ${String(cwd)}` : '']
-      .filter(Boolean)
-      .join(' · ');
-  }
-  return JSON.stringify(params, null, 2);
-}
-
-function approvalResult(
-  request: CodexApprovalRequest,
-  decision: 'accept' | 'decline',
-): Record<string, unknown> {
-  if (request.method === 'item/permissions/requestApproval') {
-    return {
-      permissions: decision === 'accept' ? request.params.permissions ?? {} : {},
-      scope: 'turn',
-      strictAutoReview: null,
-    };
-  }
-  // item/commandExecution/requestApproval and item/fileChange/requestApproval
-  // use the current app-server approval wire format, which is different from
-  // the legacy ExecCommandApproval response.
-  return { decision: decision === 'accept' ? 'accept' : 'decline' };
 }

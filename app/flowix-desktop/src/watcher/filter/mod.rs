@@ -24,9 +24,13 @@ pub const SELF_WRITE_TTL: Duration = Duration::from_secs(30);
 pub struct FileRevision([u8; 32]);
 
 impl FileRevision {
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self(Sha256::digest(bytes).into())
+    }
+
     pub fn read(path: &std::path::Path) -> Option<Self> {
         let bytes = std::fs::read(path).ok()?;
-        Some(Self(Sha256::digest(bytes).into()))
+        Some(Self::from_bytes(&bytes))
     }
 
     /// Media events use a stat revision so observing a large video never

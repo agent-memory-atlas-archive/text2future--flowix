@@ -111,6 +111,7 @@ interface PopoverContentProps {
 	align?: "start" | "center" | "end";
 	side?: "top" | "right" | "bottom" | "left";
 	sideOffset?: number;
+	offsetY?: number;
 	className?: string;
 	onExitComplete?: () => void;
 }
@@ -124,6 +125,7 @@ function PopoverContent({
 	align = "end",
 	side = "bottom",
 	sideOffset = 4,
+	offsetY = 0,
 	className,
 	onExitComplete,
 }: PopoverContentProps) {
@@ -206,6 +208,7 @@ function PopoverContent({
 						: rect.left;
 			}
 
+			topPos += offsetY;
 			const nextPosition = {
 				top: Math.max(4, Math.min(topPos, window.innerHeight - height - 4)),
 				left: Math.max(4, Math.min(leftPos, window.innerWidth - width - 4)),
@@ -230,7 +233,7 @@ function PopoverContent({
 			window.removeEventListener('scroll', updatePosition, true);
 			window.removeEventListener('resize', updatePosition);
 		};
-	}, [open, present, side, sideOffset, align, anchorRect]);
+	}, [open, present, side, sideOffset, offsetY, align, anchorRect]);
 
 	// Close on pointerdown outside. Capture matches DropdownMenu's behavior and
 	// makes the close reliable when an ancestor stops propagation (for example

@@ -4,7 +4,6 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import { STORAGE_KEYS } from '@/lib/constants';
 import { canonicalPath } from '@/lib/path';
 import { displayTitleFromFilename } from '@/lib/utils';
-import { externalFileViewKind } from '@features/editor/public/code-file';
 import {
   canonicalUrl,
   contentIdentityKey,
@@ -251,7 +250,7 @@ function parseBrowserColumnTarget(value: unknown): BrowserColumnTarget | null {
         folderPath: null,
         notebookId: null,
         restoreNotebookContext: true,
-        fileTreeVisible: externalFileViewKind(value.filePath) !== 'code',
+        fileTreeVisible: true,
         fileTreeWidth: BROWSER_COLUMN_FILE_TREE_DEFAULT_WIDTH,
         scopePath: typeof value.scopePath === 'string' && value.scopePath.trim()
           ? value.scopePath
@@ -269,9 +268,7 @@ function parseBrowserColumnTarget(value: unknown): BrowserColumnTarget | null {
             activeFilePath: typeof value.activeFilePath === 'string' ? value.activeFilePath : null,
             fileTreeVisible: typeof value.fileTreeVisible === 'boolean'
               ? value.fileTreeVisible
-              : typeof value.activeFilePath === 'string'
-                ? externalFileViewKind(value.activeFilePath) !== 'code'
-                : true,
+              : true,
             fileTreeWidth: clampFileTreeWidth(
               typeof value.fileTreeWidth === 'number'
                 ? value.fileTreeWidth
@@ -403,33 +400,11 @@ function mergePersistedBrowserColumnState(
 
 function migratePersistedBrowserColumnState(
   persisted: unknown,
-  version: number,
+  _version: number,
 ): PersistedBrowserColumnState {
-  if (version >= 5 || !isRecord(persisted) || !Array.isArray(persisted.tabs)) {
-    return persisted as PersistedBrowserColumnState;
-  }
-
-  return {
-    ...persisted,
-    // Before version 5, code file tabs stored `true` as the default tree
-    // state. Reset those old defaults once; version 5+ values represent the
-    // user's current choice and are kept when the tab is restored.
-    tabs: persisted.tabs.map((candidate) => {
-      if (!isRecord(candidate) || !isRecord(candidate.target)) return candidate;
-      const target = parseBrowserColumnTarget(candidate.target);
-      if (
-        target?.kind !== 'file-browser'
-        || !target.activeFilePath
-        || externalFileViewKind(target.activeFilePath) !== 'code'
-        || candidate.target.fileTreeVisible === false
-      ) return candidate;
-
-      return {
-        ...candidate,
-        target: { ...candidate.target, fileTreeVisible: false },
-      };
-    }),
-  } as PersistedBrowserColumnState;
+  // Older tree visibility values are ignored by code surfaces now; preserve
+  // the rest of the user's open tabs and directory browser preferences.
+  return persisted as PersistedBrowserColumnState;
 }
 
 export const useBrowserColumnStore = create<BrowserColumnState>()(

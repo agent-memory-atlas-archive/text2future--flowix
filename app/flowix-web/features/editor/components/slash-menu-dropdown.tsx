@@ -29,6 +29,7 @@ import { translate, type AppLanguage, type I18nKey } from '@/lib/i18n';
 import type { AgentTypeKey } from '@/types/agent';
 import { AgentIcon } from '@features/agent/components/agent-icon';
 import { Kbd } from '@shared/ui/shortcut-kbd';
+import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
 
 export type SlashMenuItemId =
   | 'heading-1'
@@ -432,7 +433,7 @@ export const SlashMenuDropdown = ({
                 <Fragment key={item.id}>
                   {showSectionHeader && (
                     <>
-                      {prevItem && <hr className="slash-menu-divider" />}
+                      {prevItem && <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />}
                       <div className="slash-menu-header" role="presentation">
                         <span>{sectionLabel}</span>
                       </div>

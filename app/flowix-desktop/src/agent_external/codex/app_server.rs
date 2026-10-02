@@ -54,6 +54,7 @@ fn is_image_attachment(path: &str) -> bool {
 struct Connection {
     _child: Child,
     stdin: Arc<Mutex<ChildStdin>>,
+    generation: u64,
 }
 
 #[derive(Clone)]
@@ -141,7 +142,7 @@ struct Inner {
     // to prevent spawning one app-server per caller.
     connection_start_lock: Mutex<()>,
     pending: Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>,
-    pending_approvals: Mutex<HashSet<String>>,
+    pending_approvals: Mutex<Vec<CodexApprovalRequest>>,
     /// Stop may arrive after the web projection is marked pending but before
     /// the slash-command task has registered its ActiveTurn. Scope the
     /// cancellation to the command run id so an unrelated future command is
@@ -153,6 +154,7 @@ struct Inner {
     notification_dispatch: Mutex<()>,
     latest_usage: Mutex<HashMap<String, crate::agent_types::UsageInfo>>,
     next_request_id: AtomicU64,
+    next_connection_generation: AtomicU64,
 }
 
 pub struct CodexAppServerManager {
@@ -167,24 +169,21 @@ impl CodexAppServerManager {
                 connection: Mutex::new(None),
                 connection_start_lock: Mutex::new(()),
                 pending: Mutex::new(HashMap::new()),
-                pending_approvals: Mutex::new(HashSet::new()),
+                pending_approvals: Mutex::new(Vec::new()),
                 pending_cancellations: Mutex::new(HashMap::new()),
                 app_handle: Mutex::new(None),
                 active_turns: Mutex::new(HashMap::new()),
                 notification_dispatch: Mutex::new(()),
                 latest_usage: Mutex::new(HashMap::new()),
                 next_request_id: AtomicU64::new(1),
+                next_connection_generation: AtomicU64::new(1),
             }),
         }
     }
 
     async fn ensure_connection(&self) -> Result<(), String> {
-        if self.inner.connection.lock().await.is_some() {
-            return Ok(());
-        }
-
-        // Re-check after taking the startup lock: another caller may have
-        // completed the connection while this caller was waiting.
+        // Hold the startup lock through initialization so other callers never
+        // reuse a connection before the handshake has completed.
         let _startup = self.inner.connection_start_lock.lock().await;
         if self.inner.connection.lock().await.is_some() {
             return Ok(());
@@ -223,29 +222,41 @@ impl CodexAppServerManager {
         }
 
         let stdin = Arc::new(Mutex::new(stdin));
-        let reader_inner = self.inner.clone();
-        let reader_stdin = stdin.clone();
-        tokio::spawn(async move {
-            read_loop(reader_inner, reader_stdin, BufReader::new(stdout)).await;
-        });
+        let generation = self
+            .inner
+            .next_connection_generation
+            .fetch_add(1, Ordering::Relaxed);
         *self.inner.connection.lock().await = Some(Connection {
             _child: child,
-            stdin,
+            stdin: stdin.clone(),
+            generation,
+        });
+        let reader_inner = self.inner.clone();
+        tokio::spawn(async move {
+            read_loop(reader_inner, stdin, BufReader::new(stdout), generation).await;
         });
 
-        self.request(
-            INITIALIZE_METHOD,
-            json!({
-                "clientInfo": {
-                    "name": "flowix",
-                    "title": "Flowix",
-                    "version": env!("CARGO_PKG_VERSION")
-                },
-                "capabilities": { "experimentalApi": true }
-            }),
-        )
-        .await?;
-        self.notify("initialized", json!({})).await
+        let initialized = self
+            .request(
+                INITIALIZE_METHOD,
+                json!({
+                    "clientInfo": {
+                        "name": "flowix",
+                        "title": "Flowix",
+                        "version": env!("CARGO_PKG_VERSION")
+                    },
+                    "capabilities": { "experimentalApi": true }
+                }),
+            )
+            .await;
+        let initialized = match initialized {
+            Ok(_) => self.notify("initialized", json!({})).await,
+            Err(error) => Err(error),
+        };
+        if initialized.is_err() {
+            close_connection(&self.inner, generation).await;
+        }
+        initialized
     }
 
     async fn write(&self, message: Value) -> Result<(), String> {
@@ -1080,9 +1091,15 @@ impl CodexAppServerManager {
         // any single turn. Explicitly terminate it during application
         // shutdown; dropping `tokio::process::Child` alone does not guarantee
         // that the child process exits.
-        if let Some(mut connection) = self.inner.connection.lock().await.take() {
-            let _ = connection._child.kill().await;
-            let _ = connection._child.wait().await;
+        let generation = self
+            .inner
+            .connection
+            .lock()
+            .await
+            .as_ref()
+            .map(|connection| connection.generation);
+        if let Some(generation) = generation {
+            close_connection(&self.inner, generation).await;
         }
         count
     }
@@ -1388,12 +1405,22 @@ impl CodexAppServerManager {
         request_id: &str,
         result: Value,
     ) -> Result<(), String> {
-        if !self.inner.pending_approvals.lock().await.remove(request_id) {
+        let mut pending = self.inner.pending_approvals.lock().await;
+        let Some(index) = pending
+            .iter()
+            .position(|request| request.request_id == request_id)
+        else {
             return Err("Codex approval request is no longer pending".to_string());
-        }
+        };
+        pending.remove(index);
+        drop(pending);
         let id = serde_json::from_str::<Value>(request_id)
             .map_err(|_| "Invalid Codex approval request id".to_string())?;
         self.write(json!({ "id": id, "result": result })).await
+    }
+
+    pub async fn pending_approval_requests(&self) -> Vec<CodexApprovalRequest> {
+        self.inner.pending_approvals.lock().await.clone()
     }
 
     /// Apply settings to an existing Codex thread. These settings affect the
@@ -1964,6 +1991,7 @@ async fn read_loop(
     inner: Arc<Inner>,
     stdin: Arc<Mutex<ChildStdin>>,
     mut reader: BufReader<tokio::process::ChildStdout>,
+    generation: u64,
 ) {
     let mut line = String::new();
     loop {
@@ -1999,42 +2027,115 @@ async fn read_loop(
             if let Some(method) = message.get("method").and_then(Value::as_str) {
                 if is_user_decision_request(method) {
                     let request_id = id.to_string();
-                    inner
-                        .pending_approvals
-                        .lock()
-                        .await
-                        .insert(request_id.clone());
                     let params = message.get("params").cloned().unwrap_or(Value::Null);
+                    let codex_thread_id = request_context(&params, "threadId");
+                    let flowix_thread_id = if let Some(codex_thread_id) = codex_thread_id.as_deref()
+                    {
+                        inner
+                            .active_turns
+                            .lock()
+                            .await
+                            .values()
+                            .find(|turn| turn.codex_thread_id == codex_thread_id)
+                            .map(|turn| turn.flowix_thread_id.clone())
+                    } else {
+                        None
+                    };
                     let request = CodexApprovalRequest {
                         request_id,
                         method: method.to_string(),
-                        thread_id: request_context(&params, "threadId"),
+                        flowix_thread_id,
+                        thread_id: codex_thread_id,
                         turn_id: request_context(&params, "turnId"),
                         item_id: request_context(&params, "itemId"),
                         params,
                     };
                     if let Some(app) = inner.app_handle.lock().await.clone() {
+                        inner.pending_approvals.lock().await.push(request.clone());
                         if let Err(error) = app.emit("codex-approval-request", request) {
                             tracing::warn!("failed to emit Codex approval request: {error}");
                         }
                     } else {
-                        inner
-                            .pending_approvals
-                            .lock()
-                            .await
-                            .remove(&request.request_id);
                         write_server_response(&stdin, id, server_decline_result(method)).await;
                     }
                 } else {
-                    write_server_response(&stdin, id, json!("decline")).await;
+                    write_server_error(&stdin, id, method).await;
                 }
             }
             continue;
         }
         dispatch_notification(&inner, &message).await;
     }
-    for (_, sender) in inner.pending.lock().await.drain() {
-        let _ = sender.send(Err("Codex app-server connection closed".to_string()));
+    close_connection(&inner, generation).await;
+}
+
+async fn close_connection(inner: &Arc<Inner>, generation: u64) {
+    let (connection, pending, active) = {
+        let mut current = inner.connection.lock().await;
+        if current
+            .as_ref()
+            .is_some_and(|connection| connection.generation == generation)
+        {
+            let connection = current.take();
+            let pending = std::mem::take(&mut *inner.pending.lock().await);
+            inner.pending_approvals.lock().await.clear();
+            let active = std::mem::take(&mut *inner.active_turns.lock().await);
+            (connection, pending, active)
+        } else {
+            (None, HashMap::new(), HashMap::new())
+        }
+    };
+    let Some(mut connection) = connection else {
+        return;
+    };
+    let _ = connection._child.kill().await;
+    let _ = connection._child.wait().await;
+    let manager = CodexAppServerManager {
+        inner: inner.clone(),
+    };
+    let error = "Codex app-server connection closed".to_string();
+    for (_, turn) in active {
+        if turn.stream_end_emitted.load(Ordering::Acquire) {
+            continue;
+        }
+        if let (Some(command_id), Some(command)) =
+            (turn.command_id.as_deref(), turn.command.as_deref())
+        {
+            manager
+                .emit_codex_command(
+                    &turn.app_handle,
+                    &turn.flowix_thread_id,
+                    &turn.run_id,
+                    command_id,
+                    command,
+                    turn.started_at,
+                    "error",
+                    Some(error.clone()),
+                )
+                .await;
+        }
+        manager
+            .emit_run_error(
+                &turn.app_handle,
+                &turn.flowix_thread_id,
+                error.clone(),
+                &turn.run_id,
+            )
+            .await;
+        manager
+            .emit_stream_end(
+                &turn.app_handle,
+                &turn.flowix_thread_id,
+                &turn.run_id,
+                Some(error.clone()),
+                &turn.stream_end_emitted,
+            )
+            .await;
+    }
+    // Wake request callers only after the run's terminal events are emitted.
+    // Their error paths inspect stream_end_emitted before reporting an error.
+    for (_, sender) in pending {
+        let _ = sender.send(Err(error.clone()));
     }
 }
 
@@ -2043,6 +2144,7 @@ async fn read_loop(
 pub struct CodexApprovalRequest {
     pub request_id: String,
     pub method: String,
+    pub flowix_thread_id: Option<String>,
     pub thread_id: Option<String>,
     pub turn_id: Option<String>,
     pub item_id: Option<String>,
@@ -2072,6 +2174,15 @@ fn request_context(params: &Value, key: &str) -> Option<String> {
 
 async fn write_server_response(stdin: &Arc<Mutex<ChildStdin>>, id: &Value, result: Value) {
     let reply = json!({ "id": id, "result": result });
+    if let Ok(encoded) = serde_json::to_string(&reply) {
+        let mut writer = stdin.lock().await;
+        let _ = writer.write_all(format!("{encoded}\n").as_bytes()).await;
+        let _ = writer.flush().await;
+    }
+}
+
+async fn write_server_error(stdin: &Arc<Mutex<ChildStdin>>, id: &Value, method: &str) {
+    let reply = json!({ "id": id, "error": { "code": -32601, "message": format!("Method not found: {method}") } });
     if let Ok(encoded) = serde_json::to_string(&reply) {
         let mut writer = stdin.lock().await;
         let _ = writer.write_all(format!("{encoded}\n").as_bytes()).await;

@@ -1,6 +1,7 @@
 'use client';
 
 import { useSyncExternalStore } from 'react';
+import folderIcon from '@/assets/folder-outline.svg?raw';
 
 import setiIconTheme from '@/assets/seti/vs-seti-icon-theme.json';
 
@@ -19,9 +20,6 @@ type SetiThemeMapping = {
 };
 
 const SETI_FONT_FAMILY = 'FlowixSeti';
-const SETI_FOLDER_GLYPH = '\uE033';
-const SETI_FOLDER_COLOR = '#ABABAB';
-
 const SETI_DARK_MAPPING = setiIconTheme as unknown as SetiThemeMapping & {
   iconDefinitions: Record<string, SetiIconDefinition>;
   light?: SetiThemeMapping;
@@ -150,18 +148,18 @@ function useSetiThemeVariant(): SetiThemeVariant {
   );
 }
 
-function setiIconStyle(color: string) {
+function setiIconStyle(color: string, size = 16) {
   return {
     color,
     fontFamily: SETI_FONT_FAMILY,
-    fontSize: '16px',
+    fontSize: `${size}px`,
     fontStyle: 'normal',
     fontWeight: 'normal',
     lineHeight: 1,
   } as const;
 }
 
-export function ResourceFileIcon({ path, className }: { path: string; className?: string }) {
+export function ResourceFileIcon({ path, className, size = 16 }: { path: string; className?: string; size?: number }) {
   const variant = useSetiThemeVariant();
   const icon = getResourceSetiIcon(path, variant);
 
@@ -170,14 +168,14 @@ export function ResourceFileIcon({ path, className }: { path: string; className?
       aria-hidden="true"
       className={`inline-flex items-center justify-center select-none ${className ?? ''}`}
       data-seti-icon={icon.definitionKey}
-      style={setiIconStyle(icon.color)}
+      style={setiIconStyle(icon.color, size)}
     >
       {icon.glyph}
     </span>
   );
 }
 
-/** Seti's file icon theme does not define a separate open-folder glyph. */
+/** Use the same static folder glyph as the Workspace file tree. */
 export function ResourceFolderIcon({ className, hidden = false }: {
   expanded: boolean;
   hidden?: boolean;
@@ -186,11 +184,11 @@ export function ResourceFolderIcon({ className, hidden = false }: {
   return (
     <span
       aria-hidden="true"
-      className={`inline-flex items-center justify-center select-none ${className ?? ''}`}
-      data-seti-icon="_folder"
-      style={setiIconStyle(hidden ? 'var(--muted-foreground)' : SETI_FOLDER_COLOR)}
+      className={`inline-flex items-center justify-center ${className ?? ''} ${hidden
+        ? 'text-[var(--muted-foreground)]'
+        : 'text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)]'}`}
     >
-      {SETI_FOLDER_GLYPH}
+      <span className="flex h-full w-full items-center justify-center" dangerouslySetInnerHTML={{ __html: folderIcon }} />
     </span>
   );
 }

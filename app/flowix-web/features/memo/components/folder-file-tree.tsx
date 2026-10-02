@@ -1,15 +1,22 @@
 'use client';
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
-import { ChevronRight, FoldVertical, Loader2, MoreHorizontal } from 'lucide-react';
-import { CaretRightIcon, FolderOpenIcon, FolderSimpleIcon, TrashSimpleIcon } from '@phosphor-icons/react';
+import { ChevronRight, FoldVertical, MoreHorizontal } from 'lucide-react';
+import { FolderOpenIcon, FolderSimpleIcon, TrashSimpleIcon } from '@phosphor-icons/react';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { files, type DocTreeItem } from '@platform/tauri/client';
 import { localDocumentOperations } from '@features/document/public/file-operations-api';
 import { openPath } from '@platform/tauri/opener';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
+import {
+  ListSurfaceInlineLoadingState,
+  ListSurfaceLoadingState,
+  ListSurfaceSpinner,
+  ListSurfaceViewport,
+} from '@shared/ui/list-surface';
 import { DROPDOWN_DIVIDER_SKIN } from '@shared/ui/dropdown-divider';
+import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@shared/ui/context-menu';
 import {
   DropdownMenu,
@@ -25,7 +32,6 @@ import {
 } from '@features/memo/components/use-folder-tree';
 import { FileTypeIcon } from '@features/memo/components/file-type-icon';
 import { useI18n } from '@/lib/i18n';
-import { logNativeContextMenuError, popupNativeContextMenu } from '@platform/tauri/native-context-menu';
 
 const TREE_EDGE_GUTTER = 6;
 const ITEM_INLINE_PADDING = 6;
@@ -35,7 +41,6 @@ const FOLDER_MENU_CLASS =
   'min-w-[188px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]';
 const FOLDER_MENU_ITEM_CLASS =
   'h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]';
-const FOLDER_MENU_DIVIDER_CLASS = 'mx-1 my-1 h-px bg-[var(--border-popup)] opacity-60';
 
 type FileTreeFileIcon = ComponentType<{ path: string; className?: string }>;
 type FileTreeFolderIcon = ComponentType<{
@@ -235,48 +240,6 @@ export function FolderFileTree({
               aria-expanded={isFolder ? isExpanded : undefined}
               tabIndex={0}
               title={item.fullPath}
-              onContextMenu={(event) => {
-                void popupNativeContextMenu(event, [
-                  ...(!isFolder && onFileOpenInNewTab ? [{
-                    text: t('memo.fileTree.openInNewTab'),
-                    action: () => onFileOpenInNewTab(item.fullPath),
-                  }] : []),
-                  {
-                    text: `${t('memo.fileTree.createdAt')}${formatTimestamp(item.createdMs)}`,
-                    enabled: false,
-                  },
-                  {
-                    text: `${t('memo.fileTree.updatedAt')}${formatTimestamp(item.modifiedMs)}`,
-                    enabled: false,
-                  },
-                  { item: 'Separator' },
-                  {
-                    text: t('memo.fileTree.newDocument'),
-                    action: () => setDraftRow({ parentPath: creationParentPath, kind: 'file', value: '' }),
-                  },
-                  {
-                    text: t('memo.fileTree.newFolder'),
-                    action: () => setDraftRow({ parentPath: creationParentPath, kind: 'folder', value: '' }),
-                  },
-                  {
-                    text: t('memo.fileTree.rename'),
-                    action: () => setRenaming({ item, value: item.name }),
-                  },
-                  {
-                    text: t('memo.fileTree.copyPath'),
-                    action: () => void handleCopyPath(item),
-                  },
-                  {
-                    text: t('memo.fileTree.reveal'),
-                    action: () => handleReveal(item),
-                  },
-                  { item: 'Separator' },
-                  {
-                    text: t('memo.fileTree.delete'),
-                    action: () => void handleDelete(item),
-                  },
-                ]).catch((error) => logNativeContextMenuError('folder file tree', error));
-              }}
               onClick={() => (isFolder ? tree.toggle(item.fullPath) : openDocument(item))}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {
@@ -331,11 +294,11 @@ export function FolderFileTree({
               ) : (
                 <>
                   {isFolder ? (
-                    <span className="relative h-4 w-4 shrink-0">
-                      <CaretRightIcon
+                    <span className="relative h-[18px] w-[18px] shrink-0">
+                      <ChevronRight
                         aria-hidden="true"
                         className={cn(
-                          'absolute inset-0 m-auto h-3 w-3 text-[var(--muted-foreground)] opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 group-focus-visible:opacity-100',
+                          'absolute left-1/2 top-1/2 h-[15px] w-[15px] -translate-x-1/2 -translate-y-1/2 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 group-focus-visible:opacity-100',
                           isExpanded && 'rotate-90',
                         )}
                       />
@@ -343,10 +306,12 @@ export function FolderFileTree({
                         <FolderIcon
                           expanded={isExpanded}
                           hidden={isHiddenFolder}
-                          className="absolute inset-0 h-4 w-4 text-[var(--muted-foreground)] transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0"
+                          className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0"
                         />
                       ) : (
-                        <DefaultFolderIcon className="absolute inset-0 h-4 w-4 text-[var(--muted-foreground)] transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0" />
+                        <DefaultFolderIcon className={cn(
+                          'absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0',
+                        )} />
                       )}
                     </span>
                   ) : (
@@ -359,7 +324,10 @@ export function FolderFileTree({
                     {item.name}
                   </span>
                   {isDirectoryLoading && (
-                    <Loader2 className="mr-1 h-3.5 w-3.5 shrink-0 animate-spin text-[var(--muted-foreground)]" aria-label={t('memo.list.loadingLibrary')} />
+                    <ListSurfaceSpinner
+                      className="mr-1 h-3.5 w-3.5"
+                      ariaLabel={t('memo.fileTree.loading')}
+                    />
                   )}
                   <DropdownMenu
                     open={openMenuId === item.id}
@@ -395,7 +363,7 @@ export function FolderFileTree({
                           <span className="tabular-nums">{formatTimestamp(item.modifiedMs)}</span>
                         </div>
                       </div>
-                      <div role="separator" aria-hidden="true" className={FOLDER_MENU_DIVIDER_CLASS} />
+                      <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
                       <DropdownMenuItem
                         onClick={() => setDraftRow({ parentPath: creationParentPath, kind: 'file', value: '' })}
                         className={FOLDER_MENU_ITEM_CLASS}
@@ -426,7 +394,7 @@ export function FolderFileTree({
                       >
                         {t('memo.fileTree.reveal')}
                       </DropdownMenuItem>
-                      <div role="separator" aria-hidden="true" className={FOLDER_MENU_DIVIDER_CLASS} />
+                      <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
                       <DropdownMenuItem
                         onClick={() => void handleDelete(item)}
                         className={cn(FOLDER_MENU_ITEM_CLASS, 'hover:bg-transparent hover:text-[var(--destructive)]')}
@@ -456,7 +424,7 @@ export function FolderFileTree({
                 <span className="tabular-nums">{formatTimestamp(item.modifiedMs)}</span>
               </div>
             </div>
-            <div role="separator" aria-hidden="true" className={FOLDER_MENU_DIVIDER_CLASS} />
+            <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
             <ContextMenuItem
               onClick={() => setDraftRow({ parentPath: creationParentPath, kind: 'file', value: '' })}
               className={FOLDER_MENU_ITEM_CLASS}
@@ -487,7 +455,7 @@ export function FolderFileTree({
             >
               {t('memo.fileTree.reveal')}
             </ContextMenuItem>
-            <div role="separator" aria-hidden="true" className={FOLDER_MENU_DIVIDER_CLASS} />
+            <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
             <ContextMenuItem
               onClick={() => void handleDelete(item)}
               className={cn(FOLDER_MENU_ITEM_CLASS, 'hover:bg-transparent hover:text-[var(--destructive)]')}
@@ -570,17 +538,11 @@ export function FolderFileTree({
           >
             <FoldVertical aria-hidden="true" className="h-3.5 w-3.5" />
           </button>
-          {tree.loading && (
-            <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border border-[var(--muted-foreground)]/40 border-t-transparent" />
-          )}
         </div>
       </div>
       {/* 与 AgentConversationList 同款分割线, 落在 root 文件夹标题与子级列表之间 */}
       <hr className={cn('mx-2', DROPDOWN_DIVIDER_SKIN)} />
-      <div className={cn(
-        'relative min-h-0',
-        contentSized ? 'flex-none' : 'flex-1',
-      )}>
+      <ListSurfaceViewport className={contentSized ? 'flex-none' : undefined}>
         <OverlayScrollbar
           className={cn(
             contentSized ? 'h-auto' : 'h-full',
@@ -593,6 +555,12 @@ export function FolderFileTree({
           )}
           onScroll={(event) => setShowScrollTopHint(event.currentTarget.scrollTop > 0)}
         >
+          {tree.loading && visibleNodes.length > 0 && (
+            <ListSurfaceInlineLoadingState label={t('memo.fileTree.loading')} className="py-1" />
+          )}
+          {tree.loading && visibleNodes.length === 0 && contentSized && (
+            <ListSurfaceLoadingState label={t('memo.fileTree.loading')} className="h-24" />
+          )}
           {tree.error && (
             <div className="flex items-center justify-center gap-2 px-4 py-4 text-center text-xs text-[var(--muted-foreground)]" role="alert">
               <span>{t('memo.fileTree.unreadableHint')}</span>
@@ -652,6 +620,12 @@ export function FolderFileTree({
             )}
           </div>
         </OverlayScrollbar>
+        {tree.loading && visibleNodes.length === 0 && !contentSized && (
+          <ListSurfaceLoadingState
+            label={t('memo.fileTree.loading')}
+            className="absolute inset-0 z-[2] bg-[var(--list-bg)]"
+          />
+        )}
         <div
           aria-hidden="true"
           className={cn(
@@ -659,7 +633,7 @@ export function FolderFileTree({
             showScrollTopHint ? 'opacity-100' : 'opacity-0',
           )}
         />
-      </div>
+      </ListSurfaceViewport>
     </div>
   );
 }

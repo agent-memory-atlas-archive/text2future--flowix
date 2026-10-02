@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronRight, Trash2 } from 'lucide-react';
-import { CaretDownIcon, DotsThreeIcon, FolderSimpleIcon, PlusIcon } from '@phosphor-icons/react';
+import { CaretDownIcon, FolderSimpleIcon, PlusIcon } from '@phosphor-icons/react';
 import { FolderFileTree } from '@features/memo/components/folder-file-tree';
 import { useFolderTree } from '@features/memo/components/use-folder-tree';
 import { useNoteStore } from '@features/memo/store';
@@ -27,6 +27,10 @@ function canonicalDirectoryPath(path: string): string {
 }
 
 export interface FileBrowserViewSurface extends FileBrowserTarget {
+  /** Hide the adjacent tree controls/panel while retaining the breadcrumb bar. */
+  fileTreeEnabled?: boolean;
+  /** Hide the source selector in Browser Column, while keeping path breadcrumbs. */
+  sourceMenuEnabled?: boolean;
   content?: ReactNode;
   onSelectFile: (path: string) => void;
   onSelectFolder?: (path: string) => void;
@@ -234,9 +238,9 @@ export function FileBrowserView({ surface: input }: { surface: FileBrowserViewSu
     <div className="flex h-full min-w-0 flex-col">
       {root && <nav
         aria-label="文件路径"
-        className="flex h-9 min-w-0 shrink-0 items-center gap-1 border-b border-[color-mix(in_oklch,var(--border)_68%,transparent)] px-2.5 text-xs text-[var(--muted-foreground)]"
+        className="flex min-w-0 shrink-0 items-center gap-1 border-b border-[color-mix(in_oklch,var(--border)_68%,transparent)] px-4 pb-2 text-xs text-[var(--muted-foreground)]"
       >
-        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto text-sm">
           {breadcrumbs.map((item, index) => (
             <span key={`${item.path}-${index}`} className="flex min-w-0 shrink-0 items-center gap-1">
               {index > 0 && <ChevronRight className="h-3 w-3 shrink-0 opacity-60" aria-hidden="true" />}
@@ -258,7 +262,7 @@ export function FileBrowserView({ surface: input }: { surface: FileBrowserViewSu
             </span>
           ))}
         </div>
-        {surface.onSelectFolder && <DropdownMenu className="shrink-0">
+        {surface.onSelectFolder && surface.sourceMenuEnabled !== false && <DropdownMenu className="shrink-0">
           <DropdownMenuTrigger asChild>
             <button
               type="button"
@@ -307,9 +311,9 @@ export function FileBrowserView({ surface: input }: { surface: FileBrowserViewSu
               type="button"
               aria-label={t('memo.fileTree.moreActions')}
               title={t('memo.fileTree.moreActions')}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)] data-[state=open]:bg-[var(--muted)] data-[state=open]:text-[var(--foreground)]"
+              className="flex h-4 w-6 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] data-[state=open]:text-[var(--foreground)]"
             >
-              <DotsThreeIcon size={16} weight="bold" aria-hidden="true" />
+              <CaretDownIcon size={12} weight="bold" aria-hidden="true" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent
@@ -331,18 +335,20 @@ export function FileBrowserView({ surface: input }: { surface: FileBrowserViewSu
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <button
-          type="button"
-          aria-label={surface.fileTreeVisible ? '关闭文件树' : '展开文件树'}
-          title={surface.fileTreeVisible ? '关闭文件树' : '展开文件树'}
-          aria-pressed={surface.fileTreeVisible}
-          onClick={() => surface.onTreeVisibleChange(!surface.fileTreeVisible)}
-          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors ${surface.fileTreeVisible
-            ? 'bg-[var(--muted)] text-[var(--foreground)]'
-            : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'}`}
-        >
-          <FolderSimpleIcon className="h-4 w-4" aria-hidden="true" />
-        </button>
+        {surface.fileTreeEnabled !== false && (
+          <button
+            type="button"
+            aria-label={surface.fileTreeVisible ? '关闭文件树' : '展开文件树'}
+            title={surface.fileTreeVisible ? '关闭文件树' : '展开文件树'}
+            aria-pressed={surface.fileTreeVisible}
+            onClick={() => surface.onTreeVisibleChange(!surface.fileTreeVisible)}
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors ${surface.fileTreeVisible
+              ? 'bg-[var(--muted)] text-[var(--foreground)]'
+              : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'}`}
+          >
+            <FolderSimpleIcon className="h-4 w-4" aria-hidden="true" />
+          </button>
+        )}
       </nav>}
       <div className="relative flex min-h-0 min-w-0 flex-1">
         <div className="min-w-0 flex-1">
@@ -352,7 +358,7 @@ export function FileBrowserView({ surface: input }: { surface: FileBrowserViewSu
             </div>
           )}
         </div>
-        {root && <BrowserFileBrowserTreePane
+        {root && surface.fileTreeEnabled !== false && <BrowserFileBrowserTreePane
           surface={surface}
           onRequestClose={() => surface.onTreeVisibleChange(false)}
           onFileOpenInNewTab={surface.onOpenFileInNewTab}

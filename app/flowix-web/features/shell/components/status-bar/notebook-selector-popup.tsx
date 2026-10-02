@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, ChevronsUpDown, MoreVertical, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { ChevronsUpDown, MoreVertical, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/ui/popover';
 import {
   DropdownMenu,
@@ -58,11 +58,11 @@ interface PointerState {
 
 interface DragGeometry {
   cardRects: Map<string, DOMRect>;
-  gridRect: DOMRect | null;
+  viewportRect: DOMRect | null;
 }
 
 const DRAG_THRESHOLD_PX = 4;
-const NOTEBOOKS_PER_PAGE = 17;
+const NOTEBOOK_CARD_SIZE_CLASS = 'h-[165px] w-[144px] shrink-0';
 
 function reorderNotebookIds(
   notebooks: Notebook[],
@@ -109,6 +109,7 @@ export function NotebookSelectorPopup({
   const { t } = useI18n();
   const reorderNotebooks = useNoteStore((state) => state.reorderNotebooks);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
+  const listViewportRef = useRef<HTMLElement>(null);
   const previousCardRectsRef = useRef(new Map<string, DOMRect>());
   const cardAnimationsRef = useRef(new Map<string, Animation>());
   const pointerRef = useRef<PointerState | null>(null);
@@ -118,25 +119,15 @@ export function NotebookSelectorPopup({
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const [ghost, setGhost] = useState<PointerState | null>(null);
-  const [page, setPage] = useState(0);
-  const [pageDirection, setPageDirection] = useState<'next' | 'previous'>('next');
-  const pageCount = Math.max(1, Math.ceil(notebooks.length / NOTEBOOKS_PER_PAGE));
-  const visibleNotebookIds = useMemo(
-    () => notebooks.slice(page * NOTEBOOKS_PER_PAGE, (page + 1) * NOTEBOOKS_PER_PAGE).map((notebook) => notebook.id),
-    [notebooks, page],
+  const notebooksById = useMemo(
+    () => new Map(notebooks.map((notebook) => [notebook.id, notebook] as const)),
+    [notebooks],
   );
-  useEffect(() => {
-    setPage((current) => Math.min(current, pageCount - 1));
-  }, [pageCount]);
-  useEffect(() => {
-    if (open) setPage(0);
-  }, [open]);
-
   const previewNotebookIds = useMemo(
     () => draggingId
       ? reorderNotebookIds(notebooks, draggingId, dropTarget)
-      : visibleNotebookIds,
-    [draggingId, dropTarget, visibleNotebookIds],
+      : notebooks.map((notebook) => notebook.id),
+    [draggingId, dropTarget, notebooks],
   );
 
   useLayoutEffect(() => {
@@ -218,9 +209,12 @@ export function NotebookSelectorPopup({
   useEffect(() => {
     const findDropTarget = (x: number, y: number, sourceId: string): DropTarget | null => {
       const geometry = dragGeometryRef.current;
-      if (!geometry?.gridRect) return null;
-      const { gridRect } = geometry;
-      if (x < gridRect.left || x > gridRect.right || y < gridRect.top || y > gridRect.bottom) {
+      if (!geometry?.viewportRect) return null;
+      const { viewportRect } = geometry;
+      if (
+        x < viewportRect.left || x > viewportRect.right ||
+        y < viewportRect.top || y > viewportRect.bottom
+      ) {
         return null;
       }
       const sourceRect = geometry.cardRects.get(sourceId);
@@ -235,10 +229,13 @@ export function NotebookSelectorPopup({
       let nearest: { id: string; distance: number; position: DropPosition } | null = null;
 
       for (const notebook of notebooks) {
-        if (!visibleNotebookIds.includes(notebook.id)) continue;
         if (notebook.id === sourceId) continue;
         const rect = geometry.cardRects.get(notebook.id);
         if (!rect) continue;
+        if (
+          rect.right < viewportRect.left || rect.left > viewportRect.right ||
+          rect.bottom < viewportRect.top || rect.top > viewportRect.bottom
+        ) continue;
         const inside = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
         const centerX = rect.left + rect.width / 2;
         const centerY = rect.top + rect.height / 2;
@@ -319,27 +316,19 @@ export function NotebookSelectorPopup({
       window.removeEventListener('pointerup', handleUp);
       window.removeEventListener('pointercancel', handleUp);
     };
-  }, [closeThen, notebooks, onSelect, reorderNotebooks, t, visibleNotebookIds]);
+  }, [closeThen, notebooks, onSelect, reorderNotebooks, t]);
 
   const handleCardPointerDown = (notebook: Notebook, event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || pointerRef.current) return;
     event.preventDefault();
     const cardRects = new Map<string, DOMRect>();
-    let gridRect: DOMRect | null = null;
     for (const [id, card] of cardRefs.current) {
-      const rect = card.getBoundingClientRect();
-      cardRects.set(id, rect);
-      if (!gridRect) {
-        gridRect = rect;
-        continue;
-      }
-      const left = Math.min(gridRect.left, rect.left);
-      const top = Math.min(gridRect.top, rect.top);
-      const right = Math.max(gridRect.right, rect.right);
-      const bottom = Math.max(gridRect.bottom, rect.bottom);
-      gridRect = new DOMRect(left, top, right - left, bottom - top);
+      cardRects.set(id, card.getBoundingClientRect());
     }
-    dragGeometryRef.current = { cardRects, gridRect };
+    dragGeometryRef.current = {
+      cardRects,
+      viewportRect: listViewportRef.current?.getBoundingClientRect() ?? null,
+    };
     pointerRef.current = {
       sourceId: notebook.id,
       pointerId: event.pointerId,
@@ -400,8 +389,8 @@ export function NotebookSelectorPopup({
         )}
       >
         {isMac() && <OnboardingTitlebarMac />}
-        <WindowsTitlebarControls />
-        <main className="flowix-onboarding__main flowix-notebook-list-screen__main">
+        <WindowsTitlebarControls reserveSpace />
+        <main ref={listViewportRef} className="flowix-onboarding__main flowix-notebook-list-screen__main">
           <div className="flowix-onboarding__content">
             <section className="flowix-onboarding__section">
               <div className="flowix-onboarding__section-heading flowix-onboarding__section-heading--setup flowix-notebook-list-screen__heading">
@@ -409,190 +398,177 @@ export function NotebookSelectorPopup({
                 <button
                   type="button"
                   onClick={() => onOpenChange(false)}
-                  className="flowix-notebook-list-screen__close"
+                  className="flowix-notebook-list-screen__close inline-flex h-8 w-8 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0 text-[var(--muted-foreground)] shadow-sm transition-colors duration-150 hover:border-[color-mix(in_oklch,var(--border)_65%,var(--muted-foreground))] hover:text-[color-mix(in_oklch,var(--muted-foreground)_75%,var(--foreground))]"
                   aria-label={t('common.close')}
                   title={t('common.close')}
                 >
-                  <X className="h-5 w-5" />
+                  <X className="h-4 w-4" />
                 </button>
               </div>
-              <div
-                className="flowix-notebook-list-screen__body"
-                onClick={(event) => {
-                  const target = event.target;
-                  if (target instanceof Element && target.closest('button, [role="button"], [role="menuitem"]')) return;
-                  onOpenChange(false);
-                }}
-              >
-          {notebooks.length === 0 && (
-            <div className="px-3 py-8 text-center text-sm text-[var(--muted-foreground)]">
-              {t('status.noNotebooks')}
-            </div>
-          )}
-          <div key={page} className={cn('flowix-notebook-page-enter mx-auto grid w-full max-w-[914px] grid-cols-[repeat(6,144px)] grid-rows-[repeat(3,165px)] justify-start gap-2.5', pageDirection === 'next' ? 'flowix-notebook-page-enter--next' : 'flowix-notebook-page-enter--previous')}>
-            <button
-              type="button"
-              onClick={() => closeThen(onCreateNotebook)}
-              className="group relative flex h-[165px] w-[144px] shrink-0 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)] transition-colors hover:border-solid hover:text-[var(--primary)]"
-              aria-label={t('status.newNotebook')}
-              title={t('status.newNotebook')}
-            >
-              <Plus className="h-7 w-7" />
-              <span className="text-sm">{t('status.newNotebook')}</span>
-            </button>
-            {previewNotebookIds.map((notebookId) => {
-                if (notebookId === draggingId) {
+              {notebooks.length === 0 && (
+                <div className="px-3 py-8 text-center text-sm text-[var(--muted-foreground)]">
+                  {t('status.noNotebooks')}
+                </div>
+              )}
+              <div className="flowix-notebook-list-screen__grid">
+                <button
+                  type="button"
+                  onClick={() => closeThen(onCreateNotebook)}
+                  className={cn(
+                    NOTEBOOK_CARD_SIZE_CLASS,
+                    'group relative flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)] transition-colors hover:border-solid hover:text-[var(--primary)]',
+                  )}
+                  aria-label={t('status.newNotebook')}
+                  title={t('status.newNotebook')}
+                >
+                  <Plus className="h-7 w-7" />
+                  <span className="text-sm">{t('status.newNotebook')}</span>
+                </button>
+                {previewNotebookIds.map((notebookId) => {
+                  if (notebookId === draggingId) {
+                    return (
+                      <div
+                        key={`placeholder-${notebookId}`}
+                        aria-hidden="true"
+                        className={cn(
+                          NOTEBOOK_CARD_SIZE_CLASS,
+                          'flowix-notebook-drop-placeholder rounded-lg border-2 border-dashed border-[color-mix(in_oklch,var(--primary)_62%,var(--border))] bg-[color-mix(in_oklch,var(--primary)_5%,transparent)]',
+                        )}
+                      />
+                    );
+                  }
+
+                  const notebook = notebooksById.get(notebookId);
+                  if (!notebook) return null;
+                  const isActive = selectedNotebook?.id === notebook.id;
+                  const isMissing = Boolean(notebook.missing);
+
                   return (
                     <div
-                      key={`placeholder-${notebookId}`}
-                      aria-hidden="true"
-                      className="flowix-notebook-drop-placeholder h-[165px] w-[144px] shrink-0 rounded-lg border-2 border-dashed border-[color-mix(in_oklch,var(--primary)_62%,var(--border))] bg-[color-mix(in_oklch,var(--primary)_5%,transparent)]"
-                    />
-                  );
-                }
-
-                const notebook = notebooks.find((item) => item.id === notebookId);
-                if (!notebook) return null;
-                const isActive = selectedNotebook?.id === notebook.id;
-                const isMissing = Boolean(notebook.missing);
-
-                return (
-                  <div
-                    key={notebook.id}
-                    ref={(element) => {
-                      if (element) cardRefs.current.set(notebook.id, element);
-                      else cardRefs.current.delete(notebook.id);
-                    }}
-                    role="button"
-                    tabIndex={0}
-                    aria-pressed={isActive}
-                    onPointerDown={(event) => handleCardPointerDown(notebook, event)}
-                    onKeyDown={(event) => handleCardKeyDown(notebook, event)}
-                    className={cn(
-                      'group relative flex h-[165px] w-[144px] shrink-0 cursor-default select-none flex-col items-start gap-2 rounded-lg border px-3 py-3 text-left transition-[border-color,background-color,box-shadow]',
-                      isActive
-                        ? 'border-[var(--primary)]/50 bg-[color-mix(in_oklch,var(--primary)_10%,transparent)]'
-                        : 'border-[var(--border)] bg-[var(--card)] hover:border-[var(--primary)]/50 hover:bg-[var(--card)]',
-                      isMissing && 'opacity-70',
-                    )}
-                    style={{
-                      touchAction: 'none',
-                      ...(isActive
-                        ? {
-                            backgroundColor: 'var(--popover)',
-                            backgroundImage:
-                              'radial-gradient(ellipse 90% 145% at 100% 0%, var(--brand) 0%, color-mix(in oklch, var(--brand) 80%, transparent) 100%)',
-                          }
-                        : {}),
-                    }}
-                  >
-                    <div className="flex w-full items-center justify-between">
-                      <NotebookIcon
-                        icon={notebook.icon}
-                        name={notebook.name}
-                        className={cn(
-                          'h-8 w-8 shrink-0 rounded-md text-[15px] font-semibold transition-[color,background-color,opacity,filter] duration-150',
-                          isActive
-                            ? 'bg-[color-mix(in_oklch,var(--inverse-foreground)_10%,transparent)] !text-white opacity-100'
-                            : 'bg-[var(--muted)] !text-[var(--foreground)]',
-                        )}
-                        imageClassName="h-[72%] w-[72%]"
-                      />
-                      <DropdownMenu className="shrink-0">
-                        <DropdownMenuTrigger
-                          asChild
-                          onClick={(event) => event.stopPropagation()}
-                        >
-                          <button
-                            type="button"
-                            onPointerDown={(event) => event.stopPropagation()}
-                            className={cn(
-                              'flex h-6 w-6 items-center justify-center rounded-md hover:bg-transparent',
-                              isActive
-                                ? 'text-[var(--inverse-foreground)] hover:text-[var(--inverse-foreground)]'
-                                : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
-                            )}
-                            aria-label={t('document.agent.moreActions')}
-                            title={t('document.agent.moreActions')}
+                      key={notebook.id}
+                      ref={(element) => {
+                        if (element) cardRefs.current.set(notebook.id, element);
+                        else cardRefs.current.delete(notebook.id);
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={isActive}
+                      onPointerDown={(event) => handleCardPointerDown(notebook, event)}
+                      onKeyDown={(event) => handleCardKeyDown(notebook, event)}
+                      className={cn(
+                        NOTEBOOK_CARD_SIZE_CLASS,
+                        'group relative flex cursor-pointer select-none flex-col items-start gap-2 rounded-lg border px-3 py-3 text-left transition-[border-color,background-color,box-shadow]',
+                        isActive
+                          ? 'border-[var(--primary)]/50 bg-[color-mix(in_oklch,var(--primary)_10%,transparent)]'
+                          : 'border-[var(--border)] bg-[var(--card)] hover:border-[var(--primary)]/50 hover:bg-[var(--card)]',
+                        isMissing && 'opacity-70',
+                      )}
+                      style={{
+                        touchAction: 'none',
+                        ...(isActive
+                          ? {
+                              backgroundColor: 'var(--popover)',
+                              backgroundImage:
+                                'radial-gradient(ellipse 90% 145% at 100% 0%, var(--brand) 0%, color-mix(in oklch, var(--brand) 80%, transparent) 100%)',
+                            }
+                          : {}),
+                      }}
+                    >
+                      <div className="flex w-full items-center justify-between">
+                        <NotebookIcon
+                          icon={notebook.icon}
+                          name={notebook.name}
+                          className={cn(
+                            'h-8 w-8 shrink-0 rounded-md text-[15px] font-semibold transition-[color,background-color,opacity,filter] duration-150',
+                            isActive
+                              ? 'bg-[color-mix(in_oklch,var(--inverse-foreground)_10%,transparent)] !text-white opacity-100'
+                              : 'bg-[var(--muted)] !text-[var(--foreground)]',
+                          )}
+                          imageClassName="h-[72%] w-[72%]"
+                        />
+                        <DropdownMenu className="shrink-0">
+                          <DropdownMenuTrigger
+                            asChild
+                            onClick={(event) => event.stopPropagation()}
                           >
-                            <MoreVertical className="h-4 w-4 translate-x-1" />
-                          </button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent
-                          align="end"
-                          className="w-[132px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]"
-                        >
-                          <DropdownMenuItem
-                            onClick={() => closeThen(() => onEdit(notebook))}
-                            className="group h-7 items-center gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
-                          >
-                            <Pencil className="h-3.5 w-3.5 shrink-0" />
-                            <span>{t('common.edit')}</span>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => closeThen(() => onDelete(notebook))}
-                            className="group h-7 items-center gap-2 rounded-lg px-2 py-0 text-left hover:bg-transparent hover:text-[var(--destructive)]"
-                          >
-                            <Trash2 className="h-3.5 w-3.5 shrink-0" />
-                            <span>{t('dialog.delete')}</span>
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                    <div className="mt-auto w-full space-y-1">
-                      <span
-                        className={cn(
-                          'block min-h-5 w-full min-w-0 truncate text-left text-sm font-medium',
-                          isMissing
-                            ? 'text-[var(--muted-foreground)]'
-                            : isActive
-                              ? 'text-[var(--inverse-foreground)]'
-                              : 'text-[var(--foreground)]',
-                        )}
-                        title={notebook.name}
-                      >
-                        {notebook.name}
-                        {isMissing && ` ${t('status.invalid')}`}
-                      </span>
-                      <span
-                        className={cn(
-                          'flex items-center gap-0 text-left text-xs',
-                          isActive
-                            ? 'text-[var(--inverse-foreground)]'
-                            : 'text-[var(--muted-foreground)]',
-                        )}
-                      >
-                        {cloudSyncedNotebookIds?.has(notebook.id) && (
-                          <span className="flex h-4 w-3 shrink-0 items-center justify-center" aria-hidden="true">
-                            <span
+                            <button
+                              type="button"
+                              onPointerDown={(event) => event.stopPropagation()}
                               className={cn(
-                                'h-2 w-2 rounded-full',
-                                cloudSyncAvailable
-                                  ? 'bg-[var(--success)]'
-                                  : 'bg-[var(--muted-foreground)]',
+                                'flex h-6 w-6 items-center justify-center rounded-md hover:bg-transparent',
+                                isActive
+                                  ? 'text-[var(--inverse-foreground)] hover:text-[var(--inverse-foreground)]'
+                                  : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]',
                               )}
-                              aria-hidden="true"
-                            />
-                          </span>
-                        )}
-                        {t('status.notebookMemoCount', { count: notebook.memoCount ?? 0 })}
-                      </span>
+                              aria-label={t('document.agent.moreActions')}
+                              title={t('document.agent.moreActions')}
+                            >
+                              <MoreVertical className="h-4 w-4 translate-x-1" />
+                            </button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent
+                            align="end"
+                            className="w-[132px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]"
+                          >
+                            <DropdownMenuItem
+                              onClick={() => closeThen(() => onEdit(notebook))}
+                              className="group h-7 items-center gap-2 rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
+                            >
+                              <Pencil className="h-3.5 w-3.5 shrink-0" />
+                              <span>{t('common.edit')}</span>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => closeThen(() => onDelete(notebook))}
+                              className="group h-7 items-center gap-2 rounded-lg px-2 py-0 text-left hover:bg-transparent hover:text-[var(--destructive)]"
+                            >
+                              <Trash2 className="h-3.5 w-3.5 shrink-0" />
+                              <span>{t('dialog.delete')}</span>
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                      <div className="mt-auto w-full space-y-1">
+                        <span
+                          className={cn(
+                            'block min-h-5 w-full min-w-0 truncate text-left text-sm font-medium',
+                            isMissing
+                              ? 'text-[var(--muted-foreground)]'
+                              : isActive
+                                ? 'text-[var(--inverse-foreground)]'
+                                : 'text-[var(--foreground)]',
+                          )}
+                          title={notebook.name}
+                        >
+                          {notebook.name}
+                          {isMissing && ` ${t('status.invalid')}`}
+                        </span>
+                        <span
+                          className={cn(
+                            'flex items-center gap-0 text-left text-xs',
+                            isActive
+                              ? 'text-[var(--inverse-foreground)]'
+                              : 'text-[var(--muted-foreground)]',
+                          )}
+                        >
+                          {cloudSyncedNotebookIds?.has(notebook.id) && (
+                            <span className="flex h-4 w-3 shrink-0 items-center justify-center" aria-hidden="true">
+                              <span
+                                className={cn(
+                                  'h-2 w-2 rounded-full',
+                                  cloudSyncAvailable
+                                    ? 'bg-[var(--success)]'
+                                    : 'bg-[var(--muted-foreground)]',
+                                )}
+                                aria-hidden="true"
+                              />
+                            </span>
+                          )}
+                          {t('status.notebookMemoCount', { count: notebook.memoCount ?? 0 })}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                );
-            })}
-              </div>
-          {pageCount > 1 && (
-            <nav className="mx-auto mt-5 flex items-center justify-center gap-3" aria-label={t('status.notebookList')}>
-              <button type="button" onClick={() => { setPageDirection('previous'); setPage((current) => Math.max(0, current - 1)); }} disabled={page === 0} className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border)] text-[var(--foreground)] disabled:opacity-40" aria-label={t('status.previousNotebookPage')}>
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <span className="min-w-16 text-center text-xs text-[var(--muted-foreground)]">{page + 1} / {pageCount}</span>
-              <button type="button" onClick={() => { setPageDirection('next'); setPage((current) => Math.min(pageCount - 1, current + 1)); }} disabled={page >= pageCount - 1} className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--border)] text-[var(--foreground)] disabled:opacity-40" aria-label={t('status.nextNotebookPage')}>
-                <ChevronRight className="h-4 w-4" />
-              </button>
-            </nav>
-          )}
+                  );
+                })}
               </div>
             </section>
           </div>

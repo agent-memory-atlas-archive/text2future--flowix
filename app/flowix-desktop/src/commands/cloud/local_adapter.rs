@@ -3,6 +3,292 @@ use super::*;
 
 const FULL_LOCAL_SNAPSHOT_INTERVAL_MS: i64 = 5 * 60 * 1_000;
 pub(super) static LAST_FULL_LOCAL_SNAPSHOT_AT: AtomicI64 = AtomicI64::new(0);
+static LAST_FULL_LOCAL_SNAPSHOT_BY_NOTEBOOK: OnceLock<std::sync::Mutex<HashMap<String, i64>>> = OnceLock::new();
+
+pub(super) fn record_full_local_snapshot(notebook_scope: Option<&str>) {
+    let now = Utc::now().timestamp_millis();
+    if let Some(scope) = notebook_scope {
+        let snapshots = LAST_FULL_LOCAL_SNAPSHOT_BY_NOTEBOOK
+            .get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+        snapshots.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(scope.to_string(), now);
+    } else {
+        LAST_FULL_LOCAL_SNAPSHOT_AT.store(now, Ordering::SeqCst);
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ConflictFileOutcome {
+    Applied { preserved: Option<PathBuf> },
+    Interrupted { preserved: Option<PathBuf> },
+}
+
+fn conflict_stage_path(path: &Path, operation_id: &str) -> PathBuf {
+    let operation_key: String = operation_id.chars()
+        .filter(|character| character.is_ascii_alphanumeric() || *character == '-')
+        .take(48).collect();
+    let path_hash = flowix_sync::v2_content_hash(path.to_string_lossy().as_bytes());
+    path.with_file_name(format!(".flowix-sync-{operation_key}-{}.stage", &path_hash[..8]))
+}
+
+pub(super) fn cloud_conflict_copy_path(path: &Path, operation_id: &str) -> PathBuf {
+    let operation_key: String = operation_id.chars()
+        .filter(|character| character.is_ascii_alphanumeric() || *character == '-')
+        .take(48).collect();
+    let stem: String = path.file_stem().and_then(|value| value.to_str())
+        .unwrap_or("Note").chars().take(80).collect();
+    let name = match path.extension().and_then(|value| value.to_str()) {
+        Some(extension) => format!("{stem} (Flowix conflict {operation_key}).{extension}"),
+        None => format!("{stem} (Flowix conflict {operation_key})"),
+    };
+    path.with_file_name(name)
+}
+
+fn save_conflict_bytes(primary: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
+    if primary.exists() && std::fs::read(primary).map_err(sync_error)? == bytes {
+        return Ok(primary.to_path_buf());
+    }
+    if !primary.exists() {
+        match flowix_core::memo_file::atomic_create_bytes(primary, bytes) {
+            Ok(()) => return Ok(primary.to_path_buf()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if std::fs::read(primary).map_err(sync_error)? == bytes {
+                    return Ok(primary.to_path_buf());
+                }
+            }
+            Err(error) => return Err(sync_error(error)),
+        }
+    }
+    let hash = flowix_sync::v2_content_hash(bytes);
+    let stem = primary.file_stem().and_then(|value| value.to_str()).unwrap_or("Note");
+    let extension = primary.extension().and_then(|value| value.to_str());
+    for suffix in 0..100 {
+        let name = match (extension, suffix) {
+            (Some(extension), 0) => format!("{stem} (observed-{hash}).{extension}"),
+            (Some(extension), suffix) => format!("{stem} (observed-{hash}-{suffix}).{extension}"),
+            (None, 0) => format!("{stem} (observed-{hash})"),
+            (None, suffix) => format!("{stem} (observed-{hash}-{suffix})"),
+        };
+        let candidate = primary.with_file_name(name);
+        if candidate.exists() {
+            if std::fs::read(&candidate).map_err(sync_error)? == bytes {
+                return Ok(candidate);
+            }
+            continue;
+        }
+        match flowix_core::memo_file::atomic_create_bytes(&candidate, bytes) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if std::fs::read(&candidate).map_err(sync_error)? == bytes {
+                    return Ok(candidate);
+                }
+            }
+            Err(error) => return Err(sync_error(error)),
+        }
+    }
+    Err("CLOUD_CONFLICT_COPY_COLLISION: could not allocate a safe copy name".into())
+}
+
+fn recover_conflict_stage(path: &Path, stage: &Path, conflict_copy: &Path) -> Result<Option<PathBuf>, String> {
+    if !stage.exists() {
+        return Ok(None);
+    }
+    if !path.exists() {
+        flowix_core::memo_file::rename_file_noclobber(stage, path).map_err(sync_error)?;
+        return Ok(None);
+    }
+    let bytes = std::fs::read(stage).map_err(sync_error)?;
+    let preserved = save_conflict_bytes(conflict_copy, &bytes)?;
+    std::fs::remove_file(stage).map_err(sync_error)?;
+    Ok(Some(preserved))
+}
+
+fn safely_replace_conflict_file_with_hook(
+    path: &Path,
+    expected: &[u8],
+    replacement: &[u8],
+    operation_id: &str,
+    conflict_copy: &Path,
+    after_detach: impl FnOnce(&Path),
+) -> Result<ConflictFileOutcome, String> {
+    let stage = conflict_stage_path(path, operation_id);
+    if let Some(preserved) = recover_conflict_stage(path, &stage, conflict_copy)? {
+        return Ok(ConflictFileOutcome::Interrupted { preserved: Some(preserved) });
+    }
+    let current = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ConflictFileOutcome::Interrupted { preserved: None });
+        }
+        Err(error) => return Err(sync_error(error)),
+    };
+    if current != expected {
+        return Ok(ConflictFileOutcome::Interrupted { preserved: None });
+    }
+    if let Err(error) = flowix_core::memo_file::rename_file_noclobber(path, &stage) {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return Ok(ConflictFileOutcome::Interrupted { preserved: None });
+        }
+        return Err(sync_error(error));
+    }
+    let captured = std::fs::read(&stage).map_err(sync_error)?;
+    if captured != expected {
+        let preserved = save_conflict_bytes(conflict_copy, &captured)?;
+        if !path.exists() {
+            let _ = flowix_core::memo_file::rename_file_noclobber(&stage, path);
+        }
+        if stage.exists() && path.exists() {
+            std::fs::remove_file(&stage).map_err(sync_error)?;
+        }
+        return Ok(ConflictFileOutcome::Interrupted { preserved: Some(preserved) });
+    }
+    let original_permissions = std::fs::metadata(&stage).map_err(sync_error)?.permissions();
+    after_detach(path);
+    match flowix_core::memo_file::atomic_create_bytes(path, replacement) {
+        Ok(()) => {
+            std::fs::set_permissions(path, original_permissions).map_err(sync_error)?;
+            let latest = std::fs::read(&stage).map_err(sync_error)?;
+            let preserved = if latest == expected {
+                None
+            } else {
+                Some(save_conflict_bytes(conflict_copy, &latest)?)
+            };
+            std::fs::remove_file(&stage).map_err(sync_error)?;
+            Ok(ConflictFileOutcome::Applied { preserved })
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let bytes = std::fs::read(&stage).map_err(sync_error)?;
+            let preserved = save_conflict_bytes(conflict_copy, &bytes)?;
+            std::fs::remove_file(&stage).map_err(sync_error)?;
+            Ok(ConflictFileOutcome::Interrupted { preserved: Some(preserved) })
+        }
+        Err(error) => {
+            if !path.exists() {
+                let _ = flowix_core::memo_file::rename_file_noclobber(&stage, path);
+            }
+            Err(sync_error(error))
+        }
+    }
+}
+
+fn safely_replace_conflict_file(
+    path: &Path,
+    expected: &[u8],
+    replacement: &[u8],
+    operation_id: &str,
+    conflict_copy: &Path,
+) -> Result<ConflictFileOutcome, String> {
+    safely_replace_conflict_file_with_hook(path, expected, replacement, operation_id, conflict_copy, |_| {})
+}
+
+pub(super) fn safely_replace_cloud_file(
+    path: &Path,
+    expected: Option<&[u8]>,
+    replacement: &[u8],
+    operation_id: &str,
+    conflict_copy: &Path,
+) -> Result<ConflictFileOutcome, String> {
+    if let Some(expected) = expected {
+        return safely_replace_conflict_file(path, expected, replacement, operation_id, conflict_copy);
+    }
+    match flowix_core::memo_file::atomic_create_bytes(path, replacement) {
+        Ok(()) => Ok(ConflictFileOutcome::Applied { preserved: None }),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            Ok(ConflictFileOutcome::Interrupted { preserved: None })
+        }
+        Err(error) => Err(sync_error(error)),
+    }
+}
+
+fn safely_remove_conflict_file_with_hook(
+    path: &Path,
+    expected: &[u8],
+    operation_id: &str,
+    conflict_copy: &Path,
+    after_detach: impl FnOnce(&Path),
+) -> Result<ConflictFileOutcome, String> {
+    let stage = conflict_stage_path(path, operation_id);
+    if let Some(preserved) = recover_conflict_stage(path, &stage, conflict_copy)? {
+        return Ok(ConflictFileOutcome::Interrupted { preserved: Some(preserved) });
+    }
+    let current = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ConflictFileOutcome::Applied { preserved: None });
+        }
+        Err(error) => return Err(sync_error(error)),
+    };
+    if current != expected {
+        return Ok(ConflictFileOutcome::Interrupted { preserved: None });
+    }
+    if let Err(error) = flowix_core::memo_file::rename_file_noclobber(path, &stage) {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return Ok(ConflictFileOutcome::Interrupted { preserved: None });
+        }
+        return Err(sync_error(error));
+    }
+    let captured = std::fs::read(&stage).map_err(sync_error)?;
+    if captured != expected {
+        let preserved = save_conflict_bytes(conflict_copy, &captured)?;
+        if !path.exists() {
+            let _ = flowix_core::memo_file::rename_file_noclobber(&stage, path);
+        }
+        if stage.exists() && path.exists() {
+            std::fs::remove_file(&stage).map_err(sync_error)?;
+        }
+        return Ok(ConflictFileOutcome::Interrupted { preserved: Some(preserved) });
+    }
+    after_detach(path);
+    if path.exists() {
+        let preserved = save_conflict_bytes(conflict_copy, &captured)?;
+        std::fs::remove_file(&stage).map_err(sync_error)?;
+        return Ok(ConflictFileOutcome::Interrupted { preserved: Some(preserved) });
+    }
+    std::fs::remove_file(&stage).map_err(sync_error)?;
+    Ok(ConflictFileOutcome::Applied { preserved: None })
+}
+
+pub(super) fn safely_remove_conflict_file(
+    path: &Path,
+    expected: &[u8],
+    operation_id: &str,
+    conflict_copy: &Path,
+) -> Result<ConflictFileOutcome, String> {
+    safely_remove_conflict_file_with_hook(path, expected, operation_id, conflict_copy, |_| {})
+}
+
+pub(super) fn register_preserved_conflict_copy(
+    memo_file: &flowix_core::memo_file::MemoFile,
+    notebook_id: &str,
+    notebook_root: &Path,
+    path: &Path,
+    attachment: bool,
+) -> Result<(), String> {
+    if attachment {
+        let relative = flowix_core::memo_file::notebook_relative_path(notebook_root, path)?;
+        memo_file.refresh_media_resource_path(notebook_id, &relative).map_err(sync_error)
+    } else {
+        memo_file.register_existing_file_for_notebook_id(notebook_id, path)
+            .map(|_| ()).map_err(sync_error)
+    }
+}
+
+fn recover_and_register_conflict_stage(
+    memo_file: &flowix_core::memo_file::MemoFile,
+    notebook_id: &str,
+    notebook_root: &Path,
+    path: &Path,
+    operation_id: &str,
+    conflict_copy: &Path,
+    attachment: bool,
+) -> Result<bool, String> {
+    let stage = conflict_stage_path(path, operation_id);
+    let Some(preserved) = recover_conflict_stage(path, &stage, conflict_copy)? else {
+        return Ok(false);
+    };
+    register_preserved_conflict_copy(memo_file, notebook_id, notebook_root, &preserved, attachment)?;
+    Ok(true)
+}
 
 /// Save a rejected local move under a visible conflict name, then remove the
 /// move from the durable queue. The next pass bootstraps the current cloud
@@ -31,6 +317,13 @@ pub(super) fn resolve_v2_move_conflict(
     };
     let primary_conflict_path = target.with_file_name(conflict_name);
     let mut conflict_path = primary_conflict_path.clone();
+
+    if recover_and_register_conflict_stage(
+        &memo_file, &movement.notebook_id, root, &target, &movement.operation_id,
+        &primary_conflict_path, attachment,
+    )? {
+        return Err("CLOUD_CONFLICT_LOCAL_CHANGED: recovered a staged move version".into());
+    }
 
     let local = if target.exists() {
         Some(std::fs::read(&target).map_err(sync_error)?)
@@ -83,54 +376,34 @@ pub(super) fn resolve_v2_move_conflict(
             .map_err(sync_error)?;
     }
 
-    if target.exists() {
-        let latest = std::fs::read(&target).map_err(sync_error)?;
-        if local.as_ref().is_some_and(|previous| previous != &latest) {
-            // Preserve a save that raced with conflict handling after the
-            // first copy was taken. The write lock covers Flowix writers;
-            // this second read also protects external editors that bypass it.
-            let hash = flowix_sync::v2_content_hash(&latest);
-            let revision_suffix = &hash[..8.min(hash.len())];
-            let updated_name = match extension {
-                Some(extension) => format!(
-                    "{short_stem} (Flowix conflict {} observed-{revision_suffix}).{extension}",
-                    movement.operation_id,
-                ),
-                None => format!(
-                    "{short_stem} (Flowix conflict {} observed-{revision_suffix})",
-                    movement.operation_id,
-                ),
-            };
-            let updated_conflict = target.with_file_name(updated_name);
-            if updated_conflict.exists() {
-                if std::fs::read(&updated_conflict).map_err(sync_error)? != latest {
-                    return Err("CLOUD_CONFLICT_COPY_COLLISION: concurrent move edit preserved".into());
+    if let Some(local) = &local {
+        match safely_remove_conflict_file(&target, local, &movement.operation_id, &primary_conflict_path)? {
+            ConflictFileOutcome::Applied { preserved } => {
+                if let Some(preserved) = preserved {
+                    register_preserved_conflict_copy(
+                        &memo_file, &movement.notebook_id, root, &preserved, attachment,
+                    )?;
                 }
-            } else {
-                crate::watcher::runtime::mark_self_write_for(app, &updated_conflict);
-                flowix_core::memo_file::atomic_create_bytes(&updated_conflict, &latest).map_err(sync_error)?;
             }
-            if attachment {
-                let relative = flowix_core::memo_file::notebook_relative_path(root, &updated_conflict)?;
-                memo_file.refresh_media_resource_path(&movement.notebook_id, &relative)
-                    .map_err(sync_error)?;
-            } else {
-                memo_file.register_existing_file_for_notebook_id(&movement.notebook_id, &updated_conflict)
-                    .map_err(sync_error)?;
+            ConflictFileOutcome::Interrupted { preserved } => {
+                if let Some(preserved) = preserved {
+                    register_preserved_conflict_copy(
+                        &memo_file, &movement.notebook_id, root, &preserved, attachment,
+                    )?;
+                }
+                return Err("CLOUD_CONFLICT_LOCAL_CHANGED: move target changed during recovery".into());
             }
         }
-        crate::watcher::runtime::mark_self_write_for(app, &target);
+        crate::watcher::runtime::mark_self_write_missing_for(app, &target);
         if attachment {
-            std::fs::remove_file(&target).map_err(sync_error)?;
             memo_file.refresh_media_resource_path(&movement.notebook_id, &movement.to_path)
                 .map_err(sync_error)?;
         } else if let Some(memo) = memo_file.find_memo_by_relative_path_for_notebook_id(
             &movement.notebook_id, &movement.to_path,
         ) {
-            memo_file.delete_memo_result_for_notebook_id(&movement.notebook_id, &memo.id)
-                .map_err(sync_error)?;
-        } else {
-            std::fs::remove_file(&target).map_err(sync_error)?;
+            let _ = memo_file.prune_deleted_memo_for_notebook_id(
+                &movement.notebook_id, &movement.to_path, &memo.id,
+            ).map_err(sync_error)?;
         }
     }
     state.cloud_sync.discard_v2_move_after_conflict(movement).map_err(sync_error)
@@ -244,8 +517,8 @@ pub(super) fn resolve_v2_markdown_conflict(
     let notebook = memo_file.get_notebook_config_by_id(&material.notebook_id)
         .ok_or_else(|| "NOTEBOOK_NOT_FOUND".to_string())?;
     if material.remote.filename.starts_with("attachments/") {
-        let path = safe_cloud_file_path(Path::new(&notebook.path), &material.remote.filename, true)?;
-        let local = std::fs::read(&path).map_err(sync_error)?;
+        let notebook_root = Path::new(&notebook.path);
+        let path = safe_cloud_file_path(notebook_root, &material.remote.filename, true)?;
         let stem: String = path.file_stem().and_then(|value| value.to_str())
             .unwrap_or("attachment").chars().take(80).collect();
         let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("");
@@ -255,6 +528,13 @@ pub(super) fn resolve_v2_markdown_conflict(
             format!("{stem} (Flowix conflict {}).{extension}", material.operation_id)
         };
         let copy_path = path.with_file_name(filename);
+        if recover_and_register_conflict_stage(
+            &memo_file, &material.notebook_id, notebook_root, &path,
+            &material.operation_id, &copy_path, true,
+        )? {
+            return Err("CLOUD_CONFLICT_LOCAL_CHANGED: recovered a staged attachment version".into());
+        }
+        let local = std::fs::read(&path).map_err(sync_error)?;
         if copy_path.exists() {
             if std::fs::read(&copy_path).map_err(sync_error)? != local {
                 return Err("CLOUD_CONFLICT_COPY_COLLISION: local changes preserved".to_string());
@@ -272,7 +552,24 @@ pub(super) fn resolve_v2_markdown_conflict(
         }
         if material.remote.deleted && material.relocated.is_none() {
             crate::watcher::runtime::mark_self_write_for(app, &path);
-            std::fs::remove_file(&path).map_err(sync_error)?;
+            match safely_remove_conflict_file(&path, &local, &material.operation_id, &copy_path)? {
+                ConflictFileOutcome::Applied { preserved } => {
+                    if let Some(preserved) = preserved {
+                        register_preserved_conflict_copy(
+                            &memo_file, &material.notebook_id, notebook_root, &preserved, true,
+                        )?;
+                    }
+                }
+                ConflictFileOutcome::Interrupted { preserved } => {
+                    if let Some(preserved) = preserved {
+                        register_preserved_conflict_copy(
+                            &memo_file, &material.notebook_id, notebook_root, &preserved, true,
+                        )?;
+                    }
+                    return Err("CLOUD_CONFLICT_LOCAL_CHANGED: attachment changed during recovery".into());
+                }
+            }
+            crate::watcher::runtime::mark_self_write_missing_for(app, &path);
             if flowix_core::memo_file::media_kind_for_path(&path).is_some() {
                 memo_file.refresh_media_resource_path(&material.notebook_id, &material.remote.filename)
                     .map_err(sync_error)?;
@@ -292,12 +589,12 @@ pub(super) fn resolve_v2_markdown_conflict(
             }
             crate::watcher::runtime::mark_self_write_for(app, &path);
             crate::watcher::runtime::mark_self_write_for(app, &destination);
-            std::fs::rename(&path, &destination).map_err(sync_error)?;
+            flowix_core::memo_file::rename_file_noclobber(&path, &destination).map_err(sync_error)?;
             if flowix_core::memo_file::media_kind_for_path(&destination).is_some() {
                 if let Err(error) = memo_file.move_media_resource_path(
                     &material.notebook_id, &material.remote.filename, &target.filename,
                 ) {
-                    let _ = std::fs::rename(&destination, &path);
+                    let _ = flowix_core::memo_file::rename_file_noclobber(&destination, &path);
                     return Err(sync_error(error));
                 }
             }
@@ -306,7 +603,36 @@ pub(super) fn resolve_v2_markdown_conflict(
             crate::watcher::runtime::mark_self_write_for(app, &path);
             path.clone()
         };
-        atomic_write_bytes(&destination, remote).map_err(sync_error)?;
+        crate::watcher::runtime::mark_self_write_for(app, &destination);
+        match safely_replace_conflict_file(
+            &destination, &local, remote, &material.operation_id, &copy_path,
+        )? {
+            ConflictFileOutcome::Applied { preserved } => {
+                if let Some(preserved) = preserved {
+                    register_preserved_conflict_copy(
+                        &memo_file, &material.notebook_id, notebook_root, &preserved, true,
+                    )?;
+                }
+            }
+            ConflictFileOutcome::Interrupted { preserved } => {
+                if let Some(preserved) = preserved {
+                    register_preserved_conflict_copy(
+                        &memo_file, &material.notebook_id, notebook_root, &preserved, true,
+                    )?;
+                }
+                if material.relocated.is_some() && !path.exists() && destination.exists()
+                    && flowix_core::memo_file::rename_file_noclobber(&destination, &path).is_ok()
+                {
+                    let _ = memo_file.move_media_resource_path(
+                        &material.notebook_id,
+                        material.relocated.as_ref().map_or(material.remote.filename.as_str(), |item| item.filename.as_str()),
+                        &material.remote.filename,
+                    );
+                }
+                return Err("CLOUD_CONFLICT_LOCAL_CHANGED: attachment changed during recovery".into());
+            }
+        }
+        crate::watcher::runtime::mark_self_write_content_for(app, &destination, remote);
         if flowix_core::memo_file::media_kind_for_path(&destination).is_some() {
             memo_file.refresh_media_resource_path(&material.notebook_id,
                 material.relocated.as_ref().map_or(material.remote.filename.as_str(), |target| target.filename.as_str()))
@@ -327,11 +653,20 @@ pub(super) fn resolve_v2_markdown_conflict(
         return Err("CLOUD_PATH_OR_DELETE_CONFLICT: local changes preserved".to_string());
     }
     let path = notebook_path_from_relative(Path::new(&notebook.path), &memo.relative_path)?;
+    let conflict_copy = path.with_file_name(format!(
+        "{} (Flowix conflict {}).md",
+        path.file_stem().and_then(|value| value.to_str()).unwrap_or("Note"),
+        material.operation_id,
+    ));
+    if recover_and_register_conflict_stage(
+        &memo_file, &material.notebook_id, Path::new(&notebook.path), &path,
+        &material.operation_id, &conflict_copy, false,
+    )? {
+        return Err("CLOUD_CONFLICT_LOCAL_CHANGED: recovered a staged note version".into());
+    }
     let local = std::fs::read(&path).map_err(sync_error)?;
     if material.remote.deleted && material.relocated.is_none() {
-        let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("Note");
-        let short_stem: String = stem.chars().take(80).collect();
-        let copy_path = path.with_file_name(format!("{short_stem} (Flowix conflict {}).md", material.operation_id));
+        let copy_path = conflict_copy.clone();
         if copy_path.exists() {
             if std::fs::read(&copy_path).map_err(sync_error)? != local {
                 return Err("CLOUD_CONFLICT_COPY_COLLISION: local changes preserved".into());
@@ -344,9 +679,32 @@ pub(super) fn resolve_v2_markdown_conflict(
         if std::fs::read(&path).map_err(sync_error)? != local {
             return Err("CLOUD_CONFLICT_LOCAL_CHANGED: local changes preserved".into());
         }
+        match safely_remove_conflict_file(&path, &local, &material.operation_id, &copy_path)? {
+            ConflictFileOutcome::Applied { preserved } => {
+                if let Some(preserved) = preserved {
+                    register_preserved_conflict_copy(
+                        &memo_file, &material.notebook_id, Path::new(&notebook.path),
+                        &preserved, false,
+                    )?;
+                }
+            }
+            ConflictFileOutcome::Interrupted { preserved } => {
+                if let Some(preserved) = preserved {
+                    register_preserved_conflict_copy(
+                        &memo_file, &material.notebook_id, Path::new(&notebook.path),
+                        &preserved, false,
+                    )?;
+                }
+                return Err("CLOUD_CONFLICT_LOCAL_CHANGED: local note changed during recovery".into());
+            }
+        }
         crate::watcher::runtime::mark_self_write_for(app, &path);
-        memo_file.delete_memo_result_for_notebook_id(&material.notebook_id, &memo.id)
-            .map_err(sync_error)?;
+        if !memo_file.prune_deleted_memo_for_notebook_id(
+            &material.notebook_id, &material.remote.filename, &memo.id,
+        ).map_err(sync_error)? {
+            return Err("CLOUD_CONFLICT_LOCAL_CHANGED: local note reappeared during recovery".into());
+        }
+        crate::watcher::runtime::mark_self_write_missing_for(app, &path);
         return state.cloud_sync.v2_rebase_after_conflict(&material.remote).map_err(sync_error);
     }
     let remote = material.remote_content.as_deref()
@@ -358,10 +716,7 @@ pub(super) fn resolve_v2_markdown_conflict(
         flowix_sync::text_merge::MergeOutcome::Merged(bytes) => bytes,
         flowix_sync::text_merge::MergeOutcome::Conflict
         | flowix_sync::text_merge::MergeOutcome::Unsupported => {
-            let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("Note");
-            let short_stem: String = stem.chars().take(80).collect();
-            let filename = format!("{short_stem} (Flowix conflict {}).md", material.operation_id);
-            let copy_path = path.with_file_name(filename);
+            let copy_path = conflict_copy.clone();
             if copy_path.exists() {
                 if std::fs::read(&copy_path).map_err(sync_error)? != local {
                     return Err("CLOUD_CONFLICT_COPY_COLLISION: local changes preserved".to_string());
@@ -388,11 +743,11 @@ pub(super) fn resolve_v2_markdown_conflict(
         }
         crate::watcher::runtime::mark_self_write_for(app, &path);
         crate::watcher::runtime::mark_self_write_for(app, &destination);
-        std::fs::rename(&path, &destination).map_err(sync_error)?;
+        flowix_core::memo_file::rename_file_noclobber(&path, &destination).map_err(sync_error)?;
         if let Err(error) = memo_file.rename_memo_file_for_notebook_id(
             &material.notebook_id, &path, &destination,
         ) {
-            let _ = std::fs::rename(&destination, &path);
+            let _ = flowix_core::memo_file::rename_file_noclobber(&destination, &path);
             return Err(error);
         }
         destination
@@ -400,7 +755,35 @@ pub(super) fn resolve_v2_markdown_conflict(
         crate::watcher::runtime::mark_self_write_for(app, &path);
         path.clone()
     };
-    crate::watcher::runtime::write_note_atomic(app, &destination, &next).map_err(sync_error)?;
+    match safely_replace_conflict_file(
+        &destination, &local, &next, &material.operation_id, &conflict_copy,
+    )? {
+        ConflictFileOutcome::Applied { preserved } => {
+            if let Some(preserved) = preserved {
+                register_preserved_conflict_copy(
+                    &memo_file, &material.notebook_id, Path::new(&notebook.path),
+                    &preserved, false,
+                )?;
+            }
+        }
+        ConflictFileOutcome::Interrupted { preserved } => {
+            if let Some(preserved) = preserved {
+                register_preserved_conflict_copy(
+                    &memo_file, &material.notebook_id, Path::new(&notebook.path),
+                    &preserved, false,
+                )?;
+            }
+            if material.relocated.is_some() && !path.exists() && destination.exists()
+                && flowix_core::memo_file::rename_file_noclobber(&destination, &path).is_ok()
+            {
+                let _ = memo_file.rename_memo_file_for_notebook_id(
+                    &material.notebook_id, &destination, &path,
+                );
+            }
+            return Err("CLOUD_CONFLICT_LOCAL_CHANGED: local note changed during recovery".into());
+        }
+    }
+    crate::watcher::runtime::mark_self_write_content_for(app, &destination, &next);
     let updated = memo_file.register_existing_file_for_notebook_id(&material.notebook_id, &destination)
         .map_err(sync_error)?;
     memo_events::emit(app, MemoEvent::Updated {
@@ -426,11 +809,19 @@ pub(super) fn should_run_full_local_snapshot(
         .cloud_sync
         .v2_enabled_notebooks()
         .map_err(sync_error)?;
+    let now = Utc::now().timestamp_millis();
+    let all_last = LAST_FULL_LOCAL_SNAPSHOT_AT.load(Ordering::SeqCst);
     if let Some(scope) = notebook_scope {
+        let scoped_last = LAST_FULL_LOCAL_SNAPSHOT_BY_NOTEBOOK.get()
+            .and_then(|snapshots| snapshots.lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()).get(scope).copied())
+            .unwrap_or(0);
+        let last = all_last.max(scoped_last);
+        let interval_elapsed = last == 0 || now.saturating_sub(last) >= FULL_LOCAL_SNAPSHOT_INTERVAL_MS;
         return Ok(enabled
             .iter()
             .find(|notebook| notebook.notebook_id == scope)
-            .is_some_and(|notebook| notebook.bootstrap_required));
+            .is_some_and(|notebook| notebook.bootstrap_required || interval_elapsed));
     }
     if enabled.is_empty() {
         return Ok(false);
@@ -438,9 +829,7 @@ pub(super) fn should_run_full_local_snapshot(
     if enabled.iter().any(|notebook| notebook.bootstrap_required) {
         return Ok(true);
     }
-    let now = Utc::now().timestamp_millis();
-    let last = LAST_FULL_LOCAL_SNAPSHOT_AT.load(Ordering::SeqCst);
-    Ok(last == 0 || now.saturating_sub(last) >= FULL_LOCAL_SNAPSHOT_INTERVAL_MS)
+    Ok(all_last == 0 || now.saturating_sub(all_last) >= FULL_LOCAL_SNAPSHOT_INTERVAL_MS)
 }
 
 pub(super) fn v2_account_snapshot(
@@ -552,8 +941,6 @@ pub(super) fn write_cloud_attachments(
     base: &Path,
     attachments: &[flowix_sync::V2RemoteAttachment],
 ) -> Result<(), String> {
-    let directory = base.join("attachments");
-    std::fs::create_dir_all(&directory).map_err(sync_error)?;
     for attachment in attachments {
         let filename = &attachment.metadata.filename;
         let relative = Path::new(filename);
@@ -568,14 +955,23 @@ pub(super) fn write_cloud_attachments(
         {
             return Err(format!("CLOUD_ATTACHMENT_INVALID: {filename}"));
         }
-        let path = match relative.strip_prefix("attachments") {
-            Ok(path) => base.join("attachments").join(path),
-            Err(_) => directory.join(relative),
+        let relative_name = match relative.strip_prefix("attachments") {
+            Ok(path) => format!("attachments/{}", path.display()),
+            Err(_) => format!("attachments/{filename}"),
         };
+        let path = safe_cloud_file_path(base, &relative_name, true)?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(sync_error)?;
         }
-        atomic_write_bytes(&path, &attachment.content).map_err(sync_error)?;
+        match flowix_core::memo_file::atomic_create_bytes(&path, &attachment.content) {
+            Ok(()) => {},
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                if std::fs::read(&path).map_err(sync_error)? != attachment.content {
+                    return Err(format!("CLOUD_ATTACHMENT_EDIT_CONFLICT: {filename}"));
+                }
+            },
+            Err(error) => return Err(sync_error(error)),
+        }
     }
     Ok(())
 }
@@ -609,11 +1005,12 @@ pub(super) fn apply_v2_note_changes(
         };
         if filename.starts_with("attachments/") {
             let path = safe_cloud_file_path(&base, filename, true)?;
-            let local_hash = match std::fs::read(&path) {
-                Ok(bytes) => Some(v2_content_hash(&bytes)),
+            let local_bytes = match std::fs::read(&path) {
+                Ok(bytes) => Some(bytes),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
                 Err(error) => return Err(format!("CLOUD_ATTACHMENT_READ_FAILED: {error}")),
             };
+            let local_hash = local_bytes.as_ref().map(|bytes| v2_content_hash(bytes));
             let baseline_hash = state.cloud_sync.v2_note_state(note_id).map_err(sync_error)?
                 .and_then(|value| value.content_hash);
             let pending = state.cloud_sync.has_pending_v2_note_change(note_id).map_err(sync_error)?;
@@ -621,9 +1018,21 @@ pub(super) fn apply_v2_note_changes(
                 if v2_local_content_diverged(local_hash.as_deref(), baseline_hash.as_deref(), pending) {
                     return Err(format!("CLOUD_ATTACHMENT_DELETE_CONFLICT: {filename}"));
                 }
-                if path.exists() {
+                if let Some(expected) = local_bytes.as_deref() {
                     crate::watcher::runtime::mark_self_write_for(app, &path);
-                    std::fs::remove_file(&path).map_err(sync_error)?;
+                    let copy = cloud_conflict_copy_path(&path, note_id);
+                    match safely_remove_conflict_file(&path, expected, note_id, &copy)? {
+                        ConflictFileOutcome::Applied { preserved: None } => {},
+                        outcome => {
+                            let preserved = match outcome {
+                                ConflictFileOutcome::Applied { preserved } | ConflictFileOutcome::Interrupted { preserved } => preserved,
+                            };
+                            if let Some(preserved) = preserved {
+                                register_preserved_conflict_copy(&memo_file, notebook_id, &base, &preserved, true)?;
+                            }
+                            return Err(format!("CLOUD_ATTACHMENT_DELETE_CONFLICT: {filename}"));
+                        }
+                    }
                 }
                 continue;
             }
@@ -639,7 +1048,19 @@ pub(super) fn apply_v2_note_changes(
             }
             if let Some(parent) = path.parent() { std::fs::create_dir_all(parent).map_err(sync_error)?; }
             crate::watcher::runtime::mark_self_write_for(app, &path);
-            atomic_write_bytes(&path, bytes).map_err(sync_error)?;
+            let copy = cloud_conflict_copy_path(&path, note_id);
+            match safely_replace_cloud_file(&path, local_bytes.as_deref(), bytes, note_id, &copy)? {
+                ConflictFileOutcome::Applied { preserved: None } => {},
+                outcome => {
+                    let preserved = match outcome {
+                        ConflictFileOutcome::Applied { preserved } | ConflictFileOutcome::Interrupted { preserved } => preserved,
+                    };
+                    if let Some(preserved) = preserved {
+                        register_preserved_conflict_copy(&memo_file, notebook_id, &base, &preserved, true)?;
+                    }
+                    return Err(format!("CLOUD_ATTACHMENT_EDIT_CONFLICT: {filename}"));
+                }
+            }
             continue;
         }
         if *deleted {
@@ -702,9 +1123,12 @@ pub(super) fn apply_v2_note_changes(
             // 修改”。附件已由上方 write_cloud_attachments 幂等落盘，filename/位置未变时
             // 无需重写正文。
             // 本地磁盘当前正文哈希：P0-2 回声判据与 P1-3 本地编辑判据共用。
-            let disk_hash = std::fs::read(&desired_path)
-                .ok()
-                .map(|bytes| v2_content_hash(&bytes));
+            let disk_bytes = match std::fs::read(&desired_path) {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(sync_error(error)),
+            };
+            let disk_hash = disk_bytes.as_ref().map(|bytes| v2_content_hash(bytes));
 
             // P0-2: 回声 / 内容已一致 → 跳过写盘与事件（避免监听器把“内容未变”的
             // 写盘误判为外部编辑）。
@@ -746,16 +1170,22 @@ pub(super) fn apply_v2_note_changes(
             if let Some(path) = &old_path {
                 crate::watcher::runtime::mark_self_write_for(app, path);
             }
-            let stamped_content = markdown;
             if let Some(parent) = desired_path.parent() {
                 std::fs::create_dir_all(parent).map_err(sync_error)?;
             }
-            crate::watcher::runtime::write_note_atomic(
-                app,
-                &desired_path,
-                stamped_content.as_bytes(),
-            )
-            .map_err(sync_error)?;
+            let copy = cloud_conflict_copy_path(&desired_path, note_id);
+            match safely_replace_cloud_file(&desired_path, disk_bytes.as_deref(), markdown.as_bytes(), note_id, &copy)? {
+                ConflictFileOutcome::Applied { preserved: None } => {},
+                outcome => {
+                    let preserved = match outcome {
+                        ConflictFileOutcome::Applied { preserved } | ConflictFileOutcome::Interrupted { preserved } => preserved,
+                    };
+                    if let Some(preserved) = preserved {
+                        register_preserved_conflict_copy(&memo_file, notebook_id, &base, &preserved, false)?;
+                    }
+                    return Err(format!("CLOUD_LOCAL_EDIT_CONFLICT: local file preserved at {filename}"));
+                }
+            }
             let memo = memo_file
                 .register_existing_file_for_notebook_id(notebook_id, &desired_path)
                 .map_err(sync_error)?;
@@ -874,4 +1304,79 @@ pub(super) fn apply_v2_report(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod conflict_file_tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn attachment_manifest_rejects_symlink_directory() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), temp.path().join("attachments")).unwrap();
+        let bytes = b"image".to_vec();
+        let attachment = flowix_sync::V2RemoteAttachment {
+            metadata: flowix_sync::V2Attachment {
+                filename: "image.png".into(),
+                content_hash: v2_content_hash(&bytes),
+                size_bytes: bytes.len() as i64,
+                mime_type: "image/png".into(),
+            },
+            content: bytes,
+        };
+        assert!(write_cloud_attachments(temp.path(), &[attachment]).is_err());
+        assert!(!outside.path().join("image.png").exists());
+    }
+
+    #[test]
+    fn external_atomic_save_after_detach_is_not_overwritten() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("note.md");
+        let conflict = temp.path().join("note (Flowix conflict op).md");
+        std::fs::write(&path, b"local version").unwrap();
+
+        let outcome = safely_replace_conflict_file_with_hook(
+            &path, b"local version", b"merged version", "op", &conflict,
+            |path| flowix_core::memo_file::atomic_write_bytes(path, b"external save").unwrap(),
+        ).unwrap();
+
+        assert!(matches!(outcome, ConflictFileOutcome::Interrupted { .. }));
+        assert_eq!(std::fs::read(&path).unwrap(), b"external save");
+        assert_eq!(std::fs::read(&conflict).unwrap(), b"local version");
+        assert!(!conflict_stage_path(&path, "op").exists());
+    }
+
+    #[test]
+    fn external_atomic_save_after_detach_survives_conflict_delete() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("note.md");
+        let conflict = temp.path().join("note (Flowix conflict op).md");
+        std::fs::write(&path, b"local version").unwrap();
+
+        let outcome = safely_remove_conflict_file_with_hook(
+            &path, b"local version", "op", &conflict,
+            |path| flowix_core::memo_file::atomic_write_bytes(path, b"external save").unwrap(),
+        ).unwrap();
+
+        assert!(matches!(outcome, ConflictFileOutcome::Interrupted { .. }));
+        assert_eq!(std::fs::read(&path).unwrap(), b"external save");
+        assert_eq!(std::fs::read(&conflict).unwrap(), b"local version");
+        assert!(!conflict_stage_path(&path, "op").exists());
+    }
+
+    #[test]
+    fn captured_conflict_bytes_do_not_overwrite_an_existing_copy() {
+        let temp = tempfile::tempdir().unwrap();
+        let conflict = temp.path().join("note (Flowix conflict op).md");
+        std::fs::write(&conflict, b"previous conflict").unwrap();
+
+        let preserved = save_conflict_bytes(&conflict, b"newly captured version").unwrap();
+
+        assert_ne!(preserved, conflict);
+        assert_eq!(std::fs::read(&conflict).unwrap(), b"previous conflict");
+        assert_eq!(std::fs::read(preserved).unwrap(), b"newly captured version");
+    }
 }

@@ -337,6 +337,32 @@ fn v2_report_commits_heads_bootstrap_and_cursor_atomically() {
 }
 
 #[test]
+fn bootstrap_pages_keep_cursor_and_requirement_until_final_page() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = SyncStore::new(temp.path().join("sync.db")).unwrap();
+    store.set_v2_notebook("nb_1", true).unwrap();
+    let first = V2RemoteApply::Note {
+        note_id: "first".into(), notebook_id: "nb_1".into(), filename: "first.md".into(),
+        content_hash: Some("hash-first".into()), content: Some(b"first".to_vec()),
+        revision: "rev_1".into(), sync_seq: 1, deleted: false, attachments: Vec::new(),
+    };
+    store.commit_v2_sync_report(&[first], 0, &[], 100).unwrap();
+    assert_eq!(store.v2_cursor().unwrap(), 0);
+    assert!(store.v2_notebooks(true).unwrap()[0].bootstrap_required);
+    assert!(store.v2_note_state("first").unwrap().is_some());
+
+    let second = V2RemoteApply::Note {
+        note_id: "second".into(), notebook_id: "nb_1".into(), filename: "second.md".into(),
+        content_hash: Some("hash-second".into()), content: Some(b"second".to_vec()),
+        revision: "rev_2".into(), sync_seq: 2, deleted: false, attachments: Vec::new(),
+    };
+    store.commit_v2_sync_report(&[second], 2, &["nb_1".into()], 101).unwrap();
+    assert_eq!(store.v2_cursor().unwrap(), 2);
+    assert!(!store.v2_notebooks(true).unwrap()[0].bootstrap_required);
+    assert!(store.v2_note_state("second").unwrap().is_some());
+}
+
+#[test]
 fn switching_users_clears_user_scoped_sync_state() {
     let temp = tempfile::tempdir().unwrap();
     let store = SyncStore::new(temp.path().join("sync.db")).unwrap();

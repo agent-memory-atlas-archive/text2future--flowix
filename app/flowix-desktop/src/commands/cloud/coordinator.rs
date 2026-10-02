@@ -301,9 +301,7 @@ async fn sync_v2_account_pass(
             apply_v2_report(state, app, &report).map_err(SyncError::InvalidState)
         })
         .map_err(sync_error)?;
-    if full_local_snapshot && notebook_scope.is_none() {
-        LAST_FULL_LOCAL_SNAPSHOT_AT.store(Utc::now().timestamp_millis(), Ordering::SeqCst);
-    }
+    if full_local_snapshot { record_full_local_snapshot(notebook_scope); }
     Ok(report)
 }
 
@@ -542,8 +540,10 @@ async fn run_sync_activity(
             .extend(enabled.iter().map(|notebook| notebook.notebook_id.clone()));
         activity.result.notebooks = activity.notebooks.len();
 
-        let report =
-            match sync_v2_account_pass(state.inner(), app, &target, &enabled, &activity).await {
+        let mut first_head = None;
+        let mut previous_cursor = None;
+        loop {
+            let mut report = match sync_v2_account_pass(state.inner(), app, &target, &enabled, &activity).await {
                 Ok(report) => report,
                 Err(error) => {
                     let mut error_notebooks = activity.notebooks.clone();
@@ -565,7 +565,46 @@ async fn run_sync_activity(
                     return Err(error);
                 }
             };
-        activity.absorb_report(&report);
+            activity.absorb_report(&report);
+            let mut bootstrap_pages = 0;
+            while report.bootstrap_next_page_token.is_some() {
+                bootstrap_pages += 1;
+                let next = if bootstrap_pages > 10_000 {
+                    Err("CLOUD_BOOTSTRAP_PAGE_LIMIT: bootstrap exceeded page limit".to_string())
+                } else {
+                    async {
+                        let next = state.cloud_sync.v2_continue_bootstrap(&report, target.notebook_scope())
+                            .await.map_err(cloud_error)?;
+                        state.cloud_sync.complete_v2_sync_with_apply(&next, target.notebook_scope(), || {
+                            apply_v2_report(state.inner(), app, &next).map_err(SyncError::InvalidState)
+                        }).map_err(sync_error)?;
+                        Ok::<_, String>(next)
+                    }.await
+                };
+                report = match next {
+                    Ok(next) => next,
+                    Err(error) => {
+                        emit_activity_status(app, &activity, activity.notebooks.clone(),
+                            "error", "failed", Some(&error));
+                        finish_responders(batch.responders, Err(error.clone()));
+                        if batch.retry_on_failure { schedule_retry_after_failure(app, target.clone()); }
+                        return Err(error);
+                    }
+                };
+                activity.absorb_report(&report);
+            }
+            let head = *first_head.get_or_insert(report.head_cursor);
+            if report.cursor >= head { break; }
+            if previous_cursor.is_some_and(|cursor| report.cursor <= cursor) {
+                let error = "CLOUD_SYNC_CURSOR_STALLED: remote cursor did not advance".to_string();
+                emit_activity_status(app, &activity, activity.notebooks.clone(),
+                    "error", "failed", Some(&error));
+                finish_responders(batch.responders, Err(error.clone()));
+                if batch.retry_on_failure { schedule_retry_after_failure(app, target.clone()); }
+                return Err(error);
+            }
+            previous_cursor = Some(report.cursor);
+        }
         match &target {
             SyncTarget::FullAccount => completed_full_account = true,
             SyncTarget::Notebook(notebook_id) => {

@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { ListTodo } from 'lucide-react';
+import { Info, ListTodo } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import mcpPluginIcon from '@/assets/mcp-plugin.svg';
 import { Tooltip } from '@shared/ui/tooltip';
 import type { Notebook } from '@features/memo/store/note-store';
 import { NotebookSelectorPopup } from '@features/shell/components/status-bar/notebook-selector-popup';
 import { ProductUpdatePill } from '@features/shell/components/status-bar/product-update-pill';
+import { ProductIntroDialog } from '@features/shell/components/status-bar/product-intro-dialog';
 import {
   AgentConversationStatusBar,
   AgentIcon,
@@ -36,6 +37,8 @@ interface StatusBarProps {
   onCreateNotebook: () => void;
   onOpenTodos: () => void;
   onToggleNoteNavigation: () => void;
+  productIntroOpen: boolean;
+  onProductIntroOpenChange: (open: boolean) => void;
   onOpenMcpPreferences: () => void;
   onOpenDshPreferences: () => void;
   dshDownload: DshDownloadProgress | null;
@@ -144,6 +147,8 @@ export function StatusBar({
   onCreateNotebook,
   onOpenTodos,
   onToggleNoteNavigation,
+  productIntroOpen,
+  onProductIntroOpenChange,
   onOpenMcpPreferences,
   onOpenDshPreferences,
   dshDownload,
@@ -302,7 +307,18 @@ export function StatusBar({
             />
           </button>
         </Tooltip>
+        <Tooltip content={t('shell.productIntro.button')} side="top">
+          <button
+            type="button"
+            onClick={() => onProductIntroOpenChange(true)}
+            className="h-full flex items-center justify-center px-1.5 py-0 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+            aria-label={t('shell.productIntro.button')}
+          >
+            <Info className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </Tooltip>
       </div>
+      <ProductIntroDialog open={productIntroOpen} onOpenChange={onProductIntroOpenChange} />
     </div>
   );
 }

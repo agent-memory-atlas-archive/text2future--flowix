@@ -17,7 +17,7 @@ use crate::system_data::{
 
 const FEATURED_NOTES_ALLOWED_OPERATORS: [&str; 3] = ["equals", "contains", "excludes"];
 const CUSTOM_VIEW_ALLOWED_OPERATORS: [&str; 2] = ["equals", "contains"];
-const FILE_TREE_SECTIONS: [&str; 4] = ["agents", "pinned", "views", "files"];
+const FILE_TREE_SECTIONS: [&str; 5] = ["agents", "pinned", "views", "files", "repositories"];
 
 #[tauri::command]
 pub fn get_tag_system_metadata(
@@ -178,7 +178,7 @@ pub fn set_notebook_file_tree_section_order(
             .iter()
             .any(|section| section_order.iter().filter(|item| item.as_str() == *section).count() != 1)
     {
-        return Err("file tree section order must contain agents, pinned, views, and files once each".to_string());
+        return Err("file tree section order must contain agents, pinned, views, files, and repositories once each".to_string());
     }
     if let Some(hidden) = &hidden_sections {
         if hidden.iter().any(|section| !FILE_TREE_SECTIONS.contains(&section.as_str()))

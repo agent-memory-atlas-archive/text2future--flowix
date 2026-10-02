@@ -253,13 +253,6 @@
   line-height: 1.2;
 }
 
-.slash-menu-divider {
-  margin: 0.25rem 0.5rem;
-  border: 0;
-  border-top: 1px solid var(--border-popup);
-  opacity: 0.6;
-}
-
 .slash-menu-items-frame {
   position: relative;
   display: flex;

@@ -9,7 +9,6 @@ import {
   StarIcon,
   TrashSimpleIcon,
 } from '@phosphor-icons/react';
-import { Loader2 } from 'lucide-react';
 import { MoreHorizontal } from 'lucide-react';
 import { useAgentSessionStore } from '@features/agent/store/agent-session-store';
 import type { AgentConversationInstance } from '@features/agent/store/agent-conversation-types';
@@ -48,6 +47,11 @@ import {
 } from '@features/agent/conversation-favorites';
 import { useI18n } from '@/lib/i18n';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
+import {
+  ListSurfaceInlineLoadingState,
+  ListSurfaceLoadingState,
+  ListSurfaceViewport,
+} from '@shared/ui/list-surface';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -736,7 +740,7 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
             </DropdownMenu>
           </div>
       </div>
-      <div className="relative min-h-0 flex-1">
+      <ListSurfaceViewport>
         <OverlayScrollbar
           className="h-full"
           scrollerRef={scrollerRef}
@@ -751,14 +755,7 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
           }}
         >
           {isLoading && scopedConversations.length === 0 ? (
-            <div
-              className="flex h-full min-h-0 w-full items-center justify-center gap-2 px-4 text-center text-sm text-[var(--muted-foreground)]"
-              role="status"
-              aria-live="polite"
-            >
-              <Loader2 className="h-4 w-4 animate-spin text-[var(--primary)]" aria-hidden="true" />
-              <span>{t('status.agent.loadingConversations')}</span>
-            </div>
+            <ListSurfaceLoadingState label={t('status.agent.loadingConversations')} />
           ) : loadError && scopedConversations.length === 0 ? (
             <div className="flex h-full min-h-0 w-full flex-col items-center justify-center gap-3 px-4 text-center text-sm text-[var(--muted-foreground)]" role="alert">
               <span>{t('status.agent.loadConversationsFailed')}</span>
@@ -771,10 +768,17 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
           ) : (
             <>
             {(loadError || isLoading) && (
-              <div className="flex items-center justify-center gap-2 px-2 py-1 text-xs text-[var(--muted-foreground)]" role={loadError ? 'alert' : 'status'}>
-                <span>{loadError ? t('status.agent.loadConversationsFailed') : t('status.agent.loadingConversations')}</span>
-                {loadError && <Button size="xs" variant="ghost" onClick={() => setFirstPageRetry((value) => value + 1)}>{t('error.retry')}</Button>}
-              </div>
+              loadError ? (
+                <div className="flex items-center justify-center gap-2 px-2 py-1 text-xs text-[var(--muted-foreground)]" role="alert">
+                  <span>{t('status.agent.loadConversationsFailed')}</span>
+                  <Button size="xs" variant="ghost" onClick={() => setFirstPageRetry((value) => value + 1)}>{t('error.retry')}</Button>
+                </div>
+              ) : (
+                <ListSurfaceInlineLoadingState
+                  label={t('status.agent.loadingConversations')}
+                  className="py-1"
+                />
+              )
             )}
             <div className="relative min-h-full" style={{ height: totalSize }}>
               {virtualItems.map(({ item, start, size }) => {
@@ -796,14 +800,12 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
 
                 if (item.kind === 'loading') {
                   return (
-                    <div
+                    <ListSurfaceInlineLoadingState
                       key={item.key}
-                      className="absolute inset-x-0 top-0 pt-3 pb-2 text-center text-xs text-[var(--muted-foreground)]"
+                      label={t('status.agent.loadingMoreConversations')}
+                      className="absolute inset-x-0 top-0"
                       style={{ height: size, transform: `translateY(${start}px)` }}
-                      aria-live="polite"
-                    >
-                      {t('memo.list.loadingLibrary')}
-                    </div>
+                    />
                   );
                 }
 
@@ -943,7 +945,7 @@ export function AgentConversationList({ isActive = true }: AgentConversationList
             showScrollTopHint ? 'opacity-100' : 'opacity-0',
           )}
         />
-      </div>
+      </ListSurfaceViewport>
       <Dialog open={renameTarget !== null} onOpenChange={(open) => !open && !renameSaving && setRenameTarget(null)}>
         <DialogContent className="rounded-xl border border-[var(--border-popup)] bg-[var(--card)] shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
           <DialogHeader>

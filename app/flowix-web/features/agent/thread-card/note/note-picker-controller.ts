@@ -2,6 +2,7 @@ import type { I18nKey, I18nParams } from '@/lib/i18n';
 import { notes as notesClient } from '@platform/tauri/client';
 import { useNoteStore } from '@features/memo/store/note-store';
 import { createAnchoredPopoverController, type AnchoredPopoverController } from '../anchored-popover-controller';
+import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
 
 const SEARCH_LIMIT = 10;
 const SEARCH_DELAY_MS = 150;
@@ -171,8 +172,10 @@ export class NotePickerController {
     };
     search.addEventListener('keydown', handleNavigation);
     list.addEventListener('keydown', handleNavigation);
-    const divider = document.createElement('hr');
-    divider.className = 'agent-thread-card__composer-note-search-divider';
+    const divider = document.createElement('div');
+    divider.setAttribute('role', 'separator');
+    divider.setAttribute('aria-hidden', 'true');
+    divider.className = POPUP_SEPARATOR_CLASS;
     this.options.popover.replaceChildren(list, divider, search);
     this.renderResults();
     requestAnimationFrame(() => { if (this.open && !this.disposed) search.focus(); });

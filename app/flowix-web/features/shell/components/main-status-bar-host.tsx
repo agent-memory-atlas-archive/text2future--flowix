@@ -11,6 +11,8 @@ export interface MainStatusBarHostProps {
   onCreateNotebook(): void;
   onOpenTodos(): void;
   onToggleNoteNavigation(): void;
+  productIntroOpen: boolean;
+  onProductIntroOpenChange(open: boolean): void;
   dshDownload: DshDownloadProgress | null;
   updater: AppUpdaterState;
 }

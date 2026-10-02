@@ -35,6 +35,7 @@ import { ensureAgentConversationDetailThread } from '@features/agent/components/
 import { markConversationWorkspaceStarted } from '@features/agent/runtime/workspace-snapshot';
 import { ensureConversationWorkspaceSnapshot } from '@features/agent/runtime/workspace-snapshot';
 import { AgentBackgroundTerminals } from '@features/agent/components/agent-background-terminals';
+import { CodexApprovalQueue } from '@features/agent/components/codex-approval-queue';
 import { buildInitialInstanceRuntimeConfig } from '@features/agent/store/initial-runtime-config';
 import { defaultThreadTitle } from '@features/agent/store/thread-titles';
 import { selectAndOpenAgentConversation } from '@features/workspace/use-cases/agent-conversation-navigation';
@@ -874,6 +875,7 @@ export function AgentConversationDetail({
           />
         </div>
         <div className="agent-conversation-detail__composer-stack">
+          {instance.agentType === 'codex' && <CodexApprovalQueue threadId={threadId} />}
           <AgentBackgroundTerminals
             threadId={threadId}
             agentType={instance.agentType === 'codex' ? 'codex' : 'deepseek-harness'}

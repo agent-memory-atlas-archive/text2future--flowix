@@ -19,6 +19,22 @@ pub(crate) fn mark_self_write_for(app: &AppHandle, path: &Path) {
     }
 }
 
+pub(crate) fn mark_self_write_content_for(app: &AppHandle, path: &Path, content: &[u8]) {
+    if let Some(w) = current_watcher(app) {
+        if let Ok(g) = w.read() {
+            g.mark_self_write_content(path, content);
+        }
+    }
+}
+
+pub(crate) fn mark_self_write_missing_for(app: &AppHandle, path: &Path) {
+    if let Some(w) = current_watcher(app) {
+        if let Ok(g) = w.read() {
+            g.mark_self_write_missing(path);
+        }
+    }
+}
+
 /// 原子写一篇笔记，并自动登记自身写入标记（写前 + 写后各一次）。
 ///
 /// 文件监听器仅凭内容哈希精确匹配判定自身写入（路径匹配不够）：写前标记关闭 notify
@@ -32,6 +48,6 @@ pub(crate) fn write_note_atomic(
 ) -> std::io::Result<()> {
     mark_self_write_for(app, path);
     atomic_write_bytes(path, content)?;
-    mark_self_write_for(app, path);
+    mark_self_write_content_for(app, path, content);
     Ok(())
 }

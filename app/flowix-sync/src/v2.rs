@@ -339,6 +339,7 @@ pub struct V2AccountSyncReport {
     pub deleted: usize,
     pub remote: Vec<V2RemoteApply>,
     pub bootstrapped_notebooks: Vec<String>,
+    pub bootstrap_next_page_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

@@ -1,6 +1,6 @@
 'use client';
 
-import type { FileBrowserViewSurface } from './file-browser-view';
+import { FileBrowserView, type FileBrowserViewSurface } from './file-browser-view';
 import { openBrowserColumnTarget, selectBrowserColumnFile } from '@features/workspace/use-cases/browser-column-navigation';
 
 import {
@@ -343,7 +343,7 @@ function BrowserMediaSurfaceView({ surface }: { surface: BrowserMediaSurface }) 
 
 function BrowserFileBrowserSurfaceView({ surface }: { surface: BrowserFileBrowserSurface }) {
   if (!surface.activeFilePath) {
-    return <CodeSurfaceView props={surface.documentProps} fileTree={surface} />;
+    return <FileBrowserView surface={{ ...surface, sourceMenuEnabled: false }} />;
   }
 
   const fileKind = externalFileViewKind(surface.activeFilePath);
@@ -351,7 +351,16 @@ function BrowserFileBrowserSurfaceView({ surface }: { surface: BrowserFileBrowse
     case 'markdown':
       return <DocumentContainer {...surface.documentProps} fileIdentity={surface.fileIdentity} externalEditorMode="markdown" />;
     case 'code':
-      return <CodeSurfaceView props={{ ...surface.documentProps, fileIdentity: surface.fileIdentity }} fileTree={surface} />;
+      return <FileBrowserView surface={{
+        ...surface,
+        fileTreeEnabled: false,
+        sourceMenuEnabled: false,
+        content: <DocumentContainer
+          {...surface.documentProps}
+          fileIdentity={surface.fileIdentity}
+          externalScopePath={surface.scopePath}
+        />,
+      }} />;
     case 'image':
     case 'video':
       return <MediaResourceView

@@ -112,6 +112,18 @@ fn remote_delete_removes_unchanged_file_and_index_entry() {
 }
 
 #[test]
+fn remote_delete_preserves_external_save_during_delete() {
+    let (_directory, store, sync, id, path) = fixture();
+    let _guard = store.acquire_cross_process_write_lock().unwrap();
+    let error = delete_cloud_note_locked(&store, &sync, "work", &id, None, |actual_path| {
+        flowix_core::memo_file::atomic_write_bytes(actual_path, b"external save").unwrap();
+    }).unwrap_err();
+    assert!(error.starts_with("CLOUD_DELETE_CONFLICT:"));
+    assert_eq!(std::fs::read(&path).unwrap(), b"external save");
+    assert!(store.resolve_memo_location(&id).unwrap().is_some());
+}
+
+#[test]
 fn remote_delete_does_not_treat_read_failure_as_a_missing_file() {
     let (_directory, store, sync, id, path) = fixture();
     std::fs::remove_file(&path).unwrap();

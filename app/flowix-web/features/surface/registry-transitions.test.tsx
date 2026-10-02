@@ -15,7 +15,6 @@ vi.mock('@features/document/components/document-container', () => ({
 }));
 vi.mock('./media-resource-view', () => ({ MediaResourceView: () => <div>media loading</div> }));
 vi.mock('./html-resource-view', () => ({ HtmlResourceView: () => <div>html reader</div> }));
-vi.mock('./work-file-browser-view', () => ({ CodeSurfaceFileBrowser: () => <div>code reader</div> }));
 vi.mock('@shared/ui/surface-suspense-host', () => ({
   SurfaceSuspenseHost: ({ children }: { children: ReactNode }) => children,
 }));

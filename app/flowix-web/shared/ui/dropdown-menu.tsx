@@ -1,6 +1,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
+import { POPUP_SEPARATOR_CLASS } from "@shared/ui/popup-separator";
 
 type DropdownAlign = "start" | "center" | "end";
 type DropdownSide = "top" | "bottom";
@@ -397,7 +398,7 @@ function DropdownMenuLabel({
 }
 
 function DropdownMenuSeparator() {
-	return <div className="h-px bg-[var(--border)] my-1" />;
+	return <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />;
 }
 
 // Sub Menu

@@ -157,7 +157,7 @@ export function AgentTasksSection({
           onClick={() => setCollapsed((value) => !value)}
         >
           <span>{t('memo.fileTree.agentsSectionTitle')}</span>
-          <ChevronRight className={`h-3.5 w-3.5 opacity-0 transition-[opacity,transform] group-hover:opacity-100 group-focus-within:opacity-100 ${!collapsed ? 'rotate-90' : ''}`} />
+          <ChevronRight className={`h-3.5 w-3.5 opacity-0 transition-[opacity,transform] group-hover:opacity-100 group-focus-within:opacity-100 ${collapsed ? 'opacity-100' : 'rotate-90'}`} />
         </button>
         <div className="ml-auto flex items-center">
           <DropdownMenu

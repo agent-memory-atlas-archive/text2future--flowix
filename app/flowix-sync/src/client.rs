@@ -286,33 +286,13 @@ impl CloudClient {
         .map(|value| value.data)
     }
 
-    pub async fn v2_bootstrap(&self, access_token: &str) -> Result<V2Bootstrap, SyncError> {
-        let mut result = self.send::<DataEnvelope<V2Bootstrap>>(
-            Method::GET,
-            "/v2/sync/bootstrap?limit=500",
-            Some(access_token),
-            None,
-        )
-        .await
-        .map(|value| value.data)?;
-        let mut pages = 0;
-        while let Some(token) = result.next_page_token.take() {
-            pages += 1;
-            if pages > 10_000 {
-                return Err(SyncError::InvalidState("bootstrap exceeded page limit".into()));
-            }
-            let page = self.send::<DataEnvelope<V2Bootstrap>>(
-                Method::GET,
-                &format!("/v2/sync/bootstrap?limit=500&pageToken={token}"),
-                Some(access_token), None,
-            ).await?.data;
-            if page.cursor != result.cursor {
-                return Err(SyncError::InvalidState("bootstrap snapshot cursor changed".into()));
-            }
-            result.notes.extend(page.notes);
-            result.next_page_token = page.next_page_token;
-        }
-        Ok(result)
+    pub async fn v2_bootstrap_page(&self, access_token: &str, page_token: Option<&str>) -> Result<V2Bootstrap, SyncError> {
+        let path = match page_token {
+            Some(token) => format!("/v2/sync/bootstrap?limit=10&pageToken={token}"),
+            None => "/v2/sync/bootstrap?limit=10".to_string(),
+        };
+        self.send::<DataEnvelope<V2Bootstrap>>(Method::GET, &path, Some(access_token), None)
+            .await.map(|value| value.data)
     }
 
     pub async fn v2_history(&self, access_token: &str, note_id: &str) -> Result<V2History, SyncError> {

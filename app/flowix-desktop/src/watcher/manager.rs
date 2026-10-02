@@ -318,6 +318,18 @@ impl MemoWatcher {
     /// Duplicate notify events are suppressed only while that exact revision
     /// remains on disk; a later writer on the same path passes immediately.
     pub fn mark_self_write(&self, path: &Path) {
+        self.mark_self_write_expected(path, FileRevision::read(path));
+    }
+
+    pub fn mark_self_write_content(&self, path: &Path, content: &[u8]) {
+        self.mark_self_write_expected(path, Some(FileRevision::from_bytes(content)));
+    }
+
+    pub fn mark_self_write_missing(&self, path: &Path) {
+        self.mark_self_write_expected(path, None);
+    }
+
+    fn mark_self_write_expected(&self, path: &Path, expected_revision: Option<FileRevision>) {
         let key = normalize_for_compare(path);
         if let Ok(mut map) = self.recent_self_writes.lock() {
             // 顺手�?��过老条�? 抑制表小 (<几十�? �?�� < 1µs
@@ -332,7 +344,7 @@ impl MemoWatcher {
                 key,
                 SelfWriteMark {
                     marked_at: Instant::now(),
-                    expected_revision: FileRevision::read(path),
+                    expected_revision,
                 },
             );
         }

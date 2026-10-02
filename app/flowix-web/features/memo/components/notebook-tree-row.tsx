@@ -10,19 +10,29 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import { LinkIcon, PencilSimpleIcon, TrashSimpleIcon } from '@phosphor-icons/react';
-import { ChevronRight, EyeOff, File, FolderOpen, FolderPlus, Loader2, MoreHorizontal } from 'lucide-react';
+import {
+  EyeSlashIcon,
+  FileIcon,
+  FolderOpenIcon,
+  FolderPlusIcon,
+  LinkIcon,
+  ListPlusIcon,
+  PencilSimpleIcon,
+  SquaresFourIcon,
+  TrashSimpleIcon,
+} from '@phosphor-icons/react';
+import { ChevronRight, Loader2, MoreHorizontal } from 'lucide-react';
 
 import { toast } from '@/lib/toast';
 import { cn, displayTitleFromFilename } from '@/lib/utils';
 import { canonicalDirectoryPath, canonicalPath, joinNotebookMemoPath } from '@/lib/path';
 import { useI18n } from '@/lib/i18n';
-import { getNoteColorLabel, MemoCardActions } from '@features/memo/components/memo-card-actions';
+import { MemoCardActions } from '@features/memo/components/memo-card-actions';
 import { noteRepository } from '@features/memo/services/note-repository';
-import { NOTE_COLORS, NOTE_COLOR_HEX, useNoteStore } from '@features/memo/store/note-store';
-import { buildNoteOpenLinkFromPath } from '@platform/open-target/path-link';
+import { NOTE_COLOR_HEX, useNoteStore } from '@features/memo/store/note-store';
 import type { NoteColor, NoteListItem } from '@/types/note-item';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, useContextMenuContext } from '@shared/ui/context-menu';
+import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@shared/ui/dialog';
 import folderIcon from '@/assets/folder-outline.svg?raw';
 import { getPropertyIconOption } from '@features/document/properties/property-icons';
@@ -30,14 +40,12 @@ import { resourceKindFromPath } from '@features/editor/code-file';
 import { NotebookTreeFileIcon } from '@features/memo/components/notebook-tree-file-icon';
 import { NotebookTreeResourceIcon } from '@features/memo/components/file-type-icon';
 import { files, notes, product, type DocTreeItem } from '@platform/tauri/client';
-import { memoDocumentOperations } from '@features/document/public/file-operations-api';
-import { canUseNativeContextMenu, logNativeContextMenuError, popupNativeContextMenu, type NativeContextMenuItems } from '@platform/tauri/native-context-menu';
+import { logNativeContextMenuError } from '@platform/tauri/native-context-menu';
 
 const TREE_MENU_CLASS =
   'w-[180px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]';
 const TREE_MENU_ITEM_CLASS =
   'h-7 items-center justify-start rounded-lg px-2 py-0 text-left transition-colors hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]';
-const TREE_MENU_DIVIDER_CLASS = 'mx-1 my-1 h-px bg-[var(--border-popup)] opacity-60';
 const TREE_EDGE_GUTTER = 6;
 const INDENT_PER_LEVEL = 20;
 const FOLDER_SINGLE_CLICK_DELAY_MS = 220;
@@ -83,6 +91,8 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   onOpenInNewTab,
   onCreateNote,
   onCreateFolder,
+  onCreateView,
+  onCustomizeDisplay,
   onRename,
   onDeleteFolder,
   onDeleteFile,
@@ -115,6 +125,8 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   onOpenInNewTab?: (path: string) => void;
   onCreateNote: (parentPath: string) => void;
   onCreateFolder: (parentPath: string) => void;
+  onCreateView?: (anchorElement: HTMLElement) => void;
+  onCustomizeDisplay?: (anchorRect: DOMRect) => void;
   onRename: (item: DocTreeItem, nextName: string) => Promise<void> | void;
   onPointerDown: (item: DocTreeItem, event: ReactPointerEvent<HTMLDivElement>) => void;
   onDeleteFolder?: (path: string) => Promise<void>;
@@ -129,7 +141,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   tabIndex?: number;
   moveStatus?: 'moving' | 'success';
 }) {
-  const { t, language } = useI18n();
+  const { t } = useI18n();
   const isFolder = item.type === 'folder';
   const folderClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
@@ -327,130 +339,6 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
     setRenameValue(isFolder || !isNote ? item.name : displayTitleFromFilename(item.name));
   }, [isFolder, isNote, item.name]);
 
-  const showNativeContextMenu = async (event: ReactMouseEvent<HTMLDivElement>) => {
-    if (!canUseNativeContextMenu()) return;
-    event.preventDefault();
-    event.stopPropagation();
-
-    const nativeMemo = displayedMemo;
-    const memoFavorited = nativeMemo?.favorited ?? item.memoMeta?.favorited ?? false;
-    const memoColors = nativeMemo?.colors ?? item.memoMeta?.colors ?? [];
-    const runWithMemo = (action: (loaded: NoteListItem) => void) => {
-      void (nativeMemo ? Promise.resolve(nativeMemo) : loadMemo())
-        .then((loaded) => {
-          if (loaded) action(loaded);
-          else toast.error(t('memo.fileTree.openFailed'));
-        })
-        .catch((error) => {
-          logNativeContextMenuError('notebook tree memo action', error);
-          toast.error(t('memo.fileTree.openFailed'));
-        });
-    };
-    const items: NativeContextMenuItems = [
-      { text: t('memo.fileTree.newNote'), action: () => onCreateNote(actionParentPath) },
-      { text: t('memo.fileTree.newFolder'), action: () => onCreateFolder(actionParentPath) },
-      {
-        text: t('memo.fileTree.rename'),
-        action: () => {
-          setRenameValue(isFolder || !isNote ? item.name : displayTitleFromFilename(item.name));
-          setRenaming(true);
-        },
-      },
-      { text: t('memo.fileTree.reveal'), action: revealInFileManager },
-    ];
-
-    if (isFolder && onSetDefaultFolder) {
-      items.push({ item: 'Separator' }, {
-        text: t(isDefaultFolder ? 'memo.fileTree.clearDefaultCreateFolder' : 'memo.fileTree.setDefaultCreateFolder'),
-        action: () => onSetDefaultFolder(item.fullPath),
-      });
-    }
-
-    if (isFolder) {
-      if (onDeleteFolder) {
-        items.push({ text: t('memo.fileTree.copyLink'), action: () => void navigator.clipboard.writeText(item.fullPath) });
-      }
-      if (isAgentProjectFolder) {
-        items.push(
-          { item: 'Separator' },
-          { text: t('memo.fileTree.hideAgentProjectFolder'), action: () => void hideAgentProjectFolder() },
-        );
-      } else if (onDeleteFolder) {
-        items.push(
-          { item: 'Separator' },
-          { text: t('memo.fileTree.delete'), action: () => setConfirmDelete(true) },
-        );
-      }
-    } else if (!isNote && onDeleteFile) {
-      items.push(
-        { item: 'Separator' },
-        { text: t('memo.fileTree.delete'), action: () => setConfirmFileDelete(true) },
-      );
-    } else if (isNote) {
-      const selectedColors = new Set(memoColors);
-      items.push(
-        { item: 'Separator' },
-        ...(onOpenInNewTab ? [{
-          text: t('memo.action.openInSplit'),
-          action: () => onOpenInNewTab(item.fullPath),
-        }] : []),
-        {
-          text: t(memoFavorited ? 'memo.action.unpin' : 'memo.action.pin'),
-          action: () => void toggleFavorite(memoFavorited, nativeMemo?.relativePath),
-        },
-        {
-          text: t('document.action.properties'),
-          action: () => {
-            window.dispatchEvent(new CustomEvent('flowix:open-note-properties', {
-              detail: { path: item.fullPath, scopePath: useNoteStore.getState().notebooks.find((notebook) => notebook.id === nativeMemo?.notebookId)?.path ?? null },
-            }));
-          },
-        },
-        {
-          text: t('document.action.copyLink'),
-          action: () => {
-            const link = buildNoteOpenLinkFromPath(item.fullPath, useNoteStore.getState().notebooks);
-            if (!link) {
-              toast.error(t('document.command.copyFailed'));
-              return;
-            }
-            void navigator.clipboard.writeText(link).catch(() => toast.error(t('document.command.copyFailed')));
-          },
-        },
-        {
-          text: t('document.action.copyFullText'),
-          action: () => void memoDocumentOperations.read({ path: item.fullPath, scopePath: null })
-            .then((content) => navigator.clipboard.writeText(content ?? '')),
-        },
-        {
-          text: t('memo.list.filterColorGroup'),
-          items: [
-            {
-              text: t('document.color.clear'),
-              checked: memoColors.length === 0,
-              action: () => runWithMemo((loaded) => void changeColors(loaded, [])),
-            },
-            { item: 'Separator' },
-            ...NOTE_COLORS.map((color) => ({
-              text: getNoteColorLabel(color, language),
-              checked: selectedColors.has(color),
-              action: () => {
-                const next = new Set(selectedColors);
-                if (next.has(color)) next.delete(color);
-                else next.add(color);
-                runWithMemo((loaded) => void changeColors(loaded, NOTE_COLORS.filter((value) => next.has(value))));
-              },
-            })),
-          ],
-        },
-        { item: 'Separator' },
-        { text: t('memo.action.delete'), action: () => runWithMemo(requestDelete) },
-      );
-    }
-
-    await popupNativeContextMenu(event, items);
-  };
-
   return (
     <>
       <ContextMenu onOpenChange={(open) => {
@@ -470,12 +358,6 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
           data-notebook-tree-kind={isFolder ? 'folder' : resourceKind}
           data-move-status={moveStatus}
           title={item.fullPath}
-          onContextMenu={(event) => {
-            void showNativeContextMenu(event).catch((error) => {
-              logNativeContextMenuError('notebook tree', error);
-              toast.error(t('memo.fileTree.openFailed'));
-            });
-          }}
           onClick={isFolder
             ? selectFolderOnSingleClick
             : (event) => onOpen(item.fullPath, event)}
@@ -659,13 +541,22 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
       </ContextMenuTrigger>
       <ContextMenuContent className={TREE_MENU_CLASS}>
         <ContextMenuItem onClick={() => onCreateNote(actionParentPath)} className={TREE_MENU_ITEM_CLASS}>
-          <File className="mr-2 h-4 w-4" aria-hidden="true" />
+          <FileIcon className="mr-2 h-4 w-4" aria-hidden="true" />
           {t('memo.fileTree.newNote')}
         </ContextMenuItem>
         <ContextMenuItem onClick={() => onCreateFolder(actionParentPath)} className={TREE_MENU_ITEM_CLASS}>
-          <FolderPlus className="mr-2 h-4 w-4" aria-hidden="true" />
+          <FolderPlusIcon className="mr-2 h-4 w-4" aria-hidden="true" />
           {t('memo.fileTree.newFolder')}
         </ContextMenuItem>
+        {onCreateView && (
+          <ContextMenuItem
+            onClick={(event) => onCreateView(event.currentTarget)}
+            className={TREE_MENU_ITEM_CLASS}
+          >
+            <ListPlusIcon className="mr-2 h-4 w-4" aria-hidden="true" />
+            {t('memo.customFilter.title')}
+          </ContextMenuItem>
+        )}
         <ContextMenuItem
           onClick={() => {
             setRenameValue(isFolder || !isNote ? item.name : displayTitleFromFilename(item.name));
@@ -678,7 +569,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
         </ContextMenuItem>
         {(isFolder || !isNote || !displayedMemo) && (
           <ContextMenuItem onClick={revealInFileManager} className={TREE_MENU_ITEM_CLASS}>
-            <FolderOpen className="mr-2 h-4 w-4" aria-hidden="true" />
+          <FolderOpenIcon className="mr-2 h-4 w-4" aria-hidden="true" />
             {t('memo.fileTree.reveal')}
           </ContextMenuItem>
         )}
@@ -700,13 +591,20 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
         )}
         {isFolder && (onDeleteFolder || isAgentProjectFolder) && (
           <>
-            <div role="separator" aria-hidden="true" className={TREE_MENU_DIVIDER_CLASS} />
+            <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
+            <ContextMenuItem
+              onClick={(event) => onCustomizeDisplay?.(event.currentTarget.getBoundingClientRect())}
+              className={TREE_MENU_ITEM_CLASS}
+            >
+              <SquaresFourIcon className="mr-2 h-4 w-4" aria-hidden="true" />
+              {t('memo.fileTree.customizeDisplay')}
+            </ContextMenuItem>
             {isAgentProjectFolder ? (
               <ContextMenuItem
                 onClick={() => void hideAgentProjectFolder()}
                 className={TREE_MENU_ITEM_CLASS}
               >
-                <EyeOff className="mr-2 h-4 w-4" />
+                <EyeSlashIcon className="mr-2 h-4 w-4" />
                 {t('memo.fileTree.hideAgentProjectFolder')}
               </ContextMenuItem>
             ) : onDeleteFolder ? (
@@ -722,24 +620,33 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
         )}
         {isFolder && onSetDefaultFolder && (
           <>
-            <div role="separator" aria-hidden="true" className={TREE_MENU_DIVIDER_CLASS} />
+            <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
             <ContextMenuItem onClick={() => onSetDefaultFolder(item.fullPath)} className={TREE_MENU_ITEM_CLASS}>
-              <FolderPlus className="mr-2 h-4 w-4" aria-hidden="true" />
+              <FolderPlusIcon className="mr-2 h-4 w-4" aria-hidden="true" />
               {t(isDefaultFolder ? 'memo.fileTree.clearDefaultCreateFolder' : 'memo.fileTree.setDefaultCreateFolder')}
             </ContextMenuItem>
           </>
         )}
         {!isFolder && (
-          <div role="separator" aria-hidden="true" className={TREE_MENU_DIVIDER_CLASS} />
+          <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
         )}
         {!isFolder && !isNote && onDeleteFile && (
-          <ContextMenuItem
-            onClick={() => setConfirmFileDelete(true)}
-            className={cn(TREE_MENU_ITEM_CLASS, 'hover:bg-transparent hover:text-[var(--destructive)]')}
-          >
-            <TrashSimpleIcon className="mr-2 h-4 w-4" />
-            {t('memo.fileTree.delete')}
-          </ContextMenuItem>
+          <>
+            <ContextMenuItem
+              onClick={(event) => onCustomizeDisplay?.(event.currentTarget.getBoundingClientRect())}
+              className={TREE_MENU_ITEM_CLASS}
+            >
+              <SquaresFourIcon className="mr-2 h-4 w-4" aria-hidden="true" />
+              {t('memo.fileTree.customizeDisplay')}
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={() => setConfirmFileDelete(true)}
+              className={cn(TREE_MENU_ITEM_CLASS, 'hover:bg-transparent hover:text-[var(--destructive)]')}
+            >
+              <TrashSimpleIcon className="mr-2 h-4 w-4" />
+              {t('memo.fileTree.delete')}
+            </ContextMenuItem>
+          </>
         )}
         {!isFolder && isNote && displayedMemo && (
           <MemoCardActions
@@ -751,6 +658,15 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
             onFavoriteToggle={(nextMemo) => { void toggleFavorite(nextMemo.favorited, nextMemo.relativePath); }}
             onDelete={requestDelete}
             onColorsChange={(nextMemo, colors) => { void changeColors(nextMemo, colors); }}
+            beforeDelete={(
+              <ContextMenuItem
+                onClick={(event) => onCustomizeDisplay?.(event.currentTarget.getBoundingClientRect())}
+                className={TREE_MENU_ITEM_CLASS}
+              >
+                <SquaresFourIcon className="mr-2 h-4 w-4" aria-hidden="true" />
+                {t('memo.fileTree.customizeDisplay')}
+              </ContextMenuItem>
+            )}
             Item={ContextMenuItem}
           />
         )}
@@ -758,6 +674,13 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
           <>
             <ContextMenuItem className={TREE_MENU_ITEM_CLASS} onClick={() => { void toggleFavorite(item.memoMeta?.favorited ?? false); }}>
               {t(item.memoMeta?.favorited ? 'memo.action.unpin' : 'memo.action.pin')}
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={(event) => onCustomizeDisplay?.(event.currentTarget.getBoundingClientRect())}
+              className={TREE_MENU_ITEM_CLASS}
+            >
+              <SquaresFourIcon className="mr-2 h-4 w-4" aria-hidden="true" />
+              {t('memo.fileTree.customizeDisplay')}
             </ContextMenuItem>
             <ContextMenuItem className={cn(TREE_MENU_ITEM_CLASS, 'hover:bg-transparent hover:text-[var(--destructive)]')} onClick={deleteNoteFromTree}>
               <TrashSimpleIcon className="mr-2 h-4 w-4" />

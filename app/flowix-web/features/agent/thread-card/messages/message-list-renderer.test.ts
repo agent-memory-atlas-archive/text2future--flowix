@@ -377,12 +377,12 @@ describe("continuous tool group rendering", () => {
       tool("tool-2", { isLoading: false, content: "done" }),
     ], context());
 
-    expect(list.textContent).toContain("正在处理，已完成 1 步");
+    expect(list.textContent).toContain("运行中，已完成 1 步");
 
     const { list: runningList } = createRenderedAgentMessageList([
       tool("running-only", { isLoading: true, content: "" }),
     ], context());
-    expect(runningList.textContent).toContain("正在处理");
+    expect(runningList.textContent).toContain("运行中");
     expect(runningList.textContent).not.toContain("已完成");
   });
 
@@ -519,7 +519,7 @@ describe("continuous tool group rendering", () => {
     const group = list.firstElementChild as HTMLElement;
 
     expect(group.querySelector(".agent-thread-card__tool-group-header")?.textContent)
-      .toContain("正在处理，已完成 1 步");
+      .toContain("运行中，已完成 1 步");
     expect(group.querySelector(".agent-thread-card__tool-group-loading-icon"))
       .toBeNull();
     expect(

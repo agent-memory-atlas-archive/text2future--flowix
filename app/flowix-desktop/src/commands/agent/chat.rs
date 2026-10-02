@@ -322,6 +322,13 @@ pub async fn codex_approval_respond(
         .await
 }
 
+#[tauri::command]
+pub async fn codex_approval_pending(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::agent_external::codex::CodexApprovalRequest>, String> {
+    Ok(state.codex_app_server.pending_approval_requests().await)
+}
+
 /// Update the Codex App Server settings for the next turn of an existing
 /// conversation without creating a transcript item.
 #[tauri::command]

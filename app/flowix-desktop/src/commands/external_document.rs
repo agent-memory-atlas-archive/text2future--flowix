@@ -143,9 +143,10 @@ pub(crate) fn supported_text_document_path(path: &Path) -> bool {
         return true;
     }
 
-    // A missing extension is intentionally accepted only after inspecting the
-    // file contents. Files with an explicit unknown extension remain blocked.
-    path.extension().is_none() && looks_like_utf8_text_file(path)
+    // Unknown extensions (including extensionless files) are accepted only
+    // after inspecting their contents. This allows custom text formats while
+    // still rejecting binary files such as PDFs and archives.
+    looks_like_utf8_text_file(path)
 }
 
 pub(crate) fn exact_existing_external_path(

@@ -14,21 +14,32 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from 'react';
 import {
-  ArrowDown,
-  ArrowUp,
   ChevronRight,
-  File,
-  FileCog,
   ListFilter,
   ListPlus,
   MoreHorizontal,
-  Settings2,
-  FolderPlus,
   GripVertical,
-  PanelsTopLeft,
+  Plus,
 } from 'lucide-react';
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  FileIcon,
+  FolderPlusIcon,
+  FolderOpenIcon,
+  GearSixIcon,
+  LinkIcon,
+  MinusCircleIcon,
+  ListPlusIcon,
+  PencilSimpleIcon,
+  SlidersHorizontalIcon,
+  SquaresFourIcon,
+  SquareSplitHorizontalIcon,
+  TrashSimpleIcon,
+} from '@phosphor-icons/react';
 
 import {
   canonicalDirectoryPath,
@@ -45,9 +56,10 @@ import { cn, displayTitleFromFilename } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { useComposingValue } from '@shared/hooks/use-composing-value';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
+import { ListSurfaceLoadingState, ListSurfaceSpinner, ListSurfaceViewport } from '@shared/ui/list-surface';
 import { Button } from '@shared/ui/button';
 import { Popover, PopoverContent } from '@shared/ui/popover';
-import { DialogHeader, DialogTitle } from '@shared/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@shared/ui/dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -60,7 +72,7 @@ import { useNoteStore } from '@features/memo/store/note-store';
 import { noteRepository } from '@features/memo/services/note-repository';
 import { EMPTY_CUSTOM_FILTERS, useCustomFilterStore } from '@features/memo/store/custom-filter-store';
 import { updateNoteLinksAfterMove } from '@features/memo/services/note-link-rewriter';
-import { openDocumentListTarget, replaceExternalDocumentPath } from '@features/workspace/use-cases/workspace-navigation';
+import { openDocumentListTarget, openExternalTarget, replaceExternalDocumentPath } from '@features/workspace/use-cases/workspace-navigation';
 import { createDocumentListTarget } from '@features/workspace/store/work-column-target';
 import { findFileDisplayIdentity } from '@/lib/file-display-registry';
 import {
@@ -71,14 +83,21 @@ import {
 } from '@features/document/components/use-markdown-file-drop';
 import { localDocumentOperations, memoDocumentOperations } from '@features/document/public/file-operations-api';
 import folderIcon from '@/assets/folder-outline.svg?raw';
+import { resolveNotebookAgentFiles } from '@/lib/agent-access-defaults';
 import {
   flattenLoadedTree,
   flattenVisibleTree,
+  useFolderTree,
   type FolderTreeController,
 } from '@features/memo/components/use-folder-tree';
 import { NotebookTreeRow } from '@features/memo/components/notebook-tree-row';
+import { ResourceFileIcon, ResourceFolderIcon } from '@features/surface/resource-file-icon';
+import { getWorkspaceAgentRepositories, type WorkspaceAgentRepository } from '@features/agent/public/workspace-api';
+import { useAgentAccessStore } from '@features/agent/store/agent-access-store';
+import { normalizeWorkspacePath } from '@features/agent/runtime/workspace-path';
 import {
   files,
+  product,
   system,
   windows,
   type DocTreeItem,
@@ -107,24 +126,30 @@ const TREE_DRAG_EXPAND_DELAY_MS = 650;
 const logger = createLogger('notebook-file-tree');
 // Row gutter (6px) + inline padding (6px) + half of the 12px caret.
 const FOLDER_CARET_CENTER_OFFSET = 12;
-type NotebookTreeSection = 'agents' | 'pinned' | 'views' | 'files';
+type NotebookTreeSection = 'agents' | 'pinned' | 'views' | 'files' | 'repositories';
 
-const DEFAULT_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'views', 'files'];
+const DEFAULT_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'views', 'files', 'repositories'];
 const PREVIOUS_DEFAULT_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'files', 'views'];
+const LEGACY_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'views', 'files'];
 
 function normalizeTreeSectionOrder(value: unknown): NotebookTreeSection[] {
   if (!Array.isArray(value)) return DEFAULT_TREE_SECTION_ORDER;
   const order = value.filter((item, index, items): item is NotebookTreeSection => (
-    (item === 'agents' || item === 'pinned' || item === 'views' || item === 'files')
+    DEFAULT_TREE_SECTION_ORDER.includes(item as NotebookTreeSection)
     && items.indexOf(item) === index
   ));
+  if (order.length === 5) return order;
   if (order.length === 4) {
-    return order.every((item, index) => item === PREVIOUS_DEFAULT_TREE_SECTION_ORDER[index])
-      ? DEFAULT_TREE_SECTION_ORDER
-      : order;
+    if (order.every((item, index) => item === PREVIOUS_DEFAULT_TREE_SECTION_ORDER[index])) {
+      return DEFAULT_TREE_SECTION_ORDER;
+    }
+    if (order.every((item, index) => item === LEGACY_TREE_SECTION_ORDER[index])) {
+      return DEFAULT_TREE_SECTION_ORDER;
+    }
+    return [...order, 'repositories'];
   }
   const legacyOrder = order.filter((item): item is 'files' | 'views' => item === 'files' || item === 'views');
-  if (legacyOrder.length === 2) return ['agents', 'pinned', ...legacyOrder];
+  if (legacyOrder.length === 2) return ['agents', 'pinned', ...legacyOrder, 'repositories'];
   return [...DEFAULT_TREE_SECTION_ORDER.filter((item) => !order.includes(item)), ...order];
 }
 
@@ -159,36 +184,392 @@ function TreeSectionMoreMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-[176px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
         <DropdownMenuItem disabled={!canMoveUp} onClick={onMoveUp} className={itemClassName}>
-          <ArrowUp className="h-3.5 w-3.5" aria-hidden="true" />
+          <ArrowUpIcon className="h-3.5 w-3.5" aria-hidden="true" />
           {t('memo.fileTree.moveSectionUp')}
         </DropdownMenuItem>
         <DropdownMenuItem disabled={!canMoveDown} onClick={onMoveDown} className={itemClassName}>
-          <ArrowDown className="h-3.5 w-3.5" aria-hidden="true" />
+          <ArrowDownIcon className="h-3.5 w-3.5" aria-hidden="true" />
           {t('memo.fileTree.moveSectionDown')}
         </DropdownMenuItem>
         {onCreateNote && (
           <DropdownMenuItem onClick={onCreateNote} className={itemClassName}>
-            <File className="h-3.5 w-3.5" aria-hidden="true" />
+            <FileIcon className="h-3.5 w-3.5" aria-hidden="true" />
             {t('memo.fileTree.newNote')}
           </DropdownMenuItem>
         )}
         {onCreateFolder && (
           <DropdownMenuItem onClick={onCreateFolder} className={itemClassName}>
-            <FolderPlus className="h-3.5 w-3.5" aria-hidden="true" />
+            <FolderPlusIcon className="h-3.5 w-3.5" aria-hidden="true" />
             {t('memo.fileTree.newFolder')}
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => { void windows.openPreferences('fileDisplayRules'); }} className={itemClassName}>
-          <Settings2 className="h-3.5 w-3.5" aria-hidden="true" />
+          <SlidersHorizontalIcon className="h-3.5 w-3.5" aria-hidden="true" />
           {t('memo.fileTree.fileDisplayRules')}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => { void windows.openPreferences('noteSettings'); }} className={itemClassName}>
-          <FileCog className="h-3.5 w-3.5" aria-hidden="true" />
+          <GearSixIcon className="h-3.5 w-3.5" aria-hidden="true" />
           {t('memo.fileTree.noteProperties')}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function AgentRepositoryItem({
+  repository,
+  onOpenFile,
+  onRemoveRepository,
+  onOpenInNewTab,
+  onCustomizeDisplay,
+}: {
+  repository: WorkspaceAgentRepository;
+  onOpenFile: (path: string, scopePath: string) => void;
+  onRemoveRepository: (repository: WorkspaceAgentRepository) => void;
+  onOpenInNewTab?: (path: string) => void;
+  onCustomizeDisplay?: (anchorRect: DOMRect) => void;
+}) {
+  const { t } = useI18n();
+  const [expanded, setExpanded] = useState(false);
+  const [renaming, setRenaming] = useState<{ item: DocTreeItem; value: string } | null>(null);
+  const [deleting, setDeleting] = useState<DocTreeItem | null>(null);
+  const tree = useFolderTree(repository.path, { enabled: expanded });
+  const activeFilePath = useWorkColumnStore((state) => {
+    const target = state.navigation.target;
+    if (target.kind === 'external') return target.path;
+    if (target.kind === 'media') return target.filePath;
+    return null;
+  });
+  const renameItem = async (item: DocTreeItem, value: string) => {
+    const name = value.trim();
+    setRenaming(null);
+    if (!name || name === item.name) return;
+    try {
+      if (item.type === 'folder') await files.renameFolder(item.fullPath, name, repository.path);
+      else await localDocumentOperations.rename({ path: item.fullPath, name, scopePath: repository.path });
+      await tree.refresh(parentDirectoryPath(item.fullPath, repository.path));
+      toast.success(t('memo.fileTree.renamed', { name }));
+    } catch (error) {
+      toast.error(t(String(error).includes('FILE_EXISTS') ? 'memo.fileTree.nameConflict' : 'memo.fileTree.renameFailed'));
+    }
+  };
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    try {
+      const ok = deleting.type === 'folder'
+        ? await files.deleteFolder(deleting.fullPath, repository.path)
+        : await files.delete(deleting.fullPath, repository.path);
+      if (!ok) throw new Error('delete failed');
+      await tree.refresh(parentDirectoryPath(deleting.fullPath, repository.path));
+      toast.success(t('memo.fileTree.deleted', { name: deleting.name }));
+      setDeleting(null);
+    } catch {
+      toast.error(t('memo.fileTree.deleteFailed'));
+    }
+  };
+  const renderRepositoryItems = (items: DocTreeItem[], depth: number): ReactNode[] => items.map((item) => {
+    const isFolder = item.type === 'folder';
+    const isActive = !isFolder && activeFilePath != null && samePath(item.fullPath, activeFilePath);
+    const key = canonicalPath(item.fullPath);
+    const itemExpanded = isFolder && tree.expanded.has(key);
+    const folderName = item.fullPath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? item.name;
+    const isHiddenFolder = isFolder && folderName.startsWith('.');
+    const children = isFolder ? tree.nodes.get(key)?.children ?? [] : [];
+    return (
+      <ContextMenu key={item.id}>
+      <ContextMenuTrigger asChild>
+      <div className="folder-file-tree__group relative">
+        <button
+          type="button"
+          aria-expanded={isFolder ? itemExpanded : undefined}
+          aria-current={isActive ? 'page' : undefined}
+          title={item.fullPath}
+          onClick={() => renaming?.item.id === item.id ? undefined : isFolder
+            ? tree.toggle(item.fullPath)
+            : onOpenFile(item.fullPath, repository.path)}
+          className={cn(
+            'folder-file-tree__item group relative flex h-7 items-center rounded-lg px-1.5 text-left text-[13px] font-normal leading-[1.6] text-[var(--foreground)] transition-colors duration-150 cursor-pointer hover:bg-[var(--muted)]',
+            isActive && 'bg-[var(--muted)] text-[var(--foreground)]',
+          )}
+          style={{
+            marginLeft: TREE_EDGE_GUTTER + depth * INDENT_PER_LEVEL,
+            width: `calc(100% - ${TREE_EDGE_GUTTER * 2 + depth * INDENT_PER_LEVEL}px)`,
+          }}
+        >
+          {isFolder ? (
+            <span className="relative h-[18px] w-[18px] shrink-0">
+              <ChevronRight
+                aria-hidden="true"
+                className={cn(
+                  'absolute left-1/2 top-1/2 h-[15px] w-[15px] -translate-x-1/2 -translate-y-1/2 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 group-focus-visible:opacity-100',
+                  itemExpanded && 'rotate-90',
+                )}
+              />
+              <ResourceFolderIcon
+                expanded={itemExpanded}
+                hidden={isHiddenFolder}
+                className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0"
+              />
+            </span>
+          ) : (
+            <ResourceFileIcon path={item.fullPath} size={18} className="h-[18px] w-[18px] shrink-0" />
+          )}
+          {renaming?.item.id === item.id ? (
+            <input
+              autoFocus
+              value={renaming.value}
+              onChange={(event) => setRenaming({ item, value: event.target.value })}
+              onBlur={() => void renameItem(item, renaming.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') void renameItem(item, renaming.value);
+                if (event.key === 'Escape') setRenaming(null);
+              }}
+              onClick={(event) => event.stopPropagation()}
+              className="ml-1.5 h-5 min-w-0 flex-1 border-0 bg-transparent px-0 text-[13px] outline-none"
+            />
+          ) : (
+            <span className={cn(
+              'ml-1.5 min-w-0 flex-1 truncate',
+              isActive ? 'opacity-100' : 'opacity-[0.82]',
+            )}>
+              {item.name}
+            </span>
+          )}
+          {tree.loadingDirectories.has(key) && (
+            <ListSurfaceSpinner className="mr-1 h-3.5 w-3.5" ariaLabel={t('memo.fileTree.loading')} />
+          )}
+        </button>
+        {isFolder && (children.length > 0 || tree.directoryErrors.has(key) || tree.loadingDirectories.has(key)) && (
+          <div
+            className="folder-file-tree__subtree"
+            data-expanded={itemExpanded}
+            style={{
+              '--folder-file-tree-guide-left': `${TREE_EDGE_GUTTER + depth * INDENT_PER_LEVEL + 6 + 8}px`,
+            } as CSSProperties}
+          >
+            <div className="folder-file-tree__subtree-inner">
+              <div className="folder-file-tree__subtree-items">
+                {tree.directoryErrors.has(key) && (
+                  <div className="flex min-h-7 items-center gap-2 px-2 text-xs text-[var(--muted-foreground)]" style={{ marginLeft: depth * INDENT_PER_LEVEL }} role="alert">
+                    <span className="min-w-0 flex-1 truncate">{t('memo.fileTree.unreadableHint')}</span>
+                    <button type="button" className="shrink-0 rounded px-1.5 py-0.5 text-[var(--foreground)] hover:bg-[var(--muted)]" onClick={() => void tree.retryDirectory(item.fullPath)}>
+                      {t('error.retry')}
+                    </button>
+                  </div>
+                )}
+                {itemExpanded ? renderRepositoryItems(children, depth + 1) : null}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="w-[180px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
+        <ContextMenuItem onClick={() => setRenaming({ item, value: item.name })} className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"><PencilSimpleIcon className="mr-2 h-4 w-4" aria-hidden="true" />{t('memo.fileTree.rename')}</ContextMenuItem>
+        {!isFolder && onOpenInNewTab && <ContextMenuItem onClick={() => onOpenInNewTab(item.fullPath)} className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"><SquareSplitHorizontalIcon className="mr-2 h-4 w-4" aria-hidden="true" />{t('memo.fileTree.openInRight')}</ContextMenuItem>}
+        <ContextMenuItem onClick={async () => { try { await navigator.clipboard.writeText(item.fullPath); toast.success(t('memo.fileTree.pathCopied')); } catch { toast.error(t('memo.fileTree.copyFailed')); } }} className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"><LinkIcon className="mr-2 h-4 w-4" aria-hidden="true" />{t('memo.fileTree.copyLink')}</ContextMenuItem>
+        <ContextMenuItem onClick={() => { void product.revealInFileManager(item.fullPath).catch(() => toast.error(t('memo.fileTree.openFailed'))); }} className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"><FolderOpenIcon className="mr-2 h-4 w-4" aria-hidden="true" />{t('memo.fileTree.reveal')}</ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={(event) => onCustomizeDisplay?.(event.currentTarget.getBoundingClientRect())} className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"><SquaresFourIcon className="mr-2 h-4 w-4" aria-hidden="true" />{t('memo.fileTree.customizeDisplay')}</ContextMenuItem>
+        <ContextMenuItem onClick={() => setDeleting(item)} className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left hover:bg-transparent hover:text-[var(--destructive)]"><TrashSimpleIcon className="mr-2 h-4 w-4" aria-hidden="true" />{t('memo.fileTree.delete')}</ContextMenuItem>
+      </ContextMenuContent>
+      </ContextMenu>
+    );
+  });
+
+  return (
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <button
+              type="button"
+              aria-expanded={expanded}
+              title={repository.path}
+              onClick={() => setExpanded((value) => !value)}
+              className="group flex h-7 w-full items-center rounded-lg px-1.5 text-left text-sm text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+              style={{ marginLeft: TREE_EDGE_GUTTER, width: `calc(100% - ${TREE_EDGE_GUTTER * 2}px)` }}
+            >
+              <span className="relative h-[18px] w-[18px] shrink-0">
+                <ChevronRight className={cn(
+                  'absolute left-1/2 top-1/2 h-[15px] w-[15px] -translate-x-1/2 -translate-y-1/2 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] opacity-100 transition-[opacity,transform]',
+                  expanded && 'rotate-90',
+                  expanded && 'text-[var(--brand)]',
+                )} aria-hidden="true" />
+              </span>
+              <span className={cn(
+                'ml-1.5 min-w-0 flex-1 truncate opacity-[0.82]',
+                expanded && 'text-[var(--brand)] opacity-100',
+              )}>
+                {repository.name}
+              </span>
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-[180px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
+          <ContextMenuItem
+            onClick={() => onRemoveRepository(repository)}
+            className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left hover:bg-transparent hover:text-[var(--destructive)]"
+          >
+            <MinusCircleIcon className="mr-2 h-4 w-4" aria-hidden="true" />
+            {t('agent.workspace.removeRepository')}
+          </ContextMenuItem>
+          <ContextMenuItem
+            onClick={(event) => onCustomizeDisplay?.(event.currentTarget.getBoundingClientRect())}
+            className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
+          >
+            <SquaresFourIcon className="mr-2 h-4 w-4" aria-hidden="true" />
+            {t('memo.fileTree.customizeDisplay')}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      {expanded && (
+        <div className="folder-file-tree__items">
+          {tree.loading && tree.nodes.size === 0 && (
+            <div className="flex min-h-7 items-center px-2 text-xs text-[var(--muted-foreground)]" style={{ marginLeft: TREE_EDGE_GUTTER + 20 }}>
+              {t('memo.fileTree.loading')}
+            </div>
+          )}
+          {tree.error && (
+            <button
+              type="button"
+              onClick={() => void tree.reload()}
+              className="flex min-h-7 items-center px-2 text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+              style={{ marginLeft: TREE_EDGE_GUTTER + 20 }}
+            >
+              {t('error.retry')}
+            </button>
+          )}
+          {!tree.loading && !tree.error && tree.rootChildren.length === 0 && (
+            <div className="flex min-h-7 items-center px-2 text-xs text-[var(--muted-foreground)]" style={{ marginLeft: TREE_EDGE_GUTTER + 20 }}>
+              {t('memo.fileTree.empty')}
+            </div>
+          )}
+          {renderRepositoryItems(tree.rootChildren, 0)}
+        </div>
+      )}
+      <Dialog open={deleting !== null} onOpenChange={(open) => { if (!open) setDeleting(null); }}>
+        <DialogContent className="rounded-xl border border-[var(--border-popup)] bg-[var(--card)]">
+          <DialogHeader>
+            <DialogTitle>{deleting?.type === 'folder' ? t('memo.fileTree.deleteFolderTitle') : t('document.external.deleteFileTitle')}</DialogTitle>
+            <DialogDescription>{deleting?.type === 'folder' ? t('memo.fileTree.deleteFolderDescription') : t('document.external.deleteFileDescription', { name: deleting?.name ?? '' })}</DialogDescription>
+          </DialogHeader>
+          <div className="mt-4 flex justify-end gap-2">
+            <button type="button" onClick={() => setDeleting(null)} className="h-8 rounded-lg px-3 text-sm hover:bg-[var(--muted)]">{t('dialog.cancel')}</button>
+            <button type="button" onClick={() => void confirmDelete()} className="h-8 rounded-lg border border-[var(--border)] px-3 text-sm hover:border-[var(--destructive)] hover:bg-[var(--destructive)] hover:text-white">{t('dialog.delete')}</button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function AgentRepositoriesSection({
+  repositories,
+  order,
+  onHeightChange,
+  canMoveUp,
+  canMoveDown,
+  onMoveUp,
+  onMoveDown,
+  onAddRepository,
+  onRemoveRepository,
+  canAddRepository,
+  onOpenFile,
+  onOpenInNewTab,
+  onCustomizeDisplay,
+}: {
+  repositories: WorkspaceAgentRepository[];
+  order: number;
+  onHeightChange: (height: number) => void;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onAddRepository: () => void;
+  onRemoveRepository: (repository: WorkspaceAgentRepository) => void;
+  canAddRepository: boolean;
+  onOpenFile: (path: string, scopePath: string) => void;
+  onOpenInNewTab?: (path: string) => void;
+  onCustomizeDisplay?: (anchorRect: DOMRect) => void;
+}) {
+  const { t } = useI18n();
+  const sectionRef = useRef<HTMLElement | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
+  useLayoutEffect(() => {
+    const section = sectionRef.current;
+    if (!section) return;
+    const reportHeight = () => onHeightChange(section.getBoundingClientRect().height);
+    reportHeight();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(reportHeight);
+    observer.observe(section);
+    return () => observer.disconnect();
+  }, [collapsed, onHeightChange, repositories]);
+
+  return (
+    <section
+      ref={sectionRef}
+      className="pb-3"
+      aria-label={t('memo.fileTree.repositoriesTitle')}
+      data-notebook-repositories-section="true"
+      style={{ order }}
+    >
+      <div
+        className="notebook-file-tree__section-header group mb-0.5 flex h-7 items-center rounded-lg px-1.5 transition-colors hover:bg-[var(--muted)]"
+        style={{ marginLeft: TREE_EDGE_GUTTER, width: `calc(100% - ${TREE_EDGE_GUTTER * 2}px)` }}
+      >
+        <button
+          type="button"
+          className="flex h-full items-center gap-0.5 text-[0.82rem] font-medium text-[var(--muted-foreground)] opacity-90 hover:text-[var(--foreground)] focus-visible:outline-none"
+          aria-label={t(collapsed ? 'memo.fileTree.expandRepositories' : 'memo.fileTree.collapseRepositories')}
+          title={t(collapsed ? 'memo.fileTree.expandRepositories' : 'memo.fileTree.collapseRepositories')}
+          onClick={() => setCollapsed((value) => !value)}
+        >
+          <span>{t('memo.fileTree.repositoriesTitle')}</span>
+          <ChevronRight className={cn(
+            'h-3.5 w-3.5 opacity-0 transition-[opacity,transform] group-hover:opacity-100 group-focus-within:opacity-100',
+            collapsed && 'opacity-100',
+            !collapsed && 'rotate-90',
+          )} aria-hidden="true" />
+        </button>
+        <div className="ml-auto flex items-center">
+          <button
+            type="button"
+            className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] opacity-0 transition-[color,opacity] hover:bg-[var(--muted)] hover:text-[var(--foreground)] focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label={t('agent.workspace.addRepository')}
+            title={t('agent.workspace.addRepository')}
+            disabled={!canAddRepository}
+            onClick={onAddRepository}
+          >
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+          <TreeSectionMoreMenu
+            canMoveUp={canMoveUp}
+            canMoveDown={canMoveDown}
+            onMoveUp={onMoveUp}
+            onMoveDown={onMoveDown}
+          />
+        </div>
+      </div>
+      {!collapsed && (
+        <>
+          {repositories.length > 0 ? repositories.map((repository) => (
+            <AgentRepositoryItem
+              key={repository.path}
+              repository={repository}
+              onOpenFile={onOpenFile}
+              onRemoveRepository={onRemoveRepository}
+              onOpenInNewTab={onOpenInNewTab}
+              onCustomizeDisplay={onCustomizeDisplay}
+            />
+          )) : (
+            <div className="px-2 py-1 text-xs text-[var(--muted-foreground)]" style={{ marginLeft: TREE_EDGE_GUTTER + 20 }}>
+              {t('memo.fileTree.repositoriesEmpty')}
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -435,6 +816,12 @@ export function NotebookFileTree({
     state.notebooks.find((notebook) => samePath(notebook.path, notebookPath))?.id ?? null
   ));
   const notebookId = notebookIdProp ?? notebookIdFromStore;
+  const agentAccessConfig = useAgentAccessStore((state) => state.config);
+  const agentNotebookConfigs = useAgentAccessStore((state) => state.notebookConfigs);
+  const agentRepositories = useMemo(
+    () => getWorkspaceAgentRepositories(notebookId),
+    [agentAccessConfig, agentNotebookConfigs, notebookId],
+  );
   const customFilters = useCustomFilterStore((state) => (
     notebookId ? state.filtersByNotebook[notebookId] ?? EMPTY_CUSTOM_FILTERS : EMPTY_CUSTOM_FILTERS
   ));
@@ -444,6 +831,7 @@ export function NotebookFileTree({
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
   const [viewsCollapsed, setViewsCollapsed] = useState(false);
   const [filesCollapsed, setFilesCollapsed] = useState(false);
+  const [repositorySectionHeight, setRepositorySectionHeight] = useState(0);
   const [sectionOrder, setSectionOrder] = useState<NotebookTreeSection[]>(DEFAULT_TREE_SECTION_ORDER);
   const [hiddenSections, setHiddenSections] = useState<NotebookTreeSection[]>([]);
   const [customizeOpen, setCustomizeOpen] = useState(false);
@@ -495,6 +883,7 @@ export function NotebookFileTree({
 
   const visibleSectionOrder = useMemo(() => sectionOrder.filter((section) => (
     !hiddenSections.includes(section) && (section === 'files'
+    || section === 'repositories'
     || (section === 'agents' && Boolean(notebookId) && agentSectionHeight > 0)
     || (section === 'pinned' && pinnedItems.length > 0)
     || (section === 'views' && customFilters.length > 0))
@@ -615,12 +1004,16 @@ export function NotebookFileTree({
     pinned: pinnedSectionHeight,
     views: viewsSectionHeight,
     files: TREE_HEADER_HEIGHT,
+    repositories: repositorySectionHeight,
   };
   const treeContentOffset = TREE_HEADER_HEIGHT + sectionOrder
     .slice(0, sectionOrder.indexOf('files'))
     .reduce((height, section) => height + (hiddenSections.includes(section) ? 0 : sectionHeights[section]), 0);
   const handleAgentSectionHeightChange = useCallback((height: number) => {
     setAgentSectionHeight((current) => current === height ? current : height);
+  }, []);
+  const handleRepositorySectionHeightChange = useCallback((height: number) => {
+    setRepositorySectionHeight((current) => current === height ? current : height);
   }, []);
   const getRenderRowKey = useCallback((row: NotebookTreeRenderRow) => row.key, []);
   const estimateRenderRowSize = useCallback(() => TREE_ROW_SIZE, []);
@@ -989,6 +1382,53 @@ export function NotebookFileTree({
     if (suppressOpenPathsRef.current.has(canonicalPath(path))) return;
     selectNote(path, event);
   }, [selectNote]);
+  const handleOpenRepositoryFile = useCallback((path: string, scopePath: string) => {
+    void openExternalTarget(path, { destination: 'main-third', scopePath }).catch((error) => {
+      logger.warn('failed to open repository file', { error, path });
+      toast.error(t('memo.fileTree.openFailed'));
+    });
+  }, [t]);
+  const handleAddRepository = useCallback(async () => {
+    if (!notebookId) return;
+    const result = await useAgentAccessStore.getState().addFolderFromPicker();
+    if (!result.ok) {
+      if (result.code === 'already-tracked') toast.error(t('agent.access.alreadyTracked'));
+      else if (result.code === 'save-failed') toast.error(t('agent.access.saveFailed'));
+      return;
+    }
+
+    const access = useAgentAccessStore.getState();
+    const notebookFiles = resolveNotebookAgentFiles(access.config, access.notebookConfigs, notebookId);
+    const folders = notebookFiles?.folders ?? [];
+    const addedPath = normalizeWorkspacePath(result.entry.path).toLowerCase();
+    if (folders.some((path) => normalizeWorkspacePath(path).toLowerCase() === addedPath)) {
+      toast.info(t('agent.access.folderExists'));
+      return;
+    }
+    const saved = await access.setDefaultFiles(notebookId, {
+      folders: [...folders, result.entry.path],
+      notebooks: notebookFiles?.notebooks ?? [],
+    });
+    if (!saved) toast.error(t('agent.access.saveFailed'));
+  }, [notebookId, t]);
+  const handleRemoveRepository = useCallback(async (repository: WorkspaceAgentRepository) => {
+    if (!notebookId) return;
+    const access = useAgentAccessStore.getState();
+    const notebookFiles = resolveNotebookAgentFiles(access.config, access.notebookConfigs, notebookId);
+    const folders = notebookFiles?.folders ?? [];
+    const removedPath = normalizeWorkspacePath(repository.path).toLowerCase();
+    const nextFolders = folders.filter((path) => normalizeWorkspacePath(path).toLowerCase() !== removedPath);
+    if (nextFolders.length === folders.length) return;
+    const saved = await access.setDefaultFiles(notebookId, {
+      folders: nextFolders,
+      notebooks: notebookFiles?.notebooks ?? [],
+    });
+    if (!saved) {
+      toast.error(t('agent.access.saveFailed'));
+      return;
+    }
+    toast.success(t('agent.access.folderDeleted', { name: repository.name }));
+  }, [notebookId, t]);
   const handleOpenPathInNewTab = useCallback((path: string) => {
     onNoteOpenInNewTab?.(path);
   }, [onNoteOpenInNewTab]);
@@ -1139,6 +1579,18 @@ export function NotebookFileTree({
           onOpenInNewTab={onNoteOpenInNewTab ? handleOpenPathInNewTab : undefined}
           onCreateNote={handleCreateNoteAtPath}
           onCreateFolder={handleCreateFolderAtPath}
+          onCreateView={(anchorElement) => {
+            if (!notebookId) return;
+            window.dispatchEvent(new CustomEvent('flowix:open-custom-filter-create', {
+              detail: { notebookId, anchorElement },
+            }));
+          }}
+          onCustomizeDisplay={(anchorRect) => {
+            setCustomizeAnchorRect(anchorRect);
+            setCustomizeOrder([...sectionOrder]);
+            setCustomizeHidden([...hiddenSections]);
+            setCustomizeOpen(true);
+          }}
           onRename={handleRename}
           tabIndex={treeFocusPath && samePath(treeFocusPath, item.fullPath) ? 0 : -1}
           onFocus={handleFocusPath}
@@ -1457,7 +1909,7 @@ export function NotebookFileTree({
         dragPreview && 'notebook-file-tree--dragging',
       )}
     >
-      <div className="relative min-h-0 flex-1">
+      <ListSurfaceViewport>
         <OverlayScrollbar
           className="h-full"
           scrollerClassName="h-full overflow-y-auto pt-1 pb-1"
@@ -1507,7 +1959,7 @@ export function NotebookFileTree({
                   onClick={() => setPinnedCollapsed((collapsed) => !collapsed)}
                 >
                   <span>{t('memo.fileTree.pinnedSectionTitle')}</span>
-                  <ChevronRight className={cn('h-3.5 w-3.5 opacity-0 transition-[opacity,transform] group-hover:opacity-100 group-focus-within:opacity-100', !pinnedCollapsed && 'rotate-90')} />
+                  <ChevronRight className={cn('h-3.5 w-3.5 opacity-0 transition-[opacity,transform] group-hover:opacity-100 group-focus-within:opacity-100', pinnedCollapsed && 'opacity-100', !pinnedCollapsed && 'rotate-90')} />
                 </button>
                 <div className="ml-auto flex items-center">
                   <TreeSectionMoreMenu
@@ -1533,6 +1985,18 @@ export function NotebookFileTree({
                   onOpenInNewTab={onNoteOpenInNewTab ? handleOpenPathInNewTab : undefined}
                   onCreateNote={handleCreateNoteAtPath}
                   onCreateFolder={handleCreateFolderAtPath}
+                  onCreateView={(anchorElement) => {
+                    if (!notebookId) return;
+                    window.dispatchEvent(new CustomEvent('flowix:open-custom-filter-create', {
+                      detail: { notebookId, anchorElement },
+                    }));
+                  }}
+                  onCustomizeDisplay={(anchorRect) => {
+                    setCustomizeAnchorRect(anchorRect);
+                    setCustomizeOrder([...sectionOrder]);
+                    setCustomizeHidden([...hiddenSections]);
+                    setCustomizeOpen(true);
+                  }}
                   onRename={handleRename}
                   onDeleteFile={onDeleteFile}
                   onPointerDown={() => {}}
@@ -1567,7 +2031,7 @@ export function NotebookFileTree({
                 onClick={() => setViewsCollapsed((collapsed) => !collapsed)}
               >
                 <span>{t('memo.fileTree.viewsSectionTitle')}</span>
-                <ChevronRight className={cn('h-3.5 w-3.5 opacity-0 transition-[opacity,transform] group-hover:opacity-100 group-focus-within:opacity-100', !viewsCollapsed && 'rotate-90')} />
+                <ChevronRight className={cn('h-3.5 w-3.5 opacity-0 transition-[opacity,transform] group-hover:opacity-100 group-focus-within:opacity-100', viewsCollapsed && 'opacity-100', !viewsCollapsed && 'rotate-90')} />
               </button>
               <div className="ml-auto flex items-center">
                 <button
@@ -1642,7 +2106,7 @@ export function NotebookFileTree({
               onClick={() => setFilesCollapsed((collapsed) => !collapsed)}
             >
               <span>{t('memo.fileTree.sectionTitle')}</span>
-              <ChevronRight className={cn('h-3.5 w-3.5 opacity-0 transition-[opacity,transform] group-hover:opacity-100 group-focus-within:opacity-100', !filesCollapsed && 'rotate-90')} />
+              <ChevronRight className={cn('h-3.5 w-3.5 opacity-0 transition-[opacity,transform] group-hover:opacity-100 group-focus-within:opacity-100', filesCollapsed && 'opacity-100', !filesCollapsed && 'rotate-90')} />
             </button>
             <div className="ml-auto flex items-center">
               <button
@@ -1734,11 +2198,6 @@ export function NotebookFileTree({
               setDragPreview(null);
             }}
           >
-            {!hasVisibleItems && tree.loading && (
-              <div className="px-4 py-6 text-center text-xs text-[var(--muted-foreground)]" role="status">
-                {t('memo.fileTree.loading')}
-              </div>
-            )}
             {tree.error && (
               <div className="flex items-center justify-center gap-2 px-4 py-4 text-center text-xs text-[var(--muted-foreground)]" role="alert">
                 <span>{t('memo.fileTree.unreadableHint')}</span>
@@ -1782,6 +2241,28 @@ export function NotebookFileTree({
             </div>
           </div>}
           </section>}
+          {!hiddenSections.includes('repositories') && (
+            <AgentRepositoriesSection
+              repositories={agentRepositories}
+              order={sectionOrder.indexOf('repositories') + 1}
+              onHeightChange={handleRepositorySectionHeightChange}
+              canMoveUp={visibleSectionOrder.indexOf('repositories') > 0}
+              canMoveDown={visibleSectionOrder.indexOf('repositories') < visibleSectionOrder.length - 1}
+              onMoveUp={() => moveTreeSection('repositories', -1)}
+              onMoveDown={() => moveTreeSection('repositories', 1)}
+              onAddRepository={() => { void handleAddRepository(); }}
+              onRemoveRepository={(repository) => { void handleRemoveRepository(repository); }}
+              canAddRepository={Boolean(notebookId)}
+              onOpenFile={handleOpenRepositoryFile}
+              onOpenInNewTab={onNoteOpenInNewTab ? handleOpenPathInNewTab : undefined}
+              onCustomizeDisplay={(anchorRect) => {
+                setCustomizeAnchorRect(anchorRect);
+                setCustomizeOrder([...sectionOrder]);
+                setCustomizeHidden([...hiddenSections]);
+                setCustomizeOpen(true);
+              }}
+            />
+          )}
               </div>
             </ContextMenuTrigger>
             <ContextMenuContent className="w-[180px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
@@ -1789,14 +2270,14 @@ export function NotebookFileTree({
                 onClick={() => handleCreateNoteAtPath(notebookPath)}
                 className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left transition-colors hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
               >
-                <File className="mr-2 h-4 w-4" aria-hidden="true" />
+                <FileIcon className="mr-2 h-4 w-4" aria-hidden="true" />
                 {t('memo.fileTree.newNote')}
               </ContextMenuItem>
               <ContextMenuItem
                 onClick={() => handleCreateFolderAtPath(notebookPath)}
                 className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left transition-colors hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
               >
-                <FolderPlus className="mr-2 h-4 w-4" aria-hidden="true" />
+                <FolderPlusIcon className="mr-2 h-4 w-4" aria-hidden="true" />
                 {t('memo.fileTree.newFolder')}
               </ContextMenuItem>
               <ContextMenuItem
@@ -1805,7 +2286,7 @@ export function NotebookFileTree({
                 }))}
                 className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left transition-colors hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
               >
-                <ListPlus className="mr-2 h-4 w-4" aria-hidden="true" />
+                <ListPlusIcon className="mr-2 h-4 w-4" aria-hidden="true" />
                 {t('memo.customFilter.title')}
               </ContextMenuItem>
               <ContextMenuSeparator />
@@ -1818,12 +2299,18 @@ export function NotebookFileTree({
                 }}
                 className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left transition-colors hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
               >
-                <PanelsTopLeft className="mr-2 h-4 w-4" aria-hidden="true" />
-                自定义展示
+                <SquaresFourIcon className="mr-2 h-4 w-4" aria-hidden="true" />
+                {t('memo.fileTree.customizeDisplay')}
               </ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>
         </OverlayScrollbar>
+        {!hasVisibleItems && tree.loading && (
+          <ListSurfaceLoadingState
+            label={t('memo.fileTree.loading')}
+            className="absolute inset-0 z-[2] bg-[var(--list-bg)]"
+          />
+        )}
         {dragPreview && (
           <div
             aria-hidden="true"
@@ -1849,12 +2336,12 @@ export function NotebookFileTree({
             showScrollTopHint ? 'opacity-100' : 'opacity-0',
           )}
         />
-      </div>
+      </ListSurfaceViewport>
       <Popover open={customizeOpen} onOpenChange={setCustomizeOpen} anchorRect={customizeAnchorRect}>
-        <PopoverContent side="right" align="start" sideOffset={8} className="w-[190px] max-w-[calc(100vw-16px)] rounded-2xl p-[5px] shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
+        <PopoverContent side="right" align="start" sideOffset={-160} offsetY={-80} className="w-[190px] max-w-[calc(100vw-16px)] rounded-2xl p-[5px] shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
           <DialogHeader className="mb-0 flex min-h-8 items-center justify-between px-1">
-            <DialogTitle>自定义展示</DialogTitle>
-            <button type="button" className="rounded-md px-2 py-1 text-sm font-medium text-[var(--primary)] transition-colors hover:bg-[var(--muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]" onClick={() => {
+            <DialogTitle className="text-sm">{t('memo.fileTree.customizeDisplay')}</DialogTitle>
+            <button type="button" className="rounded-md px-2 py-1 text-xs font-medium text-[var(--primary)] transition-colors hover:bg-[var(--muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]" onClick={() => {
               setSectionOrder(customizeOrder);
               setHiddenSections(customizeHidden);
               if (notebookId) {
@@ -1865,14 +2352,20 @@ export function NotebookFileTree({
           </DialogHeader>
           <div className="space-y-0.5" aria-label="文件树分区展示与顺序">
             {customizeOrder.map((section) => {
-              const labels: Record<NotebookTreeSection, string> = { agents: '对话', pinned: '置顶', views: '视图', files: '文件' };
+              const labels: Record<NotebookTreeSection, string> = {
+                agents: t('memo.fileTree.agentsSectionTitle'),
+                pinned: t('memo.fileTree.pinnedSectionTitle'),
+                views: t('memo.fileTree.viewsSectionTitle'),
+                files: t('memo.fileTree.sectionTitle'),
+                repositories: t('memo.fileTree.repositoriesTitle'),
+              };
               const selected = !customizeHidden.includes(section);
               return <div key={section} data-customize-section={section} className={cn('group relative flex h-8 items-center gap-2 rounded-lg px-2 transition-colors hover:bg-[var(--muted)]', draggedSection.current === section && 'opacity-50')}>
                 {sectionDropTarget?.section === section && draggedSection.current !== section && <span aria-hidden="true" className={cn('pointer-events-none absolute inset-x-1 z-10 h-0.5 rounded-full bg-[var(--primary)]', sectionDropTarget.after ? '-bottom-0.5' : '-top-0.5')} />}
                 <button type="button" role="checkbox" aria-checked={selected} aria-label={`展示${labels[section]}`} onClick={() => setCustomizeHidden((current) => selected ? [...current, section] : current.filter((item) => item !== section))} className={cn('notebook-file-tree__display-checkbox focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]', selected && 'notebook-file-tree__display-checkbox--checked')}>
                   {selected && <span className="notebook-file-tree__display-checkbox-mark" aria-hidden="true" />}
                 </button>
-                <span className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--foreground)]">{labels[section]}</span>
+                <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--foreground)]">{labels[section]}</span>
                 <button type="button" onPointerDown={(event) => {
                   if (event.button !== 0) return;
                   draggedSection.current = section;

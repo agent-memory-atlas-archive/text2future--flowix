@@ -28,6 +28,31 @@ fn v2_note_fingerprint(note: &crate::v2::V2LocalNote) -> Result<String, SyncErro
     Ok(crate::v2::v2_content_hash(&canonical))
 }
 
+fn find_v2_relocated_note(
+    notes: &[crate::v2::V2BootstrapNote],
+    notebook_id: &str,
+    source_note_id: &str,
+) -> Option<crate::v2::V2BootstrapNote> {
+    let mut predecessor = source_note_id.to_string();
+    let mut visited = HashSet::from([predecessor.clone()]);
+    for _ in 0..notes.len() {
+        // Reused paths leave older tombstones pointing at the same predecessor.
+        // Follow the newest edge and stop if malformed lineage forms a cycle.
+        let next = notes.iter()
+            .filter(|note| note.notebook_id == notebook_id
+                && note.moved_from_note_id.as_deref() == Some(predecessor.as_str()))
+            .max_by_key(|note| note.sync_seq)?;
+        if !visited.insert(next.id.clone()) {
+            return None;
+        }
+        if !next.deleted {
+            return Some(next.clone());
+        }
+        predecessor.clone_from(&next.id);
+    }
+    None
+}
+
 impl SyncManager {
     pub fn record_v2_local_move(
         &self,
@@ -110,26 +135,38 @@ impl SyncManager {
         operation_id: &str,
     ) -> Result<crate::v2::V2ConflictMaterial, SyncError> {
         let generation = self.auth_generation();
-        let token = self.access_token(generation).await?;
+        let mut token = self.access_token(generation).await?;
         let baseline = self.store.v2_note_state(note_id)?;
-        let bootstrap = self.client.v2_bootstrap(&token).await?;
-        let remote = bootstrap.notes.iter().cloned()
-            .find(|note| note.id == note_id && note.notebook_id == notebook_id)
-            .ok_or_else(|| SyncError::InvalidState(format!("conflicting cloud file {note_id} disappeared")))?;
-        let mut relocated = None;
-        if remote.deleted {
-            let mut predecessor = note_id.to_string();
-            for _ in 0..bootstrap.notes.len() {
-                let Some(next) = bootstrap.notes.iter().find(|note|
-                    note.notebook_id == notebook_id
-                        && note.moved_from_note_id.as_deref() == Some(predecessor.as_str())) else { break };
-                if !next.deleted {
-                    relocated = Some(next.clone());
-                    break;
-                }
-                predecessor = next.id.clone();
+        let mut page = self.client.v2_bootstrap_page(&token, None).await?;
+        let snapshot_cursor = page.cursor;
+        let mut remote = None;
+        let mut lineage = Vec::new();
+        let mut pages = 0;
+        loop {
+            for note in page.notes {
+                if note.notebook_id != notebook_id { continue; }
+                if note.id == note_id { remote = Some(note.clone()); }
+                if note.moved_from_note_id.is_some() { lineage.push(note); }
+            }
+            let Some(page_token) = page.next_page_token else { break; };
+            pages += 1;
+            if pages > 10_000 {
+                return Err(SyncError::InvalidState("bootstrap exceeded page limit".into()));
+            }
+            let first = self.client.v2_bootstrap_page(&token, Some(&page_token)).await;
+            page = if first.as_ref().is_err_and(SyncError::is_unauthorized) {
+                token = self.force_refresh_access_token(generation).await?;
+                self.client.v2_bootstrap_page(&token, Some(&page_token)).await?
+            } else { first? };
+            if page.cursor != snapshot_cursor {
+                return Err(SyncError::InvalidState("bootstrap snapshot cursor changed".into()));
             }
         }
+        let remote = remote
+            .ok_or_else(|| SyncError::InvalidState(format!("conflicting cloud file {note_id} disappeared")))?;
+        let relocated = remote.deleted.then(|| {
+            find_v2_relocated_note(&lineage, notebook_id, note_id)
+        }).flatten();
         let base_content = match baseline.as_ref().and_then(|state| state.content_hash.as_deref()) {
             Some(hash) => match self.download_verified_v2_blob(&token, note_id, hash).await {
                 Ok(content) => Some(content),
@@ -249,34 +286,51 @@ impl SyncManager {
         &self,
     ) -> Result<Vec<crate::models::CloudNotebook>, SyncError> {
         let generation = self.auth_generation();
-        let token = self.access_token(generation).await?;
-        let first = self.client.v2_bootstrap(&token).await;
-        let bootstrap = if first.as_ref().is_err_and(SyncError::is_unauthorized) {
-            let refreshed = self.force_refresh_access_token(generation).await?;
-            self.client.v2_bootstrap(&refreshed).await?
+        let mut token = self.access_token(generation).await?;
+        let first = self.client.v2_bootstrap_page(&token, None).await;
+        let mut bootstrap = if first.as_ref().is_err_and(SyncError::is_unauthorized) {
+            token = self.force_refresh_access_token(generation).await?;
+            self.client.v2_bootstrap_page(&token, None).await?
         } else {
             first?
         };
-        let _generation = self.require_auth_generation(generation)?;
         let mut used_bytes_by_notebook = HashMap::new();
-        for note in bootstrap.notes.iter().filter(|note| !note.deleted) {
-            let attachment_bytes = note.attachments.iter().fold(0_i64, |total, attachment| {
-                total.saturating_add(attachment.size_bytes.max(0))
-            });
-            let note_bytes = note.size_bytes.max(0).saturating_add(attachment_bytes);
-            let total = used_bytes_by_notebook
-                .entry(note.notebook_id.clone())
-                .or_insert(0_i64);
-            *total = total.saturating_add(note_bytes);
+        let notebooks = std::mem::take(&mut bootstrap.notebooks);
+        let snapshot_cursor = bootstrap.cursor;
+        let mut pages = 0;
+        loop {
+            for note in bootstrap.notes.iter().filter(|note| !note.deleted) {
+                let attachment_bytes = note.attachments.iter().fold(0_i64, |total, attachment| {
+                    total.saturating_add(attachment.size_bytes.max(0))
+                });
+                let note_bytes = note.size_bytes.max(0).saturating_add(attachment_bytes);
+                let total = used_bytes_by_notebook
+                    .entry(note.notebook_id.clone())
+                    .or_insert(0_i64);
+                *total = total.saturating_add(note_bytes);
+            }
+            let Some(page_token) = bootstrap.next_page_token.take() else { break; };
+            pages += 1;
+            if pages > 10_000 {
+                return Err(SyncError::InvalidState("bootstrap exceeded page limit".into()));
+            }
+            let first = self.client.v2_bootstrap_page(&token, Some(&page_token)).await;
+            bootstrap = if first.as_ref().is_err_and(SyncError::is_unauthorized) {
+                token = self.force_refresh_access_token(generation).await?;
+                self.client.v2_bootstrap_page(&token, Some(&page_token)).await?
+            } else { first? };
+            if bootstrap.cursor != snapshot_cursor {
+                return Err(SyncError::InvalidState("bootstrap snapshot cursor changed".into()));
+            }
         }
+        let _generation = self.require_auth_generation(generation)?;
         let enabled: HashSet<String> = self
             .store
             .v2_notebooks(true)?
             .into_iter()
             .map(|notebook| notebook.notebook_id)
             .collect();
-        Ok(bootstrap
-            .notebooks
+        Ok(notebooks
             .into_iter()
             .filter(|notebook| !notebook.deleted)
             .map(|notebook| {
@@ -514,6 +568,47 @@ impl SyncManager {
         }
     }
 
+    pub async fn v2_continue_bootstrap(
+        &self,
+        previous: &V2AccountSyncReport,
+        notebook_scope: Option<&str>,
+    ) -> Result<V2AccountSyncReport, SyncError> {
+        let token = previous.bootstrap_next_page_token.as_deref()
+            .ok_or_else(|| SyncError::InvalidState("bootstrap has no next page".into()))?;
+        let generation = previous.auth_generation.ok_or(SyncError::NotAuthenticated)?;
+        let mut access_token = self.access_token(generation).await?;
+        let first = self.client.v2_bootstrap_page(&access_token, Some(token)).await;
+        let page = if first.as_ref().is_err_and(SyncError::is_unauthorized) {
+            access_token = self.force_refresh_access_token(generation).await?;
+            self.client.v2_bootstrap_page(&access_token, Some(token)).await?
+        } else {
+            first?
+        };
+        if page.cursor != previous.head_cursor {
+            return Err(SyncError::InvalidState("bootstrap snapshot cursor changed".into()));
+        }
+        let enabled_notebooks: Vec<_> = self.store.v2_notebooks(true)?.into_iter()
+            .filter(|notebook| notebook_scope.is_none_or(|scope| scope == notebook.notebook_id))
+            .collect();
+        let enabled_ids: HashSet<_> = enabled_notebooks.iter()
+            .map(|notebook| notebook.notebook_id.as_str()).collect();
+        let remote = self.remote_from_bootstrap(&access_token, &enabled_ids, &page).await?;
+        let complete = page.next_page_token.is_none();
+        let _generation = self.require_auth_generation(generation)?;
+        Ok(V2AccountSyncReport {
+            auth_generation: Some(generation),
+            started_at: previous.started_at,
+            cursor: if complete { page.cursor } else { previous.cursor },
+            head_cursor: previous.head_cursor,
+            uploaded: 0,
+            deleted: 0,
+            remote,
+            bootstrapped_notebooks: if complete { enabled_notebooks.into_iter()
+                .map(|notebook| notebook.notebook_id).collect() } else { Vec::new() },
+            bootstrap_next_page_token: page.next_page_token,
+        })
+    }
+
     async fn sync_v2_account_once(
         &self,
         access_token: &str,
@@ -566,19 +661,21 @@ impl SyncManager {
             Some(scope) => self.store.v2_notebook_cursor(scope)?,
             None => self.store.v2_cursor()?,
         };
-        let (remote, next_cursor, head_cursor, bootstrapped_notebooks) = if bootstrap_required {
-            let bootstrap = self.client.v2_bootstrap(access_token).await?;
+        let (remote, next_cursor, head_cursor, bootstrapped_notebooks, bootstrap_next_page_token) = if bootstrap_required {
+            let bootstrap = self.client.v2_bootstrap_page(access_token, None).await?;
             let remote = self
                 .remote_from_bootstrap(access_token, &enabled_ids, &bootstrap)
                 .await?;
+            let complete = bootstrap.next_page_token.is_none();
             (
                 remote,
+                if complete { bootstrap.cursor } else { cursor },
                 bootstrap.cursor,
-                bootstrap.cursor,
-                enabled_notebooks
+                if complete { enabled_notebooks
                     .iter()
                     .map(|notebook| notebook.notebook_id.clone())
-                    .collect(),
+                    .collect() } else { Vec::new() },
+                bootstrap.next_page_token,
             )
         } else {
             match self
@@ -591,22 +688,24 @@ impl SyncManager {
                 )
                 .await
             {
-                Ok(result) => (result.0, result.1, result.2, Vec::new()),
+                Ok(result) => (result.0, result.1, result.2, Vec::new(), None),
                 Err(SyncError::Api {
                     status: 410, code, ..
                 }) if code == "CURSOR_EXPIRED" => {
-                    let bootstrap = self.client.v2_bootstrap(access_token).await?;
+                    let bootstrap = self.client.v2_bootstrap_page(access_token, None).await?;
                     let remote = self
                         .remote_from_bootstrap(access_token, &enabled_ids, &bootstrap)
                         .await?;
+                    let complete = bootstrap.next_page_token.is_none();
                     (
                         remote,
+                        if complete { bootstrap.cursor } else { cursor },
                         bootstrap.cursor,
-                        bootstrap.cursor,
-                        enabled_notebooks
+                        if complete { enabled_notebooks
                             .iter()
                             .map(|notebook| notebook.notebook_id.clone())
-                            .collect(),
+                            .collect() } else { Vec::new() },
+                        bootstrap.next_page_token,
                     )
                 }
                 Err(error) => return Err(error),
@@ -623,6 +722,7 @@ impl SyncManager {
             deleted,
             remote,
             bootstrapped_notebooks,
+            bootstrap_next_page_token,
         })
     }
 
@@ -996,32 +1096,18 @@ impl SyncManager {
         notebook_scope: Option<&str>,
         self_sync_seqs: &HashSet<i64>,
     ) -> Result<(Vec<V2RemoteApply>, i64, i64), SyncError> {
-        let mut next_cursor = cursor;
+        let page = self.client.v2_changes(access_token, cursor, 100).await?;
+        let next_cursor = page.cursor;
+        let head_cursor = page.head_cursor;
+        if next_cursor < cursor || (page.has_more && next_cursor == cursor) {
+            return Err(SyncError::InvalidState(
+                "cloud v2 changes cursor did not advance".into(),
+            ));
+        }
         let mut latest = HashMap::<(String, String), V2Change>::new();
-        let head_cursor = loop {
-            let page = self
-                .client
-                .v2_changes(access_token, next_cursor, 1_000)
-                .await?;
-            let page_head_cursor = page.head_cursor;
-            let page_cursor = page.cursor;
-            let has_more = page.has_more;
-            for change in page.changes {
-                latest.insert(
-                    (change.entity_type.clone(), change.entity_id.clone()),
-                    change,
-                );
-            }
-            if page_cursor < next_cursor || (has_more && page_cursor == next_cursor) {
-                return Err(SyncError::InvalidState(
-                    "cloud v2 changes cursor did not advance".into(),
-                ));
-            }
-            next_cursor = page_cursor;
-            if !has_more {
-                break page_head_cursor;
-            }
-        };
+        for change in page.changes {
+            latest.insert((change.entity_type.clone(), change.entity_id.clone()), change);
+        }
         let mut changes: Vec<_> = latest.into_values().collect();
         changes.sort_by_key(|change| change.sync_seq);
         let mut remote = Vec::new();
@@ -1508,5 +1594,45 @@ mod tests {
             content
         );
         assert!(verify_v2_blob("memo", &hash, b"tampered".to_vec()).is_err());
+    }
+
+    #[test]
+    fn relocated_note_follows_newest_edge_after_path_reuse() {
+        let notebook_id = "nb_moves";
+        let note = |id: &str, moved_from: Option<&str>, deleted: bool, sync_seq: i64| {
+            crate::v2::V2BootstrapNote {
+                id: id.into(), notebook_id: notebook_id.into(), filename: format!("{id}.md"),
+                moved_from_note_id: moved_from.map(str::to_owned), revision: format!("rev_{sync_seq}"),
+                content_hash: (!deleted).then(|| format!("hash_{id}")), size_bytes: 1, deleted,
+                sync_seq, created_at: sync_seq, updated_at: sync_seq, attachments: Vec::new(),
+            }
+        };
+        // A -> B -> A -> C. The stale B tombstone appears before current C.
+        let notes = vec![
+            note("B", Some("A"), true, 3),
+            note("A", Some("B"), true, 5),
+            note("C", Some("A"), false, 6),
+        ];
+        assert_eq!(find_v2_relocated_note(&notes, notebook_id, "A").unwrap().id, "C");
+    }
+
+    #[test]
+    fn relocated_note_stops_on_cyclic_move_lineage() {
+        let notebook_id = "nb_moves";
+        let notes = vec![
+            crate::v2::V2BootstrapNote {
+                id: "B".into(), notebook_id: notebook_id.into(), filename: "B.md".into(),
+                moved_from_note_id: Some("A".into()), revision: "r1".into(), content_hash: None,
+                size_bytes: 0, deleted: true, sync_seq: 1, created_at: 1, updated_at: 1,
+                attachments: Vec::new(),
+            },
+            crate::v2::V2BootstrapNote {
+                id: "A".into(), notebook_id: notebook_id.into(), filename: "A.md".into(),
+                moved_from_note_id: Some("B".into()), revision: "r2".into(), content_hash: None,
+                size_bytes: 0, deleted: true, sync_seq: 2, created_at: 2, updated_at: 2,
+                attachments: Vec::new(),
+            },
+        ];
+        assert!(find_v2_relocated_note(&notes, notebook_id, "A").is_none());
     }
 }

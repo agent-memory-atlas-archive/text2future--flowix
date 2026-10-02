@@ -5,6 +5,7 @@ import { Command as CommandPrimitive, useCommandState } from 'cmdk';
 import { Search, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { cn } from '@/lib/utils';
+import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
 import { useI18n } from '@/lib/i18n';
 
 /**
@@ -322,7 +323,8 @@ const CommandSeparator = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <CommandPrimitive.Separator
     ref={ref}
-    className={cn('-mx-1 my-1 h-px bg-[var(--border)]', className)}
+    aria-hidden="true"
+    className={cn(POPUP_SEPARATOR_CLASS, className)}
     {...props}
   />
 ));

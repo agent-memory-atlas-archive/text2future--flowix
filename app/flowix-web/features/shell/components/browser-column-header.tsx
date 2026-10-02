@@ -25,6 +25,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from '@shared/ui/context-menu';
+import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -418,7 +419,7 @@ export function BrowserColumnHeader({
                 <div
                   role="separator"
                   aria-hidden="true"
-                  className="mx-1 my-1 h-px bg-[var(--border-popup)] opacity-60"
+                  className={POPUP_SEPARATOR_CLASS}
                 />
                 <ContextMenuItem
                   aria-describedby={moveUnavailableReason ? `move-unavailable-${tab.id}` : undefined}
@@ -489,7 +490,7 @@ export function BrowserColumnHeader({
                   );
                 })}
               </div>
-              <div role="separator" aria-hidden="true" className="mx-1 my-1 h-px bg-[var(--border-popup)] opacity-60" />
+              <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
               <DropdownMenuItem
                 onClick={onCloseColumn}
                 className="h-7 items-center justify-start rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"

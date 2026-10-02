@@ -34,7 +34,9 @@ import { cn } from '@/lib/utils';
 import { Button } from '@shared/ui/button';
 import { Tooltip } from '@shared/ui/tooltip';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
+import { ListSurfaceLoadingState, ListSurfaceViewport } from '@shared/ui/list-surface';
 import { DROPDOWN_DIVIDER_SKIN } from '@shared/ui/dropdown-divider';
+import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
 import { MemoCard } from '@features/memo/components/memo-card';
 import { openPathNoteSession } from '@features/memo/use-cases/open-memo-session';
 import { openNotebookNote } from '@features/memo/use-cases/open-notebook-note';
@@ -936,7 +938,7 @@ export function MemoList({
                     <span className="mention-note-title">{t('memo.list.filterThisMonth')}</span>
                     {activeFilter === 'thisMonth' && <Check className="w-4 h-4 text-[var(--brand)]" />}
                   </button>
-                  <hr className={cn('mx-2 my-1 border-0', DROPDOWN_DIVIDER_SKIN)} />
+                  <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
                   <div className="px-2 pb-1 pt-1 text-xs font-normal leading-[1.2] text-[var(--muted-foreground)]">
                     {t('memo.list.filterColorGroup')}
                   </div>
@@ -1043,7 +1045,7 @@ export function MemoList({
         </div>
       </div>
 
-      <div className="relative flex min-h-0 flex-1">
+      <ListSurfaceViewport className="flex">
         {navigationDrawerEnabled && !navigationDrawerControlled && (
           <MemoListNavigationDrawer
             open={navigationDrawerOpen}
@@ -1069,10 +1071,10 @@ export function MemoList({
       </div>
     )}
         {(startupPhase === 'idle' || startupPhase === 'loading') && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-[var(--card)]/80 text-sm text-[var(--muted-foreground)]" role="status" aria-live="polite">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin text-[var(--primary)]" aria-hidden="true" />
-            {t('memo.list.loadingNotebook')}
-          </div>
+          <ListSurfaceLoadingState
+            label={t('memo.list.loadingNotebook')}
+            className="absolute inset-0 z-20 bg-[var(--card)]/80"
+          />
         )}
         {foldersMounted && selectedNotebook && (
           <div
@@ -1112,10 +1114,7 @@ export function MemoList({
                 <Button size="sm" className="rounded-lg" onClick={handleRetryMemoList}>{t('error.retry')}</Button>
               </div>
             ) : !hasCurrentMemoListData && showMemoListLoading ? (
-              <div className="flex h-full min-h-0 w-full items-center justify-center gap-2 px-4 text-center text-sm text-[var(--muted-foreground)]" role="status" aria-live="polite">
-                <Loader2 className="h-4 w-4 animate-spin text-[var(--primary)]" aria-hidden="true" />
-                <span>{t('memo.list.loadingLibrary')}</span>
-              </div>
+              <ListSurfaceLoadingState label={t('memo.list.loadingLibrary')} />
             ) : listRenderedMemos.length > 0 ? (
               <div
                 className={cn(
@@ -1159,7 +1158,7 @@ export function MemoList({
           )}
         />}
 
-      </div>
+      </ListSurfaceViewport>
     </div>
   );
 }

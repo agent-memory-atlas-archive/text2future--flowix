@@ -74,6 +74,7 @@ import { documentHistoryEntryKey } from '@features/document/public/shell-api';
 import { deleteMainExternalDocument, historyEntryFromWorkColumnTarget } from '@features/workspace/public/shell-api';
 
 const DOCUMENT_PANEL_MIN_WIDTH = BROWSER_COLUMN_MIN_WIDTH;
+const PRODUCT_INTRO_AUTO_SHOWN_KEY = 'flowix:product-intro:auto-shown';
 
 
 const BrowserColumn = lazy(() =>
@@ -132,6 +133,8 @@ export function MainLayout({
 }) {
   const { t } = useI18n();
   const [recentExportPath, setRecentExportPath] = useState<string | null>(null);
+  const [productIntroOpen, setProductIntroOpen] = useState(false);
+  const productIntroAutoShownRef = useRef(false);
   const {
     notebookToDelete,
     notebookCreateRequest,
@@ -154,6 +157,19 @@ export function MainLayout({
     completeDshInstallPrompt: handleDshInstalled,
     completeOnboarding,
   } = system;
+  const showProductIntroAfterOnboarding = useCallback(() => {
+    if (productIntroAutoShownRef.current) return;
+    productIntroAutoShownRef.current = true;
+
+    try {
+      if (window.localStorage.getItem(PRODUCT_INTRO_AUTO_SHOWN_KEY) === 'true') return;
+      window.localStorage.setItem(PRODUCT_INTRO_AUTO_SHOWN_KEY, 'true');
+    } catch {
+      // Keep the in-memory guard so a storage failure cannot reopen it repeatedly.
+    }
+
+    setProductIntroOpen(true);
+  }, []);
   // 切片订阅：每个 useStore 只取真正用到的字段，setter 走 useShallow 聚合。
   // 替代原来的 `useNoteStore()` / `useDocumentStore()` / `useSettingsStore()`
   // 全量订阅 —— 任何 set 都会让 MainLayout 整树重渲，跨菜单栏 / 状态栏 /
@@ -777,6 +793,8 @@ export function MainLayout({
             onCreateNotebook={handleCreateNotebook}
             onOpenTodos={handleOpenTodos}
             onToggleNoteNavigation={handleToggleNoteNavigation}
+            productIntroOpen={productIntroOpen}
+            onProductIntroOpenChange={setProductIntroOpen}
             dshDownload={dshDownload}
             updater={updater}
           />
@@ -838,6 +856,7 @@ export function MainLayout({
               });
             }
             await completeOnboarding();
+            showProductIntroAfterOnboarding();
           }}
         />
       )}
