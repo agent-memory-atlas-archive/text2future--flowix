@@ -20,7 +20,6 @@ import { MediaResourceView } from './media-resource-view';
 import { SurfaceSuspenseHost } from '@shared/ui/surface-suspense-host';
 import { externalFileViewKind } from '@features/editor/public/code-file';
 import { HtmlResourceView } from './html-resource-view';
-import { CodeSurfaceView } from './code-surface-view';
 import {
   useBrowserColumnStore,
   type BrowserColumnTab,
