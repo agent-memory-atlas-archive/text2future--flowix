@@ -32,6 +32,8 @@ interface MarkdownEditorProps {
   ownerPath?: string;
   /** Workspace surface hosting this editor, passed to surface-aware NodeViews. */
   workspaceHost?: WorkspaceHostId;
+  /** Read the current path when an upload starts, including after a rename. */
+  getAttachmentOwnerPath?: () => string | undefined;
   getAttachmentNotebookId?: () => string | undefined;
   propertyTargetId?: string;
   onViewSourceMode?: () => void;
@@ -236,6 +238,7 @@ function focusEmptyParagraphAfterMedia(
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(function MarkdownEditor({
   ownerPath,
   workspaceHost = 'main-third',
+  getAttachmentOwnerPath,
   getAttachmentNotebookId,
   propertyTargetId,
   onViewSourceMode,
@@ -269,15 +272,6 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   // 运行时通过下面的同步 effect dispatch meta 触发重新装饰。
   const resolvedPlaceholderRef = useRef(resolvedPlaceholder);
   resolvedPlaceholderRef.current = resolvedPlaceholder;
-  const attachmentOwnerPathRef = useRef(ownerPath);
-  const attachmentNotebookIdResolverRef = useRef(getAttachmentNotebookId);
-  attachmentOwnerPathRef.current = ownerPath;
-  attachmentNotebookIdResolverRef.current = getAttachmentNotebookId;
-  const getCurrentAttachmentOwnerPath = useCallback(() => attachmentOwnerPathRef.current, []);
-  const getCurrentAttachmentNotebookId = useCallback(
-    () => attachmentNotebookIdResolverRef.current?.(),
-    [],
-  );
   const elementRef = useRef<HTMLDivElement>(null);
   const editorMountRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<Editor | null>(null);
@@ -304,6 +298,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   const onFocusTitleRef = useRef(onFocusTitle);
   const onAppendToTitleRef = useRef(onAppendToTitle);
   const editableRef = useRef(editable);
+  const attachmentOwnerRef = useRef({ ownerPath, getAttachmentOwnerPath, getAttachmentNotebookId });
   // 链接导航上下文走 ref：mount effect 不因文档路径变化重建编辑器，
   // 点击时始终读取最新值。
   const linkContextRef = useRef<EditorLinkContext | undefined>(linkContext);
@@ -314,7 +309,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   onFocusTitleRef.current = onFocusTitle;
   onAppendToTitleRef.current = onAppendToTitle;
   editableRef.current = editable;
+  attachmentOwnerRef.current = { ownerPath, getAttachmentOwnerPath, getAttachmentNotebookId };
   linkContextRef.current = linkContext;
+
+  const getCurrentAttachmentOwnerPath = useCallback(() => {
+    const current = attachmentOwnerRef.current;
+    return current.getAttachmentOwnerPath ? current.getAttachmentOwnerPath() : current.ownerPath;
+  }, []);
+  const getCurrentAttachmentNotebookId = useCallback(() => attachmentOwnerRef.current.getAttachmentNotebookId?.(), []);
 
   const clearSerializeTimer = useCallback(() => {
     if (serializeTimerRef.current) {

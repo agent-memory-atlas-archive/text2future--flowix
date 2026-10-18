@@ -144,6 +144,10 @@ export function DocumentContainer({
   const getAttachmentNotebookId = useCallback(() => {
     return resolveNotebookIdForPath(documentIdentity.path, getWorkspaceMemoState().notebooks);
   }, [documentIdentity]);
+  const getAttachmentOwnerPath = useCallback(() => {
+    // COSEC: Uploads must belong to a note inside a registered notebook.
+    return getAttachmentNotebookId() ? getCurrentFilePath() : undefined;
+  }, [getAttachmentNotebookId, getCurrentFilePath]);
   const {
     state,
     setState,
@@ -668,6 +672,7 @@ export function DocumentContainer({
         {canMountRichEditor && richEditorMountReadyFor === documentInstanceKey && (
           <LazyDocumentEditor
             ownerPath={documentIdentity.path}
+            getAttachmentOwnerPath={getAttachmentOwnerPath}
             getAttachmentNotebookId={getAttachmentNotebookId}
             workspaceHost={hostId}
             propertyTargetId={propertyTargetId}
