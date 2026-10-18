@@ -2,17 +2,13 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createLogger } from "@/lib/logger";
 import { STORAGE_KEYS } from "@/lib/constants";
-import { agentWorkspace, piModels } from "@platform/tauri/client";
+import { piModels } from "@platform/tauri/client";
 import type {
   AgentCodexReasoningEffort,
   AgentCodexServiceTier,
   AgentPermissionMode,
   AgentTypeKey,
 } from "@/types/agent";
-import type {
-  LegacyAgentRuntimePreference,
-  LegacyAgentRuntimePreferences,
-} from "@/lib/types/agent-workspace";
 import {
   getAgentAccessOptions,
   getAgentModeOptions,
@@ -126,7 +122,7 @@ interface AgentDataLoadState {
 }
 
 export interface AgentDataStoreState {
-  /** One-time import of legacy runtime/session defaults. */
+  /** One-time import of legacy Codex session settings. */
   legacyPreferencesMigrated: boolean;
   /** Per-field revisions make user choices mergeable across app windows. */
   userPreferenceRevisions: Partial<Record<AgentTypeKey, Record<string, string>>>;
@@ -135,7 +131,7 @@ export interface AgentDataStoreState {
   agents: Record<AgentTypeKey, AgentDataRecord>;
   loadState: AgentDataLoadState;
   initializePiMode: () => Promise<void>;
-  initializeLegacyPreferences: () => Promise<void>;
+  initializeLegacySessionSettings: () => Promise<void>;
   setModelCatalog: (agentType: AgentTypeKey, catalog: AgentModelCatalog) => void;
   invalidateModelCatalog: (agentType: AgentTypeKey) => void;
   invalidateSkillCatalog: (agentType: AgentTypeKey, notebookId: string) => void;
@@ -164,14 +160,11 @@ export interface AgentDataStoreState {
     model: { id: string; providerId?: string } | undefined,
     effort: AgentCodexReasoningEffort,
   ) => void;
-  migrateLegacyPreferences: (
-    runtime: LegacyAgentRuntimePreferences | undefined,
-    codexSessionSettings?: {
-      agentCodexModel: string;
-      agentPermissionMode: AgentPermissionMode;
-      agentCodexReasoningEffort: AgentCodexReasoningEffort;
-    },
-  ) => void;
+  migrateLegacySessionSettings: (codexSessionSettings?: {
+    agentCodexModel: string;
+    agentPermissionMode: AgentPermissionMode;
+    agentCodexReasoningEffort: AgentCodexReasoningEffort;
+  }) => void;
 }
 
 const AGENT_TYPES: AgentTypeKey[] = [
@@ -232,14 +225,7 @@ const SKILL_CATALOG_MAX_AGE_MS = 60 * 1000;
 const pendingModelLoads = new Map<AgentTypeKey, Promise<AgentModelCatalog>>();
 const pendingSkillLoads = new Map<string, Promise<AgentCatalogSkill[]>>();
 let pendingPiModeInitialization: Promise<void> | null = null;
-let pendingLegacyPreferencesInitialization: Promise<void> | null = null;
-
-async function readLegacyPiModePreference(): Promise<'code' | 'writing' | undefined> {
-  const legacy = (await agentWorkspace.getLegacyPreferences())?.pi;
-  if (legacy?.piCodeMode !== undefined) return legacy.piCodeMode ? 'code' : 'writing';
-  const mode: unknown = legacy?.mode;
-  return mode === 'code' || mode === 'writing' ? mode : undefined;
-}
+let pendingLegacySessionInitialization: Promise<void> | null = null;
 
 function skillLoadKey(agentType: AgentTypeKey, notebookId: string): string {
   return `${agentType}:${notebookId}`;
@@ -504,26 +490,6 @@ function persistedAgentDataState(state: AgentDataStoreState): Record<string, unk
   };
 }
 
-function mapLegacyRuntimePreference(legacy: LegacyAgentRuntimePreference): AgentUserPreference {
-  const patch: AgentUserPreference = {};
-  if (legacy.model?.key && legacy.model.key !== "inherit") {
-    patch.model = { id: legacy.model.key, ...(legacy.model.providerId ? { providerId: legacy.model.providerId } : {}) };
-  }
-  if (legacy.access?.sandbox) patch.permission = legacy.access.sandbox;
-  if (legacy.mode) patch.mode = legacy.mode;
-  if (legacy.piCodeMode !== undefined) patch.mode = legacy.piCodeMode ? "code" : "writing";
-  if (legacy.reasoningEffort) {
-    patch.reasoningEffort = legacy.reasoningEffort;
-    if (legacy.model?.key && legacy.model.key !== "inherit") {
-      patch.reasoningByModel = {
-        [modelPreferenceKey({ id: legacy.model.key, providerId: legacy.model.providerId })]: legacy.reasoningEffort,
-      };
-    }
-  }
-  if (legacy.serviceTier) patch.serviceTier = legacy.serviceTier;
-  return patch;
-}
-
 export const useAgentDataStore = create<AgentDataStoreState>()(
   persist(
     (set, get) => ({
@@ -539,14 +505,11 @@ export const useAgentDataStore = create<AgentDataStoreState>()(
         set((state) => ({ loadState: { ...state.loadState, piMode: { status: "loading" } } }));
         const request = (async () => {
           if (get().agents.pi.user.mode === undefined) {
-            const [features, legacyMode] = await Promise.all([
-              piModels.getFeatures(),
-              get().legacyPreferencesMigrated ? undefined : readLegacyPiModePreference(),
-            ]);
+            const features = await piModels.getFeatures();
             // Another window may have migrated and cleared the old source already.
             await useAgentDataStore.persist.rehydrate();
-            const importedMode = legacyMode ?? (features.legacyCodeMode === undefined
-              ? undefined : features.legacyCodeMode ? "code" : "writing");
+            const importedMode = features.legacyCodeMode === undefined
+              ? undefined : features.legacyCodeMode ? "code" : "writing";
             set((state) => {
               // A choice made during this read always wins over migration.
               const previous = state.agents.pi.user;
@@ -583,14 +546,12 @@ export const useAgentDataStore = create<AgentDataStoreState>()(
         return request;
       },
 
-      initializeLegacyPreferences: () => {
+      initializeLegacySessionSettings: () => {
         if (get().legacyPreferencesMigrated) return Promise.resolve();
-        if (pendingLegacyPreferencesInitialization) return pendingLegacyPreferencesInitialization;
+        if (pendingLegacySessionInitialization) return pendingLegacySessionInitialization;
         const request = (async () => {
-          const legacy = await agentWorkspace.getLegacyPreferences();
           const { useAgentSessionStore } = await import('./agent-session-store');
-          get().migrateLegacyPreferences(
-            legacy ?? undefined,
+          get().migrateLegacySessionSettings(
             useAgentSessionStore.getState().sessionMeta.settings,
           );
           try {
@@ -601,8 +562,8 @@ export const useAgentDataStore = create<AgentDataStoreState>()(
           } catch (error) {
             logger.warn('Agent preference migration persistence check failed', { error });
           }
-        })().finally(() => { pendingLegacyPreferencesInitialization = null; });
-        pendingLegacyPreferencesInitialization = request;
+        })().finally(() => { pendingLegacySessionInitialization = null; });
+        pendingLegacySessionInitialization = request;
         return request;
       },
 
@@ -747,59 +708,48 @@ export const useAgentDataStore = create<AgentDataStoreState>()(
         get().setUserPreference(agentType, { reasoningEffort: effort, reasoningByModel });
       },
 
-      migrateLegacyPreferences: (runtime, codexSessionSettings) => {
+      migrateLegacySessionSettings: (codexSessionSettings) => {
         if (get().legacyPreferencesMigrated) return;
-        if (!runtime && !codexSessionSettings) {
+        if (!codexSessionSettings) {
           set({ legacyPreferencesMigrated: true });
           return;
         }
         set((state) => {
           const agents = { ...state.agents };
           const userPreferenceRevisions = { ...state.userPreferenceRevisions };
-          for (const agentType of AGENT_TYPES) {
-            const legacyRuntimeKey = agentType === "claudecode" ? "claude" : agentType === "dsh" ? "deepseek-harness" : agentType;
-            const legacy = runtime?.[legacyRuntimeKey];
-            const sessionFallback: AgentUserPreference = agentType === "codex" && codexSessionSettings
+          const migrated: AgentUserPreference = {
+            ...(codexSessionSettings.agentCodexModel && codexSessionSettings.agentCodexModel !== "inherit"
+              ? { model: { id: codexSessionSettings.agentCodexModel } }
+              : {}),
+            ...(codexSessionSettings.agentPermissionMode
+              ? { permission: codexSessionSettings.agentPermissionMode }
+              : {}),
+            ...(codexSessionSettings.agentCodexReasoningEffort
               ? {
+                  reasoningEffort: codexSessionSettings.agentCodexReasoningEffort,
                   ...(codexSessionSettings.agentCodexModel && codexSessionSettings.agentCodexModel !== "inherit"
-                    ? { model: { id: codexSessionSettings.agentCodexModel } }
-                    : {}),
-                  ...(codexSessionSettings.agentPermissionMode
-                    ? { permission: codexSessionSettings.agentPermissionMode }
-                    : {}),
-                  ...(codexSessionSettings.agentCodexReasoningEffort
-                    ? {
-                        reasoningEffort: codexSessionSettings.agentCodexReasoningEffort,
-                        ...(codexSessionSettings.agentCodexModel && codexSessionSettings.agentCodexModel !== "inherit"
-                          ? { reasoningByModel: {
-                              [modelPreferenceKey({ id: codexSessionSettings.agentCodexModel })]: codexSessionSettings.agentCodexReasoningEffort,
-                            } }
-                          : {}),
-                      }
+                    ? { reasoningByModel: {
+                        [modelPreferenceKey({ id: codexSessionSettings.agentCodexModel })]: codexSessionSettings.agentCodexReasoningEffort,
+                      } }
                     : {}),
                 }
-              : {};
-            const migrated = legacy
-              ? { ...sessionFallback, ...mapLegacyRuntimePreference(legacy) }
-              : sessionFallback;
-            if (!Object.keys(migrated).length) continue;
-            const previousUser = agents[agentType].user;
-            const nextUser = {
-              ...migrated,
-              ...previousUser,
-              ...(migrated.reasoningByModel || previousUser.reasoningByModel
-                ? { reasoningByModel: { ...migrated.reasoningByModel, ...previousUser.reasoningByModel } }
-                : {}),
-            };
-            userPreferenceRevisions[agentType] = stampLegacyPreferenceFields(
-              userPreferenceRevisions[agentType] ?? {},
+              : {}),
+          };
+          const previousUser = agents.codex.user;
+          const nextUser = {
+            ...migrated,
+            ...previousUser,
+            ...(migrated.reasoningByModel || previousUser.reasoningByModel
+              ? { reasoningByModel: { ...migrated.reasoningByModel, ...previousUser.reasoningByModel } }
+              : {}),
+          };
+          if (Object.keys(migrated).length) {
+            userPreferenceRevisions.codex = stampLegacyPreferenceFields(
+              userPreferenceRevisions.codex ?? {},
               previousUser,
               nextUser,
             );
-            agents[agentType] = {
-              ...agents[agentType],
-              user: nextUser,
-            };
+            agents.codex = { ...agents.codex, user: nextUser };
           }
           return { agents, userPreferenceRevisions, legacyPreferencesMigrated: true };
         });
@@ -838,11 +788,11 @@ export const useAgentDataStore = create<AgentDataStoreState>()(
   ),
 );
 
-/** Resolve legacy defaults before a runtime config is built for a request. */
+/** Resolve retained session settings and Pi mode before a runtime config is built. */
 export async function ensureAgentPreferencesReady(agentType?: AgentTypeKey): Promise<void> {
   const state = useAgentDataStore.getState();
-  await state.initializeLegacyPreferences().catch((error) => {
-    logger.warn("Agent preference migration deferred", { error });
+  await state.initializeLegacySessionSettings().catch((error) => {
+    logger.warn("Agent session settings migration deferred", { error });
   });
   if (!agentType || agentType === "pi") {
     await state.initializePiMode();

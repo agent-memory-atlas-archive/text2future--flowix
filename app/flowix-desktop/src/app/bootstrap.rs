@@ -556,7 +556,6 @@ pub fn run() {
             commands::cloud::cloud_restore_note_revision,
             // Device-local notebook workspaces (local.db).
             commands::agent_workspace::get_agent_workspace,
-            commands::agent_workspace::get_legacy_agent_preferences,
             commands::agent_workspace::attach_notebook_directory,
             commands::agent_workspace::detach_notebook_directory,
             // System metadata (JSON, ~/.flowix/boot/system.json)

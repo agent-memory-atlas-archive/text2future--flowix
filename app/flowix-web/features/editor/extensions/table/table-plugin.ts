@@ -4,28 +4,28 @@ import { TableHeader } from '@tiptap/extension-table-header';
 import { TableRow } from '@tiptap/extension-table-row';
 
 import { createTableEdgeInsertPlugin } from '@features/editor/extensions/table/table-edge-insert-plugin';
-import { FlowixTable } from '@features/editor/extensions/table/flowix-table';
+import { createEditorTable } from '@features/editor/extensions/table/flowix-table';
 
 const TABLE_RESIZE_HANDLE_WIDTH = 8;
 const TABLE_CELL_MIN_WIDTH = 80;
 
-export const TablePlugin = Extension.create({
-  name: 'tablePlugin',
+/** Each editor owns its table renderer and schema binding. */
+export function createTablePlugin() {
+  const table = createEditorTable().configure({
+    resizable: true,
+    handleWidth: TABLE_RESIZE_HANDLE_WIDTH,
+    cellMinWidth: TABLE_CELL_MIN_WIDTH,
+  });
 
-  addExtensions() {
-    return [
-      FlowixTable.configure({
-        resizable: true,
-        handleWidth: TABLE_RESIZE_HANDLE_WIDTH,
-        cellMinWidth: TABLE_CELL_MIN_WIDTH,
-      }),
-      TableRow,
-      TableHeader,
-      TableCell,
-    ];
-  },
+  return Extension.create({
+    name: 'tablePlugin',
 
-  addProseMirrorPlugins() {
-    return [createTableEdgeInsertPlugin(this.editor)];
-  },
-});
+    addExtensions() {
+      return [table, TableRow, TableHeader, TableCell];
+    },
+
+    addProseMirrorPlugins() {
+      return [createTableEdgeInsertPlugin(this.editor)];
+    },
+  });
+}

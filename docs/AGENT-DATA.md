@@ -16,9 +16,9 @@ Flowix file IPC authorizes registered notebook roots and enabled mounted directo
 ## Upgrade imports
 
 - `index.db` is retired and is no longer opened or imported. After successful version initialization, copies in `~/.flowix/` and `~/.flowix/db/`, including SQLite companions, are moved to each directory's `rebuild-backups/<UUID>/` for manual recovery. Installations with only an old index must re-register their notebook folders.
-- Each notebook's `.flowix/agent.json` is imported once. Older `agent-access.json.defaults.files` is a fallback for notebooks registered before the upgrade. Unattached global folder entries never create mounts.
-- Missing notebook roots defer the mount import. Malformed legacy files fail without marking import complete, allowing a later retry. Successfully imported sources are not reread after mounts change.
-- Old runtime defaults are exposed through a migration-only IPC and imported into the browser-owned user preference Store.
+- `.flowix/agent.json` is deprecated and ignored. Its contents do not create workspace mounts.
+- The startup `agent_workspace_v1` job imports legacy `agent-access.json.defaults.files` into SQLite for notebooks registered at migration time. `_global` defaults apply only to those existing notebooks; unavailable notebook roots defer the job, and later notebooks do not inherit those defaults. Orphan global folder entries do not create mounts.
+- Successfully imported mount defaults are not reread after workspace settings change. `defaults.runtime` is no longer read or imported. Current Agent preferences remain in the browser-owned user preference Store; Codex session settings and Pi feature mode are independent legacy inputs.
 
 Legacy files are retained on disk for recovery, but normal workspace writes use only `local.db`.
 

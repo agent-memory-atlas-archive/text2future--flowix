@@ -18,6 +18,7 @@ pub const CONFIG_LOCAL_MIGRATIONS_JOB: &str = "config_local_migrations_v1";
 
 #[derive(Clone, Copy)]
 enum GlobalInitializationJob {
+    AgentWorkspace,
     AgentLayout,
     LocalConfiguration,
     WatcherSettings,
@@ -25,7 +26,8 @@ enum GlobalInitializationJob {
 }
 
 impl GlobalInitializationJob {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
+        Self::AgentWorkspace,
         Self::AgentLayout,
         Self::LocalConfiguration,
         Self::WatcherSettings,
@@ -34,6 +36,7 @@ impl GlobalInitializationJob {
 
     fn key(self) -> &'static str {
         match self {
+            Self::AgentWorkspace => "agent_workspace_v1",
             Self::AgentLayout => "config_dsh_layout_v2",
             Self::LocalConfiguration => CONFIG_LOCAL_MIGRATIONS_JOB,
             Self::WatcherSettings => "config_watcher_exclusions_v1",
@@ -44,16 +47,23 @@ impl GlobalInitializationJob {
     fn is_optional(self) -> bool {
         matches!(
             self,
-            Self::AgentLayout | Self::WatcherSettings | Self::Templates
+            Self::AgentWorkspace | Self::AgentLayout | Self::WatcherSettings | Self::Templates
         )
     }
 
     fn run(
         self,
+        memo_file: &MemoFile,
         user_config: &crate::config::UserConfigStore,
         user_config_dir: &Path,
     ) -> Result<(), String> {
         match self {
+            Self::AgentWorkspace => memo_file
+                .migrate_legacy_agent_workspace()
+                .map(|imported| {
+                    tracing::info!(imported, "legacy Agent workspace defaults imported");
+                })
+                .map_err(|error| format!("import legacy Agent workspace defaults failed: {error}")),
             Self::AgentLayout => user_config.initialize_legacy_dsh_layout(),
             Self::LocalConfiguration => user_config.initialize_legacy_config_migrations(),
             Self::WatcherSettings => user_config
@@ -144,7 +154,7 @@ pub fn initialize_legacy_storage_with_progress(
         let result = run_job_with_progress(
             memo_file,
             job.key(),
-            || job.run(user_config, user_config_dir),
+            || job.run(memo_file, user_config, user_config_dir),
             &mut report,
             &mut completed,
             total,
@@ -568,6 +578,38 @@ mod tests {
                 .unwrap();
             assert_eq!(count, 0);
         }
+    }
+
+    #[test]
+    fn startup_imports_legacy_agent_workspace_defaults_once() {
+        let (temp, memo, notebook) = fixture();
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(
+            temp.path().join("config/agent-access.json"),
+            serde_json::json!({"defaults":{"files":{"_global":{"folders":[repo]}}}})
+                .to_string(),
+        )
+        .unwrap();
+        let config = temp.path().join("config");
+        let app_data = temp.path().join("app-data");
+        let user = crate::config::UserConfigStore::new(temp.path().to_path_buf());
+        let device = DeviceRegistry::load(&config, "test");
+
+        initialize_legacy_storage(&device, &memo, &user, &config, &app_data).unwrap();
+        assert!(memo.local_migration_completed("agent_workspace_v1").unwrap());
+        assert_eq!(memo.read_notebook_workspace().unwrap().notebook_configs["test"].add_dirs.len(), 1);
+
+        let mut new_notebook = notebook;
+        new_notebook.id = "later".into();
+        new_notebook.name = "later".into();
+        new_notebook.path = temp.path().join("later").to_string_lossy().into();
+        fs::create_dir_all(&new_notebook.path).unwrap();
+        memo.write_notebook_configs(&[memo.read_notebook_configs().unwrap()[0].clone(), new_notebook])
+            .unwrap();
+
+        initialize_legacy_storage(&device, &memo, &user, &config, &app_data).unwrap();
+        assert!(memo.read_notebook_workspace().unwrap().notebook_configs["later"].add_dirs.is_empty());
     }
 
     #[test]

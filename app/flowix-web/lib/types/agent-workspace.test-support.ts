@@ -1,6 +1,5 @@
-/** Historical config fixtures retained for legacy-session regression tests. */
-import type { AgentTypeKey, FilesConfig } from '@/types/agent';
-import type { LegacyAgentRuntimePreference } from './agent-workspace';
+/** Historical config fixtures retained for workspace import regression tests. */
+import type { FilesConfig } from '@/types/agent';
 
 export type AgentAccessKind = "notebook" | "folder";
 
@@ -28,7 +27,6 @@ export interface AgentAccessEntry {
 export type AgentAccessFilesDefaults = Record<string, FilesConfig>;
 
 export interface AgentAccessDefaults {
-  runtime?: Partial<Record<AgentTypeKey, LegacyAgentRuntimePreference>>;
   files?: AgentAccessFilesDefaults;
 }
 

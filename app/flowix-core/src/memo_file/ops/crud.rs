@@ -480,11 +480,19 @@ impl MemoFile {
         let new_content = existing;
         atomic_write_bytes(&new_path, new_content.as_bytes())?;
 
+        let old_relative_path = memo.relative_path.clone();
         let mut updated = memo;
         updated.filename = new_filename;
         updated.relative_path = new_relative_path;
         updated.updated_at = chrono::Utc::now().timestamp_millis();
         apply_derived_memo_fields(&mut updated, &new_content);
+        if updated.relative_path != old_relative_path {
+            MemoFile::sync_index_on_delete_for_notebook_id_locked(
+                self,
+                &notebook_id,
+                &old_relative_path,
+            )?;
+        }
         MemoFile::sync_index_on_write_for_notebook_id_locked(self, &notebook_id, &updated)?;
         Ok(updated)
     }

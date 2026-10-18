@@ -1,3 +1,6 @@
+import { DOMSerializer } from '@tiptap/pm/model';
+import { getExtensionField } from '@tiptap/core';
+import type { Editor } from '@tiptap/core';
 import { Table } from '@tiptap/extension-table';
 import type {
   JSONContent,
@@ -226,6 +229,13 @@ function normalizeNodeForMarkdown(node: JSONContent, rowHeader: boolean, columnH
   };
 }
 
+/** Pipe tables can only round-trip a single paragraph of inline content. */
+export function tableNeedsHtml(node: JSONContent): boolean {
+  return (node.content ?? []).some(row => (row.content ?? []).some(cell =>
+    cell.content?.length !== 1 || cell.content[0]?.type !== 'paragraph',
+  ));
+}
+
 export const FlowixTable = Table.extend({
   parseMarkdown(this: { parent?: (token: MarkdownToken, helpers: MarkdownParseHelpers) => JSONContent }, token, helpers) {
     const parsed = this.parent ? this.parent(token, helpers) : { type: 'table', content: [] };
@@ -289,3 +299,25 @@ export const FlowixTable = Table.extend({
     },
   },
 });
+
+/** Capture the active editor schema; Markdown callbacks have no editor context. */
+export function createEditorTable() {
+  let editor: Editor;
+  const renderSimple = getExtensionField(FlowixTable, 'renderMarkdown');
+  return Table.extend({
+    ...FlowixTable.config,
+    onBeforeCreate() {
+      editor = this.editor;
+    },
+    renderMarkdown(node, helpers, ctx) {
+      if (!tableNeedsHtml(node)) return renderSimple(node, helpers, ctx);
+      const schema = editor.schema;
+      const container = document.createElement('div');
+      container.appendChild(DOMSerializer.fromSchema(schema).serializeNode(schema.nodeFromJSON(node)));
+      // A blank source line ends a CommonMark HTML block. Character references
+      // keep the table on one source line and decode back to literal newlines
+      // inside pre/code when the schema parses the HTML.
+      return container.innerHTML.replace(/\r/g, '&#13;').replace(/\n/g, '&#10;');
+    },
+  });
+}

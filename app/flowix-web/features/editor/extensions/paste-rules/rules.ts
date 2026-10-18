@@ -14,7 +14,7 @@ import {
   parseMarkdownForPaste,
 } from '@features/editor/extensions/paste-rules/markdown';
 import { HTML_TABLE_RE, isStandaloneHtmlTable } from '@features/editor/extensions/paste-rules/html';
-import { hasImportableHtml } from '@features/editor/extensions/paste-rules/html-sanitizer';
+import { hasImportableHtml, sanitizeExternalHtml } from '@features/editor/extensions/paste-rules/html-sanitizer';
 import {
   htmlTableToTableContent,
   looksLikeTsvTable,
@@ -221,7 +221,7 @@ export function createManagedPasteRules(options: {
       priority: 760,
       match: ({ html, editor }) => !!editor.schema.nodes.table && HTML_TABLE_RE.test(html) && isStandaloneHtmlTable(html),
       run: ({ html, editor }) => {
-        const content = htmlTableToTableContent(html);
+        const content = htmlTableToTableContent(sanitizeExternalHtml(html), editor.schema);
         if (!content) return 'default';
         return insertPastedContent(content, editor) ? 'handled' : 'default';
       },

@@ -1103,6 +1103,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn media_resource_identity_is_notebook_and_normalized_relative_path() {
+        assert_eq!(
+            media_resource_id("nb_one", "photos\\summer.png").unwrap(),
+            "nb_one::photos/summer.png"
+        );
+        assert_ne!(
+            media_resource_id("nb_one", "photos/summer.png").unwrap(),
+            media_resource_id("nb_two", "photos/summer.png").unwrap()
+        );
+        assert!(media_resource_id("nb_one", "../summer.png").is_err());
+    }
+
+    #[test]
     fn background_note_preparation_preserves_shared_media_properties() {
         let (memo, _temp, root) = fixture();
         fs::write(root.join("kept.png"), b"image").unwrap();

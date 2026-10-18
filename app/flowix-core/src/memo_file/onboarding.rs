@@ -280,6 +280,9 @@ mod tests {
         mf.write_index(&MemoIndexFile::default()).unwrap();
         fs::remove_file(mf.get_memo_base().join("Welcome.md")).unwrap();
         fs::remove_file(mf.get_memo_base().join("欢迎文档.md")).unwrap();
+        // The path projection is authoritative for emptiness. Reconcile the
+        // externally removed files before asking onboarding to seed again.
+        mf.reconcile_note_index_blocking("nb_default").unwrap();
 
         assert!(mf.seed_onboarding_docs().unwrap());
         assert_eq!(mf.list_note_paths_from_disk("nb_default").unwrap().len(), ONBOARDING_DOCS.len());

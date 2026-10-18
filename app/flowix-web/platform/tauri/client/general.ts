@@ -303,7 +303,6 @@ export interface DeepSeekHarnessPluginCatalog {
 // Device-local notebook workspaces. Mutations change one attachment atomically.
 export const agentWorkspace = {
   get: () => invoke<AgentWorkspaceSnapshot>('get_agent_workspace'),
-  getLegacyPreferences: () => invoke<import('@/lib/types/agent-workspace').LegacyAgentRuntimePreferences | null>('get_legacy_agent_preferences'),
   pickDirectory: (notebookId: string) => invoke<AgentWorkspaceSnapshot | null>('pick_notebook_directory', { notebookId }),
   attachDirectory: (notebookId: string, path: string) => invoke<AgentWorkspaceSnapshot>('attach_notebook_directory', { notebookId, path }),
   detachDirectory: (notebookId: string, path: string) => invoke<AgentWorkspaceSnapshot>('detach_notebook_directory', { notebookId, path }),

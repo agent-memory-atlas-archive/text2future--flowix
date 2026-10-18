@@ -190,3 +190,135 @@ describe('mixed list Markdown round trips', () => {
     }
   })
 })
+
+
+describe('table list persistence in the production editor', () => {
+  it('restores native lists and interactive Todo state after saving', async () => {
+    const editor = await mountEditor()
+    act(() => editor.commands.setContent({ type: 'doc', content: [{
+      type: 'table', content: [{ type: 'tableRow', content: [{
+        type: 'tableCell', attrs: { colwidth: [200] }, content: [
+          { type: 'bulletList', content: [item('哈哈', { type: 'orderedList', attrs: { start: 2 }, content: [item('nested')] })] },
+          { type: 'taskList', content: [task('done', true), task('pending')] },
+        ],
+      }] }],
+    }] }))
+    const expected = editor.state.doc.firstChild?.toJSON()
+    const markdown = editor.getMarkdown()
+    expect(markdown).toContain('<table')
+    act(() => editor.commands.setContent(markdown, { contentType: 'markdown' }))
+    expect(editor.state.doc.firstChild?.toJSON()).toEqual(expected)
+    let taskPosition = -1
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === 'taskItem' && taskPosition < 0) taskPosition = pos
+    })
+    act(() => { editor.view.dispatch(editor.state.tr.setNodeMarkup(taskPosition, undefined, { checked: false })) })
+    const updated = editor.getMarkdown()
+    act(() => editor.commands.setContent(updated, { contentType: 'markdown' }))
+    expect(editor.state.doc.nodeAt(taskPosition)?.attrs.checked).toBe(false)
+  })
+})
+
+
+describe('Tab priority for lists inside table cells', () => {
+  const pressTab = (editor: Editor, shiftKey = false) => {
+    const event = new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', shiftKey, bubbles: true, cancelable: true })
+    act(() => { editor.view.dom.dispatchEvent(event) })
+    expect(event.defaultPrevented).toBe(true)
+  }
+  const cellPosition = (editor: Editor) => {
+    const { $from } = editor.state.selection
+    for (let depth = $from.depth; depth > 0; depth--) {
+      if (['tableCell', 'tableHeader'].includes($from.node(depth).type.name)) return $from.before(depth)
+    }
+    return -1
+  }
+
+  it.each(['bulletList', 'orderedList', 'taskList'])('indents and outdents %s before navigating cells', async type => {
+    const editor = await mountEditor()
+    const makeItem = type === 'taskList' ? (text: string) => task(text, true) : item
+    act(() => editor.commands.setContent({ type: 'doc', content: [{ type: 'table', content: [{
+      type: 'tableRow', content: [
+        { type: 'tableCell', content: [{ type, content: [makeItem('A'), makeItem('B')] }] },
+        { type: 'tableCell', content: [paragraph('next')] },
+      ],
+    }] }] }))
+    let position = -1
+    editor.state.doc.descendants((node, pos) => { if (node.isText && node.text === 'B') position = pos })
+    act(() => editor.commands.setTextSelection(position))
+    const originalCell = cellPosition(editor)
+    pressTab(editor)
+    expect(cellPosition(editor)).toBe(originalCell)
+    const list = editor.state.doc.firstChild?.firstChild?.firstChild?.firstChild
+    expect(list?.childCount).toBe(1)
+    expect(list?.firstChild?.lastChild?.type.name).toBe(type)
+    pressTab(editor, true)
+    expect(cellPosition(editor)).toBe(originalCell)
+    expect(editor.state.doc.firstChild?.firstChild?.firstChild?.firstChild?.childCount).toBe(2)
+    if (type === 'taskList') expect(editor.state.doc.firstChild?.firstChild?.firstChild?.firstChild?.child(1).attrs.checked).toBe(true)
+  })
+
+  it('keeps a first list item in its cell when it cannot indent', async () => {
+    const editor = await mountEditor()
+    act(() => editor.commands.setContent('<table><tr><td><ul><li><p>only</p></li></ul></td><td><p>next</p></td></tr></table>'))
+    let position = -1
+    editor.state.doc.descendants((node, pos) => { if (node.isText && node.text === 'only') position = pos })
+    act(() => editor.commands.setTextSelection(position))
+    const before = editor.getJSON()
+    const originalCell = cellPosition(editor)
+    pressTab(editor)
+    expect(editor.getJSON()).toEqual(before)
+    expect(cellPosition(editor)).toBe(originalCell)
+  })
+
+  it('still navigates ordinary cells with Tab and Shift-Tab', async () => {
+    const editor = await mountEditor()
+    act(() => editor.commands.setContent('<table><tr><td><p>first</p></td><td><p>next</p></td></tr></table>'))
+    let position = -1
+    editor.state.doc.descendants((node, pos) => { if (node.isText && node.text === 'first') position = pos })
+    act(() => editor.commands.setTextSelection(position))
+    const originalCell = cellPosition(editor)
+    pressTab(editor)
+    expect(cellPosition(editor)).not.toBe(originalCell)
+    pressTab(editor, true)
+    expect(cellPosition(editor)).toBe(originalCell)
+  })
+})
+
+
+describe('complex table serialization regressions', () => {
+  it('preserves punctuation-adjacent bold without introducing a non-schema mark', async () => {
+    const editor = await mountEditor()
+    const boldParagraph = { type: 'paragraph', content: [
+      { type: 'text', text: '重点。', marks: [{ type: 'bold' }] },
+      { type: 'text', text: '接下来' },
+    ] }
+    act(() => editor.commands.setContent({ type: 'doc', content: [boldParagraph, { type: 'table', content: [{
+      type: 'tableRow', content: [{ type: 'tableCell', content: [
+        { type: 'bulletList', content: [{ type: 'listItem', content: [boldParagraph] }] },
+      ] }],
+    }] }] }))
+    const before = editor.getJSON()
+    const markdown = editor.getMarkdown()
+    expect(markdown).toContain('<strong>重点。</strong>接下来')
+    act(() => editor.commands.setContent(markdown, { contentType: 'markdown' }))
+    expect(editor.getJSON()).toEqual(before)
+  })
+
+  it('preserves blank lines in a cell code block and following content', async () => {
+    const editor = await mountEditor()
+    act(() => editor.commands.setContent({ type: 'doc', content: [{ type: 'table', content: [{
+      type: 'tableRow', content: [
+        { type: 'tableCell', content: [{ type: 'codeBlock', content: [{ type: 'text', text: 'first\n\nsecond\n<third> & &#10;' }] }] },
+        { type: 'tableCell', content: [paragraph('neighbor')] },
+      ],
+    }] }, paragraph('after table')] }))
+    const before = editor.getJSON()
+    for (let i = 0; i < 2; i++) {
+      const markdown = editor.getMarkdown()
+      expect(markdown).toContain('first&#10;&#10;second')
+      act(() => editor.commands.setContent(markdown, { contentType: 'markdown' }))
+      expect(editor.getJSON()).toEqual(before)
+    }
+  })
+})

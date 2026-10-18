@@ -313,6 +313,8 @@ mod storage_rebuild_tests {
             updated_at: 0,
         }])
         .unwrap();
+        // Database repair runs during schema initialization before indexing.
+        memo.initialize_note_index_schema("nb_kept").unwrap();
         memo.reconcile_note_index_blocking("nb_kept").unwrap();
         assert_eq!(
             fs::read(root.join("kept.md")).unwrap(),

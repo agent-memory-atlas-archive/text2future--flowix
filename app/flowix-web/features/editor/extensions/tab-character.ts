@@ -35,6 +35,7 @@ function getListItemType(selection: TextSelection): 'listItem' | 'taskItem' | nu
   const { $from } = selection;
   for (let depth = $from.depth; depth > 0; depth -= 1) {
     const typeName = $from.node(depth).type.name;
+    if (TABLE_CELL_TYPES.has(typeName)) return null;
     if (LIST_ITEM_TYPES.has(typeName)) {
       return typeName as 'listItem' | 'taskItem';
     }
@@ -100,7 +101,6 @@ export const TabCharacter = Extension.create({
 
             const { selection } = view.state;
             if (!(selection instanceof TextSelection)) return false;
-            if (isInsideTableCell(selection)) return false;
 
             const listItemType = getListItemType(selection);
             if (listItemType) {
@@ -114,6 +114,12 @@ export const TabCharacter = Extension.create({
               return true;
             }
 
+            // Lists own Tab even inside a cell, including when an item cannot
+            // indent further. Only ordinary cell content falls through to table navigation.
+            if (isInsideTableCell(selection)) {
+              pendingTab = null;
+              return false;
+            }
             if (event.shiftKey) return false;
 
             const now = Date.now();
