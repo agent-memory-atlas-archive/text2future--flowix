@@ -30,7 +30,8 @@ import { SlashMenu } from '@features/editor/extensions/slash-menu';
 import { AgentThreadCard } from '@features/agent/thread-card';
 import { TabAgentRun } from '@features/editor/extensions/tab-agent-run';
 import { TabCharacter } from '@features/editor/extensions/tab-character';
-import { TablePlugin } from '@features/editor/extensions/table/table-plugin';
+import { tableNeedsHtml } from '@features/editor/extensions/table/flowix-table';
+import { createTablePlugin } from '@features/editor/extensions/table/table-plugin';
 import { StableCaret } from '@features/editor/extensions/stable-caret';
 import { MarkdownParagraph, MarkdownTaskItem } from './markdown-parser-common-extensions';
 import type { WorkspaceHostId } from '@features/workspace/public/host-api';
@@ -152,6 +153,9 @@ function markIsBold(mark: { type?: string }): boolean {
  */
 function markAmbiguousBoldRunsAsHtml(node: JSONContent): JSONContent {
   if (!Array.isArray(node.content)) return node;
+  // HTML tables serialize native schema nodes, so Markdown-only marks must
+  // never enter their subtrees (including nested tables).
+  if (node.type === 'table' && tableNeedsHtml(node)) return node;
 
   const content = node.content.map(child => markAmbiguousBoldRunsAsHtml(child));
   if (node.type !== 'paragraph' && node.type !== 'heading') {
@@ -321,7 +325,7 @@ export function createMarkdownEditorExtensions({
     TableReference,
     MediaLibraryReference,
     FlowixHighlight.configure({ multicolor: true }),
-    TablePlugin,
+    createTablePlugin(),
     TaskList,
     PreservedTaskItem.configure({ nested: true }),
     Markdown.configure({ markedOptions: { gfm: true, breaks: true } }),

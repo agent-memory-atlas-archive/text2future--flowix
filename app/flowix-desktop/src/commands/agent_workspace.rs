@@ -16,18 +16,6 @@ pub fn get_agent_workspace(state: State<AppState>) -> Result<NotebookWorkspaceSn
 }
 
 #[tauri::command]
-pub fn get_legacy_agent_preferences(
-    state: State<AppState>,
-) -> Result<Option<serde_json::Value>, String> {
-    state
-        .memo_file
-        .read()
-        .map_err(|_| "memo file lock poisoned".to_string())?
-        .read_legacy_agent_runtime()
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub fn attach_notebook_directory(
     notebook_id: String,
     path: String,

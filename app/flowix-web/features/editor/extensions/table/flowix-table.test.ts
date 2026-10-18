@@ -1,15 +1,18 @@
-import { Editor } from '@tiptap/core';
+import { Editor, type JSONContent } from '@tiptap/core';
+import { TaskList, TaskItem } from '@tiptap/extension-list';
+import { sanitizeExternalHtml } from '../paste-rules/html-sanitizer';
+import { htmlTableToTableContent } from '../paste-rules/table';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { TablePlugin } from '@features/editor/extensions/table/table-plugin';
+import { createTablePlugin } from '@features/editor/extensions/table/table-plugin';
 
 const editors: Editor[] = [];
 
 function createEditor(content: string): Editor {
   const editor = new Editor({
-    extensions: [StarterKit, TablePlugin, Markdown],
+    extensions: [StarterKit, TaskList, TaskItem.configure({ nested: true }), createTablePlugin(), Markdown],
     content,
     contentType: 'markdown',
   });
@@ -101,5 +104,68 @@ describe('Flowix table column widths', () => {
     expect(table?.firstChild?.firstChild?.type.name).toBe('tableCell');
     expect(table?.firstChild?.firstChild?.textContent).toBe('Alpha');
     expect(editor.getMarkdown()).toContain('"rowHeader":false');
+  });
+});
+
+
+describe('complex table HTML persistence', () => {
+  const paragraph = (text: string) => ({ type: 'paragraph', content: [{ type: 'text', text }] });
+  const bullet = { type: 'bulletList', content: [{ type: 'listItem', content: [paragraph('哈哈'),
+    { type: 'orderedList', attrs: { start: 3 }, content: [{ type: 'listItem', content: [paragraph('nested | <text>')] }] },
+  ] }] };
+  const tasks = { type: 'taskList', content: [true, false].map(checked => ({
+    type: 'taskItem', attrs: { checked }, content: [paragraph('todo'),
+      { type: 'taskList', content: [{ type: 'taskItem', attrs: { checked: !checked }, content: [paragraph('child')] }] },
+    ],
+  })) };
+
+  it.each([bullet, tasks, { type: 'paragraph', content: [{ type: 'text', text: 'first' }] }])(
+    'preserves complex cells, attributes and neighboring Markdown across repeated saves: $type', block => {
+      const editor = createEditor('');
+      editor.commands.setContent({ type: 'doc', content: [paragraph('before'), { type: 'table', content: [
+        { type: 'tableRow', content: [{ type: 'tableHeader', attrs: { colwidth: [180] }, content: [paragraph('header')] }] },
+        { type: 'tableRow', content: [{ type: 'tableCell', content: [block, paragraph('after block')] }] },
+      ] }, paragraph('after')] });
+      const expected = editor.getJSON();
+      for (let i = 0; i < 2; i++) {
+        const markdown = editor.getMarkdown();
+        expect(markdown).toContain('<table');
+        expect(markdown).not.toContain('| ---');
+        editor.commands.setContent(markdown, { contentType: 'markdown' });
+        expect(editor.getJSON()).toEqual(expected);
+      }
+      const html = editor.getMarkdown();
+      expect(htmlTableToTableContent(html, editor.schema)).toEqual(expected.content?.[1]);
+    },
+  );
+
+  it.each([bullet, tasks])('uses HTML for a single list block: $type', block => {
+    const editor = createEditor('');
+    editor.commands.setContent({ type: 'doc', content: [{ type: 'table', content: [
+      { type: 'tableRow', content: [{ type: 'tableCell', attrs: { colwidth: [160], colspan: 2 }, content: [block] }] },
+    ] }] });
+    const table: JSONContent | undefined = editor.getJSON().content?.[0];
+    const markdown = editor.getMarkdown();
+    expect(markdown).toContain('<table');
+    editor.commands.setContent(markdown, { contentType: 'markdown' });
+    expect(editor.getJSON().content?.[0]).toEqual(table);
+    const pasted = htmlTableToTableContent(sanitizeExternalHtml(markdown), editor.schema);
+    expect(pasted?.content?.[0]?.content?.[0]?.content).toEqual(table?.content?.[0]?.content?.[0]?.content);
+  });
+
+  it('keeps renderers isolated between simultaneous editors', () => {
+    const first = createEditor('<table><tr><td><ul><li><p>first</p></li></ul></td></tr></table>');
+    const second = createEditor('<table><tr><td><p>one</p><p>two</p></td></tr></table>');
+    expect(first.getMarkdown()).toContain('<ul>');
+    second.destroy();
+    expect(first.getMarkdown()).toContain('<ul>');
+    first.commands.setContent('<table><tr><td><p>simple</p></td></tr></table>', { contentType: 'markdown' });
+    expect(first.getMarkdown()).not.toContain('<table');
+  });
+
+  it('keeps literal list-like text in a simple Markdown table', () => {
+    const editor = createEditor('| Header |\n| --- |\n| - 哈哈 |');
+    expect(editor.getMarkdown()).not.toContain('<table');
+    expect(editor.state.doc.firstChild?.child(1).firstChild?.firstChild?.type.name).toBe('paragraph');
   });
 });

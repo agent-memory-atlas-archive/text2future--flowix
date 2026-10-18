@@ -53,14 +53,103 @@ impl MemoFile {
         Ok(conn)
     }
 
-    /// This is the only remaining reader of old global Agent runtime defaults.
-    pub fn read_legacy_agent_runtime(&self) -> std::io::Result<Option<serde_json::Value>> {
-        Ok(self
-            .read_legacy_agent_access()?
+    /// Import legacy notebook folder defaults into the authoritative SQLite
+    /// workspace tables. The caller records this as a one-time startup job.
+    /// `_global` applies to notebooks that already exist when the job runs;
+    /// notebooks created later do not inherit stale global defaults.
+    pub fn migrate_legacy_agent_workspace(&self) -> std::io::Result<usize> {
+        let legacy = self.read_legacy_agent_access()?;
+        let Some(files) = legacy
             .get("defaults")
-            .and_then(|d| d.get("runtime"))
-            .cloned())
+            .and_then(|defaults| defaults.get("files"))
+            .and_then(serde_json::Value::as_object)
+        else {
+            return Ok(0);
+        };
+
+        let notebooks = self.read_notebook_configs()?;
+        if notebooks.is_empty() {
+            return Ok(0);
+        }
+        if let Some(notebook) = notebooks
+            .iter()
+            .find(|notebook| !Path::new(&notebook.path).is_dir())
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                format!("notebook {} is unavailable", notebook.id),
+            ));
+        }
+
+        let folders_for = |key: &str| -> Vec<&str> {
+            files
+                .get(key)
+                .and_then(|config| config.get("folders"))
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .collect()
+        };
+        let global_folders = folders_for("_global");
+        let mut conn = self.workspace_connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_to_io)?;
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut imported = 0usize;
+
+        for notebook in &notebooks {
+            let mut notebook_imported = 0usize;
+            for path in folders_for(&notebook.id)
+                .into_iter()
+                .chain(global_folders.iter().copied())
+            {
+                if validate_add_dir(&notebook.path, path, false).is_err() {
+                    tracing::warn!(notebook_id = %notebook.id, path, "skipping invalid legacy Agent folder default");
+                    continue;
+                }
+                let normalized = normalized_directory(path);
+                let stored_path = normalized.to_string_lossy();
+                let path_key = directory_key(path);
+                let label = normalized
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                notebook_imported += tx
+                    .execute(
+                        "INSERT OR IGNORE INTO notebook_add_dirs \
+                         (id,notebook_id,path,path_key,label,enabled,sort,created_at,updated_at) \
+                         VALUES (?1,?2,?3,?4,?5,1,\
+                           COALESCE((SELECT MAX(sort)+1 FROM notebook_add_dirs WHERE notebook_id=?2),0),?6,?6)",
+                        params![
+                            uuid::Uuid::new_v4().to_string(),
+                            notebook.id,
+                            stored_path,
+                            path_key,
+                            label,
+                            now
+                        ],
+                    )
+                    .map_err(sqlite_to_io)?;
+            }
+            if notebook_imported > 0 {
+                tx.execute(
+                    "INSERT INTO notebook_workspace_state VALUES (?1,1) \
+                     ON CONFLICT(notebook_id) DO UPDATE SET revision=revision+1",
+                    [&notebook.id],
+                )
+                .map_err(sqlite_to_io)?;
+                imported += notebook_imported;
+            }
+        }
+
+        tx.commit().map_err(sqlite_to_io)?;
+        Ok(imported)
     }
+
     fn read_legacy_agent_access(&self) -> std::io::Result<serde_json::Value> {
         let path = self.registry.config_dir.join("agent-access.json");
         match fs::read(&path) {
@@ -235,7 +324,7 @@ mod tests {
         (temp, memo, notebook)
     }
     #[test]
-    fn imports_local_mounts_once_and_does_not_grant_orphan_global_entries() {
+    fn workspace_mounts_are_read_from_sqlite_not_legacy_json() {
         let (temp, memo, notebook) = fixture();
         let repo = temp.path().join("repo");
         fs::create_dir(&repo).unwrap();
@@ -255,9 +344,13 @@ mod tests {
             r#"{"entries":[{"kind":"folder","path":"/orphan","enabled":true}]}"#,
         )
         .unwrap();
-        let first = memo.read_notebook_workspace().unwrap();
-        assert_eq!(first.notebook_configs["one"].add_dirs.len(), 2);
-        assert!(first.notebook_configs["one"].add_dirs[1].missing);
+        let initial = memo.read_notebook_workspace().unwrap();
+        assert!(initial.notebook_configs["one"].add_dirs.is_empty());
+        assert_eq!(memo.migrate_legacy_agent_workspace().unwrap(), 0);
+        assert!(memo.attached_directory_paths().unwrap().is_empty());
+
+        memo.update_notebook_add_dir("one", repo.to_str().unwrap(), true)
+            .unwrap();
         assert_eq!(
             memo.attached_directory_paths().unwrap(),
             vec![dunce::canonicalize(&repo).unwrap()]
@@ -269,7 +362,7 @@ mod tests {
             memo.read_notebook_workspace().unwrap().notebook_configs["one"]
                 .add_dirs
                 .len(),
-            1
+            0
         );
         assert!(memo.attached_directory_paths().unwrap().is_empty());
     }
@@ -310,7 +403,7 @@ mod tests {
         );
     }
     #[test]
-    fn imports_global_legacy_defaults_and_defers_unavailable_notebooks() {
+    fn legacy_notebook_file_defaults_are_imported_once_for_existing_notebooks() {
         let (temp, memo, notebook) = fixture();
         let repo = temp.path().join("repo");
         fs::create_dir(&repo).unwrap();
@@ -319,32 +412,62 @@ mod tests {
             serde_json::json!({"defaults":{"files":{"one":{"folders":[repo]}}}}).to_string(),
         )
         .unwrap();
-        fs::rename(&notebook.path, temp.path().join("parked")).unwrap();
-        assert!(
-            memo.read_notebook_workspace().unwrap().notebook_configs["one"]
-                .add_dirs
-                .is_empty()
-        );
-        fs::rename(temp.path().join("parked"), &notebook.path).unwrap();
+        assert_eq!(memo.migrate_legacy_agent_workspace().unwrap(), 1);
+        assert_eq!(memo.migrate_legacy_agent_workspace().unwrap(), 0);
+        let imported = memo.read_notebook_workspace().unwrap();
+        assert_eq!(imported.notebook_configs["one"].add_dirs.len(), 1);
         assert_eq!(
-            memo.read_notebook_workspace().unwrap().notebook_configs["one"]
-                .add_dirs
-                .len(),
-            1
+            imported.notebook_configs["one"].add_dirs[0].path,
+            dunce::canonicalize(&repo).unwrap().to_string_lossy()
         );
+        let mut new_notebook = notebook.clone();
+        new_notebook.id = "two".into();
+        new_notebook.name = "Two".into();
+        new_notebook.path = temp.path().join("two").to_string_lossy().into();
+        fs::create_dir(&new_notebook.path).unwrap();
+        memo.write_notebook_configs(&[notebook, new_notebook]).unwrap();
+        let after_new_notebook = memo.read_notebook_workspace().unwrap();
+        assert!(after_new_notebook.notebook_configs["two"].add_dirs.is_empty());
         assert!(memo
             .update_notebook_add_dir("one", temp.path().to_str().unwrap(), true)
             .is_err());
     }
+
     #[test]
-    fn invalid_legacy_json_remains_retryable() {
+    fn legacy_workspace_migration_defers_until_registered_notebooks_are_available() {
         let (temp, memo, notebook) = fixture();
-        let source = Path::new(&notebook.path).join(".flowix/agent.json");
+        let repo = temp.path().join("repo");
+        fs::create_dir(&repo).unwrap();
+        fs::write(
+            temp.path().join("config/agent-access.json"),
+            serde_json::json!({"defaults":{"files":{"one":{"folders":[repo]}}}}).to_string(),
+        )
+        .unwrap();
+
+        let parked = temp.path().join("parked-notebook");
+        fs::rename(&notebook.path, &parked).unwrap();
+        let error = memo.migrate_legacy_agent_workspace().unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::WouldBlock);
+        assert!(memo.attached_directory_paths().unwrap().is_empty());
+
+        fs::rename(&parked, &notebook.path).unwrap();
+        assert_eq!(memo.migrate_legacy_agent_workspace().unwrap(), 1);
+        assert_eq!(memo.read_notebook_workspace().unwrap().notebook_configs["one"].add_dirs.len(), 1);
+    }
+
+    #[test]
+    fn invalid_legacy_agent_access_is_backed_up_without_workspace_defaults() {
+        let (temp, memo, _notebook) = fixture();
+        let source = temp.path().join("config/agent-access.json");
         fs::write(&source, "broken").unwrap();
-        assert!(memo.read_notebook_workspace().is_err());
-        fs::write(&source, r#"{"version":1,"addDirs":[]}"#).unwrap();
+
+        assert_eq!(memo.migrate_legacy_agent_workspace().unwrap(), 0);
+        assert!(!source.exists());
+        let backup_dir = temp.path().join("config/rebuild-backups");
+        let backups = fs::read_dir(backup_dir).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(backups.len(), 1);
+        assert!(backups[0].path().join("agent-access.json").is_file());
         assert!(memo.read_notebook_workspace().is_ok());
-        assert!(temp.path().join("config/db/local.db").is_file());
     }
 }
 
@@ -409,7 +532,7 @@ mod concurrency_tests {
 mod legacy_global_defaults_tests {
     use super::*;
     #[test]
-    fn stale_global_defaults_apply_only_to_preupgrade_notebooks() {
+    fn legacy_global_defaults_apply_to_notebooks_present_during_migration_only() {
         let temp = tempfile::tempdir().unwrap();
         let notes = temp.path().join("old");
         fs::create_dir(&notes).unwrap();
@@ -430,12 +553,9 @@ mod legacy_global_defaults_tests {
         memo.write_notebook_configs(std::slice::from_ref(&old))
             .unwrap();
         fs::write(config.join("agent-access.json"),serde_json::json!({"entries":[{"id":"old","kind":"notebook"}],"defaults":{"files":{"_global":{"folders":[repo]}}}}).to_string()).unwrap();
-        assert_eq!(
-            memo.read_notebook_workspace().unwrap().notebook_configs["old"]
-                .add_dirs
-                .len(),
-            1
-        );
+        assert_eq!(memo.migrate_legacy_agent_workspace().unwrap(), 1);
+        assert_eq!(memo.read_notebook_workspace().unwrap().notebook_configs["old"]
+            .add_dirs.len(), 1);
         let mut new = old.clone();
         new.id = "new".into();
         new.path = temp.path().join("new").to_string_lossy().into();

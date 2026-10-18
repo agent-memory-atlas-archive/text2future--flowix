@@ -2146,6 +2146,9 @@ mod tests {
             INSERT INTO memos VALUES ('legacy-note.md');").unwrap();
         drop(conn);
 
+        // Legacy projection cleanup is part of startup schema initialization,
+        // while ordinary reads keep the common connection path lightweight.
+        store.initialize_note_index_schema("nb_test").unwrap();
         let conn = store.open_note_index_connection("nb_test").unwrap();
         let note: String = conn.query_row("SELECT relative_path FROM notes", [], |row| row.get(0)).unwrap();
         assert_eq!(note, "current.md");
@@ -2470,9 +2473,9 @@ mod tests {
             .unwrap();
         assert_eq!(immediate_path, created.relative_path);
         drop(conn);
-        // Creation updates the Note projection immediately; the first full scan records the
-        // parser version and reparses that row once.
-        assert_eq!(store.reconcile_note_index("nb_test").unwrap().updated, 1);
+        // Creation already writes the current parsed projection, so a full scan
+        // sees it as unchanged.
+        assert_eq!(store.reconcile_note_index("nb_test").unwrap().unchanged, 1);
         let conn = store.open_note_index_connection("nb_test").unwrap();
         let memo_path: String = conn
             .query_row("SELECT relative_path FROM memos", [], |row| row.get(0))

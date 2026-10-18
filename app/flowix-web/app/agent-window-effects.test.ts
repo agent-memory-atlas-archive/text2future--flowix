@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   refreshAgentModelCatalog: vi.fn(async () => ({ items: [] })),
   loadWorkspace: vi.fn(async (): Promise<void> => undefined),
   initializePiMode: vi.fn(async () => undefined),
-  initializeLegacyPreferences: vi.fn(async () => undefined),
+  initializeLegacySessionSettings: vi.fn(async () => undefined),
   listenWorkspace: vi.fn(),
   unlistenWorkspace: vi.fn(),
   invalidateNotebookCache: vi.fn(),
@@ -39,10 +39,10 @@ vi.mock('@features/agent/store/agent-runtime-store', () => ({
 }));
 vi.mock('@features/agent/store/agent-data-store', () => ({
   ensureAgentPreferencesReady: async () => {
-    await Promise.all([mocks.initializePiMode(), mocks.initializeLegacyPreferences()]);
+    await Promise.all([mocks.initializePiMode(), mocks.initializeLegacySessionSettings()]);
   },
-  useAgentDataStore: (selector: (state: { initializePiMode: typeof mocks.initializePiMode; initializeLegacyPreferences: typeof mocks.initializeLegacyPreferences }) => unknown) => (
-    selector({ initializePiMode: mocks.initializePiMode, initializeLegacyPreferences: mocks.initializeLegacyPreferences })
+  useAgentDataStore: (selector: (state: { initializePiMode: typeof mocks.initializePiMode; initializeLegacySessionSettings: typeof mocks.initializeLegacySessionSettings }) => unknown) => (
+    selector({ initializePiMode: mocks.initializePiMode, initializeLegacySessionSettings: mocks.initializeLegacySessionSettings })
   ),
 }));
 vi.mock('@features/agent/store/agent-workspace-store', () => ({
@@ -100,7 +100,7 @@ describe('AgentWindowEffects', () => {
 
     expect(mocks.loadWorkspace).toHaveBeenCalledOnce();
     expect(mocks.initializePiMode).toHaveBeenCalledOnce();
-    expect(mocks.initializeLegacyPreferences).toHaveBeenCalledOnce();
+    expect(mocks.initializeLegacySessionSettings).toHaveBeenCalledOnce();
     expect(mocks.listenWorkspace).toHaveBeenCalledOnce();
     expect(mocks.refreshRuntime).not.toHaveBeenCalled();
     expect(mocks.useAgentEvents).not.toHaveBeenCalled();
@@ -179,7 +179,7 @@ describe('AgentWindowEffects', () => {
     await act(async () => mocks.listenWorkspace.mock.calls[0][0]());
     expect(mocks.loadWorkspace).not.toHaveBeenCalled();
     expect(mocks.initializePiMode).not.toHaveBeenCalled();
-    expect(mocks.initializeLegacyPreferences).not.toHaveBeenCalled();
+    expect(mocks.initializeLegacySessionSettings).not.toHaveBeenCalled();
     expect(mocks.useAgentEvents).toHaveBeenCalledOnce();
     expect(mocks.acquireMemoEventBridge).toHaveBeenCalledOnce();
     expect(mocks.refreshRuntime).not.toHaveBeenCalled();
@@ -195,7 +195,7 @@ describe('AgentWindowEffects', () => {
     await act(async () => admitStartupStage3());
     expect(mocks.loadWorkspace).toHaveBeenCalledOnce();
     expect(mocks.initializePiMode).toHaveBeenCalledOnce();
-    expect(mocks.initializeLegacyPreferences).toHaveBeenCalledOnce();
+    expect(mocks.initializeLegacySessionSettings).toHaveBeenCalledOnce();
     expect(mocks.refreshRuntime).toHaveBeenCalledWith({ force: true });
     expect(mocks.prewarmNotebookCache).toHaveBeenCalledOnce();
     expect(mocks.waitForWorkspaceRestoration).toHaveBeenCalledOnce();

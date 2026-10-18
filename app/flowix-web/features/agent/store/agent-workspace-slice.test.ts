@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentWorkspaceSnapshot, LegacyAgentRuntimePreferences, NotebookWorkspaceConfig } from "@/lib/types/agent-workspace";
+import type { AgentWorkspaceSnapshot, NotebookWorkspaceConfig } from "@/lib/types/agent-workspace";
 import { STORAGE_KEYS } from "@/lib/constants";
 
-const backend = vi.hoisted(() => ({ get: vi.fn(), getLegacyPreferences: vi.fn(), attachDirectory: vi.fn(), detachDirectory: vi.fn(), pickDirectory: vi.fn() }));
+const backend = vi.hoisted(() => ({ get: vi.fn(), attachDirectory: vi.fn(), detachDirectory: vi.fn(), pickDirectory: vi.fn() }));
 const piBackend = vi.hoisted(() => ({ getFeatures: vi.fn(), clearLegacyCodeMode: vi.fn() }));
+const sessionState = vi.hoisted(() => ({ settings: {} as Record<string, string> }));
 vi.mock("@platform/tauri/client", () => ({ agentWorkspace: backend, piModels: piBackend }));
-vi.mock("./agent-session-store", () => ({ useAgentSessionStore: { getState: () => ({ sessionMeta: { settings: {} } }) } }));
+vi.mock("./agent-session-store", () => ({ useAgentSessionStore: { getState: () => ({ sessionMeta: { settings: sessionState.settings } }) } }));
 import { ensureAgentPreferencesReady, useAgentDataStore } from "./agent-data-store";
 import { ensureAgentWorkspaceReady, useAgentWorkspaceStore } from "./agent-workspace-store";
 
@@ -21,7 +22,7 @@ beforeEach(() => {
   useAgentWorkspaceStore.setState(useAgentWorkspaceStore.getInitialState(), true);
   vi.resetAllMocks();
   backend.get.mockImplementation(async () => snapshot());
-  backend.getLegacyPreferences.mockResolvedValue(null);
+  sessionState.settings = {};
   piBackend.getFeatures.mockResolvedValue({ toolSearch: false });
   piBackend.clearLegacyCodeMode.mockResolvedValue(undefined);
 });
@@ -91,8 +92,8 @@ describe("Pi mode startup migration", () => {
     expect(piBackend.clearLegacyCodeMode).toHaveBeenCalledOnce();
   });
 
-  it("preserves the former Agent runtime default ahead of the Pi feature fallback", async () => {
-    backend.getLegacyPreferences.mockResolvedValue({ pi: { piCodeMode: true } });
+  it("uses the Pi feature's retained mode without Agent runtime defaults", async () => {
+    piBackend.getFeatures.mockResolvedValue({ toolSearch: false, legacyCodeMode: true });
     await useAgentDataStore.getState().initializePiMode();
     expect(useAgentDataStore.getState().agents.pi.user.mode).toBe("code");
   });
@@ -189,20 +190,25 @@ describe("local.db workspace projection", () => {
     finish(snapshot()); await reading;
     expect(useAgentWorkspaceStore.getState().workspaceActions.getNotebookFiles('one')?.folders).toEqual([]);
   });
-  it("migrates old user preferences without writing the legacy JSON", async () => {
-    backend.getLegacyPreferences.mockResolvedValue({codex:{model:{key:'legacy-model'}}});
-    await useAgentDataStore.getState().initializeLegacyPreferences();
+  it("migrates Codex session settings into the unified user preference store", async () => {
+    sessionState.settings = {
+      agentCodexModel: "legacy-model",
+      agentPermissionMode: "workspace-write",
+      agentCodexReasoningEffort: "high",
+    };
+    await useAgentDataStore.getState().initializeLegacySessionSettings();
     expect(useAgentDataStore.getState().agents.codex.user.model?.id).toBe('legacy-model');
+    expect(useAgentDataStore.getState().agents.codex.user.permission).toBe("workspace-write");
+    expect(useAgentDataStore.getState().agents.codex.user.reasoningEffort).toBe("high");
     expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.AGENT_DATA)!).state.legacyPreferencesMigrated).toBe(true);
   });
-  it("waits for legacy preference migration before preparing an Agent request", async () => {
-    let finish!: (value: LegacyAgentRuntimePreferences | null) => void;
-    backend.getLegacyPreferences.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
-    const ready = ensureAgentPreferencesReady("codex");
-    await Promise.resolve();
-    expect(useAgentDataStore.getState().agents.codex.user.model).toBeUndefined();
-    finish({ codex: { model: { key: "legacy-model" } } });
-    await ready;
+  it("applies retained Codex session settings before preparing an Agent request", async () => {
+    sessionState.settings = {
+      agentCodexModel: "legacy-model",
+      agentPermissionMode: "workspace-write",
+      agentCodexReasoningEffort: "medium",
+    };
+    await ensureAgentPreferencesReady("codex");
     expect(useAgentDataStore.getState().agents.codex.user.model?.id).toBe("legacy-model");
   });
   it("reports a database failure and retries", async () => {
@@ -223,11 +229,9 @@ it("waits for initial database hydration before allowing a workspace snapshot", 
   expect(useAgentWorkspaceStore.getState().workspaceActions.getNotebookFiles('one')?.folders).toEqual([resource.path]);
 });
 
-it("loads database mounts even when importing old preferences fails", async () => {
-  backend.getLegacyPreferences.mockRejectedValue(new Error('legacy JSON unavailable'));
+it("loads database mounts independently from session preference initialization", async () => {
   expect(await useAgentWorkspaceStore.getState().workspaceActions.loadInitial()).toBe(true);
-  await expect(useAgentDataStore.getState().initializeLegacyPreferences()).rejects.toThrow('legacy JSON unavailable');
-  expect(useAgentDataStore.getState().legacyPreferencesMigrated).toBe(false);
+  await ensureAgentPreferencesReady("codex");
   expect(useAgentWorkspaceStore.getState().workspaceActions.getNotebookFiles('one')?.folders).toEqual([resource.path]);
 });
 

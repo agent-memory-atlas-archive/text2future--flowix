@@ -1,24 +1,4 @@
-/** Device-local workspace DTOs; runtime preference types support upgrades. */
-
-import type {
-  AgentCodexReasoningEffort,
-  AgentHarnessPreset,
-  AgentPermissionMode,
-} from "@/types/agent";
-
-export interface LegacyAgentRuntimePreference {
-  model?: { key: string; providerId?: string };
-  access?: { sandbox: AgentPermissionMode };
-  reasoningEffort?: AgentCodexReasoningEffort;
-  serviceTier?: "auto" | "priority";
-  /** DeepSeek Harness tool presentation mode. */
-  mode?: AgentHarnessPreset;
-  /** Default Pi codemode setting for newly created conversations. */
-  piCodeMode?: boolean;
-}
-
-/** Legacy preference payload is a string-keyed map because its keys migrate. */
-export type LegacyAgentRuntimePreferences = Record<string, LegacyAgentRuntimePreference>;
+/** Device-local workspace DTOs. */
 
 /** Notebook-local mount data read from local.db. The notebook itself is cwd;
  * `addDirs` contains only additional runtime roots. */

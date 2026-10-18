@@ -1,4 +1,5 @@
 import type { JSONContent } from '@tiptap/core';
+import { DOMParser as SchemaDOMParser, type Schema } from '@tiptap/pm/model';
 import { sanitizeLinkHref } from '@/lib/safe-link';
 
 function splitTsvLine(line: string): string[] {
@@ -95,10 +96,24 @@ function readCellContent(cell: HTMLTableCellElement): JSONContent[] {
   return paragraphs.length ? paragraphs : [{ type: 'paragraph' }];
 }
 
-export function htmlTableToTableContent(html: string): JSONContent | null {
+export function htmlTableToTableContent(html: string, schema?: Schema): JSONContent | null {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const table = doc.querySelector('table');
   if (!table) return null;
+
+  if (schema) {
+    const parsed = SchemaDOMParser.fromSchema(schema).parse(doc.body);
+    let result: JSONContent | null = null;
+    parsed.descendants(node => {
+      if (result) return false;
+      if (node.type.name === 'table') {
+        result = node.toJSON();
+        return false;
+      }
+      return true;
+    });
+    return result;
+  }
 
   const rows = Array.from(table.rows)
     .map(row => Array.from(row.cells).map(readCellContent))

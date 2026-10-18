@@ -66,7 +66,8 @@ fn create_memo_uses_relative_path_as_compatibility_key() {
     let (mf, _tmp) = fresh_memo_file();
     let memo = mf.create_memo("Eight", "body", None).unwrap();
 
-    assert_eq!(memo.relative_path, memo.relative_path);
+    assert_eq!(memo.relative_path, "Eight.md");
+    assert_eq!(mf.read_memo(&memo.relative_path).unwrap().relative_path, memo.relative_path);
 
     let content = fs::read_to_string(mf.get_memo_base().join(&memo.filename)).unwrap();
     assert!(!content.contains("flowix_key:"));
@@ -193,83 +194,45 @@ fn pending_data_migrations_skip_unavailable_notebooks() {
 }
 
 #[test]
-fn relative_path_migration_recovers_populated_replacement_table() {
+fn legacy_memo_index_retirement_rebuilds_path_projection_from_markdown() {
     let (mf, _tmp) = fresh_memo_file();
     let memo = mf.create_memo("Recovered", "body", None).unwrap();
+    let note_path = mf.get_memo_base().join(&memo.relative_path);
+    let original_content = fs::read(&note_path).unwrap();
 
-    // Legacy memo tables (memos / memo_index_state / schema_migrations) live
-    // in the per-notebook notebook.db, not the registry.
+    // Startup retirement discards the old Memo-ID projection after rebuilding
+    // the path projection from the Markdown source of truth.
     let notebook_db = mf.notebook_db_path("nb_test").unwrap();
-    let conn = rusqlite::Connection::open(&notebook_db).unwrap();
-    let state_before: i64 = conn
-        .query_row(
-            "SELECT last_updated FROM memo_index_state WHERE notebook_id = 'nb_test'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    conn.execute_batch(
-        r#"
-        PRAGMA foreign_keys = OFF;
-        DELETE FROM schema_migrations WHERE migration_key = 'memo_relative_paths_v1';
-        CREATE TABLE memos_relative_paths_v1 (
-            id TEXT PRIMARY KEY,
-            notebook_id TEXT NOT NULL,
-            filename TEXT NOT NULL,
-            relative_path TEXT NOT NULL,
-            preview TEXT NOT NULL,
-            thumbnail TEXT,
-            thumbnail_checked INTEGER NOT NULL DEFAULT 0,
-            agents_checked INTEGER NOT NULL DEFAULT 0,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL,
-            favorited INTEGER NOT NULL,
-            icon TEXT,
-            properties TEXT NOT NULL DEFAULT '{}',
-            FOREIGN KEY(notebook_id) REFERENCES notebooks(id) ON DELETE CASCADE,
-            UNIQUE(notebook_id, relative_path)
-        );
-        INSERT INTO memos_relative_paths_v1 SELECT * FROM memos;
-        DELETE FROM memos;
-        PRAGMA foreign_keys = ON;
-        "#,
-    )
-    .unwrap();
-    drop(conn);
-
-    mf.invalidate_caches();
-    let recovered = mf.read_index().expect("half-migrated index should recover");
-    assert_eq!(recovered.memos.len(), 1);
-    assert_eq!(recovered.memos[0].relative_path, memo.relative_path);
+    mf.retire_legacy_memo_index("nb_test").unwrap();
+    assert_eq!(fs::read(&note_path).unwrap(), original_content);
+    assert_eq!(mf.read_note_entries("nb_test").unwrap().len(), 1);
+    assert_eq!(mf.read_note_entry_by_path("nb_test", &memo.relative_path).unwrap().unwrap().relative_path, memo.relative_path);
 
     let conn = rusqlite::Connection::open(&notebook_db).unwrap();
-    let replacement_exists: i64 = conn
+    let legacy_memos_exists: i64 = conn
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memos_relative_paths_v1')",
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'memos')",
             [],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(replacement_exists, 0);
-    let marker_exists: i64 = conn
+    assert_eq!(legacy_memos_exists, 0);
+    let legacy_migration_tables: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE migration_key = 'memo_relative_paths_v1'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('schema_migrations', 'memo_index_state', 'memo_lifecycles')",
             [],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(marker_exists, 1);
-    let state_after: i64 = conn
+    assert_eq!(legacy_migration_tables, 0);
+    let retired_marker: String = conn
         .query_row(
-            "SELECT last_updated FROM memo_index_state WHERE notebook_id = 'nb_test'",
+            "SELECT value FROM note_index_meta WHERE key='legacy_memo_index_retired'",
             [],
             |row| row.get(0),
         )
         .unwrap();
-    assert!(
-        state_after > state_before,
-        "recovery must invalidate caches"
-    );
+    assert_eq!(retired_marker, "1");
 }
 
 #[test]
@@ -473,9 +436,10 @@ fn read_memo_for_explicit_notebook_resolves_notebook_location() {
 }
 
 #[test]
-fn write_memo_by_id_updates_global_notebook_without_switching_current() {
+fn write_memo_global_is_scoped_by_notebook_and_relative_path() {
     let (mut mf, tmp) = fresh_memo_file();
     let current_memo = mf.create_memo("Current", "# Current", None).unwrap();
+    let current_collision = mf.create_memo("Other", "# Current copy", None).unwrap();
 
     let other_dir = tmp.join("other-global-write");
     fs::create_dir_all(&other_dir).unwrap();
@@ -495,29 +459,36 @@ fn write_memo_by_id_updates_global_notebook_without_switching_current() {
 
     mf.set_current_notebook(Some("nb_other".to_string()));
     let other_memo = mf.create_memo("Other", "# Other", None).unwrap();
-    mf.set_current_notebook(Some("nb_test".to_string()));
+    assert_eq!(current_collision.relative_path, other_memo.relative_path);
 
     let updated = mf
         .write_memo_renaming_on_title_change_global(&other_memo.relative_path, "Renamed Other\nBody")
         .expect("global write ok");
-    let other_list = mf
-        .read_index_for_notebook_id(Some("nb_other"))
-        .expect("read other index")
-        .expect("other index exists");
-    let current_list = mf.read_index().expect("current index exists");
-    let final_content = fs::read_to_string(other_dir.join(&updated.filename)).unwrap();
+    let other_content = fs::read_to_string(other_dir.join(&updated.filename)).unwrap();
+    let current_content = fs::read_to_string(tmp.join(&current_collision.filename)).unwrap();
 
-    assert_eq!(mf.current_notebook_id_value().as_deref(), Some("nb_test"));
-    assert_eq!(updated.relative_path, other_memo.relative_path);
+    assert_eq!(mf.current_notebook_id_value().as_deref(), Some("nb_other"));
+    assert_eq!(updated.relative_path, "Renamed Other.md");
     assert_eq!(updated.filename, "Renamed Other.md");
-    assert!(final_content.contains("Renamed Other"));
-    assert!(other_list.memos.iter().any(|memo| memo.relative_path == other_memo.relative_path));
-    assert_eq!(current_list.memos.len(), 1);
-    assert_eq!(current_list.memos[0].relative_path, current_memo.relative_path);
+    assert!(!other_dir.join(&other_memo.filename).exists());
+    assert!(other_content.contains("Renamed Other"));
+    assert!(current_content.contains("# Current copy"));
+    assert!(mf.read_memo_for_notebook_id("nb_test", &current_collision.relative_path).is_some());
+    assert!(mf.read_memo_for_notebook_id("nb_other", &updated.relative_path).is_some());
+    assert!(mf.read_memo_for_notebook_id("nb_other", &other_memo.relative_path).is_none());
+    assert!(mf.read_memo_for_notebook_id("nb_test", &current_memo.relative_path).is_some());
+    assert!(mf
+        .read_indexed_note_entry_by_path("nb_other", &other_memo.relative_path)
+        .unwrap()
+        .is_none());
+    assert!(mf
+        .read_indexed_note_entry_by_path("nb_other", &updated.relative_path)
+        .unwrap()
+        .is_some());
 }
 
 #[test]
-fn write_memo_global_ignores_generated_conflict_suffix() {
+fn write_memo_global_ignores_generated_conflict_suffix_within_selected_notebook() {
     let (mut mf, tmp) = fresh_memo_file();
     let other_dir = tmp.join("other-global-suffix");
     fs::create_dir_all(&other_dir).unwrap();
@@ -535,6 +506,15 @@ fn write_memo_global_ignores_generated_conflict_suffix() {
     mf.write_notebook_configs(&configs)
         .expect("write notebooks");
 
+    mf.set_current_notebook(Some("nb_test".to_string()));
+    let _current_existing = mf
+        .create_memo("Stable", "Stable\ncurrent first\n", None)
+        .unwrap();
+    let current_memo = mf
+        .create_memo("Stable", "Stable\ncurrent target\n", None)
+        .unwrap();
+    assert_eq!(current_memo.relative_path, "Stable-1.md");
+
     mf.set_current_notebook(Some("nb_other".to_string()));
     let _existing = mf
         .create_memo("Stable", "Stable\nexisting\n", None)
@@ -548,8 +528,16 @@ fn write_memo_global_ignores_generated_conflict_suffix() {
     let updated = mf
         .write_memo_renaming_on_title_change_global(&memo.relative_path, "Stable\nnew body\n")
         .expect("global write ok");
+    let current_after = mf
+        .read_memo_for_notebook_id("nb_test", &current_memo.relative_path)
+        .unwrap();
 
     assert_eq!(updated.filename, "Stable-1.md");
+    assert_eq!(current_after.relative_path, current_memo.relative_path);
+    let current_content = fs::read_to_string(tmp.join("Stable-1.md")).unwrap();
+    let other_content = fs::read_to_string(other_dir.join("Stable-1.md")).unwrap();
+    assert!(current_content.contains("new body"));
+    assert!(other_content.contains("old body"));
     assert!(other_dir.join("Stable-1.md").exists());
     assert!(!other_dir.join("Stable-2.md").exists());
     assert_eq!(mf.current_notebook_id_value().as_deref(), Some("nb_test"));
@@ -895,7 +883,8 @@ fn rename_memo_renames_file_and_updates_list() {
     assert_eq!(updated.filename, "New.md");
     assert!(!base.join("Old.md").exists(), "old file should be gone");
     assert!(base.join("New.md").exists());
-    let queried = mf.read_memo(&memo.relative_path).expect("still in list");
+    assert!(mf.read_memo(&memo.relative_path).is_none(), "renaming changes the path identity");
+    let queried = mf.read_memo(&updated.relative_path).expect("new path is indexed");
     assert_eq!(queried.filename, "New.md");
 }
 
@@ -1008,7 +997,8 @@ fn write_rename_changes_disk_when_first_line_changes() {
     assert_eq!(updated.filename, "Renamed.md");
     assert!(!base.join("Old.md").exists(), "old file should be gone");
     assert!(base.join("Renamed.md").exists());
-    let queried = mf.read_memo(&memo.relative_path).expect("still in list");
+    assert!(mf.read_memo(&memo.relative_path).is_none(), "renaming changes the path identity");
+    let queried = mf.read_memo(&updated.relative_path).expect("new path is indexed");
     assert_eq!(queried.filename, "Renamed.md");
 }
 
@@ -1024,7 +1014,7 @@ fn write_rename_noop_when_first_line_unchanged() {
         .write_memo_renaming_on_title_change(&memo.relative_path, new_body)
         .expect("write ok");
     assert!(base.join("Stable.md").exists());
-    let queried = mf.read_memo(&memo.relative_path).expect("still in list");
+    let queried = mf.read_memo(&memo.relative_path).expect("same path remains indexed");
     assert_eq!(queried.filename, "Stable.md");
 }
 
@@ -1144,7 +1134,8 @@ fn write_rename_empty_body_uses_untitled_memo() {
     assert_eq!(updated.filename, "Untitled Memo.md");
     assert!(!base.join("Keep.md").exists());
     assert!(base.join("Untitled Memo.md").exists());
-    let queried = mf.read_memo(&memo.relative_path).expect("still in list");
+    assert!(mf.read_memo(&memo.relative_path).is_none(), "renaming changes the path identity");
+    let queried = mf.read_memo(&updated.relative_path).expect("new path is indexed");
     assert_eq!(queried.filename, "Untitled Memo.md");
     assert_eq!(queried.preview, "");
 }
@@ -1886,11 +1877,7 @@ fn independent_instances_create_without_lost_rows_or_file_overwrites() {
     use std::thread;
 
     let (first, base) = fresh_memo_file();
-    let config_dir = first
-        .registry_db_path()
-        .parent()
-        .expect("config dir")
-        .to_path_buf();
+    let config_dir = base.join("config");
     let mut second = MemoFile::new(config_dir.clone());
     second.set_current_notebook(Some("nb_test".to_string()));
 
@@ -1938,12 +1925,8 @@ fn independent_instances_create_without_lost_rows_or_file_overwrites() {
 
 #[test]
 fn independent_instance_writes_are_visible_after_local_cache_was_populated() {
-    let (first, _base) = fresh_memo_file();
-    let config_dir = first
-        .registry_db_path()
-        .parent()
-        .expect("config dir")
-        .to_path_buf();
+    let (first, base) = fresh_memo_file();
+    let config_dir = base.join("config");
     assert!(first.read_index().is_none());
 
     let mut second = MemoFile::new(config_dir);
@@ -2428,6 +2411,11 @@ fn read_body(mf: &MemoFile, filename: &str) -> String {
     fs::read_to_string(path).unwrap()
 }
 
+fn prepare_tag_index(mf: &MemoFile) {
+    mf.reconcile_note_index_blocking("nb_test")
+        .expect("tag tests require a ready note index");
+}
+
 #[test]
 fn move_tag_rewrites_exact_match_in_both_sources() {
     let (mf, _base) = fresh_memo_file();
@@ -2440,6 +2428,7 @@ fn move_tag_rewrites_exact_match_in_both_sources() {
         )
         .unwrap();
     let original_body = read_body(&mf, &relative_path);
+    prepare_tag_index(&mf);
 
     let report = mf
         .move_memo_tag_locked(Some("nb_test"), "旅行/曼谷", "中国/曼谷")
@@ -2479,6 +2468,7 @@ fn move_tag_rewrites_subtree_in_both_sources() {
         )
         .unwrap();
 
+    prepare_tag_index(&mf);
     let report = mf
         .move_memo_tag_locked(Some("nb_test"), "旅行/曼谷", "中国/曼谷")
         .unwrap();
@@ -2513,6 +2503,7 @@ fn move_tag_leaves_unrelated_tags_intact() {
         )
         .unwrap();
 
+    prepare_tag_index(&mf);
     mf.move_memo_tag_locked(Some("nb_test"), "旅行/曼谷", "中国/曼谷")
         .unwrap();
 
@@ -2539,6 +2530,7 @@ fn move_tag_rewrites_body_only_membership_but_not_code() {
         )
         .unwrap();
 
+    prepare_tag_index(&mf);
     let report = mf
         .move_memo_tag_locked(Some("nb_test"), "old/path", "new/path")
         .unwrap();
@@ -2564,6 +2556,7 @@ fn delete_tag_removes_body_only_membership_but_not_code() {
         )
         .unwrap();
 
+    prepare_tag_index(&mf);
     let report = mf
         .delete_memo_tag_locked(Some("nb_test"), "remove/path")
         .unwrap();
@@ -2586,6 +2579,7 @@ fn delete_tag_ignores_unrelated_invalid_legacy_frontmatter_path() {
     let content = format!("---\ntags:\n  - \"legacy tag\"\n---\n{content}");
     std::fs::write(&path, content).unwrap();
 
+    prepare_tag_index(&mf);
     let report = mf.delete_memo_tag_locked(Some("nb_test"), "1").unwrap();
     assert_eq!(report.affected_memos, 1);
 
@@ -2622,6 +2616,7 @@ fn move_tag_rejects_target_conflict() {
         .create_note_by_path("nb_test", None, "B", "---\ntags: [中国/曼谷]\n---\n正文")
         .unwrap();
 
+    prepare_tag_index(&mf);
     // 已有 "中国/曼谷" → 移动 "旅行/曼谷" → "中国/曼谷" 冲突
     let err = mf
         .move_memo_tag_locked(Some("nb_test"), "旅行/曼谷", "中国/曼谷")
@@ -2661,6 +2656,7 @@ fn move_tag_handles_multiple_memos() {
         .create_note_by_path("nb_test", None, "C", "---\ntags: [不相关]\n---\n正文")
         .unwrap(); // 不应被影响
 
+    prepare_tag_index(&mf);
     let report = mf
         .move_memo_tag_locked(Some("nb_test"), "旅行/曼谷", "中国/曼谷")
         .unwrap();
@@ -2691,6 +2687,7 @@ fn move_tag_updates_body_without_frontmatter_identity() {
         )
         .unwrap();
 
+    prepare_tag_index(&mf);
     mf.move_memo_tag_locked(Some("nb_test"), "旅行/曼谷", "中国/曼谷")
         .unwrap();
 
@@ -2705,6 +2702,7 @@ fn move_tag_no_match_returns_zero_affected() {
         .create_note_by_path("nb_test", None, "Empty", "正文 no tags")
         .unwrap();
 
+    prepare_tag_index(&mf);
     let report = mf
         .move_memo_tag_locked(Some("nb_test"), "旅行/曼谷", "中国/曼谷")
         .unwrap();
@@ -2841,6 +2839,7 @@ fn tag_prefix_counts_use_distinct_memos_not_tag_sum() {
 #[test]
 fn tag_prefix_counts_empty_notebook_returns_empty_map() {
     let (mf, _base) = fresh_memo_file();
+    prepare_tag_index(&mf);
     let counts = mf
         .read_tag_prefix_counts_for_notebook_id(Some("nb_test"))
         .unwrap();

@@ -79,7 +79,7 @@ vi.mock("@platform/tauri/client", () => ({
     getClaudeSessionId: vi.fn(async () => null),
     getCodexDefaultModel: vi.fn(async () => "gpt-5.5"),
   },
-  agentWorkspace: { getLegacyPreferences: vi.fn(async () => null) },
+  agentWorkspace: {},
   piModels: {
     getFeatures: vi.fn(async () => ({ toolSearch: false })),
     clearLegacyCodeMode: vi.fn(async () => undefined),
