@@ -22,7 +22,10 @@ const forbidden = [
   /dsh-web-ui/iu,
   /dsh-client-ui-/iu,
 ]
-const matches = listing.filter((entry) => forbidden.some((pattern) => pattern.test(entry)))
+const bundledFlowixProfile = /(?:^|[/\\])Flowix\.app[/\\]Contents[/\\]Resources[/\\]dsh-profile[/\\]flowix[/\\]node_modules[/\\]dsh-flowix-memory(?:[/\\]|$)/iu
+const matches = listing.filter((entry) =>
+  forbidden.some((pattern) => pattern.test(entry)) && !bundledFlowixProfile.test(entry),
+)
 if (matches.length > 0) {
   console.error(`ERROR: Flowix artifact contains DSH files: ${matches.join(', ')}`)
   process.exit(1)
