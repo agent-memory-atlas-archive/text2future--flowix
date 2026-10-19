@@ -301,6 +301,7 @@ html[data-platform="mac"] .markdown-editor .agent-thread-card__body-frame > .age
 
 .markdown-editor .agent-thread-card--fullscreen .agent-thread-card__body {
   overflow-y: scroll;
+  overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
   padding-inline: 0;
 }

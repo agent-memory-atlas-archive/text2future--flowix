@@ -1,12 +1,11 @@
 ﻿import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { NodeView as ProseMirrorNodeView, EditorView, Decoration } from '@tiptap/pm/view';
-import { DecorationSet } from '@tiptap/pm/view';
 import type { ViewMutationRecord } from '@tiptap/pm/view';
 import { Node, mergeAttributes } from '@tiptap/core';
-import { NodeSelection, Plugin, PluginKey, type EditorState } from '@tiptap/pm/state';
+import { NodeSelection } from '@tiptap/pm/state';
 import { assetUrl } from '@features/editor/extensions/attachment-link/utils';
 import { setInlineAtomTextSelectionFromMouse } from '@features/editor/extensions/shared/inline-atom-selection';
-import { createTerminalInlineAtomCaretDecorations } from '@features/editor/extensions/shared/terminal-inline-atom-caret';
+import { createInlineAtomMaintenancePlugin, removeHardBreaksAroundInlineAtoms } from '@features/editor/extensions/shared/inline-atom-maintenance';
 import { dialogs } from '@platform/tauri/client';
 import {
     fileAttachmentMarkdownSpec,
@@ -20,45 +19,6 @@ const ATTACHMENT_ICON_PATH = 'M14.8287 7.75737L9.1718 13.4142C8.78127 13.8047 8.
 const ATTACHMENT_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="${ATTACHMENT_ICON_PATH}"></path></svg>`;
 
 // 鈹€鈹€鈹€ FileView (Pure Render) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-
-function removeHardBreaksAroundFileAttachments(state: EditorState) {
-    const deletions: Array<{ from: number; to: number }> = [];
-    const seen = new Set<string>();
-
-    const pushDeletion = (from: number, to: number) => {
-        const key = `${from}:${to}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-        deletions.push({ from, to });
-    };
-
-    state.doc.descendants((node: ProseMirrorNode, pos: number) => {
-        if (node.type.name !== 'fileAttachment') return;
-
-        const $pos = state.doc.resolve(pos);
-        const nodeBefore = $pos.nodeBefore;
-        if (nodeBefore?.type.name === 'hardBreak') {
-            pushDeletion(pos - nodeBefore.nodeSize, pos);
-        }
-
-        const afterPos = pos + node.nodeSize;
-        const $after = state.doc.resolve(afterPos);
-        const nodeAfter = $after.nodeAfter;
-        if (nodeAfter?.type.name === 'hardBreak') {
-            pushDeletion(afterPos, afterPos + nodeAfter.nodeSize);
-        }
-    });
-
-    if (deletions.length === 0) return null;
-
-    const tr = state.tr;
-    deletions.reverse().forEach(({ from, to }) => {
-        tr.delete(from, to);
-    });
-    return tr;
-}
-
-const fileAttachmentCaretPluginKey = new PluginKey<DecorationSet>('fileAttachmentTerminalCaret');
 
 class FileView implements ProseMirrorNodeView {
     dom: HTMLElement;
@@ -344,33 +304,12 @@ export const FileAttachment = Node.create({
     },
 
     onCreate() {
-        const tr = removeHardBreaksAroundFileAttachments(this.editor.state);
-        if (tr?.docChanged) {
-            this.editor.view.dispatch(tr);
-        }
+        const tr = removeHardBreaksAroundInlineAtoms(this.editor.state, ['fileAttachment']);
+        if (tr?.docChanged) this.editor.view.dispatch(tr);
     },
 
     addProseMirrorPlugins() {
-        return [
-            new Plugin({
-                key: fileAttachmentCaretPluginKey,
-                state: {
-                    init: (_, state) => createTerminalInlineAtomCaretDecorations(state.doc, 'fileAttachment'),
-                    apply: (transaction, value, _oldState, newState) => (
-                        transaction.docChanged
-                            ? createTerminalInlineAtomCaretDecorations(newState.doc, 'fileAttachment')
-                            : value
-                    ),
-                },
-                props: {
-                    decorations: (state) => fileAttachmentCaretPluginKey.getState(state) ?? DecorationSet.empty,
-                },
-                appendTransaction: (transactions, _oldState, newState) => {
-                    if (!transactions.some(transaction => transaction.docChanged)) return null;
-                    return removeHardBreaksAroundFileAttachments(newState);
-                },
-            }),
-        ];
+        return [createInlineAtomMaintenancePlugin(['fileAttachment'])];
     },
 
     addKeyboardShortcuts() {

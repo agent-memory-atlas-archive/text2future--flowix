@@ -13,7 +13,7 @@
  */
 (function () {
   try {
-    var VALID_RESOLVED_THEMES = ['dark', 'light', 'rock', 'ember'];
+    var VALID_RESOLVED_THEMES = ['dark', 'light', 'mist', 'rock', 'ember'];
     var params = new URLSearchParams(window.location.search || '');
     var bootTheme = params.get('bootTheme');
     var cached = bootTheme || localStorage.getItem('flowix-theme');
@@ -27,7 +27,17 @@
 
     var root = document.documentElement;
     root.setAttribute('data-theme', resolved);
-    root.style.colorScheme = resolved === 'dark' ? 'dark' : 'light';
+    root.style.colorScheme = resolved === 'dark' || resolved === 'mist' ? 'dark' : 'light';
+
+    // Restore the last confirmed native material before CSS paints. React
+    // refreshes this value through IPC; browser previews never enable it.
+    if (('__TAURI_INTERNALS__' in window || '__TAURI__' in window)
+        && !window.location.hash.startsWith('#preferences')) {
+      var material = localStorage.getItem('flowix-window-material');
+      if (material === 'mica' || material === 'vibrancy') {
+        root.dataset.windowMaterial = material;
+      }
+    }
 
     if (bootTheme && window.history && window.history.replaceState) {
       params.delete('bootTheme');

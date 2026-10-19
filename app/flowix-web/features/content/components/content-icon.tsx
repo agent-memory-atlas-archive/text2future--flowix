@@ -73,13 +73,15 @@ export function FileTypeIcon({ path, className }: { path: string; className?: st
 }
 
 /** Resolve the custom icons used for non-note files in the notebook tree. */
-export function NotebookTreeResourceIcon({ path, className, collectionType }: { path: string; className?: string; collectionType?: 'table' | 'media_library' }) {
+export function NotebookTreeResourceIcon({ path, className, collectionType }: { path: string; className?: string; collectionType?: 'table' | 'media_library' | 'work_documents' }) {
   const legacyCollectionType = collectionType
-    ?? (isTableDocumentPath(path) ? 'table' : /\.lib\.ya?ml$/i.test(path) ? 'media_library' : undefined);
+    ?? (isTableDocumentPath(path) ? 'table' : /\.lib\.ya?ml$/i.test(path) ? 'media_library' : /\.workdocs\.ya?ml$/i.test(path) ? 'work_documents' : undefined);
   const content: ContentDescription = legacyCollectionType === 'table'
     ? { kind: 'multidimensional-table' }
     : legacyCollectionType === 'media_library'
       ? { kind: 'media-library' }
+      : legacyCollectionType === 'work_documents'
+        ? { kind: 'document' }
       : { kind: 'file', path };
   return <ContentIcon content={content} className={className} />;
 }

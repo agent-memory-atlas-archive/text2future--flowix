@@ -3,7 +3,7 @@ import { ChevronRight, Plus } from 'lucide-react';
 import { CopyIcon, FolderOpenIcon, MinusCircleIcon, PencilSimpleIcon, SquareSplitHorizontalIcon, TrashSimpleIcon } from '@phosphor-icons/react';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
 import type { WorkspaceAgentRepository } from '@features/agent/public/workspace-api';
-import { localDocumentOperations } from '@features/document/public/file-operations-api';
+import { renameWorkspaceFile } from '@features/workspace/public/shell-api';
 import { ResourceFileIcon, ResourceFolderIcon } from '@features/surface/resource-file-icon';
 import { resourceKindFromPath } from '@features/editor/code-file';
 import { files, dialogs, product, type DocTreeItem } from '@platform/tauri/client';
@@ -75,7 +75,7 @@ function AgentRepositoryItem({
       }
       else {
         const extension = isTableDocument ? tableDocumentExtension(item.name) : isMediaLibrary ? mediaLibraryExtension(item.name) : '';
-        await localDocumentOperations.rename({ path: item.fullPath, name: `${name}${extension}`, scopePath: repository.path });
+        await renameWorkspaceFile({ path: item.fullPath, name: `${name}${extension}`, scopePath: repository.path });
       }
       if (item.type !== 'folder') await tree.refresh(parentDirectoryPath(item.fullPath, repository.path));
       toast.success(t('memo.fileTree.renamed', { name }));
@@ -188,7 +188,7 @@ function AgentRepositoryItem({
               <ChevronRight
                 aria-hidden="true"
                 className={cn(
-                  'absolute left-1/2 top-1/2 h-[15px] w-[15px] -translate-x-1/2 -translate-y-1/2 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 group-focus-visible:opacity-100',
+                  'absolute left-1/2 top-1/2 h-[15px] w-[15px] -translate-x-1/2 -translate-y-1/2 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] [[data-theme="mist"]_&]:text-[var(--foreground)] opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 group-focus-visible:opacity-100',
                   itemExpanded && 'rotate-90',
                 )}
               />
@@ -294,7 +294,7 @@ function AgentRepositoryItem({
             >
               <span className="relative h-[18px] w-[18px] shrink-0">
                 <ChevronRight className={cn(
-                  'absolute left-1/2 top-1/2 h-[15px] w-[15px] -translate-x-1/2 -translate-y-1/2 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] opacity-100 transition-[opacity,transform]',
+                  'absolute left-1/2 top-1/2 h-[15px] w-[15px] -translate-x-1/2 -translate-y-1/2 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] [[data-theme="mist"]_&]:text-[var(--foreground)] opacity-100 transition-[opacity,transform]',
                   expanded && 'rotate-90',
                 )} aria-hidden="true" />
               </span>

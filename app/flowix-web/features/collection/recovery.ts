@@ -18,6 +18,7 @@ import {
 } from './model';
 import { createTableDocument, createTableView, parseTableDocument, serializeTableDocument, type MultidimensionalTableDocument } from '@features/multidimensional-table/model';
 import { createMediaLibrary, parseMediaLibrary, serializeMediaLibrary } from '@features/media-library/model';
+import { createWorkDocumentsCollection, parseWorkDocumentsCollection, serializeWorkDocumentsCollection } from '@features/work-documents/model';
 
 export interface CollectionRecoveryResult {
   collectionId: string;
@@ -43,22 +44,23 @@ function parseLooseDocument(source: string): Record<string, unknown> | null {
 function collectionTypeFromWire(value: unknown): CollectionType | null {
   if (value === 'notes' || value === 'table') return 'table';
   if (value === 'media' || value === 'media_library') return 'media_library';
+  if (value === 'work_documents') return 'work_documents';
   return null;
 }
 
-function detectCollectionType(source: string, loose: Record<string, unknown> | null): CollectionType {
+function detectCollectionType(source: string, loose: Record<string, unknown> | null, filePath?: string): CollectionType {
   const collection = loose && isRecord(loose.collection) ? loose.collection : null;
   const parsed = collectionTypeFromWire(collection?.type);
   if (parsed) return parsed;
   // A syntax error elsewhere in the YAML should not hide a readable type.
   const collectionBlock = source.match(/^collection:\s*\r?\n((?:^[ \t]+.*(?:\r?\n|$))*)/m)?.[1] ?? '';
-  const wireType = collectionBlock.match(/^[ \t]{2,}type:\s*(notes|media|table|media_library)\s*$/m)?.[1];
-  return collectionTypeFromWire(wireType) ?? 'table';
+  const wireType = collectionBlock.match(/^[ \t]{2,}type:\s*(notes|media|table|media_library|work_documents)\s*$/m)?.[1];
+  return collectionTypeFromWire(wireType) ?? (/\.workdocs\.ya?ml$/i.test(filePath ?? '') ? 'work_documents' : 'table');
 }
 
 /** Identify the renderer without requiring the damaged document to validate. */
-export function inspectCollectionRecoveryType(source: string): CollectionType {
-  return detectCollectionType(source, parseLooseDocument(source));
+export function inspectCollectionRecoveryType(source: string, filePath?: string): CollectionType {
+  return detectCollectionType(source, parseLooseDocument(source), filePath);
 }
 
 function detectPlacement(filePath: string): CollectionPlacement {
@@ -108,6 +110,7 @@ function sanitizeRecords(
     const output: Record<string, unknown>[] = [];
     for (const raw of values) {
       if (!isRecord(raw)) continue;
+      if (type === 'work_documents') continue;
       const path = type === 'table' ? raw.note_path : (raw.relative_path ?? raw.note_path);
       if (!validNotebookRelativePath(path) || seen.has(path)) continue;
       if (type === 'media_library' && !notebookId
@@ -155,8 +158,8 @@ function recoveredMetadata(
 
 function fallbackCollectionName(filePath: string, type: CollectionType): string {
   const filename = filePath.split(/[\\/]/).filter(Boolean).pop() ?? '';
-  const withoutExtension = filename.replace(/(?:\.index\.ya?ml|\.(?:table|lib)\.ya?ml)$/i, '').trim();
-  return withoutExtension || (type === 'table' ? '多维表格' : '媒体库');
+  const withoutExtension = filename.replace(/(?:\.index\.ya?ml|\.(?:table|lib|workdocs)\.ya?ml)$/i, '').trim();
+  return withoutExtension || (type === 'table' ? '多维表格' : type === 'work_documents' ? '工作文档' : '媒体库');
 }
 
 function createTemplate(
@@ -172,6 +175,7 @@ function createTemplate(
     return parseCollectionDocumentV2(createFolderCollectionContent(type === 'table' ? 'notes' : 'media', name, relativeDirectory));
   }
   if (type === 'table') return parseCollectionDocumentV2(serializeTableDocument(createTableDocument('table', name, 'standalone')));
+  if (type === 'work_documents') return parseCollectionDocumentV2(serializeWorkDocumentsCollection(createWorkDocumentsCollection(name)));
   const media = createMediaLibrary(name);
   media.collection.placement = 'standalone';
   // A damaged standalone media library with no readable filter should reopen
@@ -185,7 +189,8 @@ function tryCollection(candidate: CollectionDocumentV2): CollectionDocumentV2 | 
     const source = serializeCollectionDocumentV2(candidate);
     const parsed = parseCollectionDocumentV2(source);
     if (parsed.collection.type === 'table') parseTableDocument(source);
-    else parseMediaLibrary(source);
+    else if (parsed.collection.type === 'media_library') parseMediaLibrary(source);
+    else parseWorkDocumentsCollection(source);
     return parsed;
   }
   catch { return null; }
@@ -263,7 +268,7 @@ export async function repairCollectionFile(
   const path = canonicalPath(filePath);
   const source = await externalDocuments.read(path, root);
   const loose = parseLooseDocument(source);
-  const collectionType = detectCollectionType(source, loose);
+  const collectionType = detectCollectionType(source, loose, path);
   const placement = detectPlacement(path);
   const name = fallbackCollectionName(path, collectionType);
   const notebookId = collectionType === 'media_library'

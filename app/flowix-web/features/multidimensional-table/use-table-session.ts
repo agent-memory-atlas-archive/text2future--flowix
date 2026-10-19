@@ -211,11 +211,15 @@ export function useTableSession({ filePath, fileIdentity, notebookPath: rawNoteb
     const generation = loadSequenceRef.current;
     const syncSequence = ++syncSequenceRef.current;
     const isCurrent = () => isCurrentSession(generation, key) && syncSequence === syncSequenceRef.current;
-    if (event.kind !== 'query-invalidated' || !event.relativePath) pendingTableSyncRef.current = true;
+    if ((event.kind !== 'query-invalidated' && event.kind !== 'resource-updated') || !event.relativePath) {
+      pendingTableSyncRef.current = true;
+    }
     let needsTableSync = pendingTableSyncRef.current;
     try {
       const singlePath = !needsTableSync && event.relativePath?.replace(/\\/g, '/');
-      const singleEntry = singlePath ? await notesClient.getIndexed(notebook, singlePath) : null;
+      const singleEntry = event.kind === 'resource-updated'
+        ? event.entry
+        : singlePath ? await notesClient.getIndexed(notebook, singlePath) : null;
       if (singlePath && !singleEntry) {
         pendingTableSyncRef.current = true;
         needsTableSync = true;

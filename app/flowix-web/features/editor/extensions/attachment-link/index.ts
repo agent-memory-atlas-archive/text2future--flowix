@@ -7,6 +7,12 @@ import { createFileUploadPlugin } from '@features/editor/extensions/attachment-l
 import type { AttachmentUploadOptions, OpenFileDialogParams } from '@features/editor/extensions/attachment-link/upload/file-source';
 
 declare module '@tiptap/core' {
+    interface Storage {
+        attachmentLink: {
+            getNotebookId?: () => string | undefined;
+        };
+    }
+
     interface Commands<ReturnType> {
         attachmentLink: {
             openFileDialog: (params?: OpenFileDialogParams) => ReturnType;
@@ -40,6 +46,12 @@ export const AttachmentLink = Extension.create<AttachmentUploadOptions>({
 
     addOptions() {
         return defaultOptions;
+    },
+
+    addStorage() {
+        return {
+            getNotebookId: () => this.options.getNotebookId?.(),
+        };
     },
 
     addProseMirrorPlugins() {

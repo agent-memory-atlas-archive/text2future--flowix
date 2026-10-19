@@ -49,7 +49,8 @@ import { updateNoteLinksAfterMove } from '@features/memo/services/note-link-rewr
 import { replaceExternalDocumentPath } from '@features/workspace/use-cases/workspace-navigation';
 import { openWorkspaceSurface } from '@features/workspace/public/open-surface-api';
 import { ensureFileDisplayIdentity } from '@/lib/file-display-registry';
-import { localDocumentOperations, renameMarkdownTitle } from '@features/document/public/file-operations-api';
+import { renameMarkdownTitle } from '@features/document/public/file-operations-api';
+import { renameWorkspaceFile } from '@features/workspace/public/shell-api';
 import folderIcon from '@/assets/folder-outline.svg?raw';
 import {
   flattenLoadedTree,
@@ -356,7 +357,16 @@ export function NotebookFileTree({
     [agentWorkspaceNotebook, notebookId],
   );
   const [showScrollTopHint, setShowScrollTopHint] = useState(false);
-  const { pinnedItems, removePinnedItem } = useNotebookPinnedNotes({
+  const {
+    pinnedItems,
+    hasPrevious: pinnedHasPrevious,
+    hasMore: pinnedHasMore,
+    loadingMore: pinnedLoadingMore,
+    loadingInitial: pinnedLoadingInitial,
+    loadPrevious: loadPreviousPinned,
+    loadMore: loadMorePinned,
+    removePinnedItem,
+  } = useNotebookPinnedNotes({
     notebookId,
     notebookPath,
     isActive,
@@ -478,9 +488,9 @@ export function NotebookFileTree({
     !hiddenSections.includes(section) && (section === 'files'
     || section === 'repositories'
     || (section === 'agents' && Boolean(notebookId) && agentSectionHeight > 0)
-    || (section === 'pinned' && pinnedItems.length > 0)
+    || (section === 'pinned' && (pinnedItems.length > 0 || pinnedHasPrevious || pinnedHasMore))
     || section === 'views')
-  )), [agentSectionHeight, hiddenSections, notebookId, pinnedItems.length, sectionOrder]);
+  )), [agentSectionHeight, hiddenSections, notebookId, pinnedHasMore, pinnedHasPrevious, pinnedItems.length, sectionOrder]);
 
   const moveTreeSection = useCallback((section: NotebookTreeSection, direction: -1 | 1) => {
     if (!notebookId) return;
@@ -516,8 +526,8 @@ export function NotebookFileTree({
     () => buildNotebookTreeRenderRows(visibleTreeItems, notebookPath, draft),
     [draft, notebookPath, visibleTreeItems],
   );
-  const pinnedSectionHeight = pinnedItems.length > 0
-    ? TREE_HEADER_HEIGHT + (pinnedCollapsed ? 0 : pinnedItems.length * TREE_ROW_SIZE) + 12
+  const pinnedSectionHeight = pinnedItems.length > 0 || pinnedHasPrevious || pinnedHasMore
+    ? TREE_HEADER_HEIGHT + (pinnedCollapsed ? 0 : pinnedItems.length * TREE_ROW_SIZE + (pinnedHasPrevious || pinnedHasMore ? TREE_ROW_SIZE : 0)) + 12
     : 0;
   const viewsSectionHeight = TREE_HEADER_HEIGHT + (viewsCollapsed ? 0 : (viewTableDocuments.length + viewMediaLibraries.length) * TREE_ROW_SIZE) + 12;
   const sectionHeights: Record<NotebookTreeSection, number> = {
@@ -766,6 +776,7 @@ export function NotebookFileTree({
             path: item.fullPath,
             title: trimmed,
             scopePath: notebookPath,
+            notebook: notebookId ? { id: notebookId, path: notebookPath } : null,
             displayId: fileIdentity.displayId,
             onPathChanged: (oldPath, newPath) => replaceExternalDocumentPath(fileIdentity.displayId, oldPath, newPath),
           });
@@ -776,7 +787,7 @@ export function NotebookFileTree({
             ? tableDocumentExtension(item.name)
             : isMediaLibrary ? mediaLibraryExtension(item.name)
               : isNote ? item.name.match(/\.(md|markdown)$/i)?.[0] ?? '' : '';
-          await localDocumentOperations.rename({
+          await renameWorkspaceFile({
             path: item.fullPath,
             name: `${trimmed}${extension}`,
             scopePath: notebookPath,
@@ -804,10 +815,12 @@ export function NotebookFileTree({
     const currentName = displayTitleFromFilename(item.name);
     if (!trimmed || trimmed === currentName) return true;
     try {
-      await localDocumentOperations.rename({
+      await renameWorkspaceFile({
         path: item.fullPath,
         name: `${trimmed}${tableDocumentExtension(item.name)}`,
         scopePath: notebookPath,
+        notebookId: notebookId ?? undefined,
+        collectionId: tableDocumentByPath.get(canonicalPath(item.fullPath))?.collectionId,
       });
       if (notebookId) await refreshTables();
       toast.success(t('memo.fileTree.renamed', { name: trimmed }));
@@ -1341,10 +1354,15 @@ export function NotebookFileTree({
               )}
             />
           )}
-          {pinnedItems.length > 0 && !hiddenSections.includes('pinned') && (
+          {(pinnedItems.length > 0 || pinnedHasPrevious || pinnedHasMore) && !hiddenSections.includes('pinned') && (
             <NotebookPinnedSection
               order={sectionOrder.indexOf('pinned') + 1}
               items={pinnedItems}
+              hasPreviousPage={pinnedHasPrevious}
+              hasMoreItems={pinnedHasMore}
+              loadingMore={pinnedLoadingMore || pinnedLoadingInitial}
+              onLoadPrevious={loadPreviousPinned}
+              onLoadMore={() => { void loadMorePinned(); }}
               collapsed={pinnedCollapsed}
               onToggleCollapsed={() => setPinnedCollapsed((collapsed) => !collapsed)}
               sectionActions={(

@@ -53,6 +53,22 @@ describe('workbench startup', () => {
     expect(useWorkspaceStartupStore.getState().status).toBe('ready');
   });
 
+  it('starts notebook context loading while the native notebook identity request is pending', async () => {
+    let resolveIdentity!: (id: string) => void;
+    mocks.notebook.mockReturnValue(new Promise<string>((resolve) => { resolveIdentity = resolve; }));
+    let contextStarted = false;
+    mocks.context.mockImplementation(async (identityPromise: Promise<string | null>) => {
+      contextStarted = true;
+      expect(identityPromise).toBeInstanceOf(Promise);
+      await identityPromise;
+    });
+
+    const startup = initializeMainWindowStartup();
+    await vi.waitFor(() => expect(contextStarted).toBe(true));
+    resolveIdentity('notebook-a');
+    await startup;
+  });
+
   it('does not hold stage 2 open while a restored document is unresolved', async () => {
     let finish!: () => void;
     mocks.target.mockReturnValue({ kind: 'external', path: '/slow.md', scopePath: null });

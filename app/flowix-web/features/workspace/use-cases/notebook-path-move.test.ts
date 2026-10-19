@@ -9,19 +9,25 @@ const mocks = vi.hoisted(() => ({
   tabs: [] as Array<{ target: { kind: string; activeFilePath: string | null } }>,
 }));
 
-vi.mock('@/lib/file-display-registry', () => ({ findFileDisplayId: mocks.findId }));
+vi.mock('@/lib/file-display-registry', () => ({
+  findFileDisplayId: mocks.findId,
+  listFileDisplayIdentities: () => [],
+  suspendFileDisplayReconciliation: () => () => {},
+}));
 vi.mock('@features/document/public/workspace-api', () => ({
   getWorkspaceDocumentState: () => ({ activeExternalSession: { fileIdentity: { path: mocks.documentPath } } }),
+  getWorkspaceDocumentHistory: () => [],
+  replaceWorkspaceDocumentHistoryPath: vi.fn(),
 }));
 vi.mock('@features/memo/public/workspace-api', () => ({
   updateNoteLinksAfterMove: vi.fn(),
   getWorkspaceMemoState: () => ({ selectedNote: mocks.selected, setSelectedNote: mocks.setSelectedNote }),
 }));
 vi.mock('../store/browser-column-store', () => ({
-  useBrowserColumnStore: { getState: () => ({ tabs: mocks.tabs }) },
+  useBrowserColumnStore: { getState: () => ({ tabs: mocks.tabs }), setState: vi.fn() },
 }));
 vi.mock('../store/work-column-store', () => ({
-  useWorkColumnStore: { getState: () => ({ navigation: { target: { kind: 'external', path: mocks.documentPath }, pendingTarget: null, previousTarget: null } }) },
+  useWorkColumnStore: { getState: () => ({ navigation: { target: { kind: 'external', path: mocks.documentPath }, pendingTarget: null, previousTarget: null } }), setState: vi.fn() },
 }));
 vi.mock('../store/workspace-restore-store', () => ({
   useWorkspaceRestoreStore: { getState: () => ({ desiredTarget: null }) },

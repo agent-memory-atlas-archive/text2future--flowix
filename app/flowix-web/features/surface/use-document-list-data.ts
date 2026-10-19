@@ -4,6 +4,7 @@ import { subscribe } from '@platform/tauri/event-bus';
 import { canonicalPath, joinNotebookMemoPath } from '@/lib/path';
 import { createLogger } from '@/lib/logger';
 import type { MediaLibraryRecord } from '@features/media-library/model';
+import { workDocumentsResourceKindsChanged } from '@features/work-documents/model';
 import type { DocumentListViewContext } from './document-list-view-model';
 
 const logger = createLogger('document-list-data');
@@ -47,19 +48,22 @@ function mediaResourceListItem(resource: { relativePath: string; kind: 'image' |
 }
 
 /** Owns paging, cancellation and coalesced refreshes; UI action permissions are separate. */
-export function useDocumentListData({ listContext, mediaLibrary, mediaLibraryRecords, refreshPaused }: {
+export function useDocumentListData({ listContext, mediaLibrary, workDocuments = false, mediaLibraryRecords, refreshPaused }: {
   listContext: DocumentListViewContext;
   mediaLibrary: boolean;
+  workDocuments?: boolean;
   mediaLibraryRecords: MediaLibraryRecord[];
   refreshPaused: boolean;
 }) {
   const resourceKindsKey = (listContext.filters.resourceKinds ?? []).join('\u0000');
   const hasMediaDataset = Boolean(listContext.mediaScope || listContext.mediaDatasetActive);
+  const hasWorkDocumentsDataset = Boolean(listContext.workDocumentsFilter
+    && Object.values(listContext.workDocumentsFilter).some((value) => Boolean(value)));
   const hasLinkedMedia = mediaLibraryRecords.length > 0;
   const [items, setItems] = useState<DocumentPageItem[]>([]);
   const [linkedItems, setLinkedItems] = useState<DocumentPageItem[]>([]);
   const [folders, setFolders] = useState<DocumentPageItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !workDocuments || hasWorkDocumentsDataset);
   const [loadingLinkedItems, setLoadingLinkedItems] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState(false);
@@ -80,12 +84,15 @@ export function useDocumentListData({ listContext, mediaLibrary, mediaLibraryRec
     }
     setRevision((value) => value + 1);
   }, []);
-  useEffect(() => subscribe<{ notebookId: string }>('file-management-changed', ({ notebookId }) => {
-    if (notebookId === listContext.notebookId) requestRefresh();
-  }), [requestRefresh, listContext.notebookId]);
+  useEffect(() => subscribe<{ notebookId: string; resourceKinds?: string[] }>('file-management-changed', ({ notebookId, resourceKinds }) => {
+    if (notebookId !== listContext.notebookId) return;
+    if (workDocuments && !workDocumentsResourceKindsChanged(resourceKinds)) return;
+    if (mediaLibrary && resourceKinds && !resourceKinds.some((kind) => kind === 'image' || kind === 'video')) return;
+    requestRefresh();
+  }), [requestRefresh, listContext.notebookId, mediaLibrary, workDocuments]);
   useEffect(() => subscribe<{ notebookId: string }>('media-properties-changed', ({ notebookId }) => {
-    if (notebookId === listContext.notebookId) requestRefresh();
-  }), [requestRefresh, listContext.notebookId]);
+    if (!workDocuments && notebookId === listContext.notebookId) requestRefresh();
+  }), [requestRefresh, listContext.notebookId, workDocuments]);
   useEffect(() => subscribe<FileBrowserDirectoriesChangedEvent>(
     'file-browser-directories-changed',
     (event) => {
@@ -134,13 +141,27 @@ export function useDocumentListData({ listContext, mediaLibrary, mediaLibraryRec
       setNextCursor(null);
       return () => { cancelled = true; requestGenerationRef.current += 1; };
     }
+    if (workDocuments && !hasWorkDocumentsDataset) {
+      loadingRef.current = false;
+      setLoading(false);
+      setLoadingMore(false);
+      setMoreError(false);
+      setError(false);
+      setItems([]);
+      setLinkedItems([]);
+      setLoadingLinkedItems(false);
+      setFolders([]);
+      setHasMore(false);
+      setNextCursor(null);
+      return () => { cancelled = true; requestGenerationRef.current += 1; };
+    }
     loadingRef.current = true;
     setLoading(true);
     setLoadingLinkedItems(mediaLibrary && hasLinkedMedia);
     setLoadingMore(false);
     setMoreError(false);
     setError(false);
-    const listIdentity = JSON.stringify([listContext.displayId, listContext.notebookPath, mediaLibrary]);
+    const listIdentity = JSON.stringify([listContext.displayId, listContext.notebookPath, mediaLibrary, workDocuments]);
     if (loadedListIdentityRef.current !== listIdentity) {
       setItems([]);
       setLinkedItems([]);
@@ -149,7 +170,13 @@ export function useDocumentListData({ listContext, mediaLibrary, mediaLibraryRec
     loadedListIdentityRef.current = listIdentity;
     setHasMore(false);
     setNextCursor(null);
-    const pageRequest = mediaLibrary
+    const pageRequest = workDocuments
+      ? files.listWorkDocumentsPage(listContext.notebookId, null, MEDIA_LIBRARY_PAGE_SIZE, {
+        fileNameContains: listContext.workDocumentsFilter?.file_name_contains,
+        resourceKind: listContext.workDocumentsFilter?.file_type,
+        path: listContext.workDocumentsFilter?.path_scope === 'all' ? '' : listContext.workDocumentsFilter?.path_contains,
+      })
+      : mediaLibrary
       ? hasMediaDataset
         ? mediaResources.listPage(listContext.notebookPath, (listContext.filters.resourceKinds ?? ['image', 'video']).filter((kind): kind is 'image' | 'video' => kind === 'image' || kind === 'video'), null, MEDIA_LIBRARY_PAGE_SIZE, listContext.mediaScope?.relativePath ?? null, listContext.mediaScope?.depth)
         : Promise.resolve({ resources: [], nextCursor: null, hasMore: false } satisfies MediaResourcePage)
@@ -179,7 +206,7 @@ export function useDocumentListData({ listContext, mediaLibrary, mediaLibraryRec
       } else {
         const documentPage = page as DocumentPage;
         setItems(documentPage.items);
-        setFolders(documentPage.folders);
+        setFolders(workDocuments ? [] : documentPage.folders);
         setNextCursor(documentPage.nextCursor);
         setHasMore(documentPage.hasMore);
         setLoading(false);
@@ -208,13 +235,19 @@ export function useDocumentListData({ listContext, mediaLibrary, mediaLibraryRec
       }
     });
     return () => { cancelled = true; requestGenerationRef.current += 1; };
-  }, [hasMediaDataset, hasLinkedMedia, refreshPaused, mediaLibrary, mediaLibraryRecords, revision, listContext.displayId, listContext.folderPath, listContext.mediaScope?.relativePath, listContext.mediaScope?.depth, listContext.mediaDatasetActive, listContext.notebookId, listContext.notebookPath, resourceKindsKey]);
+  }, [hasMediaDataset, hasLinkedMedia, hasWorkDocumentsDataset, refreshPaused, mediaLibrary, workDocuments, mediaLibraryRecords, revision, listContext.displayId, listContext.folderPath, listContext.mediaScope?.relativePath, listContext.mediaScope?.depth, listContext.mediaDatasetActive, listContext.notebookId, listContext.notebookPath, listContext.workDocumentsFilter?.file_name_contains, listContext.workDocumentsFilter?.file_type, listContext.workDocumentsFilter?.path_contains, listContext.workDocumentsFilter?.path_scope, resourceKindsKey]);
   const loadMore = useCallback(() => {
-    if (!listContext.notebookId || refreshPausedRef.current || (mediaLibrary && !hasMediaDataset) || !nextCursor || loading || loadingMore || !hasMore) return;
+    if (!listContext.notebookId || refreshPausedRef.current || (mediaLibrary && !hasMediaDataset) || (workDocuments && !hasWorkDocumentsDataset) || !nextCursor || loading || loadingMore || !hasMore) return;
     const generation = requestGenerationRef.current;
     setLoadingMore(true);
     setMoreError(false);
-    const pageRequest = mediaLibrary
+    const pageRequest = workDocuments
+      ? files.listWorkDocumentsPage(listContext.notebookId, nextCursor, MEDIA_LIBRARY_PAGE_SIZE, {
+        fileNameContains: listContext.workDocumentsFilter?.file_name_contains,
+        resourceKind: listContext.workDocumentsFilter?.file_type,
+        path: listContext.workDocumentsFilter?.path_scope === 'all' ? '' : listContext.workDocumentsFilter?.path_contains,
+      })
+      : mediaLibrary
       ? mediaResources.listPage(listContext.notebookPath, (listContext.filters.resourceKinds ?? ['image', 'video']).filter((kind): kind is 'image' | 'video' => kind === 'image' || kind === 'video'), nextCursor, MEDIA_LIBRARY_PAGE_SIZE, listContext.mediaScope?.relativePath ?? null, listContext.mediaScope?.depth)
       : files.listDocumentPage({ notebookId: listContext.notebookId, folderPath: listContext.folderPath, resourceKinds: listContext.filters.resourceKinds, cursor: nextCursor });
     void pageRequest.then((page) => {
@@ -231,7 +264,7 @@ export function useDocumentListData({ listContext, mediaLibrary, mediaLibraryRec
     }).finally(() => {
       if (generation === requestGenerationRef.current) setLoadingMore(false);
     });
-  }, [hasMediaDataset, hasMore, loading, loadingMore, mediaLibrary, nextCursor, resourceKindsKey, listContext.filters.resourceKinds, listContext.folderPath, listContext.mediaScope?.relativePath, listContext.mediaScope?.depth, listContext.mediaDatasetActive, listContext.notebookId, listContext.notebookPath]);
+  }, [hasMediaDataset, hasWorkDocumentsDataset, hasMore, loading, loadingMore, mediaLibrary, workDocuments, nextCursor, resourceKindsKey, listContext.filters.resourceKinds, listContext.folderPath, listContext.mediaScope?.relativePath, listContext.mediaScope?.depth, listContext.mediaDatasetActive, listContext.notebookId, listContext.notebookPath, listContext.workDocumentsFilter?.file_name_contains, listContext.workDocumentsFilter?.file_type, listContext.workDocumentsFilter?.path_contains, listContext.workDocumentsFilter?.path_scope]);
   return { items, linkedItems, folders, loading, loadingLinkedItems, loadingMore, moreError, hasMore,
     hasMediaDataset, hasLinkedMedia, error, loadMore, refresh: requestRefresh };
 }

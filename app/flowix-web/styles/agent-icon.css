@@ -14,7 +14,7 @@
   mask-size: contain;
 }
 
-[data-theme="dark"] .agent-icon--pi {
+:is([data-theme="dark"], [data-theme="mist"]) .agent-icon--pi {
   opacity: 0.72;
 }
 
@@ -22,6 +22,6 @@
  * foreground color instead of pure white. Keep this override on the rendered
  * element so it also wins over a light-theme fallback color supplied through
  * an inline custom prop. */
-[data-theme="dark"] .agent-icon--masked {
+:is([data-theme="dark"], [data-theme="mist"]) .agent-icon--masked {
   background-color: var(--foreground);
 }

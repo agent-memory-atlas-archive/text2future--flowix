@@ -41,6 +41,7 @@ vi.mock('@features/memo/store/custom-filter-store', () => ({
 
 import { useNoteStore } from '@features/memo/store/note-store';
 import { useNotebookBackgroundStore } from './notebook-background-store';
+import { noteListItemKey } from '@/types/note-item';
 
 describe('note store list loading', () => {
   beforeEach(() => {
@@ -183,6 +184,195 @@ describe('note store list loading', () => {
     resolveOld?.({ notes: [], nextCursor: null, hasMore: false });
 
     await expect(older).resolves.toBe(false);
+  });
+
+  function entry(index: number) {
+    return {
+      relativePath: `note-${index}.md`, title: `Note ${index}`, preview: 'before', thumbnail: null,
+      tags: [], todos: [], agents: [], createdAt: 1000 - index, updatedAt: 1000 - index,
+      favorited: false, icon: null, colors: [], properties: {},
+    };
+  }
+
+  async function loadBrowsingSession(sort: 'updatedAt' | 'filenameAsc' = 'updatedAt') {
+    useNoteStore.setState({
+      selectedNotebook: { id: 'notebook-1', name: 'Notebook', path: '/tmp/notebook', createdAt: 1, updatedAt: 1, isDefault: true },
+      activeFilter: 'all', activeSort: sort, activePluginId: null,
+    });
+    mocks.listByPath.mockResolvedValueOnce({ notes: Array.from({ length: 150 }, (_, i) => entry(i)), nextCursor: 'page-4', hasMore: true });
+    await useNoteStore.getState().loadNotes();
+  }
+
+  it('keeps every loaded position and cursor when editing a card after several pages', async () => {
+    await loadBrowsingSession();
+    const before = useNoteStore.getState().notes;
+    useNoteStore.getState().applyNoteListChange('notebook-1', 'note-120.md', { ...entry(120), preview: 'edited', updatedAt: 9999 });
+    const state = useNoteStore.getState();
+    expect(state.notes.map(note => note.relativePath)).toEqual(before.map(note => note.relativePath));
+    expect(state.notes[120].preview).toBe('edited');
+    expect(state.notes[0]).toBe(before[0]);
+    expect(state.memoListNextCursor).toBe('page-4');
+    expect(state.memoListHasMore).toBe(true);
+    expect(mocks.listByPath).toHaveBeenCalledOnce();
+    const updated = state.notes;
+    state.applyNoteListChange('notebook-1', 'note-120.md', { ...entry(120), preview: 'edited', updatedAt: 9999 });
+    expect(useNoteStore.getState().notes).toBe(updated);
+  });
+
+  it('commits a batch once and replays its edits over later pages', async () => {
+    await loadBrowsingSession();
+    const before = useNoteStore.getState().notes;
+    const subscriber = vi.fn();
+    const unsubscribe = useNoteStore.subscribe(subscriber);
+    try {
+      useNoteStore.getState().applyNoteListBatch([
+        { notebookId: 'notebook-1', relativePath: 'note-120.md', entry: { ...entry(120), preview: 'batch edit' } },
+        { notebookId: 'notebook-1', relativePath: 'note-121.md', entry: null },
+        { notebookId: 'other', relativePath: 'note-0.md', entry: null },
+      ]);
+      expect(subscriber).toHaveBeenCalledOnce();
+      expect(useNoteStore.getState().notes[0]).toBe(before[0]);
+      expect(useNoteStore.getState().notes).toHaveLength(149);
+      mocks.listByPath.mockResolvedValueOnce({ notes: [entry(120), entry(121), entry(150)], nextCursor: null, hasMore: false });
+      await useNoteStore.getState().loadMoreMemos();
+      expect(useNoteStore.getState().notes.find(note => note.relativePath === 'note-120.md')?.preview).toBe('batch edit');
+      expect(useNoteStore.getState().notes.some(note => note.relativePath === 'note-121.md')).toBe(false);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it('does not insert an unseen edited note into the loaded window', async () => {
+    await loadBrowsingSession('filenameAsc');
+    const before = useNoteStore.getState().notes;
+    useNoteStore.getState().applyNoteListChange('notebook-1', 'new.md', { ...entry(999), relativePath: 'new.md' });
+    expect(useNoteStore.getState().notes).toBe(before);
+  });
+
+  it('replays edits and deletions over an in-flight page response', async () => {
+    await loadBrowsingSession();
+    let resolvePage!: (value: unknown) => void;
+    mocks.listByPath.mockImplementationOnce(() => new Promise(resolve => { resolvePage = resolve; }));
+    const loading = useNoteStore.getState().loadMoreMemos();
+    useNoteStore.getState().applyNoteListChange('notebook-1', 'note-120.md', { ...entry(120), preview: 'newer' });
+    useNoteStore.getState().applyNoteListChange('notebook-1', 'note-121.md', null);
+    resolvePage({ notes: [entry(120), entry(121), entry(150)], nextCursor: 'page-5', hasMore: true });
+    await loading;
+    const state = useNoteStore.getState();
+    expect(state.notes.find(note => note.relativePath === 'note-120.md')?.preview).toBe('newer');
+    expect(state.notes.some(note => note.relativePath === 'note-121.md')).toBe(false);
+    expect(state.notes[state.notes.length - 1]?.relativePath).toBe('note-150.md');
+    expect(state.memoListNextCursor).toBe('page-5');
+  });
+
+  it('retains the session overlay for later pages and clears it on explicit refresh', async () => {
+    await loadBrowsingSession();
+    useNoteStore.getState().applyNoteListChange('notebook-1', 'note-120.md', { ...entry(120), preview: 'local' });
+    mocks.listByPath.mockResolvedValueOnce({ notes: [entry(120), entry(150)], nextCursor: null, hasMore: false });
+    await useNoteStore.getState().loadMoreMemos();
+    expect(useNoteStore.getState().notes[120].preview).toBe('local');
+    mocks.listByPath.mockResolvedValueOnce({ notes: [entry(120)], nextCursor: null, hasMore: false });
+    await useNoteStore.getState().loadNotes();
+    expect(useNoteStore.getState().notes[0].preview).toBe('before');
+  });
+
+  it('renames a loaded card in place and removes folder descendants without resetting pagination', async () => {
+    await loadBrowsingSession();
+    useNoteStore.getState().applyNoteListChange('notebook-1', 'note-120.md', { ...entry(120), relativePath: 'folder/renamed.md' });
+    expect(useNoteStore.getState().notes[120].relativePath).toBe('folder/renamed.md');
+    useNoteStore.getState().applyNoteListChange('notebook-1', 'folder', null);
+    expect(useNoteStore.getState().notes).toHaveLength(149);
+    expect(useNoteStore.getState().memoListNextCursor).toBe('page-4');
+  });
+
+  it('keeps the rendered card identity and selection through a path rename and index refresh', async () => {
+    await loadBrowsingSession();
+    useNoteStore.getState().setSelectedNote({ notebookId: 'notebook-1', relativePath: 'note-120.md' });
+    const before = useNoteStore.getState().notes[120];
+    const key = noteListItemKey(before);
+
+    useNoteStore.getState().rebaseNoteListPaths('notebook-1', 'note-120.md', 'renamed.md', false);
+    const moved = useNoteStore.getState().notes[120];
+    expect(moved.relativePath).toBe('renamed.md');
+    expect(noteListItemKey(moved)).toBe(key);
+    expect(useNoteStore.getState().selectedNote?.relativePath).toBe('renamed.md');
+    expect(useNoteStore.getState().memoListNextCursor).toBe('page-4');
+
+    useNoteStore.getState().applyNoteListChange('notebook-1', 'renamed.md', {
+      ...entry(120), relativePath: 'renamed.md', preview: 'indexed refresh',
+    });
+    const refreshed = useNoteStore.getState().notes[120];
+    expect(refreshed.preview).toBe('indexed refresh');
+    expect(noteListItemKey(refreshed)).toBe(key);
+  });
+
+  it('does not duplicate a renamed card when a stale page still contains its former path', async () => {
+    await loadBrowsingSession();
+    useNoteStore.getState().applyNoteListChange('notebook-1', 'note-120.md', { ...entry(120), relativePath: 'renamed.md' });
+    mocks.listByPath.mockResolvedValueOnce({ notes: [entry(120), entry(150)], nextCursor: null, hasMore: false });
+    await useNoteStore.getState().loadMoreMemos();
+    const notes = useNoteStore.getState().notes;
+    expect(notes[120].relativePath).toBe('renamed.md');
+    expect(notes.filter(note => note.relativePath === 'renamed.md')).toHaveLength(1);
+    expect(notes.some(note => note.relativePath === 'note-120.md')).toBe(false);
+  });
+
+  it('does not let an old-window scroll request supersede a first-page refresh', async () => {
+    await loadBrowsingSession();
+    let resolveRefresh!: (value: unknown) => void;
+    mocks.listByPath.mockImplementationOnce(() => new Promise(resolve => { resolveRefresh = resolve; }));
+    const refresh = useNoteStore.getState().loadNotes();
+    await Promise.resolve();
+    await expect(useNoteStore.getState().loadMoreMemos()).resolves.toBe(false);
+    expect(mocks.listByPath).toHaveBeenCalledTimes(2);
+    resolveRefresh({ notes: [entry(999)], nextCursor: null, hasMore: false });
+    await refresh;
+    expect(useNoteStore.getState().notes[0].relativePath).toBe('note-999.md');
+  });
+
+  it('removes a card that no longer matches without reordering the remaining cards', async () => {
+    await loadBrowsingSession();
+    mocks.listByPath.mockResolvedValueOnce({ notes: [0, 1, 2].map(i => ({ ...entry(i), favorited: true })), nextCursor: 'next', hasMore: true });
+    await useNoteStore.getState().loadNotes({ filter: 'favorited' });
+    useNoteStore.getState().applyNoteListChange('notebook-1', 'note-1.md', entry(1));
+    expect(useNoteStore.getState().notes.map(note => note.relativePath)).toEqual(['note-0.md', 'note-2.md']);
+    expect(useNoteStore.getState().memoListNextCursor).toBe('next');
+  });
+
+  it('rebases directory moves for records still arriving from an in-flight page', async () => {
+    await loadBrowsingSession();
+    let resolve!: (value: unknown) => void;
+    mocks.listByPath.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const loading = useNoteStore.getState().loadMoreMemos();
+    useNoteStore.getState().rebaseNoteListPaths('notebook-1', 'folder', 'moved', true);
+    resolve({ notes: [{ ...entry(150), relativePath: 'folder/unseen.md' }], nextCursor: null, hasMore: false });
+    await loading;
+    expect(useNoteStore.getState().notes[150].relativePath).toBe('moved/unseen.md');
+  });
+
+  it('ignores property key order when deciding whether a card changed', async () => {
+    await loadBrowsingSession();
+    useNoteStore.getState().applyNoteListChange('notebook-1', 'note-120.md', { ...entry(120), properties: { a: 1, b: 2 } });
+    const notes = useNoteStore.getState().notes;
+    useNoteStore.getState().applyNoteListChange('notebook-1', 'note-120.md', { ...entry(120), properties: { b: 2, a: 1 } });
+    expect(useNoteStore.getState().notes).toBe(notes);
+  });
+
+  it('keeps a loaded window intact on a background invalidation', async () => {
+    await loadBrowsingSession();
+    const state = useNoteStore.getState();
+    const revision = state.memoListRefreshTrigger;
+    state.handleMemoListInvalidation('notebook-1');
+    expect(useNoteStore.getState().notes).toBe(state.notes);
+    expect(useNoteStore.getState().memoListRefreshTrigger).toBe(revision);
+  });
+
+  it('automatically resumes a cold query that does not have a loaded window yet', async () => {
+    await loadBrowsingSession();
+    useNoteStore.setState({ memoListQueryKey: null });
+    const revision = useNoteStore.getState().memoListRefreshTrigger;
+    useNoteStore.getState().handleMemoListInvalidation('notebook-1');
+    expect(useNoteStore.getState().memoListRefreshTrigger).toBe(revision + 1);
   });
 
   it('persists sidebar navigation and normalizes middle-column-only filters', () => {

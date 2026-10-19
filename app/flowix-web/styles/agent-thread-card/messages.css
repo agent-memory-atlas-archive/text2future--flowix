@@ -91,17 +91,17 @@
   background: transparent !important;
 }
 
-html:not([data-theme="dark"])
+html:not([data-theme="dark"]):not([data-theme="mist"])
   .agent-conversation-surface
   .agent-thread-card__message--user
   .agent-thread-card__message-content
   pre,
-html:not([data-theme="dark"])
+html:not([data-theme="dark"]):not([data-theme="mist"])
   .agent-conversation-surface
   .agent-thread-card__message--user
   .agent-thread-card__message-content
   th,
-html:not([data-theme="dark"])
+html:not([data-theme="dark"]):not([data-theme="mist"])
   .agent-conversation-surface
   .agent-thread-card__message--user
   .agent-thread-card__message-content
@@ -208,8 +208,8 @@ html:not([data-theme="dark"])
   color: var(--foreground);
 }
 
-[data-theme="dark"] .agent-conversation-surface .agent-thread-card__message--assistant,
-[data-theme="dark"] .agent-conversation-surface .agent-thread-card__message--assistant .agent-thread-card__message-content {
+:is([data-theme="dark"], [data-theme="mist"]) .agent-conversation-surface .agent-thread-card__message--assistant,
+:is([data-theme="dark"], [data-theme="mist"]) .agent-conversation-surface .agent-thread-card__message--assistant .agent-thread-card__message-content {
   color: var(--foreground);
 }
 

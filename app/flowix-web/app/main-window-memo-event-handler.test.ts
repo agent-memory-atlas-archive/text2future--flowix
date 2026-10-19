@@ -144,7 +144,7 @@ describe('handleMainWindowMemoEvent', () => {
 
     handleMainWindowMemoEvent(event, actions);
 
-    expect(actions.handleMemoUpdated).toHaveBeenCalledWith(event.memo);
+    expect(actions.handleMemoUpdated).toHaveBeenCalledWith(event);
     expect(actions.openPathInBrowserColumn).not.toHaveBeenCalled();
   });
 

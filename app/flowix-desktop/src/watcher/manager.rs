@@ -3,11 +3,12 @@
 //! Split rename events use runtime filesystem identities, never frontmatter.
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::watcher::filter::{FileRevision, SelfWriteMap, SelfWriteMark, SELF_WRITE_TTL};
 use crate::watcher::tombstone::RemoveCoalescer;
@@ -16,17 +17,19 @@ use crate::watcher::{
     NotebookWatchContext, RawFsEvent, WhitelistConfig,
 };
 use flowix_core::memo_file::{
-    media_kind_for_path, FileManagementPolicy, MemoFile, NotebookConfig,
+    resource_kind_for_path, FileManagementPolicy, MemoFile, NotebookConfig,
 };
 
 const REMOVE_TOMBSTONE_DELAY: Duration = Duration::from_millis(450);
 
-/// Watches configured notebook roots and sends filtered events to a serial worker.
+/// Watches only the selected notebook root and sends filtered events to a serial worker.
 /// A delayed remove can be canceled by a confirmed rename pair. The watcher
 /// never matches a replacement file using its Markdown content or frontmatter.
 pub struct MemoWatcher {
     _watcher: Option<RecommendedWatcher>,
     watched_roots: Arc<std::sync::RwLock<Vec<NotebookWatchContext>>>,
+    active_notebook_id: Option<String>,
+    worker_generation: Arc<AtomicU64>,
     suspended_notebook_ids: HashMap<String, usize>,
     recent_self_writes: Arc<Mutex<SelfWriteMap>>,
     rename_tracker: Arc<Mutex<super::rename_tracker::RenameTracker>>,
@@ -37,15 +40,18 @@ pub struct MemoWatcher {
     /// cheap path filtering and enqueueing. File settling, revision reconciliation,
     /// deduplication and memo processing run serially on the worker, avoiding stalls in
     /// 所有 notebook 的事件投递会被单次 settle 卡住)。单 worker 保 FIFO, 不破坏同路径
-    /// 事件顺序。Drop 时 `worker_tx` 先落, 通道关闭, worker `recv` 返回 Err 后自然退出。
+    /// 事件顺序。重绑通过 worker generation 取消旧绑定的积压事件。
     worker_tx: Option<std::sync::mpsc::Sender<(RawFsEvent, NotebookWatchContext)>>,
     _worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl MemoWatcher {
-    /// Update only one root when template writes temporarily suspend it. Keep
-    /// the shared watcher, event queue and every unrelated notebook alive.
+    /// Refresh the active root when template writes temporarily suspend it.
+    /// An inactive notebook is treated as a successful no-op.
     pub fn refresh_notebook_root(&mut self, config: &NotebookConfig) -> bool {
+        if self.active_notebook_id.as_deref() != Some(config.id.as_str()) {
+            return true;
+        }
         let Some(watcher) = self._watcher.as_mut() else {
             return false;
         };
@@ -88,37 +94,23 @@ impl MemoWatcher {
             notebook_id: config.id.clone(),
             root: root.clone(),
         };
-        let seed = super::rename_tracker::RenameTracker::seed_root(&context);
-        self.rename_tracker
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .merge_seed(seed);
-        if watcher.watch(&root, RecursiveMode::Recursive).is_err() {
-            self.rename_tracker
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .forget_root(&root);
-            return false;
-        }
-        if let Ok(mut roots) = self.watched_roots.write() {
-            roots.push(NotebookWatchContext {
-                notebook_id: config.id.clone(),
-                root,
-            });
-            true
-        } else {
-            let _ = watcher.unwatch(&root);
-            self.rename_tracker
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .forget_root(&root);
-            false
-        }
+        let generation = self.worker_generation.load(Ordering::Acquire);
+        attach_notebook_root(
+            watcher,
+            &self.watched_roots,
+            &self.rename_tracker,
+            &self.worker_generation,
+            context,
+            generation,
+        )
     }
 
-    /// Add one newly registered notebook without restarting every existing watch.
-    /// Return false when the watcher has not started, so the caller can bind all roots.
+    /// Attach the active notebook root without restarting the watcher.
+    /// Inactive notebooks are rejected; false also asks the caller to retry binding.
     pub fn add_notebook_root(&mut self, config: &NotebookConfig) -> bool {
+        if self.active_notebook_id.as_deref() != Some(config.id.as_str()) {
+            return false;
+        }
         if self.is_watching(&config.id) {
             return true;
         }
@@ -136,32 +128,15 @@ impl MemoWatcher {
             notebook_id: config.id.clone(),
             root: root.clone(),
         };
-        let seed = super::rename_tracker::RenameTracker::seed_root(&context);
-        self.rename_tracker
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .merge_seed(seed);
-        if watcher.watch(&root, RecursiveMode::Recursive).is_err() {
-            self.rename_tracker
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .forget_root(&root);
-            return false;
-        }
-        match self.watched_roots.write() {
-            Ok(mut roots) => {
-                roots.push(NotebookWatchContext { notebook_id: config.id.clone(), root });
-                true
-            }
-            Err(_) => {
-                let _ = watcher.unwatch(&root);
-                self.rename_tracker
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .forget_root(&root);
-                false
-            }
-        }
+        let generation = self.worker_generation.load(Ordering::Acquire);
+        attach_notebook_root(
+            watcher,
+            &self.watched_roots,
+            &self.rename_tracker,
+            &self.worker_generation,
+            context,
+            generation,
+        )
     }
 
     pub fn is_watching(&self, notebook_id: &str) -> bool {
@@ -183,6 +158,8 @@ impl MemoWatcher {
         Self {
             _watcher: None,
             watched_roots: Arc::new(std::sync::RwLock::new(Vec::new())),
+            active_notebook_id: None,
+            worker_generation: Arc::new(AtomicU64::new(0)),
             suspended_notebook_ids: HashMap::new(),
             recent_self_writes: Arc::new(Mutex::new(HashMap::new())),
             rename_tracker: Arc::new(Mutex::new(super::rename_tracker::RenameTracker::default())),
@@ -224,21 +201,20 @@ impl MemoWatcher {
         }
     }
 
-    pub fn rebind_all(&mut self, app: AppHandle, configs: Vec<NotebookConfig>) {
-        // Drop �?watcher —此赋�?`take` �?Option, �?RecommendedWatcher 立即析构
-        let _ = self._watcher.take();
-        if let Some(coalescer) = self.remove_coalescer.take() {
-            coalescer.cancel_all();
-        }
-        // 旧 worker_tx drop -> 旧通道关闭 -> 旧 worker `recv` 返回 Err 退出。
-        let _ = self.worker_tx.take();
-        let _ = self._worker.take();
-
-        let roots: Vec<NotebookWatchContext> = configs
-            .into_iter()
+    /// Replace the watched roots with the selected notebook's root, if available.
+    pub fn rebind_current_notebook(
+        &mut self,
+        app: AppHandle,
+        active_notebook_id: Option<&str>,
+        active_config: Option<NotebookConfig>,
+    ) {
+        let active_notebook_id = active_notebook_id.map(str::to_string);
+        let active_config = active_config
+            .filter(|config| active_notebook_id.as_deref() == Some(config.id.as_str()));
+        let desired_root = active_config
             .filter(|config| !self.suspended_notebook_ids.contains_key(&config.id))
-            .filter_map(|config| {
-                let root = PathBuf::from(&config.path);
+            .and_then(|config| {
+                let root = PathBuf::from(config.path);
                 if !root.is_dir() {
                     tracing::warn!(
                         "[MemoWatcher] watch skipped, notebook path is not a dir: {}",
@@ -250,8 +226,39 @@ impl MemoWatcher {
                     notebook_id: config.id,
                     root,
                 })
-            })
-            .collect();
+            });
+        let unchanged = self.active_notebook_id == active_notebook_id
+            && self._watcher.is_some()
+            && self
+                .watched_roots
+                .read()
+                .is_ok_and(|roots| match (desired_root.as_ref(), roots.as_slice()) {
+                    (None, []) => true,
+                    (Some(desired), [current]) => {
+                        desired.notebook_id == current.notebook_id
+                            && desired.root == current.root
+                    }
+                    _ => false,
+                });
+        self.active_notebook_id = active_notebook_id;
+        if unchanged {
+            return;
+        }
+        self.rebind_current_root(app, desired_root);
+    }
+
+    fn rebind_current_root(&mut self, app: AppHandle, root: Option<NotebookWatchContext>) {
+        let worker_generation = self.worker_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        let generation_counter = self.worker_generation.clone();
+        // Drop �?watcher —此赋�?`take` �?Option, �?RecommendedWatcher 立即析构
+        let _ = self._watcher.take();
+        if let Some(coalescer) = self.remove_coalescer.take() {
+            coalescer.cancel_all();
+        }
+        // The generation invalidates queued work before the old sender closes.
+        let _ = self.worker_tx.take();
+        let _ = self._worker.take();
+
         if let Ok(mut watched) = self.watched_roots.write() { watched.clear(); }
         let remove_coalescer =
             RemoveCoalescer::new(app.clone(), self.memo_file.clone(), REMOVE_TOMBSTONE_DELAY);
@@ -269,9 +276,13 @@ impl MemoWatcher {
             std::sync::mpsc::channel::<(RawFsEvent, NotebookWatchContext)>();
         let worker_tx_for_callback = worker_tx.clone();
 
-        let rename_tracker = Arc::new(Mutex::new(
-            super::rename_tracker::RenameTracker::seed(&roots),
-        ));
+        let rename_tracker = Arc::new(Mutex::new(super::rename_tracker::RenameTracker::default()));
+        if let Some(root) = &root {
+            rename_tracker
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .register_root(root);
+        }
         self.rename_tracker = rename_tracker.clone();
         let rename_tracker_for_callback = rename_tracker.clone();
         let mut watcher: RecommendedWatcher =
@@ -305,63 +316,85 @@ impl MemoWatcher {
                 }
             };
 
-        let mut watched_count = 0usize;
-        for ctx in roots {
-            if let Err(e) = watcher.watch(&ctx.root, RecursiveMode::Recursive) {
-                tracing::error!("[MemoWatcher] failed to watch {}: {e}", ctx.root.display());
-                continue;
-            }
-            tracing::info!(
-                "[MemoWatcher] watching notebook {} at {}",
-                ctx.notebook_id,
-                ctx.root.display()
-            );
-            if let Ok(mut watched) = self.watched_roots.write() {
-                watched.push(ctx.clone());
+        let watched_count = if let Some(context) = root {
+            if attach_notebook_root(
+                &mut watcher,
+                &self.watched_roots,
+                &self.rename_tracker,
+                &self.worker_generation,
+                context,
+                worker_generation,
+            ) {
+                1
             } else {
-                tracing::error!("[MemoWatcher] failed to record watched notebook root");
-                let _ = watcher.unwatch(&ctx.root);
-                continue;
+                0
             }
-            watched_count += 1;
-        }
+        } else {
+            0
+        };
         if watched_count == 0 {
-            tracing::info!("[MemoWatcher] initialized with no available notebook roots; offline roots can be retried later");
+            tracing::info!("[MemoWatcher] initialized with no available active notebook root; offline root can be retried later");
         }
 
-        // 单 worker 串行 drain -> 保 FIFO (同路径事件顺序不乱)。`process` 含
+        // 单 worker 在 10ms 窗口内合并同路径 Create/Modify 后串行处理。
+        // rename 与目录事件是边界，不跨边界合并；`process` 含
         // `wait_for_markdown_copy_to_settle` (≤400ms) + 磁盘读写, 跑在这里而非 notify
-        // 共享线程, 解放后者继续投递其它 notebook 的事件。通道关闭 (MemoWatcher drop /
-        // rebind 取走 worker_tx) 时 `recv` 返回 Err, worker 自然退出。
+        // 共享线程, 解放后者继续投递事件。重绑时 generation 变化会让旧 worker
+        // 丢弃队列中尚未处理的事件，不会在切换后继续处理旧笔记本的积压。
         let worker_app = app.clone();
         let worker_memo_file = self.memo_file.clone();
         let worker = std::thread::Builder::new()
             .name("memo-watcher-processor".into())
             .spawn(move || {
                 let mut processed_revisions = HashMap::<PathBuf, FileRevision>::new();
-                while let Ok((raw, ctx)) = worker_rx.recv() {
-                    if !should_process_stable_event(
-                        &raw,
-                        &recent_for_worker,
-                        &mut processed_revisions,
-                    ) {
-                        continue;
-                    }
-                    // catch_unwind: 单个事件处理 panic 不能永久杀死 worker (否则后续事件
-                    // 静默不处理)。panic 本身是 bug (见技术债务「unwrap panic」节), 这里只做
-                    // 隔离 + 记录, 让 worker 继续处理后续事件。
-                    if let Err(payload) =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            PathNoteEventProcessor::process(&raw, &worker_app, &worker_memo_file, &ctx)
-                        }))
-                    {
-                        tracing::error!(
-                            thread = "memo-watcher-processor",
-                            path = %raw.path.display(),
-                            kind = ?raw.kind,
-                            "PathNoteEventProcessor::process panicked; worker recovered. payload={:?}",
-                            payload
+                'worker: while let Ok(first) = worker_rx.recv() {
+                    let batch = collect_queued_events(first, &worker_rx);
+                    for (raw, ctx) in batch {
+                        if generation_counter.load(Ordering::Acquire) != worker_generation {
+                            break 'worker;
+                        }
+                        let decision = stabilize_event(
+                            &raw,
+                            &recent_for_worker,
+                            &mut processed_revisions,
                         );
+                        let stable_content = match decision {
+                            StableEventDecision::Skip => continue,
+                            StableEventDecision::Process { content } => content,
+                        };
+                        // Serialize the final validity check and processing with notebook
+                        // selection changes. If a switch already won, this old event is
+                        // discarded; if processing won, the switch waits for it to finish.
+                        let state = worker_app.state::<crate::app::state::AppState>();
+                        let _transition = state
+                            .notebook_transition
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        if generation_counter.load(Ordering::Acquire) != worker_generation {
+                            break 'worker;
+                        }
+                        // catch_unwind: 单个事件处理 panic 不能永久杀死 worker (否则后续事件
+                        // 静默不处理)。panic 本身是 bug (见技术债务「unwrap panic」节), 这里只做
+                        // 隔离 + 记录, 让 worker 继续处理后续事件。
+                        if let Err(payload) =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                PathNoteEventProcessor::process(
+                                    &raw,
+                                    &worker_app,
+                                    &worker_memo_file,
+                                    &ctx,
+                                    stable_content.as_deref(),
+                                )
+                            }))
+                        {
+                            tracing::error!(
+                                thread = "memo-watcher-processor",
+                                path = %raw.path.display(),
+                                kind = ?raw.kind,
+                                "PathNoteEventProcessor::process panicked; worker recovered. payload={:?}",
+                                payload
+                            );
+                        }
                     }
                 }
             })
@@ -410,11 +443,90 @@ impl MemoWatcher {
     }
 }
 
-/// notify 回调主体 —过滤 + �?��抑制 + 防抖 + 触发 `MemoFile` 重派�?+ emit�?///
-/// 注意: 这个函数�?notify �?��的线程上�? �?ReAct 主循�?��发�?/// `MemoFile` �?`Arc<StdRwLock<MemoFile>>`, 我们读锁�? 调用方负责不持锁�?await�?///
-/// 抑制两道�? 逐级下沉:
-/// 1. `recent_self_writes` (�?��) —`mark_self_write` 在写盘前调用
-/// 2. `last_emit` (�?��) —150ms 内同�?��事件�? 处理 FSEvents 双触�?
+fn attach_notebook_root(
+    watcher: &mut RecommendedWatcher,
+    watched_roots: &Arc<std::sync::RwLock<Vec<NotebookWatchContext>>>,
+    rename_tracker: &Arc<Mutex<super::rename_tracker::RenameTracker>>,
+    worker_generation: &Arc<AtomicU64>,
+    context: NotebookWatchContext,
+    generation: u64,
+) -> bool {
+    rename_tracker
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .register_root(&context);
+    match watched_roots.write() {
+        Ok(mut roots) => roots.push(context.clone()),
+        Err(_) => {
+            tracing::error!("[MemoWatcher] failed to record watched notebook root");
+            rename_tracker
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .forget_root(&context.root);
+            return false;
+        }
+    }
+    if let Err(error) = watcher.watch(&context.root, RecursiveMode::Recursive) {
+        tracing::error!(
+            "[MemoWatcher] failed to watch {}: {error}",
+            context.root.display()
+        );
+        if let Ok(mut roots) = watched_roots.write() {
+            roots.retain(|item| item.notebook_id != context.notebook_id);
+        }
+        rename_tracker
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .forget_root(&context.root);
+        return false;
+    }
+    tracing::info!(
+        "[MemoWatcher] watching notebook {} at {}",
+        context.notebook_id,
+        context.root.display()
+    );
+    seed_rename_tracker_async(
+        rename_tracker.clone(),
+        context,
+        worker_generation.clone(),
+        generation,
+    );
+    true
+}
+
+fn seed_rename_tracker_async(
+    tracker: Arc<Mutex<super::rename_tracker::RenameTracker>>,
+    root: NotebookWatchContext,
+    generation_counter: Arc<AtomicU64>,
+    generation: u64,
+) {
+    let notebook_id = root.notebook_id.clone();
+    if let Err(error) = std::thread::Builder::new()
+        .name("memo-watcher-rename-seed".into())
+        .spawn(move || {
+            let keep_running = || generation_counter.load(Ordering::Acquire) == generation;
+            let Some(seed) =
+                super::rename_tracker::RenameTracker::seed_root_while(&root, keep_running)
+            else {
+                return;
+            };
+            let mut seed = seed;
+            seed.discard_stale_entries();
+            if generation_counter.load(Ordering::Acquire) == generation {
+                tracker
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .merge_seed(seed);
+            }
+        })
+    {
+        tracing::warn!(%error, notebook_id = %notebook_id,
+            "could not start background rename baseline scan");
+    }
+}
+
+/// Notify callback path filtering and event enqueueing. Keep filesystem scans
+/// and content settling on the serial worker, not the shared notify thread.
 fn handle_notify_event(
     remove_coalescer: &RemoveCoalescer,
     whitelist: &Arc<std::sync::RwLock<WhitelistConfig>>,
@@ -465,8 +577,8 @@ fn handle_notify_event(
                 let new_markdown = new.extension().is_some_and(|extension| {
                     extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
                 });
-                if !new.is_dir() && ((old_allowed && media_kind_for_path(old).is_some())
-                    || (new_allowed && media_kind_for_path(new).is_some())) {
+                if !new.is_dir() && ((old_allowed && resource_kind_for_path(old).is_some())
+                    || (new_allowed && resource_kind_for_path(new).is_some())) {
                     remove_coalescer.cancel_path(old);
                     let mut raw = RawFsEvent::new(FsEventKind::Modify, new.clone());
                     raw.rename_from = Some(old.clone());
@@ -508,10 +620,9 @@ fn handle_notify_event(
             tracing::debug!("[MemoWatcher] no notebook root for {}", path.display());
             continue;
         };
-        let relative = match path.strip_prefix(&ctx.root) {
-            Ok(relative) => relative,
-            Err(_) => continue,
-        };
+        if path.strip_prefix(&ctx.root).is_err() {
+            continue;
+        }
         let mut fs_kind = FsEventKind::from_notify(&event.kind);
         let removed_directory = matches!(event.kind, notify::EventKind::Remove(notify::event::RemoveKind::Folder));
         let directory_event = path.is_dir()
@@ -550,7 +661,7 @@ fn handle_notify_event(
         }
         let raw = RawFsEvent::new(fs_kind, path.clone());
         match if matches!(fs_kind, FsEventKind::DirectoryChange)
-            || media_kind_for_path(&path).is_some()
+            || resource_kind_for_path(&path).is_some()
             || crate::commands::document_list::is_table_document_path(&path) {
             crate::watcher::event::FilterDecision::Pass
         } else {
@@ -595,32 +706,54 @@ fn path_allowed_for_watch(root: &Path, path: &Path, directory_event: bool) -> bo
     }
 }
 
+enum StableEventDecision {
+    Skip,
+    Process { content: Option<String> },
+}
+
 fn should_process_stable_event(
     event: &RawFsEvent,
     recent_self_writes: &Arc<Mutex<SelfWriteMap>>,
     processed_revisions: &mut HashMap<PathBuf, FileRevision>,
 ) -> bool {
+    matches!(
+        stabilize_event(event, recent_self_writes, processed_revisions),
+        StableEventDecision::Process { .. }
+    )
+}
+
+fn stabilize_event(
+    event: &RawFsEvent,
+    recent_self_writes: &Arc<Mutex<SelfWriteMap>>,
+    processed_revisions: &mut HashMap<PathBuf, FileRevision>,
+) -> StableEventDecision {
     if event.rename_from.is_some() {
-        return true;
+        return StableEventDecision::Process { content: None };
     }
     let key = normalize_for_compare(&event.path);
     match event.kind {
         FsEventKind::Create | FsEventKind::Modify => {
             if !event.path.exists() {
                 processed_revisions.remove(&key);
-                return true;
+                return StableEventDecision::Process { content: None };
             }
             crate::watcher::processor::wait_for_markdown_copy_to_settle(&event.path);
-            let media = media_kind_for_path(&event.path).is_some();
-            let revision = if media {
-                FileRevision::read_metadata(&event.path)
+            let indexed_resource = resource_kind_for_path(&event.path).is_some();
+            let (revision, content) = if indexed_resource {
+                (FileRevision::read_metadata(&event.path), None)
+            } else if is_markdown_note_path(&event.path) {
+                let Ok(bytes) = std::fs::read(&event.path) else {
+                    return StableEventDecision::Process { content: None };
+                };
+                let revision = FileRevision::from_bytes(&bytes);
+                (Some(revision), String::from_utf8(bytes).ok())
             } else {
-                FileRevision::read(&event.path)
+                (FileRevision::read(&event.path), None)
             };
             let Some(revision) = revision else {
-                return true;
+                return StableEventDecision::Process { content: None };
             };
-            if !media && crate::watcher::filter::self_write::is_exact_self_write(
+            if !indexed_resource && crate::watcher::filter::self_write::is_exact_self_write(
                 &event.path,
                 &revision,
                 recent_self_writes,
@@ -629,25 +762,92 @@ fn should_process_stable_event(
                 // window already owns this content. A later external revert
                 // to an older hash must then be treated as a new revision.
                 processed_revisions.insert(key, revision);
-                return false;
+                return StableEventDecision::Skip;
             }
             if processed_revisions.get(&key) == Some(&revision) {
                 tracing::debug!(
                     "[MemoWatcher] duplicate stable revision dropped: {}",
                     event.path.display()
                 );
-                return false;
+                return StableEventDecision::Skip;
             }
             processed_revisions.insert(key, revision);
-            true
+            StableEventDecision::Process { content }
         }
         FsEventKind::Remove => {
             processed_revisions.remove(&key);
-            true
+            StableEventDecision::Process { content: None }
         }
-        FsEventKind::DirectoryChange => true,
-        FsEventKind::Other => false,
+        FsEventKind::DirectoryChange => StableEventDecision::Process { content: None },
+        FsEventKind::Other => StableEventDecision::Skip,
     }
+}
+
+fn is_markdown_note_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "md" | "markdown"))
+}
+
+fn collect_queued_events(
+    first: (RawFsEvent, NotebookWatchContext),
+    receiver: &std::sync::mpsc::Receiver<(RawFsEvent, NotebookWatchContext)>,
+) -> Vec<(RawFsEvent, NotebookWatchContext)> {
+    const BATCH_WINDOW: Duration = Duration::from_millis(10);
+    const MAX_BATCH_SIZE: usize = 128;
+
+    let deadline = Instant::now() + BATCH_WINDOW;
+    let mut batch = vec![first];
+    while batch.len() < MAX_BATCH_SIZE {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match receiver.recv_timeout(remaining) {
+            Ok(event) => batch.push(event),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    coalesce_queued_events(batch)
+}
+
+fn coalesce_queued_events(
+    batch: Vec<(RawFsEvent, NotebookWatchContext)>,
+) -> Vec<(RawFsEvent, NotebookWatchContext)> {
+    let mut events: Vec<(RawFsEvent, NotebookWatchContext)> = Vec::with_capacity(batch.len());
+    let mut coalescible = HashMap::<(String, PathBuf, PathBuf), usize>::new();
+
+    for (mut event, context) in batch {
+        if event.rename_from.is_some()
+            || !matches!(event.kind, FsEventKind::Create | FsEventKind::Modify)
+        {
+            // A rename or other event is an ordering boundary. Never merge
+            // writes across it: path rebases and directory reconciliation rely
+            // on the original sequence.
+            coalescible.clear();
+            events.push((event, context));
+            continue;
+        }
+
+        let key = (
+            context.notebook_id.clone(),
+            normalize_for_compare(&context.root),
+            normalize_for_compare(&event.path),
+        );
+        if let Some(index) = coalescible.get(&key).copied() {
+            if events[index].0.kind == FsEventKind::Create {
+                event.kind = FsEventKind::Create;
+            }
+            events[index] = (event, context);
+        } else {
+            coalescible.insert(key, events.len());
+            events.push((event, context));
+        }
+    }
+
+    events
 }
 
 fn context_for_path(
@@ -673,7 +873,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recovered_bindings_reconcile_attached_roots_but_not_offline_or_suspended_roots() {
+    fn recovered_binding_reconciles_only_the_selected_attached_root() {
         let temp = tempfile::tempdir().unwrap();
         let memo = Arc::new(std::sync::RwLock::new(MemoFile::new(temp.path().join("config"))));
         let mut manager = MemoWatcher::new(memo);
@@ -687,8 +887,11 @@ mod tests {
                 is_default: false, sort: 0, created_at: 1, updated_at: 1,
             }
         }).collect();
+        manager.active_notebook_id = Some(configs[0].id.clone());
         manager.set_notebook_suspended(&configs[2].id, true);
-        for config in &configs { manager.add_notebook_root(config); }
+        assert!(manager.add_notebook_root(&configs[0]));
+        assert!(!manager.add_notebook_root(&configs[1]));
+        assert!(!manager.add_notebook_root(&configs[2]));
         let background = crate::app::notebook_background::NotebookBackground::default();
         crate::watcher::runtime::reconcile_bound_roots(&manager, &configs, &background);
         let statuses = background.statuses();
@@ -722,22 +925,26 @@ mod tests {
                 }
             })
             .collect();
-        assert!(manager.add_notebook_root(&configs[0]));
+        manager.active_notebook_id = Some(configs[1].id.clone());
+        assert!(!manager.add_notebook_root(&configs[0]));
         assert!(manager.add_notebook_root(&configs[1]));
         for _ in 0..2 {
             manager.set_notebook_suspended(&configs[1].id, true);
             assert!(manager.refresh_notebook_root(&configs[1]));
             let roots = manager.watched_roots.read().unwrap();
+            assert!(roots.is_empty());
+            drop(roots);
+            manager.set_notebook_suspended(&configs[1].id, false);
+            assert!(manager.refresh_notebook_root(&configs[1]));
+            let roots = manager.watched_roots.read().unwrap();
             assert_eq!(roots.len(), 1);
-            assert_eq!(roots[0].notebook_id, configs[0].id);
+            assert_eq!(roots[0].notebook_id, configs[1].id);
         }
-        manager.set_notebook_suspended(&configs[1].id, false);
+        assert!(manager.refresh_notebook_root(&configs[0]));
         assert!(manager.refresh_notebook_root(&configs[1]));
-        assert_eq!(manager.watched_roots.read().unwrap().len(), 1);
-        manager.set_notebook_suspended(&configs[1].id, false);
-        assert!(manager.refresh_notebook_root(&configs[1]));
-        assert!(manager.refresh_notebook_root(&configs[1]));
-        assert_eq!(manager.watched_roots.read().unwrap().len(), 2);
+        let roots = manager.watched_roots.read().unwrap();
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].notebook_id, configs[1].id);
     }
 
     fn marked_revision(path: &Path) -> Arc<Mutex<SelfWriteMap>> {
@@ -803,6 +1010,64 @@ mod tests {
             &unmarked,
             &mut processed
         ));
+    }
+
+    #[test]
+    fn worker_keeps_the_stable_markdown_snapshot_for_indexing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("memo.md");
+        let content = "# Stable snapshot\nbody";
+        std::fs::write(&path, content).unwrap();
+        let event = RawFsEvent::new(FsEventKind::Modify, path);
+        let mut processed = HashMap::new();
+
+        let StableEventDecision::Process {
+            content: Some(snapshot),
+        } = stabilize_event(&event, &Arc::new(Mutex::new(SelfWriteMap::new())), &mut processed)
+        else {
+            panic!("stable Markdown event should carry its content snapshot");
+        };
+
+        assert_eq!(snapshot, content);
+    }
+
+    #[test]
+    fn watcher_batch_merges_same_path_writes_and_keeps_create_semantics() {
+        let root = PathBuf::from("/notes");
+        let context = || NotebookWatchContext {
+            notebook_id: "nb_a".into(),
+            root: root.clone(),
+        };
+        let mut batch = vec![
+            (RawFsEvent::new(FsEventKind::Create, root.join("a.md")), context()),
+            (RawFsEvent::new(FsEventKind::Modify, root.join("b.md")), context()),
+            (RawFsEvent::new(FsEventKind::Modify, root.join("a.md")), context()),
+        ];
+
+        let merged = coalesce_queued_events(std::mem::take(&mut batch));
+
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].0.path, root.join("a.md"));
+        assert_eq!(merged[0].0.kind, FsEventKind::Create);
+        assert_eq!(merged[1].0.path, root.join("b.md"));
+    }
+
+    #[test]
+    fn watcher_batch_does_not_coalesce_across_rename_events() {
+        let root = PathBuf::from("/notes");
+        let context = || NotebookWatchContext {
+            notebook_id: "nb_a".into(),
+            root: root.clone(),
+        };
+        let mut rename = RawFsEvent::new(FsEventKind::Create, root.join("a.md"));
+        rename.rename_from = Some(root.join("old.md"));
+        let events = vec![
+            (RawFsEvent::new(FsEventKind::Modify, root.join("a.md")), context()),
+            (rename, context()),
+            (RawFsEvent::new(FsEventKind::Modify, root.join("a.md")), context()),
+        ];
+
+        assert_eq!(coalesce_queued_events(events).len(), 3);
     }
 
     #[cfg(target_os = "macos")]

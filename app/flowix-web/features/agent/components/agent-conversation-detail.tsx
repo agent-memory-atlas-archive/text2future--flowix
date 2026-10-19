@@ -10,6 +10,7 @@ import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
 import { agent } from '@platform/tauri/client/agent';
 import { useAgentConversationSurface } from './use-agent-conversation-surface';
+import { isInitialConversationHistoryLoading } from './agent-conversation-history-loading';
 import { useAgentSessionStore } from '@features/agent/store/agent-session-store';
 import { createAndOpenAgentConversation } from '@features/agent/use-cases/new-conversation';
 import { canActOnQueuedMessage } from '@features/agent/store/follow-up-queue-slice';
@@ -87,17 +88,6 @@ function isMissingHistorySession(error: string | null | undefined): boolean {
 }
 const DETAIL_DRAFT_KEY_PREFIX = 'flowix:agent-conversation-draft:';
 const logger = createLogger('agent-conversation-detail');
-
-function shouldShowInitialHistorySkeleton(
-  threadId: string | null,
-  messageCount: number,
-  status: 'idle' | 'loading' | 'ready' | 'error' | undefined,
-): boolean {
-  return Boolean(threadId)
-    && messageCount === 0
-    && status !== 'ready'
-    && status !== 'error';
-}
 
 function detailDraftKey(instanceId: string): string {
   return `${DETAIL_DRAFT_KEY_PREFIX}${instanceId}`;
@@ -209,7 +199,7 @@ function AgentConversationDetailContent({
   const initialHistoryStatus = projection?.pagination.initialStatus ?? 'idle';
   const initialHistoryError = projection?.pagination.initialError;
   const missingSession = isMissingHistorySession(initialHistoryError);
-  const isInitialHistoryLoading = shouldShowInitialHistorySkeleton(
+  const isInitialHistoryLoading = isInitialConversationHistoryLoading(
     threadId,
     messages.length,
     initialHistoryStatus,
@@ -306,7 +296,7 @@ function AgentConversationDetailContent({
         current.runs.codexCommand?.status === 'pending'
       ) : false,
       shouldRenderMessages: true,
-      isInitialHistoryLoading: shouldShowInitialHistorySkeleton(id, visibleMessages.length, current?.pagination.initialStatus),
+      isInitialHistoryLoading: isInitialConversationHistoryLoading(id, visibleMessages.length, current?.pagination.initialStatus),
     });
   }, []);
 

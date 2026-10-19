@@ -8,7 +8,7 @@ export interface ApplyOptions {
 
 /**
  * 首屏 boot 脚本 (index.html) 读取的 localStorage key — 缓存"已解析"的主题
- * id (dark / light / rock), 让 <head> 的 inline 脚本在 CSS paint 前就能把
+ * id (dark / light / mist / rock), 让 <head> 的 inline 脚本在 CSS paint 前就能把
  * data-theme 写到 <html>, 避免深色模式开窗时一帧白色闪烁。
  *
  * 真源始终是 ~/.flowix/boot/preference.json (Tauri IPC); 这个 cache 只是给首屏
@@ -39,7 +39,7 @@ export function applyTheme(
     id === 'system' ? resolveSystemTheme(opts.prefersDark) : id;
   root.setAttribute('data-theme', resolved);
   // colorScheme 影响浏览器原生控件 (滚动条、表单) 的反色策略, 跟着主题走最自然。
-  root.style.colorScheme = resolved === 'dark' ? 'dark' : 'light';
+  root.style.colorScheme = resolved === 'dark' || resolved === 'mist' ? 'dark' : 'light';
   try {
     localStorage.setItem(THEME_CACHE_KEY, resolved);
   } catch {

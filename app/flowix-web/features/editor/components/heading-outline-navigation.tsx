@@ -8,6 +8,7 @@ const HEADING_SELECTOR = 'h1, h2, h3, h4'
 const NON_DOCUMENT_HEADING_SELECTOR = '.agent-thread-card, .frontmatter-property-node'
 const MAX_OUTLINE_ITEMS = 30
 const REVEAL_DELAY_MS = 450
+const HEADING_REFRESH_DEBOUNCE_MS = 200
 const SCROLL_OFFSET_PX = 16
 const POPOVER_WIDTH_PX = 253
 const VIEWPORT_PADDING_PX = 8
@@ -66,6 +67,23 @@ export function getNavigationActiveElement(
 function readHeadings(editor: Editor): HeadingItem[] {
   if (editor.isDestroyed) return []
   return extractHeadings(editor.view.dom)
+}
+
+/**
+ * The outline is derived from the rendered DOM, so every update used to force a
+ * full `querySelectorAll` plus a state commit. Compare before committing so
+ * typing inside a paragraph does not touch the outline at all.
+ */
+function sameHeadings(left: HeadingItem[], right: HeadingItem[]): boolean {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index += 1) {
+    const previous = left[index]
+    const next = right[index]
+    if (previous.element !== next.element || previous.level !== next.level || previous.text !== next.text) {
+      return false
+    }
+  }
+  return true
 }
 
 function getScrollContainer(editor: Editor): HTMLElement | null {
@@ -156,16 +174,26 @@ export function HeadingOutlineNavigation({ editor }: { editor: Editor }) {
 
   const refreshHeadings = useCallback(() => {
     const nextHeadings = readHeadings(editor)
+    if (sameHeadings(allHeadingsRef.current, nextHeadings)) return
     allHeadingsRef.current = nextHeadings
     setAllHeadings(nextHeadings)
   }, [editor])
 
   useEffect(() => {
     refreshHeadings()
-    editor.on('update', refreshHeadings)
+    let timer: number | undefined
+    const scheduleRefresh = () => {
+      if (timer !== undefined) window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        timer = undefined
+        refreshHeadings()
+      }, HEADING_REFRESH_DEBOUNCE_MS)
+    }
+    editor.on('update', scheduleRefresh)
 
     return () => {
-      editor.off('update', refreshHeadings)
+      if (timer !== undefined) window.clearTimeout(timer)
+      editor.off('update', scheduleRefresh)
     }
   }, [editor, refreshHeadings])
 

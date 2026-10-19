@@ -1,7 +1,7 @@
 import YAML from 'yaml';
 
 /** Runtime names stay stable while schema v2 uses the user-facing dataset names. */
-export type CollectionType = 'table' | 'media_library';
+export type CollectionType = 'table' | 'media_library' | 'work_documents';
 export type CollectionPlacement = 'standalone' | 'folder';
 export type CollectionDepth = 'direct_children' | 'descendants';
 export interface CollectionSource {
@@ -56,7 +56,7 @@ export function createCollectionMetadata(
 export function collectionDisplayName(filePath: string, placement: CollectionPlacement): string {
   const parts = filePath.split(/[\\/]/).filter(Boolean);
   if (placement === 'folder') return parts[parts.length - 2] ?? '';
-  return (parts[parts.length - 1] ?? '').replace(/\.(?:index\.ya?ml|(?:table|lib)\.ya?ml)$/i, '');
+  return (parts[parts.length - 1] ?? '').replace(/\.(?:index\.ya?ml|(?:table|lib|workdocs)\.ya?ml)$/i, '');
 }
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -92,8 +92,14 @@ function ruleFilterMatchesCollectionType(filter: unknown, type: CollectionType):
       return rule.op === 'eq' || rule.op === 'equals' || rule.op === 'contains' || rule.op === 'in';
     }
     if (field === 'file_name' || field === 'path') return rule.op === 'contains' && typeof rule.value === 'string';
-    if (field === 'kind') return (rule.op === 'eq' && (rule.value === 'image' || rule.value === 'video'))
+    if (field === 'kind' && type === 'media_library') return (rule.op === 'eq' && (rule.value === 'image' || rule.value === 'video'))
       || (rule.op === 'in' && Array.isArray(rule.value) && rule.value.every((kind) => kind === 'image' || kind === 'video'));
+    if (field === 'kind' && type === 'work_documents') {
+      const kinds = ['document', 'spreadsheet', 'presentation', 'web', 'archive', 'database'];
+      return (rule.op === 'eq' && typeof rule.value === 'string' && kinds.includes(rule.value))
+        || (rule.op === 'in' && Array.isArray(rule.value) && rule.value.length > 0
+          && rule.value.every((kind) => typeof kind === 'string' && kinds.includes(kind)));
+    }
     return false;
   });
 }
@@ -133,7 +139,7 @@ export function validateCollectionMetadata(value: unknown, type?: CollectionType
     : undefined;
   if (!isRecord(value) || !hasOnlyKeys(value, ['id', 'type', 'placement', 'name', 'revision', 'created_at', 'updated_at', 'properties'])
     || typeof value.id !== 'string' || !/^col_[0-9a-f]{32}$/.test(value.id)
-    || !['table', 'media_library'].includes(String(normalizedType)) || (type && normalizedType !== type)
+    || !['table', 'media_library', 'work_documents'].includes(String(normalizedType)) || (type && normalizedType !== type)
     || (value.placement !== undefined && !['standalone', 'folder'].includes(String(value.placement)))
     || (value.name !== undefined && (typeof value.name !== 'string' || !value.name.trim() || value.name !== value.name.trim()))
     || !Number.isSafeInteger(value.revision) || Number(value.revision) < 0
@@ -172,7 +178,7 @@ function validateV2Envelope(value: Record<string, unknown>): { collection: Colle
   if (collection.type === 'table' && (typeof dataset.schema.primary_field_id !== 'string' || !dataset.schema.primary_field_id.trim())) throw new Error('笔记集合缺少主字段');
   if (dataset.schema.preset_fields !== undefined && (!Array.isArray(dataset.schema.preset_fields)
     || (dataset.schema.preset_fields as unknown[]).some((id) => typeof id !== 'string'))) throw new Error('预设属性列表无效');
-  if (collection.type === 'media_library' && (!Array.isArray(dataset.schema.fields) || dataset.schema.fields.length > 0)) throw new Error('媒体集合不支持自定义字段');
+  if ((collection.type === 'media_library' || collection.type === 'work_documents') && (!Array.isArray(dataset.schema.fields) || dataset.schema.fields.length > 0)) throw new Error('此集合不支持自定义字段');
   for (const kind of ['include', 'exclude'] as const) {
     const seenIds = new Set<string>();
     const seenPaths = new Set<string>();
@@ -186,6 +192,7 @@ function validateV2Envelope(value: Record<string, unknown>): { collection: Colle
       if (!isDraftNote && seenPaths.has(path)) throw new Error('集合记录重复');
       if (!isDraftNote) seenPaths.add(path);
       if (collection.type === 'media_library' && (typeof record.resource_id !== 'string' || !record.resource_id.trim())) throw new Error('媒体记录缺少资源 ID');
+      if (collection.type === 'work_documents') throw new Error('工作文档集合不支持手动记录');
       if (collection.type === 'table' && !hasOnlyKeys(record, ['id', 'updated_at', 'note_path'])) throw new Error('笔记记录包含未知字段');
       if (collection.type === 'media_library' && !hasOnlyKeys(record, ['id', 'updated_at', 'resource_id', 'relative_path'])) throw new Error('媒体记录包含未知字段');
     }
@@ -197,7 +204,8 @@ function validateV2Envelope(value: Record<string, unknown>): { collection: Colle
       || typeof view.name !== 'string' || !view.name.trim() || typeof view.layout !== 'string'
       || !isRecord(view.config) || (view.filter !== undefined && !isRecord(view.filter))
       || (view.sort !== undefined && !Array.isArray(view.sort)))) throw new Error('集合视图格式无效');
-  const validLayouts = collection.type === 'table' ? ['table', 'kanban', 'calendar', 'gallery'] : ['waterfall'];
+  const validLayouts = collection.type === 'table' ? ['table', 'kanban', 'calendar', 'gallery']
+    : collection.type === 'media_library' ? ['waterfall'] : ['gallery'];
   if (viewItems.some((view) => !isRecord(view) || !validLayouts.includes(String(view.layout))
     || (view.filter !== undefined && !ruleFilterMatchesCollectionType(view.filter, collection.type))
     || (Array.isArray(view.sort) && view.sort.some((sort) => !isRecord(sort) || !hasOnlyKeys(sort, ['field', 'direction'])
@@ -226,6 +234,7 @@ export function parseCollectionDocumentV2(source: string, type?: CollectionType)
       name: legacyCollection.name, revision: legacyCollection.revision, created_at: legacyCollection.created_at,
       updated_at: legacyCollection.updated_at, properties: legacyCollection.properties ?? {},
     }, type);
+    if (collection.type === 'work_documents') throw new Error('不支持的集合文件格式或版本');
     const legacyKeys = collection.type === 'table' ? ['schema_version', 'table', 'records'] : ['schema_version', 'view', 'records'];
     const legacyConfig = value.payload[collection.type === 'table' ? 'table' : 'view'];
     const legacyRecords = value.payload.records;
@@ -374,7 +383,7 @@ export function serializeCollectionDocumentV2(document: CollectionDocumentV2): s
   const checked = validateCollectionMetadata(document.collection);
   const wireCollection = {
     id: checked.id,
-    type: checked.type === 'table' ? 'notes' : 'media',
+    type: checked.type === 'table' ? 'notes' : checked.type === 'media_library' ? 'media' : 'work_documents',
     placement: checked.placement,
     revision: checked.revision,
     created_at: checked.created_at,

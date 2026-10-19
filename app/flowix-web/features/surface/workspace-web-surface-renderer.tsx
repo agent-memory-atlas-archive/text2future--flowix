@@ -58,6 +58,7 @@ export function WebRenderer({ surface, context }: {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const embedTimeoutRef = useRef<number | null>(null);
   const runtime = context.webNavigation ? surface.runtime ?? port.getRuntime() : local.runtime;
+  const lastLoadedUrlRef = useRef(runtime && !runtime.isLoading ? runtime.currentUrl : null);
   const currentUrl = runtime?.currentUrl ?? surface.url;
   const reloadToken = runtime?.reloadToken ?? 0;
   const [address, setAddress] = useState(currentUrl);
@@ -139,6 +140,7 @@ export function WebRenderer({ surface, context }: {
       // host document. Keep the address bar and tab title at their last known
       // values in that case.
     }
+    lastLoadedUrlRef.current = loadedUrl;
 
     const runtimeNow = port.getRuntime();
     if (runtimeNow && loadedUrl !== runtimeNow.currentUrl) {
@@ -163,6 +165,7 @@ export function WebRenderer({ surface, context }: {
 
   useEffect(() => {
     const error = runtime?.error;
+    const isLoading = runtime?.isLoading ?? true;
     context.reportPresentation?.({
       title: pageTitle,
       icon: browserFaviconForUrl(currentUrl) ?? undefined,
@@ -172,8 +175,12 @@ export function WebRenderer({ surface, context }: {
             message: { key: 'error.unexpected', fallbackText: error },
             actions: [{ id: 'reload', label: { key: 'error.retry' }, enabled: true, run: port.reload }],
           }
-        : runtime?.isLoading
-          ? { status: 'loading', phase: 'content', message: { key: 'memo.navigation.loading' }, retainContent: true }
+        : isLoading
+          ? {
+              status: 'loading',
+              loadingMode: lastLoadedUrlRef.current === currentUrl ? 'background' : 'blocking',
+              retainContent: true,
+            }
           : { status: 'ready' },
     });
   }, [context.reportPresentation, currentUrl, pageTitle, port.reload, runtime?.error, runtime?.isLoading]);

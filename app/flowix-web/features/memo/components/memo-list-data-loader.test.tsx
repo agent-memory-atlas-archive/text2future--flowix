@@ -113,6 +113,21 @@ describe('MemoListDataLoader', () => {
     expect(setLoadedMemoListQueryKey).toHaveBeenCalledWith('notebook-1:all:createdAt:::');
   });
 
+  it('shares a pending query across effect re-entry and retains its completed revision', async () => {
+    let resolve!: (applied: boolean) => void;
+    const loadNotes = vi.fn(() => new Promise<boolean>(done => { resolve = done; }));
+    await act(async () => { renderLoader({ loadNotes }); });
+    await act(async () => {
+      renderLoader({ loadNotes, memoListQueryKey: 'notebook-1:all:createdAt:::' });
+    });
+    expect(loadNotes).toHaveBeenCalledOnce();
+    await act(async () => { resolve(true); });
+    await act(async () => {
+      renderLoader({ loadNotes, memoListQueryKey: 'notebook-1:all:createdAt:::' });
+    });
+    expect(loadNotes).toHaveBeenCalledOnce();
+  });
+
   it('does not mark a superseded query as loaded', async () => {
     const loadNotes = vi.fn().mockResolvedValue(false);
     const setLoadedMemoListQueryKey = vi.fn();

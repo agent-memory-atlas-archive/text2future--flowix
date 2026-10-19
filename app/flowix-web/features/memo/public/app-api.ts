@@ -1,3 +1,4 @@
+import { refreshIndexedMemo } from '@features/memo/services/memo-list-refresh-service';
 import type { MemoEvent, MemoDerivedRefresh } from '@/types/memo';
 import { useNoteStore } from '@features/memo/store/note-store';
 import { useTagStore } from '@features/memo/store/tag-store';
@@ -38,8 +39,8 @@ export function applyAppMemoCreated(_memo: unknown): void {
   useNoteStore.getState().handleMemoEvent();
 }
 
-export function applyAppMemoUpdated(_memo: unknown): void {
-  useNoteStore.getState().handleMemoEvent();
+export function applyAppMemoUpdated(event: Extract<MemoEvent, { kind: 'updated' }>): void {
+  void refreshIndexedMemo(event.notebookId, event.memo.relativePath);
 }
 
 export function applyAppMemoDeleted(): void {
@@ -80,7 +81,8 @@ export function applyAppTagsRenamed(event: Extract<MemoEvent, { kind: 'tags_rena
   if (getAppSelectedNotebookId() === event.notebookId
     && event.affectedRelativePaths.length
     && event.renamedTags.length) {
-    useNoteStore.getState().triggerRefresh();
+    for (const path of event.affectedRelativePaths) void refreshIndexedMemo(event.notebookId, path);
+    useNoteStore.getState().handleMemoListInvalidation(event.notebookId);
   }
 }
 
@@ -89,6 +91,7 @@ export function applyAppTagsDeleted(event: Extract<MemoEvent, { kind: 'tags_dele
   if (getAppSelectedNotebookId() === event.notebookId
     && event.affectedRelativePaths.length
     && event.deletedTags.length) {
-    useNoteStore.getState().triggerRefresh();
+    for (const path of event.affectedRelativePaths) void refreshIndexedMemo(event.notebookId, path);
+    useNoteStore.getState().handleMemoListInvalidation(event.notebookId);
   }
 }

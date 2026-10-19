@@ -72,6 +72,8 @@ function resolveExternalDocumentSurface(
       };
     case 'media-library':
       return { kind: 'media-library-file', instanceKey, fileIdentity, notebookPath: scopePath, notebookId: null };
+    case 'work-documents':
+      return { kind: 'work-documents-file', instanceKey, fileIdentity, notebookPath: scopePath, notebookId: null };
   }
 }
 
@@ -144,8 +146,9 @@ function resolveWorkColumnTarget(
   }
   switch (target.kind) {
     case 'folder-collection':
-      return surfaceContent({ kind: 'folder-collection', instanceKey: `${target.notebookId}:${target.folderPath}`,
-        notebookId: target.notebookId, notebookPath: target.notebookPath, folderPath: target.folderPath, folderName: target.folderName });
+      return surfaceContent({ kind: 'folder-collection', instanceKey: `${target.notebookId}:${target.folderPath}:${target.viewMode ?? 'chooser'}`,
+        notebookId: target.notebookId, notebookPath: target.notebookPath, folderPath: target.folderPath, folderName: target.folderName,
+        viewMode: target.viewMode });
     case 'empty':
       return emptyContent(input.emptyMessage, 'no-target');
     case 'web':
@@ -171,6 +174,10 @@ function resolveWorkColumnTarget(
       const fileIdentity = { path: target.filePath, displayId: target.displayId };
       if (target.collectionType === 'media_library') {
         return surfaceContent({ kind: 'media-library-file', instanceKey: target.displayId, fileIdentity, notebookId: target.notebookId, notebookPath: target.notebookPath });
+      }
+      if (target.collectionType === 'work_documents') {
+        return surfaceContent({ kind: 'work-documents-file', instanceKey: target.displayId, fileIdentity,
+          notebookId: target.notebookId, notebookPath: target.notebookPath, expectedCollectionId: target.collectionId });
       }
       return surfaceContent({ kind: 'table-file', instanceKey: collectionSessionKey({ ...target, expectedCollectionId: target.collectionId }), fileIdentity,
         props: { filePath: target.filePath, fileIdentity, notebookId: target.notebookId, notebookPath: target.notebookPath,

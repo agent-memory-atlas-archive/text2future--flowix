@@ -1265,12 +1265,12 @@ fn register_existing_file_reload_when_already_in_list() {
     fs::write(&abs, "# title\nv1 body\n").unwrap();
     let memo1 = mf.register_existing_file(&abs).unwrap();
     // 改盘 + 再次 register → 应走 reload, 不重复 push
-    fs::write(&abs, "# title\nv2 body\n").unwrap();
+    fs::write(&abs, "# v2 title\nv2 body\n").unwrap();
     let memo2 = mf.register_existing_file(&abs).unwrap();
     assert_eq!(memo1.relative_path, memo2.relative_path);
     let list = mf.read_index().expect("list");
     assert_eq!(list.memos.len(), 1);
-    assert_eq!(memo2.preview, "v2 body"); // 第二行=
+    assert_eq!(memo2.preview, "v2 title");
 }
 
 #[test]
@@ -1602,12 +1602,12 @@ fn reload_refreshes_preview_after_external_edit() {
     let memo = mf.create_memo("Reload", "original body\n", None).unwrap();
     fs::write(
         base.join("Reload.md"),
-        "---\nfilename: Reload\n---\n# title\nchanged body\n",
+        "---\nfilename: Reload\n---\n# changed title\nchanged body\n",
     )
     .unwrap();
     let updated = mf.reload_memo_from_disk(&memo.relative_path).expect("reload ok");
     assert_eq!(updated.filename, "Reload.md");
-    assert!(updated.preview.contains("changed"));
+    assert_eq!(updated.preview, "changed title");
 }
 
 // =====================================================================

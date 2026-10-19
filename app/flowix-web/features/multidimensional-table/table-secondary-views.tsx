@@ -231,7 +231,7 @@ export function TableGalleryView({ records, titleField, fields, renderValue, ima
               <span className="flex min-w-0 items-center gap-1">
                 {icon
                   ? <img src={icon.src} alt="" aria-hidden="true" draggable={false} className="h-4 w-4 shrink-0 object-contain" />
-                  : <NotebookTreeFileIcon className='h-4 w-4 shrink-0 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)]' />}
+                  : <NotebookTreeFileIcon className='h-4 w-4 shrink-0 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] [[data-theme="mist"]_&]:text-[var(--foreground)]' />}
                 <span className={`block min-w-0 truncate text-sm font-medium leading-5 ${missing ? 'text-[var(--muted-foreground)]' : 'text-[var(--foreground)]'}`}>{renderValue(record, titleField)}</span>
               </span>
               <span className="mt-0.5 block truncate text-xs leading-4 text-[var(--muted-foreground)]">

@@ -1,6 +1,6 @@
 import { sortFields } from './field-order';
 import { builtinTableFieldValue, builtinPresetTableField, builtinPresetValue, type BuiltinTableField } from './builtin-fields';
-import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ChevronDown, ChevronUp, FileText, MoreHorizontal } from 'lucide-react';
 import { ArrowUpRightIcon, ArrowsLeftRightIcon, LightningIcon, MinusCircleIcon, TrashSimpleIcon } from '@phosphor-icons/react';
 import type { NoteEntry } from '@platform/tauri/client';
@@ -221,6 +221,15 @@ export const TableRecordRow = memo(function TableRecordRow({
   const [switchNoteSearch, setSwitchNoteSearch] = useState('');
   const [uploadingImageFieldId, setUploadingImageFieldId] = useState<string | null>(null);
   const primaryTitleInputRef = useRef<HTMLTextAreaElement>(null);
+  const resizePrimaryTitleInput = useCallback((input = primaryTitleInputRef.current) => {
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight, window.innerHeight * 0.5)}px`;
+  }, []);
+  const setPrimaryTitleInputRef = useCallback((input: HTMLTextAreaElement | null) => {
+    primaryTitleInputRef.current = input;
+    if (input) resizePrimaryTitleInput(input);
+  }, [resizePrimaryTitleInput]);
   const creatingDraftNoteRef = useRef(false);
   const shouldLoadAvailableNotes = switchNoteOpen || (editingPrimary && !note && allowSwitchNote);
   const subscribeToAvailableNotes = useCallback((listener: () => void) => (
@@ -239,12 +248,11 @@ export const TableRecordRow = memo(function TableRecordRow({
     return !query || `${availableNote.title ?? ''} ${availableNote.relativePath}`.toLocaleLowerCase().includes(query);
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const input = primaryTitleInputRef.current;
     if (!editingPrimary || !input) return;
-    input.style.height = 'auto';
-    input.style.height = `${Math.min(input.scrollHeight, window.innerHeight * 0.5)}px`;
-  }, [editingPrimary, primaryTitleDraft]);
+    resizePrimaryTitleInput(input);
+  }, [editingPrimary, primaryTitleDraft, resizePrimaryTitleInput]);
 
 
   useEffect(() => {
@@ -356,7 +364,7 @@ export const TableRecordRow = memo(function TableRecordRow({
                   <PopoverContent align="start" side="bottom" sideOffset={4} fitViewport className="w-[240px] max-w-[calc(100vw-1rem)] rounded-xl px-2 py-2 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
                     <div className="multidimensional-table__primary-editor">
                       <textarea
-                        ref={primaryTitleInputRef}
+                        ref={setPrimaryTitleInputRef}
                         autoFocus
                         aria-label="笔记文件名"
                         rows={1}

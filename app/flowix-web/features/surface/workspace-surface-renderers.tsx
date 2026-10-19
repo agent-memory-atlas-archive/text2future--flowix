@@ -27,8 +27,7 @@ function publishDocumentContentState(
   switch (contentState.status) {
     case 'loading':
       reportPresentation({ state: {
-        status: 'loading', phase: 'content', message: { key: 'document.file.loading' },
-        retainContent: contentState.retainContent,
+        status: 'loading', loadingMode: 'blocking', retainContent: contentState.retainContent,
       } });
       break;
     case 'error':
@@ -72,6 +71,8 @@ const CsvPreview = lazy(() => import('@features/document/components/csv-preview'
 const TableDocumentView = lazy(() => import('@features/multidimensional-table/public/surface-api').then((module) => ({ default: module.TableDocumentView })));
 const MediaLibraryView = lazy(() => import('@features/media-library/media-library-view').then((module) => ({ default: module.MediaLibraryView })));
 const MediaResourceView = lazy(() => import('./media-resource-view').then((module) => ({ default: module.MediaResourceView })));
+const WorkDocumentsView = lazy(() => import('./work-documents-view').then((module) => ({ default: module.WorkDocumentsView })));
+const WorkDocumentsCollectionView = lazy(() => import('./work-documents-collection-view').then((module) => ({ default: module.WorkDocumentsCollectionView })));
 const MarkdownDocumentSurface = lazy(() => import('./markdown-document-surface').then((module) => ({ default: module.MarkdownDocumentSurface })));
 const HtmlResourceView = lazy(() => import('./html-resource-view').then((module) => ({ default: module.HtmlResourceView })));
 const CodeSurfaceFileBrowser = lazy(() => import('./work-file-browser-view').then((module) => ({ default: module.CodeSurfaceFileBrowser })));
@@ -89,7 +90,8 @@ export function MarkdownRenderer({ surface, context }: RendererProps<'file-markd
   return <MarkdownDocumentSurface
     fileIdentity={surface.fileIdentity}
     documentProps={{ ...surface.documentProps, workspaceHost: context.host,
-      initialFocus: context.initialFocus ?? surface.documentProps.initialFocus, onContentStateChange }}
+      initialFocus: context.initialFocus ?? surface.documentProps.initialFocus,
+      onContentStateChange: context.reportPresentation ? onContentStateChange : undefined }}
     navigationViewId={context.host === 'browser-column' ? context.viewId : undefined}
     reportPresentation={context.reportPresentation}
     registerLifecycle={context.registerLifecycle}
@@ -104,7 +106,7 @@ export function CodeRenderer({ surface, context }: RendererProps<'file-code'>) {
     ...surface.documentProps,
     workspaceHost: context.host,
     initialFocus: context.initialFocus ?? surface.documentProps.initialFocus,
-    onContentStateChange,
+    onContentStateChange: context.reportPresentation ? onContentStateChange : undefined,
   }, context.registerLifecycle);
   if (context.host === 'main-third') {
     const workSurface = {
@@ -160,6 +162,20 @@ export function MediaLibraryRenderer({ surface, context }: RendererProps<'file-m
   />;
 }
 
+export function WorkDocumentsCollectionRenderer({ surface, context }: RendererProps<'file-work-documents'>) {
+  const lifecycleProps = useWorkspaceSurfaceLifecycleBridge({}, context.registerLifecycle);
+  return <WorkDocumentsCollectionView
+    {...lifecycleProps}
+    filePath={surface.fileIdentity.path}
+    fileIdentity={surface.fileIdentity}
+    notebookPath={surface.notebookPath}
+    notebookId={surface.notebookId}
+    expectedCollectionId={surface.expectedCollectionId}
+    workspaceHost={context.host}
+    reportPresentation={context.reportPresentation}
+  />;
+}
+
 export function HtmlRenderer({ surface, context }: RendererProps<'file-html'>) {
   const documentProps = useWorkspaceSurfaceLifecycleBridge({
     ...surface.documentProps,
@@ -189,7 +205,7 @@ export function UnavailableRenderer({ surface, context }: RendererProps<'file-un
     ...surface.documentProps,
     workspaceHost: context.host,
     initialFocus: context.initialFocus ?? surface.documentProps?.initialFocus,
-    onContentStateChange,
+    onContentStateChange: context.reportPresentation ? onContentStateChange : undefined,
   }, context.registerLifecycle);
   const baseFileKind = externalFileViewKind(filePath);
   const { isTextContent, loading: contentDetectionLoading } = useExternalFileContentDetection(filePath, surface.scopePath, baseFileKind === 'unavailable');
@@ -199,7 +215,7 @@ export function UnavailableRenderer({ surface, context }: RendererProps<'file-un
     if (baseFileKind === 'docx' || baseFileKind === 'csv') return;
     if (contentDetectionLoading) {
       context.reportPresentation?.({ state: {
-        status: 'loading', phase: 'content', message: { key: 'document.file.loading' }, retainContent: false,
+        status: 'loading', loadingMode: 'blocking', retainContent: false,
       } });
     } else if (resolvedFileKind === 'code' && hasDocumentProps) {
       context.reportPresentation?.({ appearance: workspaceSurfaceAppearance('file-code'),
@@ -214,7 +230,7 @@ export function UnavailableRenderer({ surface, context }: RendererProps<'file-un
     onSurfaceLifecycleReady={documentProps.onSurfaceLifecycleReady} reportPresentation={context.reportPresentation} />;
   if (contentDetectionLoading) return context.reportPresentation ? null : <WorkspaceSurfaceStateView
     appearance={workspaceSurfaceAppearance('file-unavailable')}
-    state={{ status: 'loading', phase: 'content', message: { key: 'document.file.loading' }, retainContent: false }}
+    state={{ status: 'loading', loadingMode: 'blocking', retainContent: false }}
   />;
   if (resolvedFileKind === 'code' && surface.documentProps) {
     const content = <DocumentContainer
@@ -252,8 +268,13 @@ export function PluginWorkbenchRenderer({ surface, context }: RendererProps<'plu
 
 export function CollectionRenderer({ surface, context }: RendererProps<'collection'>) {
   useEffect(() => {
+    if (surface.viewMode === 'work-documents') return;
     context.reportPresentation?.({ state: { status: 'ready' } });
-  }, [context.reportPresentation]);
+  }, [context.reportPresentation, surface.viewMode]);
+
+  if (surface.viewMode === 'work-documents') {
+    return <WorkDocumentsView notebookId={surface.notebookId} notebookPath={surface.notebookPath} context={context} />;
+  }
 
   const choose = async (initialType: 'notes' | 'media') => {
     try {

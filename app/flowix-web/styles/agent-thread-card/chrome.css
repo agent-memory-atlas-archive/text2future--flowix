@@ -108,7 +108,9 @@
   min-height: var(--atc-max-height);
 }
 
-.markdown-editor .agent-thread-card--fullscreen {
+/* controls.css imports later and makes the base card transparent. Keep the
+ * fullscreen surface opaque so wheel hit-testing stays on its message area. */
+.markdown-editor .agent-thread-card.agent-thread-card--fullscreen {
   /* Fullscreen is scoped to the work-column document container. Keeping the
    * card in that containing block makes it follow panel movement when the
    * memo list is shown or hidden. */

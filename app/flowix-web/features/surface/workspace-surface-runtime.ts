@@ -93,17 +93,21 @@ function updateStartupSurfaceState(viewId: string, state: SurfaceState): void {
   emitStartup();
 }
 
-export function registerWorkspaceSurfacePresentationOwner(viewId: string, owner: object): () => void {
+export function registerWorkspaceSurfacePresentationOwner(
+  viewId: string,
+  owner: object,
+  initialUpdate: Readonly<SurfacePresentationUpdate> = {},
+): () => void {
   owners.set(viewId, owner);
-  clearSnapshot(viewId);
   const pending = pendingUpdates.get(viewId);
-  if (pending?.owner === owner) {
-    pendingUpdates.delete(viewId);
-    snapshots.set(viewId, pending.update);
-    emit(viewId);
-  } else if (pending) {
-    pendingUpdates.delete(viewId);
-  }
+  pendingUpdates.delete(viewId);
+  const update = pending?.owner === owner
+    ? { ...initialUpdate, ...pending.update }
+    : initialUpdate;
+  if (Object.keys(update).length === 0) snapshots.delete(viewId);
+  else snapshots.set(viewId, update);
+  if (update.state) updateStartupSurfaceState(viewId, update.state);
+  emit(viewId);
   return () => {
     if (owners.get(viewId) !== owner) return;
     owners.delete(viewId);

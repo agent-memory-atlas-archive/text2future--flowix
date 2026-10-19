@@ -9,6 +9,8 @@ import {
   collectShikiHighlightInputs,
   createShikiDecorationSet,
   invalidateShikiThemeCache,
+  type ShikiHighlightBlockResult,
+  type ShikiHighlightInput,
 } from '@features/editor/extensions/codeblock-shiki/shiki/shiki-decorations'
 import { tokenizeCodeBlocksInWorker } from './shiki-worker-client'
 import { transactionNeedsShikiLoad, transactionTouchesCodeBlock } from './shiki-transaction-scope'
@@ -21,6 +23,10 @@ export interface PluginShikiOptions {
   defaultTheme: BundledTheme
   preloadThemes?: BundledTheme[]
   traceId?: number | null
+}
+
+function highlightCacheKey(block: ShikiHighlightInput): string {
+  return `${block.language}\u0000${block.theme}\u0000${block.text}`
 }
 
 function countCodeBlocks(doc: ProseMirrorNode, typeName: string): number {
@@ -42,6 +48,7 @@ export function proseMirrorPluginShiki(options: PluginShikiOptions) {
   const { name, defaultLanguage, defaultTheme, traceId = null } = options
   let currentView: EditorView | null = null
   let pendingRaf: number | null = null
+  let pendingDebounce: ReturnType<typeof setTimeout> | null = null
   let requestWorkerRecompute: (() => void) | null = null
 
   const shikiPlugin: Plugin = new Plugin({
@@ -101,6 +108,7 @@ export function proseMirrorPluginShiki(options: PluginShikiOptions) {
       let needsRerun = false
       let idleId: number | null = null
       let timeoutId: ReturnType<typeof setTimeout> | null = null
+      const tokenResults = new Map<string, ShikiHighlightBlockResult['lines']>()
 
       const scheduleRecompute = () => {
         if (cancelled) return
@@ -110,7 +118,15 @@ export function proseMirrorPluginShiki(options: PluginShikiOptions) {
         }
         void recomputeDecorations()
       }
-      requestWorkerRecompute = scheduleRecompute
+      const scheduleDebouncedRecompute = () => {
+        if (cancelled) return
+        if (pendingDebounce !== null) clearTimeout(pendingDebounce)
+        pendingDebounce = setTimeout(() => {
+          pendingDebounce = null
+          scheduleRecompute()
+        }, 150)
+      }
+      requestWorkerRecompute = scheduleDebouncedRecompute
 
       const recomputeDecorations = async () => {
         if (cancelled || running || editorView.isDestroyed) return
@@ -124,29 +140,48 @@ export function proseMirrorPluginShiki(options: PluginShikiOptions) {
           defaultLanguage,
           defaultTheme,
         })
+        const currentKeys = new Set(blocks.map(highlightCacheKey))
+        const missingBlocks = blocks.filter(block => !tokenResults.has(highlightCacheKey(block)))
         markDocumentOpenTrace(traceId, 'shiki:worker-start', {
           codeBlockCount,
           highlightedBlockCount: blocks.length,
+          tokenizedBlockCount: missingBlocks.length,
           contentChars: documentSnapshot.textContent.length,
         })
 
         try {
-          const reply = await tokenizeCodeBlocksInWorker(blocks)
+          const reply = await tokenizeCodeBlocksInWorker(missingBlocks)
           if (cancelled || editorView.isDestroyed) return
           if (editorView.state.doc !== documentSnapshot) {
             needsRerun = true
             return
           }
 
+          const missingByPosition = new Map(missingBlocks.map(block => [block.from, block]))
+          for (const result of reply.blocks ?? []) {
+            const input = missingByPosition.get(result.from)
+            if (input) tokenResults.set(highlightCacheKey(input), result.lines)
+          }
+          // Keep only token results represented by the current document. This
+          // bounds memory to the open document and avoids LRU churn when it has
+          // more than 64 distinct code blocks.
+          for (const key of tokenResults.keys()) {
+            if (!currentKeys.has(key)) tokenResults.delete(key)
+          }
+          const allResults = blocks.flatMap((block): ShikiHighlightBlockResult[] => {
+            const lines = tokenResults.get(highlightCacheKey(block))
+            return lines ? [{ from: block.from, lines }] : []
+          })
+
           const decorations = createShikiDecorationSet(
             documentSnapshot,
             { doc: documentSnapshot, name, defaultLanguage, defaultTheme },
             blocks,
-            reply.blocks ?? [],
+            allResults,
           )
           editorView.dispatch(editorView.state.tr.setMeta(SHIKI_DECORATIONS_META, decorations))
           const elapsedMs = Math.round((performance.now() - startedAt) * 10) / 10
-          const tokenCount = (reply.blocks ?? []).reduce((count, block) => (
+          const tokenCount = allResults.reduce((count, block) => (
             count + block.lines.reduce((lineCount, line) => lineCount + line.length, 0)
           ), 0)
           console.info('[perf:open-doc]', 'Shiki:worker-tokenize', {
@@ -154,6 +189,7 @@ export function proseMirrorPluginShiki(options: PluginShikiOptions) {
             workerMs: reply.workerMs,
             codeBlockCount,
             highlightedBlockCount: blocks.length,
+            tokenizedBlockCount: missingBlocks.length,
             tokenCount,
             contentChars: documentSnapshot.textContent.length,
           })
@@ -162,6 +198,7 @@ export function proseMirrorPluginShiki(options: PluginShikiOptions) {
             workerMs: reply.workerMs,
             codeBlockCount,
             highlightedBlockCount: blocks.length,
+            tokenizedBlockCount: missingBlocks.length,
             tokenCount,
           })
           markDocumentOpenTrace(traceId, 'shiki:first-decoration')
@@ -174,7 +211,7 @@ export function proseMirrorPluginShiki(options: PluginShikiOptions) {
           running = false
           if (needsRerun && !cancelled) {
             needsRerun = false
-            scheduleRecompute()
+            scheduleDebouncedRecompute()
           }
         }
       }
@@ -236,6 +273,10 @@ export function proseMirrorPluginShiki(options: PluginShikiOptions) {
           if (timeoutId !== null) {
             globalThis.clearTimeout(timeoutId)
             timeoutId = null
+          }
+          if (pendingDebounce !== null) {
+            clearTimeout(pendingDebounce)
+            pendingDebounce = null
           }
           if (pendingRaf !== null) {
             cancelAnimationFrame(pendingRaf)

@@ -11,11 +11,15 @@ import {
   TextStrikethroughIcon,
   TextUnderlineIcon,
 } from '@phosphor-icons/react';
-import { type ReactNode, useCallback, useEffect, useMemo, useReducer, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import type { BubbleMenuProps } from '@tiptap/react/menus';
 import { openLinkEditPopup } from '@features/editor/components/link-edit-popup';
 import { FlowixHighlightPalette } from '@features/editor/components/flowix-highlight-palette';
-import { hasFormattableTextSelection } from '@features/editor/components/selection-bubble-menu-state';
+import {
+  getSelectionBubbleMenuSnapshot,
+  hasFormattableTextSelection,
+  sameSelectionBubbleMenuSnapshot,
+} from '@features/editor/components/selection-bubble-menu-state';
 import { useI18n } from '@/lib/i18n';
 import { Tooltip } from '@shared/ui/tooltip';
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/ui/popover';
@@ -64,16 +68,18 @@ function FormatButton({
 
 export function SelectionBubbleMenu({ editor }: SelectionBubbleMenuProps) {
   const { t } = useI18n();
-  const [, rerender] = useReducer((revision: number) => revision + 1, 0);
+  const [snapshot, setSnapshot] = useState(() => getSelectionBubbleMenuSnapshot(editor));
   const [highlightPaletteOpen, setHighlightPaletteOpen] = useState(false);
 
   useEffect(() => {
     const update = () => {
-      rerender();
-      if (!hasFormattableTextSelection(editor)) {
+      const next = getSelectionBubbleMenuSnapshot(editor);
+      setSnapshot((previous) => sameSelectionBubbleMenuSnapshot(previous, next) ? previous : next);
+      if (!next.hasSelection) {
         setHighlightPaletteOpen(false);
       }
     };
+    update();
     editor.on('transaction', update);
     return () => {
       editor.off('transaction', update);
@@ -104,9 +110,7 @@ export function SelectionBubbleMenu({ editor }: SelectionBubbleMenuProps) {
     [],
   );
 
-  const linkHref = editor.isActive('link')
-    ? String(editor.getAttributes('link').href ?? '')
-    : '';
+  const linkHref = snapshot.linkHref;
 
   return (
     <BubbleMenu
@@ -120,29 +124,29 @@ export function SelectionBubbleMenu({ editor }: SelectionBubbleMenuProps) {
       options={options}
     >
       <FormatButton
-        active={editor.isActive('bold')}
-        disabled={!editor.can().chain().focus().toggleBold().run()}
+        active={snapshot.bold}
+        disabled={!snapshot.boldEnabled}
         icon={<TextBIcon size={17} weight="bold" aria-hidden="true" />}
         label={t('editor.bubble.bold')}
         onRun={() => editor.chain().focus().toggleBold().run()}
       />
       <FormatButton
-        active={editor.isActive('italic')}
-        disabled={!editor.can().chain().focus().toggleItalic().run()}
+        active={snapshot.italic}
+        disabled={!snapshot.italicEnabled}
         icon={<TextItalicIcon size={17} weight="bold" aria-hidden="true" />}
         label={t('editor.bubble.italic')}
         onRun={() => editor.chain().focus().toggleItalic().run()}
       />
       <FormatButton
-        active={editor.isActive('underline')}
-        disabled={!editor.can().chain().focus().toggleUnderline().run()}
+        active={snapshot.underline}
+        disabled={!snapshot.underlineEnabled}
         icon={<TextUnderlineIcon size={17} weight="bold" aria-hidden="true" />}
         label={t('editor.bubble.underline')}
         onRun={() => editor.chain().focus().toggleUnderline().run()}
       />
       <FormatButton
-        active={editor.isActive('strike')}
-        disabled={!editor.can().chain().focus().toggleStrike().run()}
+        active={snapshot.strike}
+        disabled={!snapshot.strikeEnabled}
         icon={
           <TextStrikethroughIcon size={17} weight="bold" aria-hidden="true" />
         }
@@ -151,8 +155,8 @@ export function SelectionBubbleMenu({ editor }: SelectionBubbleMenuProps) {
       />
       <span className="selection-bubble-divider" aria-hidden="true" />
       <FormatButton
-        active={editor.isActive('code')}
-        disabled={!editor.can().chain().focus().toggleCode().run()}
+        active={snapshot.code}
+        disabled={!snapshot.codeEnabled}
         icon={<CodeIcon size={17} weight="bold" aria-hidden="true" />}
         label={t('editor.bubble.inlineCode')}
         onRun={() => editor.chain().focus().toggleCode().run()}
@@ -161,9 +165,9 @@ export function SelectionBubbleMenu({ editor }: SelectionBubbleMenuProps) {
         <PopoverTrigger asChild>
           <button
             type="button"
-            className={`selection-bubble-button${editor.isActive('highlight') ? ' is-active' : ''}`}
+            className={`selection-bubble-button${snapshot.highlight ? ' is-active' : ''}`}
             aria-label={t('editor.bubble.highlight')}
-            aria-pressed={editor.isActive('highlight')}
+            aria-pressed={snapshot.highlight}
             aria-expanded={highlightPaletteOpen}
             onMouseDown={(event) => event.preventDefault()}
           >

@@ -14,16 +14,12 @@ export type DocumentContentStatus =
   | { status: 'error'; message: string; retry: () => void | Promise<void> };
 
 export interface DocumentContainerState {
-  // fullContent includes frontmatter + body markdown
-  fullContent: string;
   isLoaded: boolean;
   isLoading: boolean;
   error: string | null;
   errorKind: 'missing-note' | 'error' | null;
   isScrolled: boolean;
   isNewlyCreated: boolean;
-  charCount: number;
-  tokenCount: number;
   createdAt: string;
   updatedAt: string;
   updatedAtDate: Date | null;
@@ -83,15 +79,12 @@ export interface DocumentContainerProps {
 }
 
 export const initialDocumentContainerState: DocumentContainerState = {
-  fullContent: '',
   isLoaded: false,
   isLoading: false,
   error: null,
   errorKind: null,
   isScrolled: false,
   isNewlyCreated: false,
-  charCount: 0,
-  tokenCount: 0,
   createdAt: '',
   updatedAt: '',
   updatedAtDate: null,

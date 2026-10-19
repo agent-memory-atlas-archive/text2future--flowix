@@ -60,6 +60,30 @@ async function ensureLanguage(
   await pending
 }
 
+/**
+ * Highlighting is recomputed for every code block whenever any block changes,
+ * so one keystroke in a code block re-tokenizes the whole document. Unchanged
+ * blocks always produce identical output, so keep a small LRU keyed by the
+ * resolved language/theme/text.
+ */
+const TOKEN_CACHE_LIMIT = 64
+const tokenCache = new Map<string, ShikiHighlightToken[][]>()
+
+function cachedTokens(key: string): ShikiHighlightToken[][] | undefined {
+  const hit = tokenCache.get(key)
+  if (!hit) return undefined
+  tokenCache.delete(key)
+  tokenCache.set(key, hit)
+  return hit
+}
+
+function storeTokens(key: string, lines: ShikiHighlightToken[][]): void {
+  tokenCache.set(key, lines)
+  if (tokenCache.size <= TOKEN_CACHE_LIMIT) return
+  const oldest = tokenCache.keys().next().value
+  if (oldest !== undefined) tokenCache.delete(oldest)
+}
+
 async function tokenize(blocks: readonly ShikiHighlightInput[]): Promise<ShikiHighlightBlockResult[]> {
   const instance = await getHighlighter()
   await Promise.all([...new Set(blocks.map((block) => block.language))]
@@ -72,6 +96,9 @@ async function tokenize(blocks: readonly ShikiHighlightInput[]): Promise<ShikiHi
     const language = instance.getLoadedLanguages().some((loadedLanguage) => loadedLanguage === block.language)
       ? block.language
       : 'plaintext'
+    const cacheKey = `${language}\u0000${theme}\u0000${block.text}`
+    const cached = cachedTokens(cacheKey)
+    if (cached) return { from: block.from, lines: cached }
     const lines = instance.codeToTokensBase(block.text, {
       lang: language as BundledLanguage,
       theme,
@@ -80,6 +107,7 @@ async function tokenize(blocks: readonly ShikiHighlightInput[]): Promise<ShikiHi
       content: token.content,
       color: token.color ?? '',
     })))
+    storeTokens(cacheKey, resultLines)
     return { from: block.from, lines: resultLines }
   })
 }

@@ -1,9 +1,15 @@
 use super::*;
 use rusqlite::{params, TransactionBehavior};
 
+fn is_package_document_directory(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "pages" | "key"))
+}
+
 impl MemoFile {
     /// Reject derived-index collisions before a directory operation changes disk.
-    /// Inactive media records retain user properties and must not be discarded.
+    /// Inactive resource records retain user properties and must not be discarded.
     pub fn validate_directory_index_rebase(&self, notebook_id: &str, previous: &str, next: &str) -> std::io::Result<()> {
         let conn = self.open_note_index_connection(notebook_id)?;
         drop(self.open_notebook_db(notebook_id)?);
@@ -17,7 +23,7 @@ impl MemoFile {
              OR EXISTS(SELECT 1 FROM note_content_revisions source JOIN note_content_revisions target
              ON target.notebook_id=source.notebook_id AND target.relative_path=?2 || substr(source.relative_path,length(?1)+1)
              WHERE source.notebook_id=?4 AND source.relative_path>=?1 AND source.relative_path<?3)
-             OR EXISTS(SELECT 1 FROM media_resources source JOIN media_resources target
+             OR EXISTS(SELECT 1 FROM resource_catalog source JOIN resource_catalog target
              ON target.notebook_id=source.notebook_id AND target.relative_path=?2 || substr(source.relative_path,length(?1)+1)
              WHERE source.notebook_id=?4 AND source.relative_path>=?1 AND source.relative_path<?3
              AND source.missing_since IS NULL AND source.deleted_at IS NULL)",
@@ -28,7 +34,7 @@ impl MemoFile {
         }
         Ok(())
     }
-    /// Rebase derived note/media rows without reading every file in the notebook.
+    /// Rebase derived note/resource rows without reading every file in the notebook.
     /// The caller must hold the notebook structural lock and have moved the directory.
     /// Repeating the same confirmed move is safe during journal recovery.
     pub fn rebase_directory_indexes(
@@ -65,9 +71,9 @@ impl MemoFile {
              WHERE notebook_id=?4 AND relative_path>=?1 AND relative_path<?3",
             params![previous_prefix, next_prefix, upper_bound, notebook_id],
         ).map_err(sqlite_to_io)?;
-        let media_rows = {
+        let resource_rows = {
             let mut statement = tx.prepare(
-                "SELECT id, relative_path FROM media_resources
+                "SELECT id, relative_path FROM resource_catalog
                  WHERE notebook_id=?1 AND relative_path>=?2 AND relative_path<?3
                    AND missing_since IS NULL AND deleted_at IS NULL",
             ).map_err(sqlite_to_io)?;
@@ -76,22 +82,22 @@ impl MemoFile {
             }).map_err(sqlite_to_io)?;
             rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_to_io)?
         };
-        let media_moves = media_rows.into_iter().map(|(old_id, old_path)| {
+        let resource_moves = resource_rows.into_iter().map(|(old_id, old_path)| {
             let next_path = format!("{next}/{}", old_path.strip_prefix(&previous_prefix).unwrap_or_default());
             let next_id = crate::memo_file::media_resource_id(notebook_id, &next_path)
                 .map_err(std::io::Error::other)?;
-            let temporary_id = format!("__flowix_media_move__{}", uuid::Uuid::now_v7().simple());
+            let temporary_id = format!("__flowix_resource_move__{}", uuid::Uuid::now_v7().simple());
             Ok((old_id, temporary_id, next_path, next_id))
         }).collect::<std::io::Result<Vec<_>>>()?;
-        for (old_id, temporary_id, _, _) in &media_moves {
+        for (old_id, temporary_id, _, _) in &resource_moves {
             tx.execute(
-                "UPDATE media_resources SET id=?1 WHERE notebook_id=?2 AND id=?3",
+                "UPDATE resource_catalog SET id=?1 WHERE notebook_id=?2 AND id=?3",
                 params![temporary_id, notebook_id, old_id],
             ).map_err(sqlite_to_io)?;
         }
-        for (_, temporary_id, next_path, next_id) in media_moves {
+        for (_, temporary_id, next_path, next_id) in resource_moves {
             tx.execute(
-                "UPDATE media_resources SET id=?1, relative_path=?2 WHERE notebook_id=?3 AND id=?4",
+                "UPDATE resource_catalog SET id=?1, relative_path=?2 WHERE notebook_id=?3 AND id=?4",
                 params![next_id, next_path, notebook_id, temporary_id],
             ).map_err(sqlite_to_io)?;
         }
@@ -106,6 +112,7 @@ impl MemoFile {
         target: &Path,
     ) -> std::io::Result<()> {
         let source_is_directory = source.is_dir();
+        let source_absolute = std::fs::canonicalize(source)?;
         let notebook_ids = self.notebook_ids_for_paths(&[source, target])?;
         let _change_guard = if notebook_ids.is_empty() {
             None
@@ -168,6 +175,75 @@ impl MemoFile {
                 return Err(error);
             }
             rebased_directories.push((notebook_id.clone(), previous.clone(), next.clone()));
+            if source_is_directory {
+                let old_indexed = is_package_document_directory(source);
+                let new_indexed = target.is_dir() && is_package_document_directory(target);
+                let update = if old_indexed && new_indexed {
+                    self.move_indexed_resource_path(notebook_id, previous, next)
+                        .and_then(|moved| {
+                            if moved {
+                                Ok(())
+                            } else {
+                                self.refresh_indexed_resource_path(notebook_id, next)
+                            }
+                        })
+                } else if old_indexed {
+                    self.refresh_indexed_resource_path(notebook_id, previous)
+                } else if new_indexed {
+                    self.refresh_indexed_resource_path(notebook_id, next)
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = update {
+                    tracing::warn!(notebook_id, %error, "resource catalog package rename update failed");
+                }
+            }
+        }
+        if !source_is_directory {
+            let target_absolute = std::fs::canonicalize(target)?;
+            for notebook_id in &notebook_ids {
+                let Some(notebook) = self.get_notebook_config_by_id(notebook_id) else {
+                    continue;
+                };
+                let root = std::fs::canonicalize(notebook.path)?;
+                let old_relative = source_absolute
+                    .strip_prefix(&root)
+                    .ok()
+                    .map(|path| path.to_string_lossy().replace('\\', "/"));
+                let new_relative = target_absolute
+                    .strip_prefix(&root)
+                    .ok()
+                    .map(|path| path.to_string_lossy().replace('\\', "/"));
+                match (old_relative, new_relative) {
+                    (Some(old), Some(new)) => {
+                        let old_indexed = crate::memo_file::resource_kind_for_path(source).is_some();
+                        let new_indexed = crate::memo_file::resource_kind_for_path(target).is_some();
+                        if old_indexed && new_indexed {
+                            if !self.move_indexed_resource_path(notebook_id, &old, &new)? {
+                                self.refresh_indexed_resource_path(notebook_id, &new)?;
+                            }
+                        } else {
+                            if old_indexed {
+                                self.refresh_indexed_resource_path(notebook_id, &old)?;
+                            }
+                            if new_indexed {
+                                self.refresh_indexed_resource_path(notebook_id, &new)?;
+                            }
+                        }
+                    }
+                    (Some(old), None)
+                        if crate::memo_file::resource_kind_for_path(source).is_some() =>
+                    {
+                        self.refresh_indexed_resource_path(notebook_id, &old)?;
+                    }
+                    (None, Some(new))
+                        if crate::memo_file::resource_kind_for_path(target).is_some() =>
+                    {
+                        self.refresh_indexed_resource_path(notebook_id, &new)?;
+                    }
+                    _ => {}
+                }
+            }
         }
         drop(_guard);
         drop(_change_guard);

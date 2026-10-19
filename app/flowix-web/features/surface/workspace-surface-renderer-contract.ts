@@ -33,6 +33,7 @@ export type WorkspaceSurfaceRendererData =
   | { kind: 'file-video'; fileIdentity: FileDisplayIdentity; scopePath: string | null }
   | { kind: 'file-table'; fileIdentity: FileDisplayIdentity; props: TableDocumentViewProps }
   | { kind: 'file-media-library'; fileIdentity: FileDisplayIdentity; notebookPath: string | null; notebookId: string | null; expectedCollectionId?: string | null }
+  | { kind: 'file-work-documents'; fileIdentity: FileDisplayIdentity; notebookPath: string | null; notebookId: string | null; expectedCollectionId?: string | null }
   | { kind: 'file-html'; fileIdentity: FileDisplayIdentity; scopePath: string | null; documentProps: ExternalDocumentProps }
   | { kind: 'file-docx'; fileIdentity: FileDisplayIdentity; scopePath: string | null }
   | { kind: 'file-unavailable'; fileIdentity: FileDisplayIdentity; scopePath: string | null; documentProps?: ExternalDocumentProps }
@@ -40,7 +41,7 @@ export type WorkspaceSurfaceRendererData =
   | { kind: 'agent-conversation'; instanceId: string }
   | { kind: 'web'; url: string; title?: string; runtime?: WorkspaceWebRuntime | null }
   | { kind: 'file-browser'; props: WorkspaceFileBrowserSurfaceProps }
-  | { kind: 'collection'; notebookId: string; notebookPath: string; folderPath: string; folderName: string }
+  | { kind: 'collection'; notebookId: string; notebookPath: string; folderPath: string; folderName: string; viewMode?: 'work-documents' }
   | { kind: 'mindmap'; props: PluginDocumentViewProps }
   | { kind: 'plugin-artifact'; props: PluginDocumentViewProps }
   | { kind: 'plugin-workbench'; props: PluginWorkbenchProps };
@@ -48,6 +49,7 @@ export type WorkspaceSurfaceRendererData =
 export interface WorkspaceSurfaceRenderContext extends Pick<SurfaceViewContext,
   'host' | 'viewId' | 'focused' | 'readOnly' | 'initialFocus'> {
   reportPresentation?: (update: SurfacePresentationUpdate) => void;
+  onRendererError?: () => void;
   registerLifecycle?: (lifecycle: SurfaceLifecycle | null, owner?: object) => void;
   webNavigation?: WorkspaceWebNavigationPort;
   onCollectionActiveViewChange?: (viewId: string) => void;

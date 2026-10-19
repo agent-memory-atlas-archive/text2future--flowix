@@ -39,11 +39,11 @@ describe('WorkspaceSurfaceStateView', () => {
     };
     await render({ status: 'ready' });
     const input = host.querySelector('input');
-    await render({ status: 'loading', phase: 'content', retainContent: false });
+    await render({ status: 'loading', loadingMode: 'blocking', retainContent: false });
     expect(host.querySelector('input')).toBe(input);
     expect(input!.closest('[inert]')).not.toBeNull();
     await render({ status: 'error', message: { key: 'error.unexpected' } });
-    await render({ status: 'loading', phase: 'content', retainContent: true });
+    await render({ status: 'loading', loadingMode: 'blocking', retainContent: true });
     await render({ status: 'ready' });
     expect(host.querySelector('input')).toBe(input);
     expect(input!.closest('[inert]')).toBeNull();
@@ -55,12 +55,42 @@ describe('WorkspaceSurfaceStateView', () => {
     root = createRoot(host);
     await act(async () => root.render(<WorkspaceSurfaceStateView
       appearance={appearance}
-      state={{ status: 'loading', phase: 'content', message: { key: 'loading' }, retainContent: true }}>
+      state={{ status: 'loading', loadingMode: 'blocking', retainContent: true }}>
       <div data-testid="async-content">mounted</div>
     </WorkspaceSurfaceStateView>));
 
     expect(host.querySelector('[data-testid="async-content"]')?.textContent).toBe('mounted');
     expect(host.querySelector('[data-testid="surface-spinner"]')).not.toBeNull();
+  });
+
+  it('retains interactive content with one transparent loader and delegates background or host loading', async () => {
+    host = document.createElement('div');
+    root = createRoot(host);
+    const render = async (state: SurfaceState, loadingOwner: 'surface' | 'host' = 'surface') => {
+      await act(async () => root.render(<WorkspaceSurfaceStateView
+        appearance={appearance} state={state} keepContentMounted loadingOwner={loadingOwner}>
+        <input defaultValue="draft" />
+      </WorkspaceSurfaceStateView>));
+    };
+
+    await render({ status: 'ready' });
+    const input = host.querySelector('input');
+    await render({ status: 'loading', loadingMode: 'blocking', retainContent: true });
+    expect(host.querySelector('input')).toBe(input);
+    expect(input!.closest('[inert]')).toBeNull();
+    expect(host.querySelectorAll('[data-testid="surface-spinner"]')).toHaveLength(1);
+    expect(host.querySelector('[class*="bg-"]')).toBeNull();
+    expect(host.querySelector('[data-testid="surface-spinner"]')!.closest('.pointer-events-none')).not.toBeNull();
+
+    await render({ status: 'loading', loadingMode: 'background', retainContent: true });
+    expect(host.querySelector('input')).toBe(input);
+    expect(input!.closest('[inert]')).toBeNull();
+    expect(host.querySelector('[data-testid="surface-spinner"]')).toBeNull();
+
+    await render({ status: 'loading', loadingMode: 'blocking', retainContent: false }, 'host');
+    expect(host.querySelector('input')).toBe(input);
+    expect(input!.closest('[inert]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="surface-spinner"]')).toBeNull();
   });
 
   it('shows domain error detail and its retry action in the shared state view', async () => {

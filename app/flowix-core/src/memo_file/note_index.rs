@@ -16,9 +16,28 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use super::{
-    notebook_path_from_relative, notebook_relative_path, AgentThreadItem, Memo, MemoFile,
+    notebook_path_from_relative, notebook_relative_path, AgentThreadItem, MemoFile,
     NoteColor, TodoItem,
 };
+
+// Keep list and single-entry reads on the same projection decoder.
+const NOTE_ENTRY_COLUMNS: &str = "relative_path, title, preview, thumbnail, created_at, updated_at, favorited, icon, colors_json, properties_json, size_bytes, tags, todos, agents";
+
+fn note_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteEntry> {
+    fn json<T: serde::de::DeserializeOwned>(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<T> {
+        let value: String = row.get(column)?;
+        serde_json::from_str(&value).map_err(|error| rusqlite::Error::FromSqlConversionFailure(
+            column, rusqlite::types::Type::Text, Box::new(error),
+        ))
+    }
+    Ok(NoteEntry {
+        relative_path: row.get(0)?, title: row.get(1)?, preview: row.get(2)?,
+        thumbnail: row.get(3)?, created_at: row.get(4)?, updated_at: row.get(5)?,
+        favorited: row.get::<_, i64>(6)? != 0, icon: row.get(7)?,
+        colors: json(row, 8)?, properties: json(row, 9)?, size_bytes: row.get(10)?,
+        tags: json(row, 11)?, todos: json(row, 12)?, agents: json(row, 13)?,
+    })
+}
 
 const SCHEMA_VERSION: i64 = 4;
 // Version 10 stores derived tags, todos, and agents on each notes row.
@@ -123,10 +142,57 @@ pub struct NoteEntry {
     pub properties: serde_json::Value,
 }
 
+/// Minimal projection used by file-tree rows. It never reads note bodies.
+#[derive(Debug)]
+pub struct NoteTreeMetadata {
+    pub relative_path: String,
+    pub created_at: i64,
+    pub favorited: bool,
+    pub icon: Option<String>,
+    pub colors: Vec<NoteColor>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum NoteWriteOutcome {
     Saved { content: String },
     Conflict { disk_content: String },
+}
+
+/// Internal save result; only a successful write can carry an index entry.
+pub(crate) enum NoteWriteResult {
+    Saved {
+        content: String,
+        index_entry: Option<NoteEntry>,
+    },
+    Conflict {
+        disk_content: String,
+    },
+}
+
+fn note_entry_from_derived_fields(
+    relative_path: &str,
+    size_bytes: u64,
+    created_at: i64,
+    updated_at: i64,
+    fields: super::derivation::DerivedNoteFields<'_>,
+) -> NoteEntry {
+    let metadata = fields.metadata.unwrap_or_default();
+    NoteEntry {
+        size_bytes,
+        relative_path: relative_path.to_owned(),
+        title: display_title_from_relative_path(relative_path),
+        preview: fields.preview,
+        thumbnail: fields.thumbnail,
+        tags: metadata.tags,
+        todos: fields.todos,
+        agents: fields.agents,
+        created_at,
+        updated_at,
+        favorited: metadata.favorited,
+        icon: metadata.icon,
+        colors: metadata.colors,
+        properties: metadata.properties,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -244,25 +310,63 @@ impl MemoFile {
         content: &str,
         expected_content: Option<&str>,
     ) -> io::Result<NoteWriteOutcome> {
+        self.write_note_by_path_with_result(
+            notebook_id,
+            relative_path,
+            content,
+            expected_content,
+        )
+        .map(|result| match result {
+            NoteWriteResult::Saved { content, .. } => NoteWriteOutcome::Saved { content },
+            NoteWriteResult::Conflict { disk_content } => {
+                NoteWriteOutcome::Conflict { disk_content }
+            }
+        })
+    }
+
+    pub(crate) fn write_note_by_path_with_result(
+        &self,
+        notebook_id: &str,
+        relative_path: &str,
+        content: &str,
+        expected_content: Option<&str>,
+    ) -> io::Result<NoteWriteResult> {
         let root = self.notebook_root_for_note(notebook_id)?;
         let path = self.validate_note_path(&root, relative_path, true)?;
         super::frontmatter::extract_document_metadata_tolerant(content)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error.to_string()))?;
-        match self.write_file_if_matches_for_notebook(notebook_id, &path, content, expected_content)? {
+        match self.write_file_if_matches_for_notebook(
+            notebook_id,
+            &path,
+            content,
+            expected_content,
+        )? {
             super::FileWriteOutcome::Conflict { disk_content } => {
-                Ok(NoteWriteOutcome::Conflict { disk_content })
+                Ok(NoteWriteResult::Conflict { disk_content })
             }
             super::FileWriteOutcome::Saved => {
-                if let Err(error) = self.refresh_note_path(notebook_id, relative_path) {
-                    mark_note_index_refresh_pending_logged(&root, notebook_id, relative_path);
-                    tracing::warn!(
-                        notebook_id,
-                        relative_path,
-                        "note saved but path index refresh failed: {error}"
-                    );
-                }
-                Ok(NoteWriteOutcome::Saved {
+                let index_entry = match self.refresh_note_path_with_content(
+                    notebook_id,
+                    relative_path,
+                    content,
+                ) {
+                    Ok(()) => self
+                        .read_indexed_note_entry_by_path(notebook_id, relative_path)
+                        .ok()
+                        .flatten(),
+                    Err(error) => {
+                        mark_note_index_refresh_pending_logged(&root, notebook_id, relative_path);
+                        tracing::warn!(
+                            notebook_id,
+                            relative_path,
+                            "note saved but path index refresh failed: {error}"
+                        );
+                        None
+                    }
+                };
+                Ok(NoteWriteResult::Saved {
                     content: content.to_string(),
+                    index_entry,
                 })
             }
         }
@@ -667,53 +771,11 @@ impl MemoFile {
         relative_path: &str,
     ) -> io::Result<Option<NoteEntry>> {
         let conn = self.open_note_index_connection(notebook_id)?;
-        let row: Option<(String, String, String, Option<String>, i64, i64, i64, Option<String>, String, String, u64, String, String, String)> = conn
-            .query_row(
-                "SELECT relative_path, title, preview, thumbnail, created_at, updated_at, favorited, icon, colors_json, properties_json, size_bytes, tags, todos, agents \
-                 FROM notes WHERE relative_path=?1",
-                params![relative_path],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?,
-                    row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?,
-                    row.get(11)?, row.get(12)?, row.get(13)?)),
-            )
-            .optional()
-            .map_err(io::Error::other)?;
-        let Some((
-            relative_path,
-            title,
-            preview,
-            thumbnail,
-            created_at,
-            updated_at,
-            favorited,
-            icon,
-            colors,
-            properties,
-            size_bytes,
-            tags,
-            todos,
-            agents,
-        )) = row
-        else {
-            return Ok(None);
-        };
-        let entry = NoteEntry {
-            size_bytes,
-            relative_path,
-            title,
-            preview,
-            thumbnail,
-            tags: serde_json::from_str(&tags).map_err(io::Error::other)?,
-            todos: serde_json::from_str(&todos).map_err(io::Error::other)?,
-            agents: serde_json::from_str(&agents).map_err(io::Error::other)?,
-            created_at,
-            updated_at,
-            favorited: favorited != 0,
-            icon,
-            colors: serde_json::from_str(&colors).map_err(io::Error::other)?,
-            properties: serde_json::from_str(&properties).map_err(io::Error::other)?,
-        };
-        Ok(Some(entry))
+        conn.query_row(
+            &format!("SELECT {NOTE_ENTRY_COLUMNS} FROM notes WHERE relative_path=?1"),
+            params![relative_path],
+            note_entry_from_row,
+        ).optional().map_err(io::Error::other)
     }
 
     /// Derive an entry from the Markdown file when the SQLite projection is
@@ -741,112 +803,70 @@ impl MemoFile {
             .map(|time| (time.as_millis().min(i64::MAX as u128)) as i64)
             .unwrap_or(updated_at);
         let content = fs::read_to_string(&path)?;
-        let mut derived = Memo {
-            filename: relative_path
-                .rsplit('/')
-                .next()
-                .unwrap_or(relative_path)
-                .to_owned(),
-            relative_path: relative_path.to_owned(),
-            preview: String::new(),
-            thumbnail: None,
-            tags: Vec::new(),
-            todos: Vec::new(),
-            agents: Vec::new(),
+        let fields = super::derivation::derive_note_fields(&content);
+        Ok(note_entry_from_derived_fields(
+            relative_path,
+            metadata.len(),
             created_at,
             updated_at,
-            favorited: false,
-            icon: None,
-            colors: Vec::new(),
-            properties: serde_json::json!({}),
-        };
-        super::apply_derived_memo_fields(&mut derived, &content);
-        let title = display_title_from_relative_path(relative_path);
-        Ok(NoteEntry {
-            size_bytes: metadata.len(),
-            relative_path: derived.relative_path,
-            title,
-            preview: derived.preview,
-            thumbnail: derived.thumbnail,
-            tags: derived.tags,
-            todos: derived.todos,
-            agents: derived.agents,
-            created_at: derived.created_at,
-            updated_at: derived.updated_at,
-            favorited: derived.favorited,
-            icon: derived.icon,
-            colors: derived.colors,
-            properties: derived.properties,
-        })
+            fields,
+        ))
     }
 
     /// Read the path-keyed list without opening any legacy memo table.
     pub fn read_note_entries(&self, notebook_id: &str) -> io::Result<Vec<NoteEntry>> {
-        if !self.note_index_is_ready(notebook_id)? {
+        let conn = self.open_note_index_connection(notebook_id)?;
+        if !Self::note_index_is_ready_on_connection(&conn)? {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "Note index is not ready",
             ));
         }
-        let conn = self.open_note_index_connection(notebook_id)?;
-        let mut stmt = conn.prepare(
-            "SELECT relative_path, title, preview, thumbnail, created_at, updated_at, favorited, icon, colors_json, properties_json, size_bytes, tags, todos, agents \
-             FROM notes ORDER BY created_at ASC, relative_path ASC"
-        ).map_err(io::Error::other)?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, i64>(6)?,
-                    row.get::<_, Option<String>>(7)?,
-                    row.get::<_, String>(8)?,
-                    row.get::<_, String>(9)?,
-                    row.get::<_, u64>(10)?,
-                    row.get::<_, String>(11)?,
-                    row.get::<_, String>(12)?,
-                    row.get::<_, String>(13)?,
-                ))
-            })
+        let mut statement = conn.prepare(&format!(
+            "SELECT {NOTE_ENTRY_COLUMNS} FROM notes ORDER BY created_at ASC, relative_path ASC"
+        )).map_err(io::Error::other)?;
+        let entries = statement
+            .query_map([], note_entry_from_row)
+            .map_err(io::Error::other)?
+            .collect::<Result<Vec<_>, _>>()
             .map_err(io::Error::other)?;
-        let mut entries = Vec::new();
-        for row in rows {
-            let (
-                relative_path,
-                title,
-                preview,
-                thumbnail,
-                created_at,
-                updated_at,
-                favorited,
-                icon,
-                colors,
-                properties,
-                size_bytes,
-                tags,
-                todos,
-                agents,
-            ) = row.map_err(io::Error::other)?;
-            entries.push(NoteEntry {
-                size_bytes,
-                relative_path,
-                title,
-                preview,
-                thumbnail,
-                tags: serde_json::from_str(&tags).map_err(io::Error::other)?,
-                todos: serde_json::from_str(&todos).map_err(io::Error::other)?,
-                agents: serde_json::from_str(&agents).map_err(io::Error::other)?,
-                created_at,
-                updated_at,
-                favorited: favorited != 0,
-                icon,
-                colors: serde_json::from_str(&colors).map_err(io::Error::other)?,
-                properties: serde_json::from_str(&properties).map_err(io::Error::other)?,
-            });
+        Ok(entries)
+    }
+
+    /// Read only entries already found by a directory listing. Primary-key
+    /// lookups avoid scanning the notebook even when listing its root directory.
+    pub fn read_note_tree_metadata_for_paths(
+        &self,
+        notebook_id: &str,
+        relative_paths: &[String],
+    ) -> io::Result<Vec<NoteTreeMetadata>> {
+        if relative_paths.is_empty() { return Ok(Vec::new()); }
+        let conn = self.open_note_index_connection(notebook_id)?;
+        if !Self::note_index_is_ready_on_connection(&conn)? {
+            return Err(io::Error::new(io::ErrorKind::WouldBlock, "Note index is not ready"));
+        }
+        let mut entries = Vec::with_capacity(relative_paths.len());
+        // Stay below SQLite's variable limit, including older builds (999).
+        for paths in relative_paths.chunks(300) {
+            let placeholders = vec!["?"; paths.len()].join(",");
+            let mut statement = conn.prepare(&format!(
+                "SELECT relative_path, created_at, favorited, icon, colors_json \
+                 FROM notes WHERE relative_path IN ({placeholders})"
+            )).map_err(io::Error::other)?;
+            let rows = statement.query_map(rusqlite::params_from_iter(paths), |row| {
+                let colors: String = row.get(4)?;
+                Ok(NoteTreeMetadata {
+                    relative_path: row.get(0)?,
+                    created_at: row.get(1)?,
+                    favorited: row.get::<_, i64>(2)? != 0,
+                    icon: row.get(3)?,
+                    colors: serde_json::from_str(&colors).map_err(|error|
+                        rusqlite::Error::FromSqlConversionFailure(
+                            4, rusqlite::types::Type::Text, Box::new(error),
+                        ))?,
+                })
+            }).map_err(io::Error::other)?;
+            entries.extend(rows.collect::<Result<Vec<_>, _>>().map_err(io::Error::other)?);
         }
         Ok(entries)
     }
@@ -874,12 +894,11 @@ impl MemoFile {
             return Ok(Vec::new());
         }
         let tag_filter = tag_filter.map(str::trim).filter(|tag| !tag.is_empty());
-        self.ensure_note_search_index(notebook_id)?;
+        let conn = self.ensure_note_search_index(notebook_id)?;
         let root = self.notebook_root_for_note(notebook_id)?;
         if !pending_note_index_refreshes(&root)?.is_empty() {
             self.verify_note_index(notebook_id)?;
         }
-        let conn = self.open_note_index_connection(notebook_id)?;
         let short_query = query.chars().count() < 3;
         let (sql, query_pattern) = if short_query {
             let escaped = query
@@ -949,7 +968,7 @@ impl MemoFile {
             .map_err(io::Error::other)
     }
 
-    fn ensure_note_search_index(&self, notebook_id: &str) -> io::Result<()> {
+    fn ensure_note_search_index(&self, notebook_id: &str) -> io::Result<Connection> {
         let root = self
             .get_notebook_config_by_id(notebook_id)
             .map(|config| std::path::PathBuf::from(config.path))
@@ -965,7 +984,7 @@ impl MemoFile {
             .map_err(io::Error::other)?
             .and_then(|value| value.parse().ok());
         if version == Some(NOTE_SEARCH_FTS_VERSION) {
-            return Ok(());
+            return Ok(conn);
         }
 
         // Read files outside SQLite write transactions. Each row is checked
@@ -1050,7 +1069,8 @@ impl MemoFile {
             params![NOTE_SEARCH_FTS_VERSION.to_string()],
         )
         .map_err(io::Error::other)?;
-        tx.commit().map_err(io::Error::other)
+        tx.commit().map_err(io::Error::other)?;
+        Ok(conn)
     }
 
     /// Fetch one sorted page directly from the projection. Markdown is
@@ -1068,19 +1088,19 @@ impl MemoFile {
         cursor: Option<(bool, i64, Option<&str>, Option<&str>, &str)>,
         limit: usize,
     ) -> io::Result<Vec<NoteEntry>> {
-        if !self.note_index_is_ready(notebook_id)? {
+        let conn = self.open_note_index_connection(notebook_id)?;
+        if !Self::note_index_is_ready_on_connection(&conn)? {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
                 "Note index is not ready",
             ));
         }
-        let conn = self.open_note_index_connection(notebook_id)?;
         let date_column = if sort == "updatedAt" {
             "updated_at"
         } else {
             "created_at"
         };
-        let mut sql = String::from("SELECT n.relative_path FROM notes n WHERE 1=1");
+        let mut sql = format!("SELECT {NOTE_ENTRY_COLUMNS} FROM notes n WHERE 1=1");
         let mut args: Vec<SqlValue> = Vec::new();
         match filter {
             "todos" => sql.push_str(" AND json_array_length(n.todos)>0"),
@@ -1157,28 +1177,21 @@ impl MemoFile {
             ));
         }
         args.push((limit as i64).into());
-        let paths = conn
-            .prepare(&sql)
-            .map_err(io::Error::other)?
-            .query_map(rusqlite::params_from_iter(args), |row| {
-                row.get::<_, String>(0)
-            })
+        let mut statement = conn.prepare(&sql).map_err(io::Error::other)?;
+        let entries = statement
+            .query_map(rusqlite::params_from_iter(args), note_entry_from_row)
             .map_err(io::Error::other)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(io::Error::other)?;
-        paths
-            .into_iter()
-            .map(|path| {
-                self.read_note_entry_by_path(notebook_id, &path)?
-                    .ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::NotFound, "indexed note disappeared")
-                    })
-            })
-            .collect()
+        Ok(entries)
     }
 
     pub(crate) fn note_index_is_ready(&self, notebook_id: &str) -> io::Result<bool> {
         let conn = self.open_note_index_connection(notebook_id)?;
+        Self::note_index_is_ready_on_connection(&conn)
+    }
+
+    fn note_index_is_ready_on_connection(conn: &Connection) -> io::Result<bool> {
         let mut stmt = conn.prepare(
             "SELECT key, value FROM note_index_meta WHERE key IN ('build_state', 'parser_version')"
         ).map_err(io::Error::other)?;
@@ -1426,6 +1439,27 @@ impl MemoFile {
     /// Refresh one path after a local write or watcher event. A missing file
     /// removes its projection; all other notebook files stay untouched.
     pub fn refresh_note_path(&self, notebook_id: &str, relative_path: &str) -> io::Result<()> {
+        self.refresh_note_path_with_snapshot(notebook_id, relative_path, None)
+    }
+
+    /// Refresh one path from content already read or written by the caller.
+    /// Markdown stays authoritative; the snapshot avoids reading the same body
+    /// from disk again during this refresh.
+    pub fn refresh_note_path_with_content(
+        &self,
+        notebook_id: &str,
+        relative_path: &str,
+        content: &str,
+    ) -> io::Result<()> {
+        self.refresh_note_path_with_snapshot(notebook_id, relative_path, Some(content))
+    }
+
+    fn refresh_note_path_with_snapshot(
+        &self,
+        notebook_id: &str,
+        relative_path: &str,
+        content_snapshot: Option<&str>,
+    ) -> io::Result<()> {
         let relative = Path::new(relative_path);
         let root = self
             .get_notebook_config_by_id(notebook_id)
@@ -1458,7 +1492,14 @@ impl MemoFile {
         let mut conn = self.open_note_index_connection(notebook_id)?;
         let mut report = NoteIndexReconcileReport::default();
         self.refresh_note_index_path_with_retry(
-            notebook_id, &mut conn, &root, &path, true, false, &mut report,
+            notebook_id,
+            &mut conn,
+            &root,
+            &path,
+            true,
+            false,
+            content_snapshot,
+            &mut report,
         )
     }
 
@@ -1568,6 +1609,7 @@ impl MemoFile {
                 entry.path(),
                 verify_hashes,
                 reparse_all,
+                None,
                 &mut report,
             )?;
         }
@@ -1590,7 +1632,7 @@ impl MemoFile {
                 // after its directory was visited, so inspect it again under
                 // the notebook lock and SQLite transaction.
                 self.refresh_note_index_path_with_retry(
-                    notebook_id, &mut conn, &root, &candidate, true, false, &mut report,
+                    notebook_id, &mut conn, &root, &candidate, true, false, None, &mut report,
                 )?;
             }
         }
@@ -1629,6 +1671,7 @@ impl MemoFile {
         path: &Path,
         verify_hashes: bool,
         reparse_all: bool,
+        content_snapshot: Option<&str>,
         report: &mut NoteIndexReconcileReport,
     ) -> io::Result<()> {
         conn.busy_timeout(Duration::ZERO).map_err(io::Error::other)?;
@@ -1637,7 +1680,13 @@ impl MemoFile {
             let guard = self.operation_locks().notebook_read(notebook_id, "refresh_note_index_path")?;
             let mut attempt = NoteIndexReconcileReport::default();
             let result = Self::refresh_note_index_path(
-                conn, root, path, verify_hashes, reparse_all, &mut attempt,
+                conn,
+                root,
+                path,
+                verify_hashes,
+                reparse_all,
+                content_snapshot,
+                &mut attempt,
             );
             drop(guard);
             match result {
@@ -1662,6 +1711,7 @@ impl MemoFile {
         path: &Path,
         verify_hashes: bool,
         reparse_all: bool,
+        content_snapshot: Option<&str>,
         report: &mut NoteIndexReconcileReport,
     ) -> io::Result<()> {
         let relative = notebook_relative_path(root, path).map_err(io::Error::other)?;
@@ -1722,8 +1772,16 @@ impl MemoFile {
             tx.commit().map_err(io::Error::other)?;
             return Ok(());
         }
-        let bytes = fs::read(path)?;
-        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let owned_bytes = if content_snapshot.is_none() {
+            Some(fs::read(path)?)
+        } else {
+            None
+        };
+        let bytes = content_snapshot
+            .map(str::as_bytes)
+            .or_else(|| owned_bytes.as_deref())
+            .expect("a file snapshot or disk bytes are available");
+        let hash = format!("{:x}", Sha256::digest(bytes));
         if !reparse_all
             && previous
                 .as_ref()
@@ -1738,25 +1796,21 @@ impl MemoFile {
             tx.commit().map_err(io::Error::other)?;
             return Ok(());
         }
-        let content = String::from_utf8(bytes)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let title = display_title_from_relative_path(&relative);
-        let mut derived = Memo {
-            filename: relative.rsplit('/').next().unwrap_or(&relative).to_owned(),
-            relative_path: relative.clone(),
-            preview: String::new(),
-            thumbnail: None,
-            tags: Vec::new(),
-            todos: Vec::new(),
-            agents: Vec::new(),
-            created_at: 0,
-            updated_at: 0,
-            favorited: false,
-            icon: None,
-            colors: Vec::new(),
-            properties: serde_json::json!({}),
+        let owned_content = match content_snapshot {
+            Some(_) => None,
+            None => Some(
+                String::from_utf8(owned_bytes.expect("disk bytes were loaded"))
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+            ),
         };
-        super::apply_derived_memo_fields(&mut derived, &content);
+        let content = content_snapshot
+            .or(owned_content.as_deref())
+            .expect("a valid note content snapshot is available");
+        let title = display_title_from_relative_path(&relative);
+        let derived = super::derivation::derive_note_fields(&content);
+        let metadata = derived.metadata.unwrap_or_default();
+        let filename = relative.rsplit('/').next().unwrap_or(&relative).to_owned();
+        let filename_lower = filename.to_lowercase();
         tx.execute(
                 "INSERT INTO notes (relative_path, size_bytes, modified_ns, content_hash, title, preview, thumbnail, properties_json, indexed_at, created_at, updated_at, favorited, icon, colors_json, filename, filename_lower, tags, todos, agents) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19) \
@@ -1767,15 +1821,15 @@ impl MemoFile {
                  icon=excluded.icon, colors_json=excluded.colors_json, filename=excluded.filename, filename_lower=excluded.filename_lower, \
                  tags=excluded.tags, todos=excluded.todos, agents=excluded.agents",
                 params![relative, size, modified_ns, hash, title, derived.preview, derived.thumbnail,
-                    derived.properties.to_string(),
+                    metadata.properties.to_string(),
                     chrono::Utc::now().timestamp_millis(),
                     previous.as_ref().map(|(_, _, _, created)| *created).filter(|created| *created > 0)
                         .unwrap_or(file_created_ms),
                     modified_ns.unwrap_or(0) / 1_000_000,
-                    i64::from(derived.favorited), derived.icon,
-                     serde_json::to_string(&derived.colors).map_err(io::Error::other)?,
-                     derived.filename, derived.filename.to_lowercase(),
-                     serde_json::to_string(&derived.tags).map_err(io::Error::other)?,
+                    i64::from(metadata.favorited), metadata.icon,
+                     serde_json::to_string(&metadata.colors).map_err(io::Error::other)?,
+                     filename, filename_lower,
+                     serde_json::to_string(&metadata.tags).map_err(io::Error::other)?,
                      serde_json::to_string(&derived.todos).map_err(io::Error::other)?,
                      serde_json::to_string(&derived.agents).map_err(io::Error::other)?],
             ).map_err(io::Error::other)?;
@@ -1790,8 +1844,8 @@ impl MemoFile {
             params![
                 relative,
                 title,
-                super::extract_body_content(&content),
-                derived.tags.join(" "),
+                derived.body,
+                metadata.tags.join(" "),
                 modified_ns.unwrap_or(0) / 1_000_000,
             ],
         )
@@ -1841,11 +1895,13 @@ impl MemoFile {
             .map_err(io::Error::other)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
             .map_err(io::Error::other)?;
+        if !run_legacy_migrations && note_schema_is_current(&conn, notebook_id)? {
+            return Ok(conn);
+        }
         if run_legacy_migrations {
             discard_legacy_v2_note_projection(&mut conn)?;
         }
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; \
-            CREATE TABLE IF NOT EXISTS note_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); \
+        conn.execute_batch("CREATE TABLE IF NOT EXISTS note_index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); \
             CREATE TABLE IF NOT EXISTS notes (relative_path TEXT PRIMARY KEY, \
               size_bytes INTEGER NOT NULL, modified_ns INTEGER, content_hash TEXT NOT NULL, \
               title TEXT NOT NULL, preview TEXT NOT NULL, thumbnail TEXT, properties_json TEXT NOT NULL, indexed_at INTEGER NOT NULL, \
@@ -1972,6 +2028,35 @@ impl MemoFile {
     }
 }
 
+/// Inspect the database itself on every open, rather than caching a path:
+/// another process may replace/rebuild the file while this process stays alive.
+fn note_schema_is_current(conn: &Connection, notebook_id: &str) -> io::Result<bool> {
+    let objects: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE \
+         (type='table' AND name IN ('note_index_meta', 'notes', 'note_content_revisions', 'note_search_fts')) \
+         OR (type='index' AND name IN ('idx_notes_created_page', 'idx_notes_updated_page', 'idx_notes_filename_page'))",
+        [], |row| row.get(0),
+    ).map_err(io::Error::other)?;
+    if objects != 7 { return Ok(false); }
+    let mut statement = conn.prepare(
+        "SELECT key, value FROM note_index_meta WHERE key IN ('schema_version', 'notebook_id')"
+    ).map_err(io::Error::other)?;
+    let values = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(io::Error::other)?
+        .collect::<Result<HashMap<_, _>, _>>().map_err(io::Error::other)?;
+    let Some(version) = values.get("schema_version") else { return Ok(false); };
+    if version != &SCHEMA_VERSION.to_string() {
+        return Err(io::Error::new(io::ErrorKind::InvalidData,
+            format!("unsupported Note index schema version: {version}")));
+    }
+    match values.get("notebook_id") {
+        Some(stored) if stored == notebook_id => Ok(true),
+        Some(_) => Err(io::Error::new(io::ErrorKind::InvalidData,
+            "Note index belongs to a different notebook")),
+        None => Ok(false),
+    }
+}
+
 /// The V2 path projection is derived from Markdown. Drop its tables on first
 /// use, leaving the current Note projection and unrelated notebook data intact.
 fn discard_legacy_v2_note_projection(conn: &mut Connection) -> io::Result<()> {
@@ -2025,6 +2110,100 @@ mod tests {
             sort: 0, created_at: 0, updated_at: 0,
         }]).unwrap();
         (temp, memo, root)
+    }
+
+    #[test]
+    fn tree_metadata_reads_only_requested_paths_in_bounded_batches() {
+        let (_temp, memo, root) = background_fixture();
+        fs::write(root.join("a.md"), "original body").unwrap();
+        memo.reconcile_note_index("background").unwrap();
+        let conn = memo.open_note_index_connection("background").unwrap();
+        // A malformed field unrelated to tree rows must not break this query.
+        conn.execute("UPDATE notes SET properties_json='invalid', favorited=1, icon='star', colors_json='[\"red\"]' WHERE relative_path='a.md'", []).unwrap();
+        conn.execute("INSERT INTO notes SELECT 'nested/a.md', size_bytes, modified_ns, content_hash, title, preview, thumbnail, properties_json, indexed_at, created_at, updated_at, favorited, icon, colors_json, filename, filename_lower, tags, todos, agents FROM notes WHERE relative_path='a.md'", []).unwrap();
+        fs::remove_file(root.join("a.md")).unwrap();
+        let mut paths: Vec<String> = (0..650).map(|i| format!("missing-{i}.md")).collect();
+        paths.push("a.md".into());
+        paths.push("quote'%_?.md".into());
+        let result = memo.read_note_tree_metadata_for_paths("background", &paths).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].relative_path, "a.md");
+        assert!(result[0].favorited);
+        assert_eq!(result[0].icon.as_deref(), Some("star"));
+        assert_eq!(result[0].colors, vec![NoteColor::Red]);
+    }
+
+    #[test]
+    fn note_refresh_can_reuse_a_watcher_content_snapshot() {
+        let (_temp, memo, root) = background_fixture();
+        let snapshot = "body read by the watcher\nsecond line";
+        fs::write(root.join("snapshot.md"), "previous body").unwrap();
+        memo.reconcile_note_index("background").unwrap();
+        fs::write(root.join("snapshot.md"), snapshot).unwrap();
+
+        memo.refresh_note_path_with_content("background", "snapshot.md", snapshot)
+            .unwrap();
+
+        let entries = memo.read_note_entries("background").unwrap();
+        let entry = entries
+            .iter()
+            .find(|entry| entry.relative_path == "snapshot.md")
+            .unwrap();
+        assert_eq!(entry.preview, "body read by the watcher");
+    }
+
+    #[test]
+    fn schema_fast_path_opens_while_another_connection_holds_the_writer_lock() {
+        let (_temp, memo, _root) = background_fixture();
+        let writer = memo.open_note_index_connection("background").unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        // Authoritative warm schema requires no CREATE/INSERT operations.
+        let reader = memo.open_note_index_connection("background").unwrap();
+        assert!(note_schema_is_current(&reader, "background").unwrap());
+        writer.execute_batch("ROLLBACK").unwrap();
+    }
+
+    #[test]
+    fn schema_fast_path_checks_missing_objects_and_replaced_database() {
+        let (_temp, memo, _root) = background_fixture();
+        let conn = memo.open_note_index_connection("background").unwrap();
+        conn.execute_batch("DROP TABLE note_content_revisions").unwrap();
+        assert!(!note_schema_is_current(&conn, "background").unwrap());
+        drop(conn);
+        assert!(note_schema_is_current(&memo.open_note_index_connection("background").unwrap(), "background").unwrap());
+        let path = memo.notebook_db_path("background").unwrap();
+        fs::remove_file(path).unwrap();
+        // A newly opened file must initialize even in the same process.
+        assert!(note_schema_is_current(&memo.open_note_index_connection("background").unwrap(), "background").unwrap());
+    }
+
+    #[test]
+    fn schema_fast_path_rejects_wrong_notebook_and_version() {
+        let (_temp, memo, _root) = background_fixture();
+        let conn = memo.open_note_index_connection("background").unwrap();
+        assert!(note_schema_is_current(&conn, "another").is_err());
+        conn.execute("UPDATE note_index_meta SET value='999' WHERE key='schema_version'", []).unwrap();
+        assert!(memo.open_note_index_connection("background").is_err());
+        let version: String = conn.query_row("SELECT value FROM note_index_meta WHERE key='schema_version'", [], |row| row.get(0)).unwrap();
+        assert_eq!(version, "999");
+    }
+
+    #[test]
+    fn note_page_reads_projection_without_repairing_or_opening_markdown() {
+        let (_temp, memo, root) = background_fixture();
+        fs::write(root.join("a.md"), "# Indexed\nOriginal body").unwrap();
+        memo.reconcile_note_index("background").unwrap();
+        let before = memo.read_indexed_note_entry_by_path("background", "a.md").unwrap().unwrap();
+        // The watcher has not processed this external change yet. A list query
+        // must keep the index snapshot rather than repairing the selected rows.
+        fs::write(root.join("a.md"), "# Changed\nDifferent body").unwrap();
+        let page = memo.read_note_page("background", "all", None, None, "updatedAt", i64::MAX, 0, 0, None, 51).unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0].preview, before.preview);
+        assert_eq!(page[0].updated_at, before.updated_at);
+        // Even a temporarily missing source file cannot break the index query.
+        fs::remove_file(root.join("a.md")).unwrap();
+        assert_eq!(memo.read_note_page("background", "all", None, None, "createdAt", i64::MAX, 0, 0, None, 51).unwrap().len(), 1);
     }
 
     #[test]

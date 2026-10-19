@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect } from "react";
-import { subscribeNotebookChanges } from '@platform/tauri/notebook-change-events';
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useI18n } from "@/lib/i18n";
 import { subscribeAppActiveAgentConversation } from "@features/document/public/app-api";
@@ -16,14 +15,15 @@ import {
   getAppSelectedNotebookId,
   getAppNotebookPath,
   refreshAppDerivedMetadata,
-  refreshAppPathNoteMetadata,
   refreshAppTodoCount,
 } from "@features/memo/public/app-api";
-import { invalidateMentionNotes } from "@features/editor/extensions/note-mention";
+// Data modules only: the extension barrels also export TipTap Node views,
+// which pulled ProseMirror into the desktop startup graph.
+import { invalidateMentionNotes } from "@features/editor/extensions/note-mention/note-mention-data";
 import {
   invalidateMentionTags,
   setNotebookIdProvider,
-} from "@features/editor/extensions/tag-mention";
+} from "@features/editor/extensions/tag-mention/tag-mention-data";
 import { toast } from "@/lib/toast";
 import { handleMainWindowMemoEvent } from "./main-window-memo-event-handler";
 import type { MemoEvent } from "@/types/memo";
@@ -34,13 +34,11 @@ import {
 import { initializeMainWindowStartup } from './main-window-startup';
 import { createLogger } from '@/lib/logger';
 import { joinNotebookMemoPath } from '@/lib/path';
-import { useUserSettingsStore } from '@features/preferences/store/user-settings-store';
 import { resumePendingNoteLinkUpdates } from '@features/memo/public/app-api';
-import { subscribeWorkspaceDocumentSaves, rebaseStoredRecoveryDraftPaths } from '@features/document/public/workspace-api';
+import { subscribeWorkspaceDocumentSaves } from '@features/document/public/workspace-api';
 import {
   syncAppAgentConversationRestore,
   removeBrowserColumnTabsByPath,
-  applyNotebookPathMove,
 } from '@features/workspace/public/app-api';
 import { openWorkspaceSurface } from '@features/workspace/public/open-surface-api';
 import { clearWorkspaceTargetForDeletedFile } from '@features/workspace/public/shell-api';
@@ -53,6 +51,7 @@ import {
   clearActionableNotice,
   upsertActionableNotice,
 } from '@features/notifications/actionable-notice-store';
+import { mountMainWindowNotebookEvents } from './main-window-notebook-events';
 
 const logger = createLogger('main-window-effects');
 const NAVIGATION_FAILURE_NOTICE_ID = 'workspace-navigation-failure';
@@ -118,62 +117,7 @@ export function MainWindowEffects() {
     });
   }, [mainWindowTitle]);
 
-  useEffect(() => {
-    let pathChangeChain = Promise.resolve();
-    let disposed = false;
-    const unsubscribe = subscribeNotebookChanges(
-      (change) => {
-        const { notebookId } = change;
-        invalidateMentionNotes();
-        invalidateMentionTags();
-        refreshAppPathNoteMetadata(notebookId);
-        if (change.kind === 'resource-created'
-          && change.source === 'external_tool'
-          && change.relativePath.split('/').pop() !== 'AGENTS.md'
-          && useUserSettingsStore.getState().settings.autoOpenCreatedNotesInBrowser) {
-          const { relativePath } = change;
-          pathChangeChain = pathChangeChain.then(async () => {
-            if (disposed) return;
-            const notebookPath = await getAppNotebookPath(notebookId);
-            const path = notebookPath && joinNotebookMemoPath(notebookPath, relativePath);
-            if (disposed || !path || !notebookPath) return;
-            await openWorkspaceSurface({
-              host: 'browser-column',
-              target: { kind: 'external', path, scopePath: notebookPath, transitionId: null },
-              options: { notebookId },
-            });
-          }).catch((error) => logger.warn('open externally created note failed', { error, notebookId, relativePath }));
-        }
-        if (change.kind === 'path-moved') {
-          const { previousRelativePath, relativePath, directory } = change;
-          pathChangeChain = pathChangeChain.then(async () => {
-            if (disposed) return;
-            const notebookPath = await getAppNotebookPath(notebookId);
-            if (!disposed && notebookPath) {
-              applyNotebookPathMove({ notebookId, notebookPath, previousRelativePath, relativePath, directory });
-              const previous = joinNotebookMemoPath(notebookPath, previousRelativePath);
-              const next = joinNotebookMemoPath(notebookPath, relativePath);
-              if (previous && next) await rebaseStoredRecoveryDraftPaths(previous, next, directory);
-            }
-          }).catch((error) => logger.warn('rebase moved note path failed', { error, notebookId, relativePath }));
-        }
-        if (change.kind === 'resource-deleted') {
-          const { relativePath } = change;
-          pathChangeChain = pathChangeChain.then(async () => {
-            if (disposed) return;
-            const notebookPath = await getAppNotebookPath(notebookId);
-            if (disposed) return;
-            const path = notebookPath && joinNotebookMemoPath(notebookPath, relativePath);
-            if (path) {
-              removeBrowserColumnTabsByPath(path);
-              await clearWorkspaceTargetForDeletedFile(path);
-            }
-          }).catch((error) => logger.warn('resolve deleted note path failed', { error, notebookId, relativePath }));
-        }
-      },
-    );
-    return () => { disposed = true; unsubscribe(); };
-  }, []);
+  useEffect(() => mountMainWindowNotebookEvents(), []);
 
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;

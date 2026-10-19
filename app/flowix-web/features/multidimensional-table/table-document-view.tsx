@@ -11,6 +11,7 @@ import { DeletePresetDialog } from '@features/properties/delete-preset-dialog';
 import { PROPERTY_TYPES_KEY, readPropertyTypes } from '@features/document/properties/property-type-metadata';
 import { NoteCreatePicker } from './note-create-picker';
 import { collectionSessionKey } from '@/lib/collection-session-key';
+import { MultidimensionalTableLoadingSkeleton } from '@shared/ui/multidimensional-table-loading-skeleton';
 'use client';
 
 import type { SurfaceLifecycle, SurfacePresentationUpdate } from '@features/workspace/public/surface-api';
@@ -44,7 +45,6 @@ import { displayTitleFromFilename } from '@/lib/utils';
 import { collectionDisplayName } from '@features/collection/model';
 import { Button } from '@shared/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@shared/ui/dialog';
-import { CenteredLoadingSpinner } from '@shared/ui/centered-loading-spinner';
 import { useTitleEditCaret } from '@shared/hooks/use-title-edit-caret';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/ui/popover';
@@ -194,22 +194,6 @@ const TABLE_FIELD_WIDTHS: Record<TableFieldType, number> = {
   Icon: 120,
   Image: 120,
 };
-function TableLoadingSkeleton() {
-  return <div className="relative h-full min-h-0 overflow-hidden">
-    <div className="h-full overflow-hidden p-5" aria-hidden="true">
-      <table className="multidimensional-table w-full min-w-[640px] table-fixed border-collapse text-sm">
-        <thead><tr>{['w-2/3', 'w-1/2', 'w-3/5', 'w-2/5'].map((width, index) => <th key={index} className="h-10 border-r border-[var(--border)] px-2 text-left">
-          <div className={`h-3 animate-pulse rounded bg-[var(--muted)] ${width}`} />
-        </th>)}</tr></thead>
-        <tbody>{Array.from({ length: 7 }, (_, row) => <tr key={row}>{['w-3/4', 'w-1/2', 'w-2/3', 'w-1/3'].map((width, column) => <td key={column} className="h-10 border-b border-r border-[var(--border)] px-2">
-          <div className={`h-3 animate-pulse rounded bg-[var(--muted)] ${width}`} />
-        </td>)}</tr>)}</tbody>
-      </table>
-    </div>
-    <CenteredLoadingSpinner className="pointer-events-none absolute inset-0" ariaLabel="正在打开多维表格" />
-  </div>;
-}
-
 function IncompatibleViewEmptyState({ title, description, titleAction }: { title: string; description: string; titleAction?: ReactNode }) {
   return <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 py-12 text-center">
     <div className="flex items-center justify-center gap-3">
@@ -586,7 +570,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       } });
     } else if (!document) {
       reportPresentation({ title, state: {
-        status: 'loading', phase: 'content', message: { key: 'document.file.loading' }, retainContent: false,
+        status: 'loading', loadingMode: 'blocking', retainContent: true,
       } });
     } else if (expectedCollectionId && document.collection.id !== expectedCollectionId) {
       reportPresentation({ title, state: {
@@ -2086,6 +2070,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
         path: oldPath,
         title,
         scopePath: notebookPath,
+        notebook: notebookId ? { id: notebookId, path: notebookPath } : null,
         displayId: identity.displayId,
         onPathChanged: (previousPath, nextPath) => replaceExternalDocumentPath(identity.displayId, previousPath, nextPath),
       });
@@ -2571,6 +2556,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     })
     : new Map<string, TableRecord[]>(), [calendarDateFieldId, calendarDateMetadata, calendarField, document, noteForRecord, secondaryViewRecords]);
   if (loadError) {
+    if (reportPresentation) return null;
     return <div className={`flex h-full min-h-0 flex-col items-center justify-center gap-3 p-8 text-center ${embeddedInEditor ? 'rounded-lg border border-[var(--border)] bg-[var(--editor-block-bg)]' : ''}`}>
       <Table2 className="h-8 w-8 text-[var(--muted-foreground)] opacity-70" aria-hidden="true" />
       <div className="text-sm">无法显示多维表格</div>
@@ -2583,8 +2569,9 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       </div>
     </div>;
   }
-  if (!document) return <TableLoadingSkeleton />;
+  if (!document) return <MultidimensionalTableLoadingSkeleton showSpinner={!reportPresentation} />;
   if (expectedCollectionId && document.collection.id !== expectedCollectionId) {
+    if (reportPresentation) return null;
     return <div className="flex h-full min-h-0 flex-col items-center justify-center gap-2 p-6 text-center">
       <Table2 className="h-7 w-7 text-[var(--muted-foreground)]" aria-hidden="true" />
       <div className="text-sm font-medium">引用的表格身份已变化</div>
@@ -2908,7 +2895,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
           data-overflow-left={viewTabsOverflow.left ? 'true' : 'false'}
           data-overflow-right={viewTabsOverflow.right ? 'true' : 'false'}
         >
-          <div ref={viewTabsScrollerRef} className="scrollbar-hide flex h-full min-w-0 items-center overflow-x-auto">
+          <div ref={viewTabsScrollerRef} className="multidimensional-table__view-tabs-scroll-area scrollbar-hide flex h-full min-w-0 items-center overflow-x-auto">
           <div className="flex w-max min-w-max shrink-0 items-center gap-1.5 pr-2">
           {document.views.items.map((view) => (
             <ContextMenu key={view.id}>
@@ -3378,7 +3365,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
         previewExternalNoteDrop={previewExternalGalleryDrop}
         onExternalNoteDrop={addExternalNotesToGallery}
       />}
-      {embeddedInEditor && activeView?.layout === 'gallery' && galleryPageCount > 1 && <footer className="flex flex-wrap items-center justify-end gap-3 px-5 py-1.5 text-xs text-[var(--muted-foreground)]" aria-label="画廊分页">
+      {embeddedInEditor && activeView?.layout === 'gallery' && galleryPageCount > 1 && <footer className="flex flex-wrap items-center justify-end gap-3 px-0 py-1.5 text-sm text-[var(--muted-foreground)]" aria-label="画廊分页">
         <span>{secondaryViewRecords.length} 条</span>
         <button
           type="button"
@@ -3403,7 +3390,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
         <div ref={loadMoreRecordsRef} className="h-8 shrink-0" aria-hidden="true" />
       )}
       </OverlayScrollbar>
-      {activeView?.layout === 'table' && <div className={`flex w-full min-w-0 shrink-0 flex-wrap items-center justify-between gap-2 py-1.5 pr-4 ${embeddedInEditor ? '' : 'pl-4'}`}>
+      {activeView?.layout === 'table' && <div className={`flex w-full min-w-0 shrink-0 flex-wrap items-center justify-between gap-2 py-1.5 pr-0 ${embeddedInEditor ? '' : 'pl-4'}`}>
         {showAssociateNoteButton && (
           <button
             type="button"

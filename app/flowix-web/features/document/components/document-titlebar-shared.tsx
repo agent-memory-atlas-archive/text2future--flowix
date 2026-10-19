@@ -117,7 +117,8 @@ export interface DocumentTitlebarProps {
     onRequestDelete: () => void;
   };
   folderCollectionViewType?: {
-    current: 'table' | 'media_library';
+    /** `work_documents` collections are non-switchable; the menu only offers table/media. */
+    current: 'table' | 'media_library' | 'work_documents';
     onSelect: (type: 'table' | 'media_library') => void;
     isDefaultFolder: boolean;
     onToggleDefaultFolder: () => void;

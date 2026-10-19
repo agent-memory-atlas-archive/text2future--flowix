@@ -62,6 +62,7 @@ class MediaLibraryReferenceNodeView implements ProseMirrorNodeView {
     this.root.render(<MediaLibraryReferenceSurface
       key={`${this.node.attrs.notebookId}:${this.node.attrs.collectionId}`}
       attrs={normalizeMediaLibraryReferenceAttrs(this.node.attrs)}
+      currentNotebookId={this.editor.storage.attachmentLink?.getNotebookId?.() ?? null}
       editable={this.editor.isEditable}
       onRemove={() => this.removeNode()}
       onReplace={(anchor) => this.replaceNode(anchor)}
@@ -268,7 +269,7 @@ function MediaLibraryDatasetPopover({ document, notebook, filePath, editable, bu
           locationOnly
           showLocationMenu={false}
           onFileNameChange={setFileName}
-          onFileTypeChange={setFileType}
+          onFileTypeChange={(value) => setFileType(value as 'any' | MediaLibraryKind)}
           onPathChange={setPath}
           onPathSelected={async (selectedPath) => {
             const saved = await save(selectedPath, false);
@@ -309,7 +310,7 @@ function MediaLibraryDatasetPopover({ document, notebook, filePath, editable, bu
                 applying={saving}
                 showLocationMenu={false}
                 onFileNameChange={setFileName}
-                onFileTypeChange={setFileType}
+                onFileTypeChange={(value) => setFileType(value as 'any' | MediaLibraryKind)}
                 onPathChange={setPath}
                 onFolderPickerOpenChange={setFolderPickerOpen}
                 onReset={() => { setFileName(''); setFileType('any'); }}
@@ -323,8 +324,9 @@ function MediaLibraryDatasetPopover({ document, notebook, filePath, editable, bu
   </Popover>;
 }
 
-function MediaLibraryReferenceSurface({ attrs, editable, onRemove, onReplace, onRelativePathChange }: {
+function MediaLibraryReferenceSurface({ attrs, currentNotebookId, editable, onRemove, onReplace, onRelativePathChange }: {
   attrs: MediaLibraryReferenceAttrs;
+  currentNotebookId: string | null;
   editable: boolean;
   onRemove: () => void;
   onReplace: (anchor: HTMLElement) => void;
@@ -333,8 +335,9 @@ function MediaLibraryReferenceSurface({ attrs, editable, onRemove, onReplace, on
   const { t } = useI18n();
   const notebooks = useNoteStore((state) => state.notebooks);
   const notebook = notebooks.find((item) => item.id === attrs.notebookId);
+  const external = !currentNotebookId || currentNotebookId !== attrs.notebookId;
   const [nearViewport, setNearViewport] = useState(false);
-  const reference = useCollectionReference(notebook, attrs.collectionId, 'media_library', null, nearViewport);
+  const reference = useCollectionReference(external ? undefined : notebook, attrs.collectionId, 'media_library', null, nearViewport && !external);
   const filePath = reference.fileIdentity?.path ?? null;
   const sectionRef = useRef<HTMLElement>(null);
   const [document, setDocument] = useState<MediaLibraryDocument | null>(null);
@@ -375,13 +378,22 @@ function MediaLibraryReferenceSurface({ attrs, editable, onRemove, onReplace, on
 
   const condition = document ? mediaLibraryFileCondition(document) : undefined;
   const [datasetMenuOpen, setDatasetMenuOpen] = useState(false);
+  useEffect(() => {
+    if (!external) return;
+    setDatasetMenuOpen(false);
+    setDocument(null);
+    setResources([]);
+    setHasMore(false);
+    setLoadingResources(false);
+    setError(null);
+  }, [external]);
   const fileType = condition?.file_type;
   const hasDatasetCondition = Boolean(document && (hasMediaDatasetFilter(document.dataset.filter) || document.dataset.source.scope !== 'notebook')
     || condition?.path_scope === 'all' || condition?.path_contains || condition?.file_name_contains || condition?.file_type);
   const hasDocument = document !== null;
   const mediaLibraryRecords = document?.dataset.records.include ?? [];
   useEffect(() => {
-    if (!nearViewport || !notebook || !hasDocument) return;
+    if (external || !nearViewport || !notebook || !hasDocument) return;
     if (!hasDatasetCondition && mediaLibraryRecords.length === 0) {
       setResources([]);
       setHasMore(false);
@@ -444,7 +456,7 @@ function MediaLibraryReferenceSurface({ attrs, editable, onRemove, onReplace, on
       if (active) setError(reason instanceof Error ? reason.message : String(reason));
     }).finally(() => { if (active) setLoadingResources(false); });
     return () => { active = false; };
-  }, [document?.dataset.filter, document?.dataset.source.depth, document?.dataset.source.path, document?.dataset.source.scope, filePath, fileType, hasDatasetCondition, hasDocument, mediaLibraryRecords, nearViewport, notebook?.id, notebook?.path, resourceRevision]);
+  }, [document?.dataset.filter, document?.dataset.source.depth, document?.dataset.source.path, document?.dataset.source.scope, external, filePath, fileType, hasDatasetCondition, hasDocument, mediaLibraryRecords, nearViewport, notebook?.id, notebook?.path, resourceRevision]);
 
   const openLibrary = useCallback(async () => {
     if (!filePath || !notebook || !attrs.collectionId) return;
@@ -630,6 +642,8 @@ function MediaLibraryReferenceSurface({ attrs, editable, onRemove, onReplace, on
     </div>
     {!attrs.notebookId || !attrs.collectionId
       ? <div className="py-8 text-center text-sm text-[var(--muted-foreground)]">媒体库引用信息不完整</div>
+      : external
+        ? <div className="py-8 text-center text-sm text-[var(--muted-foreground)]">{t('collection.notInCurrentNotebook')}</div>
       : !notebook || reference.error
         ? <div className="py-8 text-center text-sm text-[var(--muted-foreground)]">{reference.error ?? '找不到媒体库所属的笔记本'}</div>
         : !nearViewport || loadingLibrary || loadingResources

@@ -99,7 +99,7 @@ function StartupLoadingOverlay() {
     ));
   if (!visible) return null;
   return (
-    <div className="fixed inset-0 z-[2147483646] flex items-center justify-center bg-[var(--frame-bg)]">
+    <div data-window-material-overlay className="fixed inset-0 z-[2147483646] flex items-center justify-center bg-[var(--frame-bg)]">
       {nativePhase === 'running' && nativeStage === 'initialization' && nativeProgress ? (
         <div className="flex w-72 flex-col items-center gap-3 text-sm text-[var(--muted-foreground)]">
           <CenteredLoadingSpinner label={t('memo.navigation.preparingVersion')} />
@@ -219,6 +219,37 @@ function App() {
   useApplyFontSettings(format);
 
   useEffect(() => {
+    const root = document.documentElement;
+    if (!isTauriRuntime() || hash.startsWith('#preferences')) {
+      delete root.dataset.windowMaterial;
+      return;
+    }
+
+    let active = true;
+    void windows.getWindowMaterial().then((material) => {
+      if (!active) return;
+      if (material === 'none') {
+        delete root.dataset.windowMaterial;
+      } else {
+        root.dataset.windowMaterial = material;
+      }
+      try {
+        if (material === 'none') localStorage.removeItem('flowix-window-material');
+        else localStorage.setItem('flowix-window-material', material);
+      } catch {
+        // The live IPC result still applies when storage is unavailable.
+      }
+    }).catch((error) => {
+      logger.error('get native window material failed', { error });
+    });
+
+    return () => {
+      active = false;
+      delete root.dataset.windowMaterial;
+    };
+  }, [hash]);
+
+  useEffect(() => {
     const setNativeReady = () => useWorkspaceStartupStore.setState((state) => (
       state.nativePhase === 'ready'
         && state.nativeStage === 'workspacePreparation'
@@ -233,30 +264,21 @@ function App() {
       return;
     }
     let active = true;
-    let inFlight = false;
-    let timer: number | undefined;
     const refresh = async () => {
-      if (inFlight) return;
-      inFlight = true;
       try {
-        const status = await boot.getStartupStatus();
-        if (!active) return;
-        applyNativeStartupStatus(status);
-        if (status.phase === 'ready' || status.phase === 'failed') {
-          if (timer !== undefined) window.clearInterval(timer);
-          timer = undefined;
+        let status = await boot.getStartupStatus();
+        while (active) {
+          applyNativeStartupStatus(status);
+          if (status.phase === 'ready' || status.phase === 'failed') break;
+          status = await boot.waitForStartupStatusChange(status);
         }
       } catch {
         if (active) setNativeReady();
-        if (timer !== undefined) window.clearInterval(timer);
-        timer = undefined;
-      } finally { inFlight = false; }
+      }
     };
     void refresh();
-    timer = window.setInterval(() => void refresh(), 250);
     return () => {
       active = false;
-      if (timer !== undefined) window.clearInterval(timer);
     };
   }, [hash]);
 

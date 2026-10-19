@@ -1,4 +1,5 @@
 import { Extension, type MarkdownToken } from '@tiptap/core';
+import { boundedIndexOf } from '@features/editor/markdown-tokenizer-start';
 
 export type WebCardAttrs = {
   url: string;
@@ -34,7 +35,7 @@ export const webCardMarkdownSpec = {
     name: 'webCard',
     level: 'block' as const,
     start(src: string) {
-      return src.indexOf('::webcard');
+      return boundedIndexOf(src, '::webcard');
     },
     tokenize(src: string) {
       const match = WEB_CARD_RE.exec(src);

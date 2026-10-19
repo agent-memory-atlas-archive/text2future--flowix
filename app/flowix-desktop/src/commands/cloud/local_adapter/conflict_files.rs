@@ -334,7 +334,7 @@ pub(crate) fn register_preserved_conflict_copy(
     if attachment {
         let relative = flowix_core::memo_file::notebook_relative_path(notebook_root, path)?;
         memo_file
-            .refresh_media_resource_path(notebook_id, &relative)
+            .refresh_indexed_resource_path(notebook_id, &relative)
             .map_err(sync_error)
     } else {
         let relative = flowix_core::memo_file::notebook_relative_path(notebook_root, path)?;

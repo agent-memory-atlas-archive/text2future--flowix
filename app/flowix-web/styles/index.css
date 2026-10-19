@@ -42,7 +42,9 @@
 @import './theme/light.css';
 @import './theme/dark.css';
 @import './theme/rock.css';
+@import './theme/mist.css';
 @import './theme/ember.css';
+@import './window-material.css';
 
 @font-face {
 	font-family: 'FlowixSeti';
@@ -243,13 +245,13 @@ html.flowix-drag-drop-active * {
 	display: none;
 }
 
-[data-theme="dark"] .mcp-supported-agent-icon[data-agent-icon="chatgpt"] .mcp-supported-agent-icon__image,
-[data-theme="dark"] .mcp-supported-agent-icon[data-agent-icon="hermes"] .mcp-supported-agent-icon__image {
+:is([data-theme="dark"], [data-theme="mist"]) .mcp-supported-agent-icon[data-agent-icon="chatgpt"] .mcp-supported-agent-icon__image,
+:is([data-theme="dark"], [data-theme="mist"]) .mcp-supported-agent-icon[data-agent-icon="hermes"] .mcp-supported-agent-icon__image {
 	display: none;
 }
 
-[data-theme="dark"] .mcp-supported-agent-icon[data-agent-icon="chatgpt"] .mcp-supported-agent-icon__mask,
-[data-theme="dark"] .mcp-supported-agent-icon[data-agent-icon="hermes"] .mcp-supported-agent-icon__mask {
+:is([data-theme="dark"], [data-theme="mist"]) .mcp-supported-agent-icon[data-agent-icon="chatgpt"] .mcp-supported-agent-icon__mask,
+:is([data-theme="dark"], [data-theme="mist"]) .mcp-supported-agent-icon[data-agent-icon="hermes"] .mcp-supported-agent-icon__mask {
 	display: block;
 	background-color: var(--foreground);
 	mask-position: center;
@@ -278,24 +280,24 @@ html.flowix-drag-drop-active * {
 	background: linear-gradient(135deg, #ffffff 0%, #ffffff 50%, #0e1014 50%, #0e1014 100%);
 }
 
-[data-theme="dark"] .theme-card__preview-surface {
+:is([data-theme="dark"], [data-theme="mist"]) .theme-card__preview-surface {
 	background: color-mix(in oklch, var(--theme-preview-surface) 72%, var(--background));
 	border-color: color-mix(in oklch, var(--theme-preview-accent) 68%, var(--background));
 }
 
-[data-theme="dark"] .theme-card__preview-accent {
+:is([data-theme="dark"], [data-theme="mist"]) .theme-card__preview-accent {
 	background: color-mix(in oklch, var(--theme-preview-accent) 68%, var(--background));
 }
 
-[data-theme="dark"] .theme-card__preview-primary {
+:is([data-theme="dark"], [data-theme="mist"]) .theme-card__preview-primary {
 	background: color-mix(in oklch, var(--theme-preview-primary) 78%, var(--background));
 }
 
-[data-theme="dark"] .theme-card__preview-system-icon {
+:is([data-theme="dark"], [data-theme="mist"]) .theme-card__preview-system-icon {
 	color: color-mix(in oklch, var(--theme-preview-primary) 78%, var(--background));
 }
 
-[data-theme="dark"] .theme-card__preview-system-split {
+:is([data-theme="dark"], [data-theme="mist"]) .theme-card__preview-system-split {
 	background: linear-gradient(
 		135deg,
 		color-mix(in oklch, white 76%, var(--background)) 0%,
@@ -322,7 +324,7 @@ html.flowix-drag-drop-active * {
 }
 
 /* 中间列顶部的产品图标: 深色模式使用单色白版，保留 PNG 的透明背景。 */
-[data-theme="dark"] .product-icon {
+:is([data-theme="dark"], [data-theme="mist"]) .product-icon {
 	filter: brightness(0) invert(0.82);
 }
 
@@ -833,12 +835,12 @@ html.flowix-drag-drop-active * {
 		opacity: 1;
 		color: var(--tag-icon-hover, color-mix(in oklch, var(--foreground) 55%, white));
 	}
-	/* dark 主题下前景色已经接近白色, 直接用纯白获得清晰的提亮反馈。
+	/* Dark 和 Mist 深色配色下前景色已经接近白色, 直接用纯白获得清晰的提亮反馈。
 	   其他主题使用前景色与白色的混合色, 比原本的 muted 图标明显更亮。
 	   用 CSS 变量而非额外
 	   选择器, 避免 lightningcss 把两条 :hover/:focus-visible 选择器
 	   列表错误合并 (它会丢掉 [data-theme="dark"] 前缀)。 */
-	[data-theme="dark"] {
+	:is([data-theme="dark"], [data-theme="mist"]) {
 		--tag-icon-hover: oklch(1 0 0);
 	}
 	[data-tag-icon][aria-expanded="true"] .tag-expand-indicator,
@@ -854,7 +856,7 @@ html.flowix-drag-drop-active * {
 	   行外层 .tag-collapse-track 用 max-height 2rem(=行高 h-8)<->0 实现双向高度
 	   过渡 (行高固定, max-height 取精确值过渡最自然), overflow:hidden 裁剪收缩
 	   内容; 行间距直接设在轨道上，折叠时同步归零使其真正塌缩不占高度。
-	   折叠子树行仍留在 DOM 中 (unmount 无法 CSS 过渡), 仅视觉收缩, 由 data-collapsed 切换。 */
+	   折叠子树先完成 80ms 过渡，随后由 TagTree 移除行 DOM。 */
 	.tag-collapse-track {
 		max-height: 2rem;
 		opacity: 1;

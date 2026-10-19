@@ -1,4 +1,5 @@
 import { Extension, type MarkdownToken } from '@tiptap/core';
+import { boundedSearch } from '@features/editor/markdown-tokenizer-start';
 
 export const TABLE_REFERENCE_MARKER = 'flowix:table-reference';
 export const TABLE_REFERENCE_VERSION = 1;
@@ -42,7 +43,7 @@ export const tableReferenceMarkdownSpec = {
     name: 'tableReference',
     level: 'block' as const,
     start(source: string) {
-      return new RegExp(`^<!--[ \\t]*${TABLE_REFERENCE_MARKER}[ \\t]+\\{`, 'm').exec(source)?.index ?? -1;
+      return boundedSearch(source, new RegExp(`^<!--[ \\t]*${TABLE_REFERENCE_MARKER}[ \\t]+\\{`, 'm'));
     },
     tokenize(source: string) {
       const metadata = tableReferenceMetadataFromSource(source);

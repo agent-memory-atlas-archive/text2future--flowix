@@ -42,14 +42,15 @@ mod note_index;
 mod versions;
 
 pub use note_index::{
-    NoteEntry, NoteIndexReconcileReport, NoteSearchHit,
+    NoteEntry, NoteIndexReconcileReport, NoteSearchHit, NoteTreeMetadata,
     NoteWriteOutcome,
 };
+pub(crate) use note_index::NoteWriteResult;
 pub use operation_locks::{FileLockIntent, FileWriteGuard, OperationLocks};
 
 // 公开 API re-export — 跟旧 `memo_file.rs` 的 pub use 边界一致。
 pub use derivation::{
-    apply_derived_memo_fields, ensure_todo_ids_in_content, extract_agent_threads_from_body,
+    apply_derived_memo_fields, extract_agent_threads_from_body,
     extract_title_and_preview, extract_todos_from_body, normalize_search_tag_filter,
     normalize_tag_path, tag_path_matches_filter,
 };
@@ -69,7 +70,10 @@ pub use local_migrations::{initialize_local_migration_table, NotebookInitializat
 pub use internal_migration::{NotebookInternalMigrationReport, NOTEBOOK_INTERNAL_MIGRATION_KEY};
 pub use storage_repair::{ensure_storage_directory, read_or_create_json, backup_database, backup_storage_file, is_rebuildable_storage_error, with_database_rebuild};
 pub use database_layout::{prepare_database_directory, DATABASE_DIRECTORY_NAME};
-pub use media_resource::{media_kind_for_path, media_resource_id, MediaResource, MediaResourceKind, MediaResourcePage};
+pub use media_resource::{
+    media_kind_for_path, media_resource_id, resource_catalog_id, resource_kind_for_path, IndexedResource,
+    IndexedResourcePage, MediaResource, MediaResourceKind, MediaResourcePage, ResourceKind,
+};
 pub use migration::{DataMigrationReport, NotebookMigrationReport, LATEST_DATA_MIGRATION_VERSION};
 pub use ops::{
     base_filename, filename_from_notebook_relative_path, is_ignored_notebook_relative_path,
@@ -90,13 +94,13 @@ pub use versions::{
     MEMO_VERSION_LIMIT,
 };
 
-/// Storage façade over notebook registry, Note catalog, media and revisions.
+/// Storage façade over notebook registry, note and resource catalogs, and revisions.
 /// Domain implementations live in separate modules; `NotebookRegistry` owns
 /// the device-local registry path and cache.
 ///
 /// 字段:
 /// - `registry`: 用户配置目录 (`~/.flowix/`) 下的设备级笔记本注册表。
-/// - Note 投影和媒体属性位于
+/// - Note 投影、通用资源索引和媒体属性位于
 ///   `<notebook>/.flowix/notebook.db`。
 /// - `current_notebook_id`: 当前活跃 notebook id, `None` 表示走默认。
 /// - `index_cache`: 当前 notebook 相对路径索引的内存缓存。读路径先查询 SQLite

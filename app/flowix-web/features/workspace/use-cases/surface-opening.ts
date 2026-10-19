@@ -47,8 +47,10 @@ function workTargetSurfaceKind(target: WorkWorkspaceSurfaceTarget): WorkspaceSur
     case 'external': return fileKind(target.path);
     case 'table': return 'file-table';
     case 'media-library': return 'file-media-library';
-    case 'collection': return target.collectionType === 'table' ? 'file-table' : 'file-media-library';
-    case 'collection-reference': return target.collectionKind === 'media_library' ? 'file-media-library' : 'file-table';
+    case 'collection': return target.collectionType === 'table' ? 'file-table'
+      : target.collectionType === 'media_library' ? 'file-media-library' : 'file-work-documents';
+    case 'collection-reference': return target.collectionKind === 'media_library' ? 'file-media-library'
+      : target.collectionKind === 'work_documents' ? 'file-work-documents' : 'file-table';
     case 'media': return 'media';
     case 'agent-conversation': return 'agent-conversation';
     case 'web': return 'web';
@@ -58,7 +60,7 @@ function workTargetSurfaceKind(target: WorkWorkspaceSurfaceTarget): WorkspaceSur
 
 function workTargetIdentity(target: WorkWorkspaceSurfaceTarget): ContentIdentity | null {
   switch (target.kind) {
-    case 'folder-collection': return { kind: 'folder-collection', notebookId: target.notebookId, folderPath: target.folderPath };
+    case 'folder-collection': return { kind: 'folder-collection', notebookId: target.notebookId, folderPath: target.folderPath, viewMode: target.viewMode };
     case 'external': return { kind: 'external', path: target.path };
     case 'table': case 'media-library': return { kind: 'external', path: target.filePath };
     case 'collection': return { kind: 'collection', notebookId: target.notebookId, collectionId: target.collectionId, viewId: target.viewId };
@@ -80,6 +82,7 @@ function browserTargetSurfaceKind(target: BrowserColumnTarget): WorkspaceSurface
       if (!target.activeFilePath) return 'file-browser';
       if (target.collectionType === 'table' || /\.table\.ya?ml$/i.test(target.activeFilePath)) return 'file-table';
       if (target.collectionType === 'media_library' || /\.lib\.ya?ml$/i.test(target.activeFilePath)) return 'file-media-library';
+      if (target.collectionType === 'work_documents' || /\.workdocs\.ya?ml$/i.test(target.activeFilePath)) return 'file-work-documents';
       if (/\.index\.yaml$/i.test(target.activeFilePath)) return 'file-browser';
       return fileKind(target.activeFilePath);
   }
@@ -201,7 +204,8 @@ export async function openWorkspaceSurface(
   if (request.host === 'browser-column') {
     const target = request.target;
     if (target.kind === 'collection-reference') {
-      assertHostSupport(target.collectionKind === 'media_library' ? 'file-media-library' : 'file-table', 'browser-column');
+      assertHostSupport(target.collectionKind === 'media_library' ? 'file-media-library'
+        : target.collectionKind === 'work_documents' ? 'file-work-documents' : 'file-table', 'browser-column');
       return openCollectionReferenceInBrowser(target, request.options?.browserDisposition);
     }
     const resolvedTarget = browserTargetFromOpenTarget(target, request.options?.notebookId);

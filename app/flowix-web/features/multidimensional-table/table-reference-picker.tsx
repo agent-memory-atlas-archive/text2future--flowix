@@ -20,15 +20,15 @@ import {
   type CollectionReferencePickerAnchor,
 } from '@features/collection/reference-picker';
 
-function TableReferencePicker({ editor, replaceRange, generation, preferredViewType }: {
+function TableReferencePicker({ editor, replaceRange, generation, preferredViewType, ownerNotebookId }: {
   editor: Editor;
   replaceRange: CollectionReferenceInsertRange;
   generation: number;
   preferredViewType?: TableViewType;
+  ownerNotebookId: string | null;
 }) {
-  const notebookItems = useNoteStore((state) => state.notebooks);
-  const selectedNotebook = useNoteStore((state) => state.selectedNotebook);
-  const notebooks = useMemo(() => notebookItems.filter((notebook) => !notebook.missing), [notebookItems]);
+  const ownerNotebook = useNoteStore((state) => state.notebooks.find((notebook) => notebook.id === ownerNotebookId && !notebook.missing));
+  const notebooks = useMemo(() => ownerNotebook ? [ownerNotebook] : [], [ownerNotebook]);
   const [candidates, setCandidates] = useState<CollectionReferenceCandidate[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
@@ -96,6 +96,11 @@ function TableReferencePicker({ editor, replaceRange, generation, preferredViewT
 
   const attachReference = (candidate: CollectionReferenceCandidate, collectionId: string, viewId: string | null) => {
     if (!isCollectionReferencePickerCurrent(generation)) return;
+    if (candidate.notebookId !== editor.storage.attachmentLink?.getNotebookId?.()) {
+      toast.warning('只能插入当前笔记本中的多维表格');
+      setOpeningPath(null);
+      return;
+    }
     if (editor.isDestroyed || !editor.isEditable) {
       closeCollectionReferencePicker(generation);
       if (!editor.isDestroyed) toast.error('当前笔记为只读，无法插入多维表格引用');
@@ -122,6 +127,10 @@ function TableReferencePicker({ editor, replaceRange, generation, preferredViewT
       if (!filePath) throw new Error('多维表格路径无效');
       const source = await externalDocuments.read(filePath, candidate.notebookPath);
       if (!isCollectionReferencePickerCurrent(generation)) return;
+      if (candidate.notebookId !== editor.storage.attachmentLink?.getNotebookId?.()) {
+        setOpeningPath(null);
+        return;
+      }
       const document = await parseTableDocumentAsync(source);
       if (document.collection.id !== candidate.collectionId) {
         throw new Error('表格文件已更新，请重新打开选择器后选择');
@@ -164,8 +173,8 @@ function TableReferencePicker({ editor, replaceRange, generation, preferredViewT
   const createTable = async () => {
     const name = query.trim();
     if (!name || creatingTable || !isCollectionReferencePickerCurrent(generation)) return;
-    if (!selectedNotebook || selectedNotebook.missing) {
-      toast.error('请先选择可用的笔记本');
+    if (!ownerNotebook || ownerNotebook.id !== editor.storage.attachmentLink?.getNotebookId?.()) {
+      toast.error('无法确定当前笔记本');
       return;
     }
     if (editor.isDestroyed || !editor.isEditable) {
@@ -176,18 +185,23 @@ function TableReferencePicker({ editor, replaceRange, generation, preferredViewT
 
     setCreatingTable(true);
     try {
-      const preferences = await files.getNotebookViewPreferences(selectedNotebook.path);
+      const preferences = await files.getNotebookViewPreferences(ownerNotebook.path);
       const created = await createTableDocumentFile(
-        selectedNotebook.path,
+        ownerNotebook.path,
         preferences.defaultCreateFolder,
         name,
         preferredViewType ?? 'table',
       );
       if (!isCollectionReferencePickerCurrent(generation)) return;
+      if (editor.storage.attachmentLink?.getNotebookId?.() !== ownerNotebook.id) {
+        toast.warning('当前笔记本已切换，请在当前笔记本中重新插入多维表格');
+        setCreatingTable(false);
+        return;
+      }
       attachReference({
-        notebookId: selectedNotebook.id,
-        notebookName: selectedNotebook.name,
-        notebookPath: selectedNotebook.path,
+        notebookId: ownerNotebook.id,
+        notebookName: ownerNotebook.name,
+        notebookPath: ownerNotebook.path,
         relativePath: created.relativePath,
         collectionId: created.table.collection.id,
         name: created.name,
@@ -263,10 +277,12 @@ function TableReferencePicker({ editor, replaceRange, generation, preferredViewT
 }
 
 export function openTableReferencePicker(editor: Editor, replaceRange: CollectionReferenceInsertRange, anchor: CollectionReferencePickerAnchor, preferredViewType?: TableViewType) {
+  const ownerNotebookId = editor.storage.attachmentLink?.getNotebookId?.() ?? null;
   openCollectionReferencePicker(editor, replaceRange, anchor, 'table', (generation) => <TableReferencePicker
     editor={editor}
     replaceRange={replaceRange}
     generation={generation}
     preferredViewType={preferredViewType}
+    ownerNotebookId={ownerNotebookId}
   />);
 }

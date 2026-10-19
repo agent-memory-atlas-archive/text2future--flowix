@@ -468,7 +468,6 @@ pub(crate) fn apply_v2_report(
                 (),
             );
             crate::events::emit_to(app, crate::commands::notebook::NOTEBOOKS_CHANGED_EVENT, ());
-            crate::commands::helpers::refresh_watcher_roots(state, app);
         }
     }
     Ok(())

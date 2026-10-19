@@ -21,7 +21,7 @@ export interface NoteEntry {
   preview: string;
   thumbnail: string | null;
   tags: string[];
-  todos: { id: string; content: string; status: string }[];
+  todos: { content: string; status: string }[];
   agents: { threadId: string; title: string; agentType: string }[];
   createdAt: number;
   updatedAt: number;
@@ -105,13 +105,6 @@ export const notes = {
       expectedContent: params.expectedContent,
     }),
   modifiedAt: (filePath: string) => invoke<number | null>('get_document_modified_at', { filePath }),
-  renameTitle: (params: { filePath: string; title: string; expectedFilename?: string; expectedContent: string }) =>
-    invokeDocumentMutation<{ path: string; filename: string; notebookChange: NotebookPathMove }>('rename_memo_title', {
-      filePath: params.filePath,
-      title: params.title,
-      expectedFilename: params.expectedFilename,
-      expectedContent: params.expectedContent,
-    }).then((result) => { publishNotebookPathMove(result.notebookChange); return result; }),
   moveToDirectory: (filePath: string, notebookId: string, parentRelativePath: string) =>
     invoke<{ path: string; notebookChange: NotebookPathMove }>('move_memo_to_directory', { filePath, notebookId, parentRelativePath }).then((result) => { publishNotebookPathMove(result.notebookChange); return result; }),
   list: (notebookId: string) => invoke<NoteEntry[]>('list_notes_by_path', { notebookId }),

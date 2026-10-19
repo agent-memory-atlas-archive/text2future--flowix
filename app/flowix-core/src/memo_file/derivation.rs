@@ -2,9 +2,8 @@
 //! `apply_derived_memo_fields` / `strip_markdown` /
 //! `is_blank_line` / `strip_block_node_lines`。
 //!
-//! 派生语义: `tags` / `properties` 来自头部 YAML，其余展示字段来自 Markdown
-//! 正文。写盘后由 [`apply_derived_memo_fields`] 同步回 memo index，使 YAML 成为
-//! 文档属性真源、memo index 仅作为派生缓存。
+//! 派生语义: `properties` 来自头部 YAML, `tags` 合并 YAML 与正文标签, 预览、缩略图、
+//! todos 和 agent 卡片来自 Markdown 正文。memo index 仅作为可重建的派生缓存。
 //!
 //! ## 块节点过滤档案 (`BLOCK_NODE_FILTERS`)
 //!
@@ -23,10 +22,8 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashSet;
 
-use super::frontmatter::{
-    extract_body_content, extract_document_metadata_tolerant,
-};
-use super::types::{AgentThreadItem, Memo, TodoItem};
+use super::frontmatter::{extract_body_content, parse_document_tolerant};
+use super::types::{AgentThreadItem, Memo, NoteColor, TodoItem};
 
 /// 解码常见 HTML 实体为对应 Unicode 字符。title/preview 派生的最小集:
 /// - 空白类 (`&nbsp;` / `&ensp;` / `&emsp;` / `&thinsp;` / `&hairsp;` /
@@ -225,7 +222,7 @@ static BLOCK_NODE_FILTERS: &[BlockNodeFilter] = &[
 
 /// 在 title / preview 派生前剥离所有已登记的块节点 (围栏优先剥, 然后按行
 /// 剔除单行形态)。返回的字符串已不含块节点元数据, 可直接交给原有的
-/// "取首行 / 第二行" 逻辑。
+/// 首行提取逻辑。
 ///
 /// **不变量 (改本函数时务必保持) ──**
 ///
@@ -245,10 +242,12 @@ fn strip_block_node_lines(body: &str) -> String {
         let Some(strip) = filter.strip_fences else {
             continue;
         };
-        let mut prev = String::new();
-        while prev != current {
-            prev = current.clone();
-            current = strip(&current);
+        loop {
+            let next = strip(&current);
+            if next == current {
+                break;
+            }
+            current = next;
         }
     }
 
@@ -320,17 +319,19 @@ fn is_markdown_table_delimiter(line: &str) -> bool {
             .all(|cell| TABLE_DELIMITER_CELL_RE.is_match(cell))
 }
 
-/// 提取 (title, preview): title = 第一条非空行 (经 `strip_markdown` 清洗),
-/// preview = 第二条非空行 (取前 200 字符)。
+/// 提取 (title, preview): 两者都基于第一条有效正文行，preview 最多 200 字符。
 ///
-/// 两条规则之前先经过 [`strip_block_node_lines`] ── 任何已登记的 Tiptap 自定
+/// 提取前先经过 [`strip_block_node_lines`] ── 任何已登记的 Tiptap 自定
 /// 义节点 (`::agent-thread-card{...}` / `:::agent-thread-card ... :::`) 都不会
-/// 占据首行或第二行, 也就不会泄漏到 `filename` (title) 或 `preview` 里。
+/// 占据首行, 也就不会泄漏到 `filename` (title) 或 `preview` 里。
 ///
-/// 性能要点: 只取前两个非空行, 找到后立即结束迭代。典型笔记正文 5KB+ 也只
-/// 处理 2-10 行, 不再为求前两条结果跑遍整文件。
+/// 性能要点: 找到第一条有效行后立即结束迭代。
 pub fn extract_title_and_preview(content: &str) -> (String, String) {
     let body = strip_block_node_lines(&strip_fenced_code_blocks(extract_body_content(content)));
+    extract_title_and_preview_from_body(&body)
+}
+
+fn extract_title_and_preview_from_body(body: &str) -> (String, String) {
     let mut iter = body
         .lines()
         .map(str::trim)
@@ -339,19 +340,21 @@ pub fn extract_title_and_preview(content: &str) -> (String, String) {
         .filter(|line| !line.is_empty());
 
     let title = iter.next().unwrap_or_default();
-    let preview = iter.next().unwrap_or_default().chars().take(200).collect();
+    let preview = title.chars().take(200).collect();
     (title, preview)
 }
 
 pub fn extract_thumbnail(content: &str) -> Option<String> {
+    let body = strip_block_node_lines(&strip_fenced_code_blocks(extract_body_content(content)));
+    extract_thumbnail_from_body(&body)
+}
+
+fn extract_thumbnail_from_body(body: &str) -> Option<String> {
     static MARKDOWN_IMAGE_URL_RE: Lazy<Regex> = Lazy::new(|| {
         Regex::new(r#"!\[[^\]]*\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)(?:\{[^}\n]*\})?"#).unwrap()
     });
-
-    let body_without_code = strip_fenced_code_blocks(extract_body_content(content));
-    let body = strip_block_node_lines(&body_without_code);
     MARKDOWN_IMAGE_URL_RE
-        .captures(&body)
+        .captures(body)
         .and_then(|captures| captures.get(1))
         .map(|matched| matched.as_str().trim().to_string())
         .filter(|url| !url.is_empty())
@@ -367,9 +370,19 @@ pub fn extract_thumbnail(content: &str) -> Option<String> {
 ///
 /// 排除区: 围栏代码块 (3+ 反引号) 与行内反引号代码段内的 `#tag` 不参与
 /// 提取 — 块内是代码示例, 不是用户的标签; 行内反引号包裹的内容是"代码"
-/// 语义。两种区域在抽取前先从源文本里"挖空"成 NUL 占位, NUL 不在
+/// 语义。围栏块在共享预处理阶段移除, 行内代码范围以 NUL 占位, NUL 不在
 /// `\s` 内且不会被 `#` 误连, 保证原 TAG_RE 不需要任何修改。
-pub(crate) fn extract_tags_from_body(content: &str) -> Vec<String> {
+#[cfg(test)]
+fn extract_tags_from_body(content: &str) -> Vec<String> {
+    let body = strip_fenced_code_blocks(extract_body_content(content));
+    extract_tags_from_fence_stripped_body(&body)
+}
+
+fn extract_tags_from_fence_stripped_body(body: &str) -> Vec<String> {
+    extract_tags_from_code_filtered_body(&strip_inline_code_spans(body))
+}
+
+fn extract_tags_from_code_filtered_body(body: &str) -> Vec<String> {
     // 结构: 前缀 (^|空白) + # + (level/)*level
     //   - level: 1+ 个非空白 / 非 `/` / 非 Unicode 标点字符
     //   - 段间用 `/` 分隔
@@ -382,8 +395,7 @@ pub(crate) fn extract_tags_from_body(content: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut tags = Vec::new();
 
-    let body = strip_code_regions(extract_body_content(content));
-    for captures in TAG_RE.captures_iter(&body) {
+    for captures in TAG_RE.captures_iter(body) {
         if let Some(raw) = captures.get(2).map(|m| m.as_str()) {
             if let Some(tag) = normalize_tag_path(raw) {
                 if seen.insert(tag.clone()) {
@@ -396,9 +408,9 @@ pub(crate) fn extract_tags_from_body(content: &str) -> Vec<String> {
     tags
 }
 
-fn merge_document_tag_sources(mut tags: Vec<String>, content: &str) -> Vec<String> {
+fn merge_document_tag_sources(mut tags: Vec<String>, body: &str) -> Vec<String> {
     let mut seen: HashSet<String> = tags.iter().cloned().collect();
-    for tag in extract_tags_from_body(content) {
+    for tag in extract_tags_from_fence_stripped_body(body) {
         if seen.insert(tag.clone()) {
             tags.push(tag);
         }
@@ -630,67 +642,44 @@ fn blank_inline_code_spans(line: &str) -> String {
     out
 }
 
-/// 一次性剥除 markdown 围栏代码块 (3+ 反引号) 与行内反引号代码段。
-/// 围栏按行扫描, 找到 opening fence 后整段 (含 closing fence) 跳过;
-/// 行内反引号则在每行内独立处理 (围栏外的行才会到达这一步)。
-fn strip_code_regions(body: &str) -> String {
+/// Blank inline-code spans in an already fence-free body so tag extraction can
+/// reuse the shared fenced-code pass used by the other derived fields.
+fn strip_inline_code_spans(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
-    let mut in_fence = false;
-    let mut fence_len: usize = 0;
-
     for line in body.split_inclusive('\n') {
-        if !in_fence {
-            if let Some(n) = fence_open_len(line) {
-                in_fence = true;
-                fence_len = n;
-                // 跳过 opening fence 行 (不写入 out)
-                continue;
-            }
-            // 围栏外的普通行: 处理行内反引号代码段
-            out.push_str(&blank_inline_code_spans(line));
-        } else {
-            // 围栏内: 检查是否到 closing fence
-            if is_fence_close_line(line, fence_len) {
-                in_fence = false;
-                fence_len = 0;
-                // 跳过 closing fence 行
-            }
-            // 围栏内其它行: 丢弃
-        }
+        out.push_str(&blank_inline_code_spans(line));
     }
-
     out
 }
 
-/// 从 body 抽 `- [ ]` / `- [x]` 复选框条目 (todo items)。
+/// 从 body 抽取无序列表中的 Markdown 复选框条目。
 ///
 /// content 走 [`decode_html_entities`] 后再判 blank ── 让 `&nbsp;` /
 /// `&#160;` 等空白类实体被正确折叠为空, 不会作为空白条目泄漏到结果数组。
 /// 实体解码也保证存储的 content 与 title/preview 流水线语义一致。
 pub fn extract_todos_from_body(content: &str) -> Vec<TodoItem> {
+    let body = strip_fenced_code_blocks(extract_body_content(content));
+    extract_todos_from_fence_stripped_body(&body)
+}
+
+fn extract_todos_from_fence_stripped_body(body: &str) -> Vec<TodoItem> {
     static TODO_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"(?m)^\s*-\s*\[([ xX])\]\s*(.+)$").unwrap());
+        Lazy::new(|| Regex::new(r"(?m)^\s*[-*+]\s*\[([ xX])\]\s*(.+)$").unwrap());
 
     TODO_RE
-        .captures_iter(extract_body_content(content))
-        .enumerate()
-        .filter_map(|(position, captures)| {
+        .captures_iter(body)
+        .filter_map(|captures| {
             let raw_content = captures.get(2)?.as_str().trim();
-            let (raw_content, marker_id) = strip_todo_id_marker(raw_content);
+            // Older notes may still contain identity comments. Keep accepting
+            // them, but task text is the projection and no longer has an ID.
+            let raw_content = strip_legacy_todo_marker(raw_content);
             let content = decode_html_entities(raw_content);
             if content.trim().is_empty() {
                 return None;
             }
 
             let checked = captures.get(1)?.as_str().eq_ignore_ascii_case("x");
-            // The marker is the durable identity. The fallback is only for
-            // legacy/unmarked files and is replaced with a marker by the
-            // index write path. Include the occurrence so duplicate task text
-            // can still be represented during that one-time migration.
-            let id = marker_id
-                .unwrap_or_else(|| format!("todo-{:016x}", todo_fallback_id(&content, position)));
             Some(TodoItem {
-                id,
                 content,
                 status: if checked { "completed" } else { "pending" }.to_string(),
             })
@@ -698,86 +687,22 @@ pub fn extract_todos_from_body(content: &str) -> Vec<TodoItem> {
         .collect()
 }
 
-fn strip_todo_id_marker(content: &str) -> (&str, Option<String>) {
+fn strip_legacy_todo_marker(content: &str) -> &str {
     static TODO_MARKER_RE: Lazy<Regex> = Lazy::new(|| {
-        Regex::new(r"(?s)\s*<!--\s*flowix-todo-id:\s*([A-Za-z0-9_-]{1,80})\s*-->\s*$").unwrap()
+        Regex::new(r"(?s)\s*<!--\s*flowix-todo-id:\s*[A-Za-z0-9_-]{1,80}\s*-->\s*$").unwrap()
     });
-    let Some(captures) = TODO_MARKER_RE.captures(content) else {
-        return (content, None);
+    let Some(marker) = TODO_MARKER_RE.find(content) else {
+        return content;
     };
-    let marker = captures.get(1).map(|value| value.as_str().to_string());
-    let content_end = captures
-        .get(0)
-        .map(|value| value.start())
-        .unwrap_or(content.len());
-    (&content[..content_end], marker)
-}
-
-fn todo_fallback_id(content: &str, position: usize) -> u64 {
-    let mut hash = 14695981039346656037u64;
-    for byte in content.bytes().chain(position.to_le_bytes()) {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(1099511628211);
-    }
-    hash
-}
-
-/// Add an invisible marker to every unmarked Markdown checkbox line.
-///
-/// The marker is stored in the Markdown file, so copying or renaming a note
-/// keeps task identity without making the rebuildable SQLite index a source of
-/// truth. Existing markers are left byte-for-byte intact.
-pub fn ensure_todo_ids_in_content(content: &str) -> String {
-    static TODO_LINE_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r"^\s*-\s*\[([ xX])\]\s*(.+)$").unwrap());
-    let body_start = super::frontmatter::FRONTMATTER_RE
-        .captures(content)
-        .and_then(|captures| captures.get(2).map(|body| body.start()))
-        .unwrap_or(0);
-    let (prefix, body) = content.split_at(body_start);
-    let mut output = String::with_capacity(content.len());
-    output.push_str(prefix);
-
-    for (position, line) in body.split_inclusive('\n').enumerate() {
-        let (line_content, line_ending) = if let Some(value) = line.strip_suffix("\r\n") {
-            (value, "\r\n")
-        } else if let Some(value) = line.strip_suffix('\n') {
-            (value, "\n")
-        } else {
-            (line, "")
-        };
-        let Some(captures) = TODO_LINE_RE.captures(line_content) else {
-            output.push_str(line);
-            continue;
-        };
-        let raw_content = captures
-            .get(2)
-            .map(|value| value.as_str().trim())
-            .unwrap_or_default();
-        let (task_content, marker_id) = strip_todo_id_marker(raw_content);
-        if task_content.trim().is_empty() || marker_id.is_some() {
-            output.push_str(line);
-            continue;
-        }
-        let normalized = decode_html_entities(task_content).trim().to_string();
-        if normalized.is_empty() {
-            output.push_str(line);
-            continue;
-        }
-        let id = format!("todo-{:016x}", todo_fallback_id(&normalized, position));
-        let marker_start = captures
-            .get(2)
-            .map(|value| value.start())
-            .unwrap_or(line_content.len());
-        output.push_str(&line_content[..marker_start]);
-        output.push_str(task_content.trim_end());
-        output.push_str(&format!(" <!-- flowix-todo-id:{id} -->"));
-        output.push_str(line_ending);
-    }
-    output
+    &content[..marker.start()]
 }
 
 pub fn extract_agent_threads_from_body(content: &str) -> Vec<AgentThreadItem> {
+    let body = strip_fenced_code_blocks(extract_body_content(content));
+    extract_agent_threads_from_fence_stripped_body(&body)
+}
+
+fn extract_agent_threads_from_fence_stripped_body(body: &str) -> Vec<AgentThreadItem> {
     static AGENT_THREAD_CARD_ATTRS_RE: Lazy<Regex> =
         Lazy::new(|| Regex::new(r#"(?m)^\s*::agent-thread-card\{([^}]*)\}\s*$"#).unwrap());
     static ATTR_RE: Lazy<Regex> =
@@ -785,7 +710,6 @@ pub fn extract_agent_threads_from_body(content: &str) -> Vec<AgentThreadItem> {
 
     let mut seen = HashSet::new();
     let mut agents = Vec::new();
-    let body = strip_fenced_code_blocks(extract_body_content(content));
 
     for captures in AGENT_THREAD_CARD_ATTRS_RE.captures_iter(&body) {
         let attrs = captures.get(1).map(|m| m.as_str()).unwrap_or_default();
@@ -825,19 +749,46 @@ fn decode_markdown_attr(value: &str) -> String {
     decode_html_entities(value)
 }
 
-/// 应用派生字段到 memo。`filename` 仅在为空时从 body 第一行覆盖 (用户显式设的
-/// title 优先), `preview` / `todos` / `agents` 从 body 重算; `tags` 是
-/// YAML tags 与正文标签的稳定去重并集, `properties` 仍只来自 YAML。
-pub fn apply_derived_memo_fields(memo: &mut Memo, full_content: &str) {
-    let (derived_title, preview) = extract_title_and_preview(full_content);
-    if memo.filename.trim().is_empty() && !derived_title.is_empty() {
-        memo.filename = derived_title;
+/// Content-derived fields shared by note indexing and the legacy Memo adapter.
+#[derive(Debug)]
+pub(super) struct DerivedNoteFields<'a> {
+    pub(super) body: &'a str,
+    pub(super) preview: String,
+    pub(super) thumbnail: Option<String>,
+    pub(super) todos: Vec<TodoItem>,
+    pub(super) agents: Vec<AgentThreadItem>,
+    pub(super) metadata: Option<DerivedDocumentMetadata>,
+    derived_title: String,
+}
+
+#[derive(Debug)]
+pub(super) struct DerivedDocumentMetadata {
+    pub(super) tags: Vec<String>,
+    pub(super) favorited: bool,
+    pub(super) icon: Option<String>,
+    pub(super) colors: Vec<NoteColor>,
+    pub(super) properties: serde_json::Value,
+}
+
+impl Default for DerivedDocumentMetadata {
+    fn default() -> Self {
+        Self {
+            tags: Vec::new(),
+            favorited: false,
+            icon: None,
+            colors: Vec::new(),
+            properties: serde_json::json!({}),
+        }
     }
-    memo.preview = preview;
-    memo.thumbnail = extract_thumbnail(full_content);
-    memo.todos = extract_todos_from_body(full_content);
-    memo.agents = extract_agent_threads_from_body(full_content);
-    if let Ok(metadata) = extract_document_metadata_tolerant(full_content) {
+}
+
+pub(super) fn derive_note_fields(full_content: &str) -> DerivedNoteFields<'_> {
+    let parsed = parse_document_tolerant(full_content);
+    let body = parsed.body;
+    let body_without_fences = strip_fenced_code_blocks(body);
+    let display_body = strip_block_node_lines(&body_without_fences);
+    let (derived_title, preview) = extract_title_and_preview_from_body(&display_body);
+    let metadata = parsed.metadata.ok().map(|metadata| {
         let mut seen = HashSet::new();
         let yaml_tags = metadata
             .tags
@@ -847,31 +798,62 @@ pub fn apply_derived_memo_fields(memo: &mut Memo, full_content: &str) {
                 Some(_) => None,
                 None => {
                     tracing::warn!(
-                        note_path = %memo.relative_path,
                         tag = %raw,
-                        "ignoring invalid legacy frontmatter tag path while deriving memo metadata"
+                        "ignoring invalid legacy frontmatter tag path while deriving note metadata"
                     );
                     None
                 }
             })
             .collect();
-        memo.tags = merge_document_tag_sources(yaml_tags, full_content);
-        memo.favorited = metadata
-            .properties
-            .get("flowix_favorited")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        memo.icon = metadata
-            .properties
-            .get("flowix_icon")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
-        memo.colors = metadata
-            .properties
-            .get("flowix_colors")
-            .cloned()
-            .and_then(|value| serde_json::from_value(value).ok())
-            .unwrap_or_default();
+        DerivedDocumentMetadata {
+            tags: merge_document_tag_sources(yaml_tags, &body_without_fences),
+            favorited: metadata
+                .properties
+                .get("flowix_favorited")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            icon: metadata
+                .properties
+                .get("flowix_icon")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            colors: metadata
+                .properties
+                .get("flowix_colors")
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok())
+                .unwrap_or_default(),
+            properties: metadata.properties,
+        }
+    });
+
+    DerivedNoteFields {
+        body,
+        preview,
+        thumbnail: extract_thumbnail_from_body(&display_body),
+        todos: extract_todos_from_fence_stripped_body(&body_without_fences),
+        agents: extract_agent_threads_from_fence_stripped_body(&body_without_fences),
+        metadata,
+        derived_title,
+    }
+}
+
+/// Apply derived fields to a legacy Memo projection. Its filename remains an
+/// explicit value when present; content-derived fields always follow the file.
+pub fn apply_derived_memo_fields(memo: &mut Memo, full_content: &str) {
+    let fields = derive_note_fields(full_content);
+    if memo.filename.trim().is_empty() && !fields.derived_title.is_empty() {
+        memo.filename = fields.derived_title;
+    }
+    memo.preview = fields.preview;
+    memo.thumbnail = fields.thumbnail;
+    memo.todos = fields.todos;
+    memo.agents = fields.agents;
+    if let Some(metadata) = fields.metadata {
+        memo.tags = metadata.tags;
+        memo.favorited = metadata.favorited;
+        memo.icon = metadata.icon;
+        memo.colors = metadata.colors;
         memo.properties = metadata.properties;
     }
 }

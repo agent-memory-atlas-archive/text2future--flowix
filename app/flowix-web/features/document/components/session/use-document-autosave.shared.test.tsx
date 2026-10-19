@@ -23,12 +23,9 @@ describe('shared document autosave', () => {
     const identity = { kind: 'md' as const, path: '/shared-autosave.md', displayId: 'display-shared-autosave' };
     applyLoadedDocumentContent(identity, '/notes/shared.md', '# Base');
     let onChange: ((content: string) => void) | undefined;
-    const setState = vi.fn();
-    const reloadDocument = vi.fn().mockResolvedValue(undefined);
     function Surface() {
       onChange = useDocumentAutosave({
-        identity, filePath: '/notes/shared.md',
-        externalScopePath: null, setState, reloadDocument,
+        identity, externalScopePath: null,
       }).handleChange;
       return null;
     }
@@ -54,13 +51,11 @@ describe('shared document autosave', () => {
     const identity = { kind: 'md' as const, ...ensureFileDisplayIdentity(originalPath) };
     reconcileFileDisplays([identity]);
     applyLoadedDocumentContent(identity, '/notes/old.md', 'Base');
-    let currentPath = originalPath;
     let onChange: ((content: string) => void) | undefined;
     function Surface() {
       onChange = useDocumentAutosave({
-        identity, filePath: '/notes/old.md', getCurrentFilePath: () => currentPath,
+        identity,
         externalScopePath: isExternalDocument ? '/notes' : null,
-        setState: vi.fn(), reloadDocument: vi.fn().mockResolvedValue(undefined),
       }).handleChange;
       return null;
     }
@@ -81,7 +76,6 @@ describe('shared document autosave', () => {
       await act(async () => vi.advanceTimersByTimeAsync(1000));
       expect(save).not.toHaveBeenCalled();
 
-      currentPath = '/notes/new.md';
       finishRename!();
       finishRename = null;
       await act(async () => { await rename; });

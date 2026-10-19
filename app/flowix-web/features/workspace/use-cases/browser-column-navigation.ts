@@ -39,7 +39,9 @@ function targetTabTitle(target: BrowserColumnTarget): string {
 
   switch (target.kind) {
     case 'folder-collection':
-      return target.folderName || target.folderPath.split(/[\\/]/).filter(Boolean).pop() || '文件夹集合';
+      return target.viewMode === 'work-documents'
+        ? '工作文档'
+        : target.folderName || target.folderPath.split(/[\\/]/).filter(Boolean).pop() || '文件夹集合';
     case 'media':
       return filenameFromPath(target.filePath);
     case 'file-browser':
@@ -66,7 +68,7 @@ function targetTabIcon(target: BrowserColumnTarget): string | null {
 }
 
 function targetTabId(target: BrowserColumnTarget): string {
-  if (target.kind === 'folder-collection') return `folder-collection:${target.notebookId}:${canonicalPath(target.folderPath)}`;
+  if (target.kind === 'folder-collection') return `folder-collection:${target.notebookId}:${canonicalPath(target.folderPath)}:${target.viewMode ?? 'chooser'}`;
   if (target.kind === 'agent_conversation') return `agent:${target.instanceId}`;
   if (target.kind === 'web') return `web:${canonicalUrl(target.url) ?? target.url}`;
   if (target.kind === 'file-browser') {
@@ -245,7 +247,7 @@ export function openWorkColumnTargetInBrowserColumn(
   const browserTarget: BrowserColumnTarget | null = (() => {
   switch (target.kind) {
     case 'folder-collection': return { kind: 'folder-collection', notebookId: target.notebookId,
-      notebookPath: target.notebookPath, folderPath: target.folderPath, folderName: target.folderName };
+      notebookPath: target.notebookPath, folderPath: target.folderPath, folderName: target.folderName, viewMode: target.viewMode };
       case 'media':
         return {
           kind: 'media',
@@ -328,7 +330,7 @@ async function prepareCollectionBrowserTarget(target: BrowserColumnTarget): Prom
     const source = await externalDocuments.read(target.activeFilePath, root);
     try { envelope = parseCollectionDocumentV2(source); }
     catch {
-      return { ...target, notebookId, scopePath: root, collectionType: inspectCollectionRecoveryType(source), collectionUnavailableReason: '集合文件格式无效' };
+      return { ...target, notebookId, scopePath: root, collectionType: inspectCollectionRecoveryType(source, target.activeFilePath), collectionUnavailableReason: '集合文件格式无效' };
     }
   }
   const collectionId = target.collectionDisplay?.collectionId ?? envelope!.collection.id;

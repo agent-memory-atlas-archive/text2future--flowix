@@ -3,9 +3,12 @@
 import { useEffect } from 'react';
 import { useAgentEvents } from '@features/agent/hooks/use-agent-events';
 import { useAgentRuntimeStore } from '@features/agent/store/agent-runtime-store';
-import { invalidateNotebookCache, prewarmNotebookCache } from '@features/editor/extensions/note-link';
-import { invalidateMentionNotes } from '@features/editor/extensions/note-mention';
-import { invalidateMentionTags } from '@features/editor/extensions/tag-mention';
+// Import the data modules directly. The `note-link` / `note-mention` /
+// `tag-mention` barrels also re-export their TipTap Node views, which dragged
+// ProseMirror into the desktop startup graph for two cache helpers.
+import { invalidateNotebookCache, prewarmNotebookCache } from '@features/editor/extensions/note-link/memo-resolver';
+import { invalidateMentionNotes } from '@features/editor/extensions/note-mention/note-mention-data';
+import { invalidateMentionTags } from '@features/editor/extensions/tag-mention/tag-mention-data';
 import { cloud, listenToAgentWorkspaceChanges } from '@platform/tauri/client';
 import { refreshAgentModelCatalog } from '@features/agent/services/agent-catalog-service';
 import { acquireMemoEventBridge } from '@/lib/memo-dispatcher';

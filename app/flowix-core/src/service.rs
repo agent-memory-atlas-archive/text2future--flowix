@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::memo_file::{
-    notebook_path_from_relative, MemoFile,
-    NoteEntry, NoteSearchHit, NoteWriteOutcome, NotebookConfig,
+    notebook_path_from_relative, MemoFile, NoteEntry, NoteSearchHit, NoteWriteResult,
+    NotebookConfig,
 };
 
 const DEFAULT_LIST_PAGE_SIZE: usize = 50;
@@ -140,6 +140,35 @@ impl NoteService<'_> {
         cursor: Option<&str>,
         requested_limit: Option<usize>,
     ) -> Result<NotePage, FlowixError> {
+        self.query_note_page(notebook_key, filter, sort, tag_id, color, cursor, requested_limit, true)
+    }
+
+    /// Desktop reads must never turn an unavailable index into synchronous
+    /// notebook maintenance. The background worker owns preparation.
+    pub fn list_indexed_page(
+        &mut self,
+        notebook_key: &str,
+        filter: &str,
+        sort: &str,
+        tag_id: Option<&str>,
+        color: Option<&str>,
+        cursor: Option<&str>,
+        requested_limit: Option<usize>,
+    ) -> Result<NotePage, FlowixError> {
+        self.query_note_page(notebook_key, filter, sort, tag_id, color, cursor, requested_limit, false)
+    }
+
+    fn query_note_page(
+        &mut self,
+        notebook_key: &str,
+        filter: &str,
+        sort: &str,
+        tag_id: Option<&str>,
+        color: Option<&str>,
+        cursor: Option<&str>,
+        requested_limit: Option<usize>,
+        prepare_index: bool,
+    ) -> Result<NotePage, FlowixError> {
         let notebook = self.resolve_notebook(notebook_key)?;
         let limit = requested_limit
             .unwrap_or(DEFAULT_LIST_PAGE_SIZE)
@@ -207,7 +236,7 @@ impl NoteService<'_> {
             );
             let mut notes = match page {
                 Ok(notes) => notes,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(error) if prepare_index && error.kind() == std::io::ErrorKind::WouldBlock => {
                     self.memo_file.reconcile_note_index(&notebook.id)?;
                     self.memo_file.read_note_page(
                         &notebook.id,
@@ -315,17 +344,25 @@ impl NoteService<'_> {
         expected_content: Option<&str>,
     ) -> Result<NoteSaveOutcome, FlowixError> {
         let notebook = self.resolve_notebook(notebook_key)?;
-        match self.memo_file.write_note_by_path(
+        match self.memo_file.write_note_by_path_with_result(
             &notebook.id,
             relative_path,
             content,
             expected_content,
         )? {
-            NoteWriteOutcome::Conflict { disk_content } => {
+            NoteWriteResult::Conflict { disk_content } => {
                 Ok(NoteSaveOutcome::Conflict { disk_content })
             }
-            NoteWriteOutcome::Saved { content } => {
-                let entry = self.path_note_entry(&notebook.id, relative_path)?;
+            NoteWriteResult::Saved {
+                content,
+                index_entry,
+            } => {
+                let entry = match index_entry {
+                    Some(entry) => entry,
+                    None => self
+                        .memo_file
+                        .derive_note_entry_from_disk(&notebook.id, relative_path)?,
+                };
                 let path = notebook_path_from_relative(
                     &PathBuf::from(&notebook.path),
                     &entry.relative_path,
@@ -548,6 +585,44 @@ mod tests {
             }])
             .unwrap();
         (temp, memo_file)
+    }
+
+    #[test]
+    fn indexed_page_reports_pending_without_reconciling_a_cold_notebook() {
+        let (temp, store) = service_fixture();
+        std::fs::write(temp.path().join("notes/unindexed.md"), "# Not scanned").unwrap();
+        let mut service = NoteService::new(&store);
+        let error = service.list_indexed_page("work", "all", "createdAt", None, None, None, Some(50)).unwrap_err();
+        assert!(matches!(error, FlowixError::Io(ref error) if error.kind() == std::io::ErrorKind::WouldBlock));
+        assert!(!store.note_index_is_ready("work").unwrap());
+        assert!(store.read_indexed_note_entry_by_path("work", "unindexed.md").unwrap().is_none());
+        store.reconcile_note_index("work").unwrap();
+        assert_eq!(service.list_indexed_page("work", "all", "createdAt", None, None, None, Some(50)).unwrap().notes.len(), 1);
+    }
+
+    #[test]
+    fn save_returns_filename_title_and_first_body_line_preview() {
+        let (_temp, store) = service_fixture();
+        let mut service = NoteService::new(&store);
+        service
+            .create_note_by_path("work", None, "Filename title", "# Old preview\nOld body\n")
+            .unwrap();
+
+        let saved = service
+            .save_note_by_path(
+                "work",
+                "Filename title.md",
+                "# New preview\nNew body\n",
+                Some("# Old preview\nOld body\n"),
+            )
+            .unwrap();
+        let NoteSaveOutcome::Saved(document) = saved else {
+            panic!("save should succeed without a content conflict");
+        };
+
+        assert_eq!(document.entry.title, "Filename title");
+        assert_eq!(document.entry.preview, "New preview");
+        assert_eq!(document.body, "# New preview\nNew body\n");
     }
 
     #[test]

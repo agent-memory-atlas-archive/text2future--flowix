@@ -1323,6 +1323,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "webview2-com",
+ "window-vibrancy",
  "windows",
  "zip",
 ]

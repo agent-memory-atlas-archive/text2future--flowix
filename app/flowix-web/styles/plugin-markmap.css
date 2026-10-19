@@ -62,10 +62,10 @@
   border-radius: 8px;
 }
 
-/* markmap-view injects its own global defaults into the SVG. Keep dark-theme
+/* markmap-view injects its own global defaults into the SVG. Keep dark-palette
  * text explicit at the foreignObject boundary so HTML labels do not fall back
  * to the library's light-mode #333 when theme inheritance crosses SVG/HTML. */
-[data-theme="dark"] .plugin-markmap-canvas__svg {
+:is([data-theme="dark"], [data-theme="mist"]) .plugin-markmap-canvas__svg {
   --markmap-text-color: var(--document-foreground);
   --markmap-a-color: var(--document-link);
   --markmap-a-hover-color: color-mix(in oklch, var(--document-link) 78%, white);
@@ -73,13 +73,13 @@
   color: var(--document-foreground);
 }
 
-[data-theme="dark"] .plugin-markmap-canvas__svg .markmap-foreign,
-[data-theme="dark"] .plugin-markmap-canvas__svg .markmap-foreign > div,
-[data-theme="dark"] .plugin-markmap-canvas__svg .markmap-foreign > div > div {
+:is([data-theme="dark"], [data-theme="mist"]) .plugin-markmap-canvas__svg .markmap-foreign,
+:is([data-theme="dark"], [data-theme="mist"]) .plugin-markmap-canvas__svg .markmap-foreign > div,
+:is([data-theme="dark"], [data-theme="mist"]) .plugin-markmap-canvas__svg .markmap-foreign > div > div {
   color: var(--document-foreground);
 }
 
-[data-theme="dark"] .plugin-markmap-canvas__svg .markmap-foreign a {
+:is([data-theme="dark"], [data-theme="mist"]) .plugin-markmap-canvas__svg .markmap-foreign a {
   color: var(--document-link);
 }
 

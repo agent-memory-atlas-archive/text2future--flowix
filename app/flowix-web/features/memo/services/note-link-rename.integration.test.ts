@@ -15,13 +15,14 @@ vi.mock('@features/memo/store/note-store', () => ({
   useNoteStore: { getState: () => ({ notebooks, notebooksInitialized: true }) },
 }));
 
-import { localDocumentOperations } from '@features/document/use-cases/local-document-operations';
+import { renameMarkdownTitle } from '@features/document/use-cases/local-document-operations';
 import { applyLoadedDocumentContent, getDocumentBuffer, recordDocumentEdit } from '@features/document/store/document-session-service';
 import { acceptBackgroundDocumentContent, hasLiveUnsavedDocumentAtPath } from '@features/document/public/workspace-api';
 import { NoteReference } from '@features/editor/extensions/note-link/view-note';
 import { toNoteReferenceAttrs } from '@features/editor/extensions/note-mention/note-mention-data';
 import { canonicalPath } from '@/lib/path';
 import { rewriteNoteLinkMoves } from './note-link-rewriter';
+import { ensureFileDisplayIdentity, rebaseFileDisplayPath } from '@/lib/file-display-registry';
 
 let root = '';
 const editors: Editor[] = [];
@@ -81,7 +82,15 @@ describe('rename B updates the Markdown reference in A', () => {
       throw new Error(`Unexpected native operation: ${command}`);
     });
 
-    await localDocumentOperations.rename!({ path: noteB, name: '简介2.md', scopePath: root });
+    const noteBIdentity = ensureFileDisplayIdentity(noteB);
+    await renameMarkdownTitle({
+      path: noteB,
+      title: '简介2',
+      scopePath: root,
+      notebook: { id: 'test-book', path: canonicalPath(root) },
+      displayId: noteBIdentity.displayId,
+      onPathChanged: (previous, next) => rebaseFileDisplayPath(previous, next, noteBIdentity.displayId),
+    });
     await vi.waitFor(() => {
       expect(JSON.parse(localStorage.getItem('flowix:pending-note-link-moves') ?? '[]')).toEqual([]);
     });

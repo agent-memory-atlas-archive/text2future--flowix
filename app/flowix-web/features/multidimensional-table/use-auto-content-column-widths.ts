@@ -75,7 +75,11 @@ export function useAutoContentColumnWidths(tableRef: RefObject<HTMLTableElement 
       const style = getComputedStyle(probe);
       const inset = parseFloat(style.getPropertyValue('--multidimensional-table-content-inset')) || 8;
       const chromeWidth = inset * 2;
-      if (context) context.font = style.font;
+      if (context) {
+        // WebKit can return an empty computed `font` shorthand. Build a valid
+        // Canvas font from its longhands so text is not measured at 10px sans-serif.
+        context.font = style.font || `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      }
       const cardWidths = new Map([...cardCache.values()].map((card) => [card, card.getBoundingClientRect().width]));
       const next = Object.fromEntries(measurements.map((column) => {
         const headerWidth = labelWidth(column.label) + 80;

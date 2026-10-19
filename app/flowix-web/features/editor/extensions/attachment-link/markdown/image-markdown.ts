@@ -1,4 +1,5 @@
 import { Extension, type MarkdownParseHelpers, type MarkdownToken } from '@tiptap/core';
+import { scanHead } from '@features/editor/markdown-tokenizer-start';
 import { decodeStorageKey } from './asset-markdown';
 import { parseFlowixMediaStyleComment, parseFlowixMediaStyleSuffix } from './media-style';
 
@@ -51,10 +52,11 @@ export const imageMarkdownSpec = {
     name: 'image',
     level: 'block' as const,
     start(src: string) {
-      const candidateIndex = src.search(/^<!--[ \t]*flowix:media[ \t]+\{/m);
+      const head = scanHead(src);
+      const candidateIndex = head.search(/^<!--[ \t]*flowix:media[ \t]+\{/m);
       const candidate = candidateIndex >= 0 ? parseFlowixMediaStyleComment(src.slice(candidateIndex)) : null;
       const commentIndex = candidate && src.slice(candidateIndex + candidate.raw.length).startsWith('![') ? candidateIndex : -1;
-      const imageIndex = src.indexOf('![');
+      const imageIndex = head.indexOf('![');
       if (commentIndex < 0) return imageIndex;
       if (imageIndex < 0) return commentIndex;
       return Math.min(commentIndex, imageIndex);

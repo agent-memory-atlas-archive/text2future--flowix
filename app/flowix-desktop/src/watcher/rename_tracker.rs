@@ -1,6 +1,6 @@
 //! Match split OS rename events using live filesystem identity, never document text.
 use super::processor::NotebookWatchContext;
-use flowix_core::memo_file::{filesystem_identity, media_kind_for_path, FileManagementPolicy};
+use flowix_core::memo_file::{filesystem_identity, resource_kind_for_path, FileManagementPolicy};
 use notify::{
     event::{ModifyKind, RenameMode},
     Event, EventKind,
@@ -41,25 +41,44 @@ impl RenameTracker {
         self.observe(path);
     }
 
-    pub fn seed(roots: &[NotebookWatchContext]) -> Self {
+    pub fn seed_root_while(
+        root: &NotebookWatchContext,
+        keep_running: impl Fn() -> bool,
+    ) -> Option<Self> {
         let mut tracker = Self::default();
-        for root in roots {
-            tracker.add_root(root);
-        }
         tracker
+            .add_root_while(root, &keep_running)
+            .then_some(tracker)
     }
-    pub fn seed_root(root: &NotebookWatchContext) -> Self {
-        let mut tracker = Self::default();
-        tracker.add_root(root);
-        tracker
+    pub fn register_root(&mut self, root: &NotebookWatchContext) {
+        self.roots.insert(root.root.clone());
+    }
+    pub fn discard_stale_entries(&mut self) {
+        self.known
+            .retain(|path, identity| filesystem_identity(path) == Some(*identity));
+        self.known_directories.retain(|path| path.is_dir());
     }
     pub fn merge_seed(&mut self, seed: Self) {
-        self.roots.extend(seed.roots);
-        self.known.extend(seed.known);
-        self.known_directories.extend(seed.known_directories);
+        for root in seed.roots {
+            if !self.roots.contains(&root) {
+                continue;
+            }
+            for (path, identity) in seed.known.iter().filter(|(path, _)| path.starts_with(&root)) {
+                // Keep observations made by live events while the baseline was
+                // collected off-thread.
+                self.known.entry(path.clone()).or_insert(*identity);
+            }
+            for path in seed
+                .known_directories
+                .iter()
+                .filter(|path| path.starts_with(&root))
+            {
+                self.known_directories.insert(path.clone());
+            }
+        }
     }
-    pub fn add_root(&mut self, root: &NotebookWatchContext) {
-        self.roots.insert(root.root.clone());
+    fn add_root_while(&mut self, root: &NotebookWatchContext, keep_running: &impl Fn() -> bool) -> bool {
+        self.register_root(root);
         let policy = FileManagementPolicy::from_notebook_root(&root.root);
         for entry in walkdir::WalkDir::new(&root.root)
             .follow_links(false)
@@ -72,16 +91,20 @@ impl RenameTracker {
             })
             .filter_map(Result::ok)
         {
+            if !keep_running() {
+                return false;
+            }
             if entry.file_type().is_dir()
                 || entry
                     .path()
                     .extension()
                     .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-                || media_kind_for_path(entry.path()).is_some()
+                || resource_kind_for_path(entry.path()).is_some()
             {
                 self.observe(entry.path());
             }
         }
+        true
     }
     pub fn forget_root(&mut self, root: &Path) {
         self.roots.remove(root);

@@ -42,6 +42,8 @@ interface DynamicVirtualListOptions<T> {
   keepAliveKeys?: readonly string[];
   /** Height of non-virtual content before this list in the same scroller. */
   scrollMargin?: number;
+  /** Retain visible item positions when paging or metadata changes reorder rows. */
+  preserveScrollAnchor?: boolean;
 }
 
 function observeUsableRect(
@@ -164,6 +166,7 @@ export function useDynamicVirtualList<T>({
   overscan = DEFAULT_OVERSCAN,
   keepAliveKeys = [],
   scrollMargin = 0,
+  preserveScrollAnchor = false,
 }: DynamicVirtualListOptions<T>) {
   const lastUsableRectRef = useRef<Rect | null>(null);
   const trackViewportReadinessRef = useRef(trackViewportReadiness);
@@ -180,7 +183,8 @@ export function useDynamicVirtualList<T>({
   );
 
   const keys = useMemo(() => items.map(getKey), [getKey, items]);
-  itemIndexesRef.current = new Map(keys.map((key, index) => [key, index]));
+  const itemIndexes = useMemo(() => new Map(keys.map((key, index) => [key, index])), [keys]);
+  itemIndexesRef.current = itemIndexes;
 
   const getScrollElement = useCallback(() => scrollerRef.current, [scrollerRef]);
   const getItemKey = useCallback((index: number) => keys[index] ?? index, [keys]);
@@ -304,6 +308,37 @@ export function useDynamicVirtualList<T>({
       size: virtualItem.size,
     }));
   }, [enabled, estimateSize, items, keys, measuredItems, scrollMargin]);
+
+  const anchorSnapshot = useRef<{
+    keys: readonly string[];
+    resetKey: string | undefined;
+    anchors: { key: string; offset: number }[];
+  } | null>(null);
+  useLayoutEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!enabled || !preserveScrollAnchor || !scroller || !lastUsableRectRef.current) return;
+    const previous = anchorSnapshot.current;
+    if (previous && previous.keys !== keys && previous.resetKey === resetKey) {
+      for (const anchor of previous.anchors) {
+        const index = itemIndexesRef.current.get(anchor.key);
+        if (index === undefined) continue;
+        const measured = virtualizer.getVirtualItems().find((item) => String(item.key) === anchor.key);
+        const start = measured?.start ?? virtualizer.getOffsetForIndex(index, 'start')?.[0];
+        if (start !== undefined && Math.abs(start + anchor.offset - scroller.scrollTop) > 0.5) {
+          virtualizer.scrollToOffset(Math.max(0, start + anchor.offset));
+        }
+        break;
+      }
+    }
+    const firstVisible = virtualizer.getVirtualItemForOffset(scroller.scrollTop);
+    anchorSnapshot.current = {
+      keys, resetKey,
+      anchors: virtualizer.getVirtualItems()
+        .filter((item) => firstVisible && item.index >= firstVisible.index)
+        .slice(0, 3)
+        .map((item) => ({ key: String(item.key), offset: scroller.scrollTop - item.start })),
+    };
+  });
 
   return {
     totalSize: enabled ? totalSize : 0,

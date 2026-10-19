@@ -26,6 +26,7 @@ async function setFavorite(path: string, favorited: boolean): Promise<FavoriteMu
 }
 
 export const noteRepository = {
+  getIndexed: (notebookId: string, relativePath: string) => notes.getIndexed(notebookId, relativePath),
   listByPath: (params: {
     notebookId: string;
     filter?: FilterType;

@@ -4,6 +4,8 @@ interface MarkdownParserReply {
   ok: boolean
   document?: JSONContent
   workerMs?: number
+  /** Present when raw HTML had to be folded to text before parsing. */
+  rawHtmlFiltered?: boolean
   error?: string
 }
 

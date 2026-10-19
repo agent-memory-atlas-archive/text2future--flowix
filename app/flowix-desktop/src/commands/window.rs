@@ -53,6 +53,12 @@ pub fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Returns the native backdrop successfully applied to the main window.
+#[tauri::command]
+pub fn get_window_material() -> &'static str {
+    crate::window_material::active_material()
+}
+
 #[tauri::command]
 pub async fn open_preferences_window(
     app: tauri::AppHandle,
@@ -76,6 +82,7 @@ pub(crate) fn open_preferences_window_inner(
         Theme::System => None,
         Theme::Light => Some("light"),
         Theme::Dark => Some("dark"),
+        Theme::Mist => Some("mist"),
         Theme::Rock => Some("rock"),
         Theme::Ember => Some("ember"),
     };

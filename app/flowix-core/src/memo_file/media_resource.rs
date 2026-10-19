@@ -1,11 +1,11 @@
-//! Notebook-local media resource index.
+//! Notebook-local resource catalog shared by media and file documents.
 //!
-//! Media files remain on disk, while their user properties and resource
-//! identity are stored in the notebook-local database at
+//! Files remain on disk, while their identity and lightweight metadata are
+//! stored in the notebook-local database at
 //! `<notebook>/.flowix/notebook.db`. It is deliberately separate from the
 //! global notebook registry database (`~/.flowix/db/local.db`).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -16,6 +16,47 @@ use sha2::{Digest, Sha256};
 
 use super::notebook::sqlite_to_io;
 use super::MemoFile;
+
+/// File family stored in the shared resource catalog. The `image` and `video`
+/// values keep the media library API stable; other families are indexed as
+/// files only and are never parsed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ResourceKind {
+    Image,
+    Video,
+    Audio,
+    Document,
+    Spreadsheet,
+    Presentation,
+    Web,
+    Archive,
+    Database,
+}
+
+impl ResourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Document => "document",
+            Self::Spreadsheet => "spreadsheet",
+            Self::Presentation => "presentation",
+            Self::Web => "web",
+            Self::Archive => "archive",
+            Self::Database => "database",
+        }
+    }
+
+    fn is_media(self) -> bool {
+        matches!(self, Self::Image | Self::Video | Self::Audio)
+    }
+
+    fn has_media_properties(self) -> bool {
+        matches!(self, Self::Image | Self::Video)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -31,6 +72,37 @@ impl MediaResourceKind {
             Self::Video => "video",
         }
     }
+
+    fn resource_kind(self) -> ResourceKind {
+        match self {
+            Self::Image => ResourceKind::Image,
+            Self::Video => ResourceKind::Video,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexedResource {
+    pub id: String,
+    pub notebook_id: String,
+    pub relative_path: String,
+    pub kind: ResourceKind,
+    pub format: String,
+    pub is_directory: bool,
+    pub size_bytes: u64,
+    pub modified_ms: u64,
+    pub fingerprint: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexedResourcePage {
+    pub resources: Vec<IndexedResource>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -62,26 +134,31 @@ struct MediaResourceRecord {
     deleted_at: Option<i64>,
 }
 
-const MEDIA_MISSING_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+const RESOURCE_MISSING_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
-/// Normalize a notebook-relative media path and derive its stable resource ID.
-/// The path is deliberately part of identity: a rename produces a new ID.
-pub fn media_resource_id(notebook_id: &str, relative_path: &str) -> std::io::Result<String> {
-    let normalized = normalize_media_relative_path(relative_path)?;
+/// Normalize a notebook-relative path and derive its stable resource ID.
+/// The path is part of identity: a rename produces a new ID.
+pub fn resource_catalog_id(notebook_id: &str, relative_path: &str) -> std::io::Result<String> {
+    let normalized = normalize_resource_relative_path(relative_path)?;
     if notebook_id.is_empty() || notebook_id.contains("::") || notebook_id.contains('\0') {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid notebook id"));
     }
     Ok(format!("{notebook_id}::{normalized}"))
 }
 
-fn normalize_media_relative_path(relative_path: &str) -> std::io::Result<String> {
+/// Backward-compatible media name for the shared resource identity function.
+pub fn media_resource_id(notebook_id: &str, relative_path: &str) -> std::io::Result<String> {
+    resource_catalog_id(notebook_id, relative_path)
+}
+
+fn normalize_resource_relative_path(relative_path: &str) -> std::io::Result<String> {
     let normalized = relative_path.replace('\\', "/");
     if normalized.is_empty()
         || normalized.starts_with('/')
         || normalized.contains('\0')
         || normalized.split('/').any(|part| part.is_empty() || part == "." || part == "..")
     {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid media relative path"));
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid resource relative path"));
     }
     Ok(normalized)
 }
@@ -101,7 +178,7 @@ fn modified_ms(path: &Path) -> u64 {
 
 fn stable_fingerprint(path: &Path, size_bytes: u64) -> String {
     // This is intentionally a quick identity signal, not a full content hash.
-    // It must not contain the path or mtime: a media file can be renamed
+    // It must not contain the path or mtime: a resource can be renamed
     // outside Flowix and still be recognized during the next catalog rebuild.
     // The size plus both ends of the file avoids reading a large video in full
     // while making accidental matches less likely than a prefix-only sample.
@@ -137,7 +214,31 @@ fn parse_kind(value: &str) -> Option<MediaResourceKind> {
     }
 }
 
+fn parse_resource_kind(value: &str) -> Option<ResourceKind> {
+    match value {
+        "image" => Some(ResourceKind::Image),
+        "video" => Some(ResourceKind::Video),
+        "audio" => Some(ResourceKind::Audio),
+        "document" => Some(ResourceKind::Document),
+        "spreadsheet" => Some(ResourceKind::Spreadsheet),
+        "presentation" => Some(ResourceKind::Presentation),
+        "web" => Some(ResourceKind::Web),
+        "archive" => Some(ResourceKind::Archive),
+        "database" => Some(ResourceKind::Database),
+        _ => None,
+    }
+}
+
 pub fn media_kind_for_path(path: &Path) -> Option<MediaResourceKind> {
+    match resource_kind_for_path(path)? {
+        ResourceKind::Image => Some(MediaResourceKind::Image),
+        ResourceKind::Video => Some(MediaResourceKind::Video),
+        _ => None,
+    }
+}
+
+/// Classify supported non-code files without opening or parsing their content.
+pub fn resource_kind_for_path(path: &Path) -> Option<ResourceKind> {
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
     if matches!(
         extension.as_str(),
@@ -155,7 +256,7 @@ pub fn media_kind_for_path(path: &Path) -> Option<MediaResourceKind> {
             | "heic"
             | "heif"
     ) {
-        return Some(MediaResourceKind::Image);
+        return Some(ResourceKind::Image);
     }
     if matches!(
         extension.as_str(),
@@ -173,9 +274,58 @@ pub fn media_kind_for_path(path: &Path) -> Option<MediaResourceKind> {
             | "webm"
             | "wmv"
     ) {
-        return Some(MediaResourceKind::Video);
+        return Some(ResourceKind::Video);
+    }
+    if matches!(
+        extension.as_str(),
+        "aac" | "aif" | "aiff" | "alac" | "amr" | "ape" | "caf" | "dff" | "dsf"
+            | "flac" | "m4a" | "m4b" | "m4p" | "mid" | "midi" | "mka" | "mp3"
+            | "mpc" | "oga" | "ogg" | "opus" | "ra" | "ram" | "tta" | "voc"
+            | "wav" | "wma" | "wv"
+    ) {
+        return Some(ResourceKind::Audio);
+    }
+    if matches!(extension.as_str(), "docx" | "doc" | "odt" | "pages" | "wps" | "pdf") {
+        return Some(ResourceKind::Document);
+    }
+    if matches!(extension.as_str(), "xlsx" | "xls" | "xlsm" | "ods" | "csv") {
+        return Some(ResourceKind::Spreadsheet);
+    }
+    if matches!(extension.as_str(), "pptx" | "ppt" | "key" | "odp") {
+        return Some(ResourceKind::Presentation);
+    }
+    if matches!(extension.as_str(), "html" | "htm") {
+        return Some(ResourceKind::Web);
+    }
+    if matches!(extension.as_str(), "zip" | "7z" | "rar") {
+        return Some(ResourceKind::Archive);
+    }
+    if matches!(extension.as_str(), "sqlite" | "db") {
+        return Some(ResourceKind::Database);
     }
     None
+}
+
+fn resource_format_for_path(path: &Path) -> String {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
+fn is_directory_resource_bundle(path: &Path) -> bool {
+    path.is_dir()
+        && path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "pages" | "key"))
+}
+
+fn is_inside_directory_resource_bundle(path: &Path, root: &Path) -> bool {
+    path.ancestors()
+        .skip(1)
+        .take_while(|ancestor| *ancestor != root)
+        .any(is_directory_resource_bundle)
 }
 
 impl MemoFile {
@@ -183,10 +333,15 @@ impl MemoFile {
         self.open_notebook_db_inner(notebook_id, false)
     }
 
-    /// Upgrade the notebook media catalog during version initialization.
-    pub fn initialize_media_resource_schema(&self, notebook_id: &str) -> std::io::Result<()> {
+    /// Initialize the shared notebook resource catalog during version initialization.
+    pub fn initialize_resource_catalog_schema(&self, notebook_id: &str) -> std::io::Result<()> {
         self.open_notebook_db_inner(notebook_id, true)?;
         Ok(())
+    }
+
+    /// Backward-compatible name for older internal callers.
+    pub fn initialize_media_resource_schema(&self, notebook_id: &str) -> std::io::Result<()> {
+        self.initialize_resource_catalog_schema(notebook_id)
     }
 
     fn open_notebook_db_inner(
@@ -218,11 +373,13 @@ impl MemoFile {
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous = NORMAL;
             PRAGMA foreign_keys = ON;
-            CREATE TABLE IF NOT EXISTS media_resources (
+            CREATE TABLE IF NOT EXISTS resource_catalog (
                 id TEXT PRIMARY KEY,
                 notebook_id TEXT NOT NULL,
                 relative_path TEXT NOT NULL,
-                kind TEXT NOT NULL CHECK(kind IN ('image', 'video')),
+                kind TEXT NOT NULL CHECK(kind IN ('image', 'video', 'audio', 'document', 'spreadsheet', 'presentation', 'web', 'archive', 'database')),
+                format TEXT NOT NULL DEFAULT '',
+                is_directory INTEGER NOT NULL DEFAULT 0,
                 size_bytes INTEGER NOT NULL,
                 modified_ms INTEGER NOT NULL,
                 fingerprint TEXT,
@@ -234,12 +391,12 @@ impl MemoFile {
                 updated_at INTEGER NOT NULL,
                 UNIQUE(notebook_id, relative_path)
             );
-            CREATE INDEX IF NOT EXISTS idx_media_resources_kind
-                ON media_resources(kind);
-            CREATE INDEX IF NOT EXISTS idx_media_resources_updated
-                ON media_resources(updated_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_media_resources_fingerprint
-                ON media_resources(fingerprint);
+            CREATE INDEX IF NOT EXISTS idx_resource_catalog_kind
+                ON resource_catalog(kind);
+            CREATE INDEX IF NOT EXISTS idx_resource_catalog_updated
+                ON resource_catalog(updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_resource_catalog_fingerprint
+                ON resource_catalog(fingerprint);
             CREATE TABLE IF NOT EXISTS notebook_index_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -254,12 +411,14 @@ impl MemoFile {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sqlite_to_io)?;
         for (column, definition) in [
+            ("format", "TEXT NOT NULL DEFAULT ''"),
+            ("is_directory", "INTEGER NOT NULL DEFAULT 0"),
             ("properties_revision", "INTEGER NOT NULL DEFAULT 0"),
             ("missing_since", "INTEGER"),
             ("deleted_at", "INTEGER"),
         ] {
             let exists = tx
-                .prepare("PRAGMA table_info(media_resources)")
+                .prepare("PRAGMA table_info(resource_catalog)")
                 .map_err(sqlite_to_io)?
                 .query_map([], |row| row.get::<_, String>(1))
                 .map_err(sqlite_to_io)?
@@ -267,17 +426,105 @@ impl MemoFile {
                 .any(|name| name == column);
             if !exists {
                 tx.execute(
-                    &format!("ALTER TABLE media_resources ADD COLUMN {column} {definition}"),
+                    &format!("ALTER TABLE resource_catalog ADD COLUMN {column} {definition}"),
                     [],
                 )
                 .map_err(sqlite_to_io)?;
             }
         }
+        let catalog_sql: String = tx
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='resource_catalog'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_to_io)?;
+        let required_kinds = [
+            "'image'", "'video'", "'audio'", "'document'", "'spreadsheet'",
+            "'presentation'", "'web'", "'archive'", "'database'",
+        ];
+        if !required_kinds.iter().all(|kind| catalog_sql.contains(kind)) {
+            // SQLite cannot alter a CHECK constraint in place. Rebuild this
+            // derived catalog table transactionally so notebooks created by
+            // earlier versions can index the newer document families.
+            tx.execute_batch(
+                "CREATE TABLE resource_catalog_next (
+                    id TEXT PRIMARY KEY,
+                    notebook_id TEXT NOT NULL,
+                    relative_path TEXT NOT NULL,
+                    kind TEXT NOT NULL CHECK(kind IN ('image', 'video', 'audio', 'document', 'spreadsheet', 'presentation', 'web', 'archive', 'database')),
+                    format TEXT NOT NULL DEFAULT '',
+                    is_directory INTEGER NOT NULL DEFAULT 0,
+                    size_bytes INTEGER NOT NULL,
+                    modified_ms INTEGER NOT NULL,
+                    fingerprint TEXT,
+                    properties TEXT NOT NULL DEFAULT '{}',
+                    properties_revision INTEGER NOT NULL DEFAULT 0,
+                    missing_since INTEGER,
+                    deleted_at INTEGER,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    UNIQUE(notebook_id, relative_path)
+                );
+                INSERT INTO resource_catalog_next (
+                    id, notebook_id, relative_path, kind, format, is_directory,
+                    size_bytes, modified_ms, fingerprint, properties,
+                    properties_revision, missing_since, deleted_at, created_at, updated_at
+                ) SELECT
+                    id, notebook_id, relative_path, kind, format, is_directory,
+                    size_bytes, modified_ms, fingerprint, properties,
+                    properties_revision, missing_since, deleted_at, created_at, updated_at
+                FROM resource_catalog;
+                DROP TABLE resource_catalog;
+                ALTER TABLE resource_catalog_next RENAME TO resource_catalog;",
+            )
+            .map_err(sqlite_to_io)?;
+        }
+        // Older notebook databases may still have the former media table.
+        // Keep its shape readable until the resource catalog initialization
+        // job copies it transactionally and removes it.
+        let legacy_media_table_exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='media_resources')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_to_io)?;
+        if legacy_media_table_exists {
+            for (column, definition) in [
+                ("properties_revision", "INTEGER NOT NULL DEFAULT 0"),
+                ("missing_since", "INTEGER"),
+                ("deleted_at", "INTEGER"),
+            ] {
+                let exists = tx
+                    .prepare("PRAGMA table_info(media_resources)")
+                    .map_err(sqlite_to_io)?
+                    .query_map([], |row| row.get::<_, String>(1))
+                    .map_err(sqlite_to_io)?
+                    .filter_map(Result::ok)
+                    .any(|name| name == column);
+                if !exists {
+                    tx.execute(
+                        &format!("ALTER TABLE media_resources ADD COLUMN {column} {definition}"),
+                        [],
+                    )
+                    .map_err(sqlite_to_io)?;
+                }
+            }
+        }
         tx.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_media_resources_missing
-                 ON media_resources(missing_since, deleted_at);
-             CREATE INDEX IF NOT EXISTS idx_media_resources_library_page
-                 ON media_resources(notebook_id, deleted_at, missing_since, created_at DESC, id DESC);",
+            "CREATE INDEX IF NOT EXISTS idx_resource_catalog_kind
+                 ON resource_catalog(kind);
+             CREATE INDEX IF NOT EXISTS idx_resource_catalog_updated
+                 ON resource_catalog(updated_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_resource_catalog_fingerprint
+                 ON resource_catalog(fingerprint);
+             CREATE INDEX IF NOT EXISTS idx_resource_catalog_missing
+                 ON resource_catalog(missing_since, deleted_at);
+             CREATE INDEX IF NOT EXISTS idx_resource_catalog_kind_format
+                 ON resource_catalog(kind, format);
+             CREATE INDEX IF NOT EXISTS idx_resource_catalog_library_page
+                 ON resource_catalog(notebook_id, deleted_at, missing_since, created_at DESC, id DESC);",
         )
         .map_err(sqlite_to_io)?;
         tx.commit().map_err(sqlite_to_io)?;
@@ -329,7 +576,7 @@ impl MemoFile {
                 "SELECT id, notebook_id, relative_path, kind, size_bytes, modified_ms,
                     fingerprint, properties, properties_revision, missing_since, deleted_at,
                     created_at, updated_at
-             FROM media_resources
+             FROM resource_catalog
              WHERE notebook_id = ?1 AND relative_path = ?2",
                 params![notebook_id, relative_path],
                 |row| {
@@ -386,7 +633,7 @@ impl MemoFile {
     ) -> std::io::Result<MediaResourcePage> {
         let conn = self.open_notebook_db(notebook_id)?;
         let kind_filter = match kinds {
-            [] => String::new(),
+            [] => " AND kind IN ('image', 'video')".to_owned(),
             [MediaResourceKind::Image] => " AND kind = 'image'".to_owned(),
             [MediaResourceKind::Video] => " AND kind = 'video'".to_owned(),
             _ => " AND kind IN ('image', 'video')".to_owned(),
@@ -418,7 +665,7 @@ impl MemoFile {
         let sql = format!(
             "SELECT id, notebook_id, relative_path, kind, size_bytes, modified_ms,
                     fingerprint, properties, properties_revision, created_at, updated_at
-             FROM media_resources
+             FROM resource_catalog
              WHERE notebook_id = ?1 AND deleted_at IS NULL AND missing_since IS NULL{kind_filter}{where_extra}
              ORDER BY created_at DESC, id DESC LIMIT ?{}",
             values.len(),
@@ -452,28 +699,140 @@ impl MemoFile {
         Ok(MediaResourcePage { resources, next_cursor, has_more })
     }
 
-    /// Register or refresh a media path. The file itself is never modified.
-    pub fn ensure_media_resource(
+    /// Query the shared catalog for indexed non-media resources. This returns
+    /// metadata only; file contents are never opened or parsed.
+    pub fn list_indexed_resources_page(
+        &self,
+        notebook_id: &str,
+        kinds: &[ResourceKind],
+        cursor: Option<(i64, String)>,
+        limit: usize,
+    ) -> std::io::Result<IndexedResourcePage> {
+        let conn = self.open_notebook_db(notebook_id)?;
+        let mut values = vec![rusqlite::types::Value::Text(notebook_id.to_owned())];
+        let kind_filter = if kinds.is_empty() {
+            String::new()
+        } else {
+            let placeholders = kinds.iter().enumerate().map(|(index, _)| format!("?{}", index + 2)).collect::<Vec<_>>().join(",");
+            values.extend(kinds.iter().map(|kind| rusqlite::types::Value::Text(kind.as_str().to_owned())));
+            format!(" AND kind IN ({placeholders})")
+        };
+        let mut cursor_filter = String::new();
+        if let Some((modified_ms, id)) = cursor {
+            values.push(rusqlite::types::Value::Integer(modified_ms));
+            values.push(rusqlite::types::Value::Text(id));
+            cursor_filter = format!(
+                " AND (modified_ms < ?{} OR (modified_ms = ?{} AND id < ?{}))",
+                values.len() - 1,
+                values.len() - 1,
+                values.len(),
+            );
+        }
+        let page_limit = limit.clamp(1, 120).saturating_add(1) as i64;
+        values.push(rusqlite::types::Value::Integer(page_limit));
+        let sql = format!(
+            "SELECT id, notebook_id, relative_path, kind, format, is_directory,
+                    size_bytes, modified_ms, fingerprint, created_at, updated_at
+             FROM resource_catalog
+             WHERE notebook_id = ?1 AND deleted_at IS NULL AND missing_since IS NULL{kind_filter}{cursor_filter}
+             ORDER BY modified_ms DESC, id DESC LIMIT ?{}",
+            values.len(),
+        );
+        let mut statement = conn.prepare(&sql).map_err(sqlite_to_io)?;
+        let decode_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<IndexedResource> {
+            let kind: String = row.get(3)?;
+            Ok(IndexedResource {
+                id: row.get(0)?,
+                notebook_id: row.get(1)?,
+                relative_path: row.get(2)?,
+                kind: parse_resource_kind(&kind).ok_or(rusqlite::Error::InvalidQuery)?,
+                format: row.get(4)?,
+                is_directory: row.get(5)?,
+                size_bytes: row.get::<_, i64>(6)?.max(0) as u64,
+                modified_ms: row.get::<_, i64>(7)?.max(0) as u64,
+                fingerprint: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+            })
+        };
+        let mut resources = statement
+            .query_map(rusqlite::params_from_iter(values.iter()), decode_row)
+            .map_err(sqlite_to_io)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_to_io)?;
+        let has_more = resources.len() > page_limit as usize - 1;
+        if has_more { resources.pop(); }
+        let next_cursor = has_more.then(|| resources.last()).flatten()
+            .map(|resource| format!("{}:{}", resource.modified_ms, resource.id));
+        Ok(IndexedResourcePage { resources, next_cursor, has_more })
+    }
+
+    /// Read a lightweight catalog row. This never opens or parses the file.
+    pub fn read_indexed_resource(
         &self,
         notebook_id: &str,
         relative_path: &str,
-        kind: MediaResourceKind,
+    ) -> std::io::Result<Option<IndexedResource>> {
+        let conn = self.open_notebook_db(notebook_id)?;
+        conn.query_row(
+            "SELECT id, notebook_id, relative_path, kind, format, is_directory,
+                    size_bytes, modified_ms, fingerprint, created_at, updated_at
+             FROM resource_catalog
+             WHERE notebook_id=?1 AND relative_path=?2 AND deleted_at IS NULL",
+            params![notebook_id, relative_path],
+            |row| {
+                let kind: String = row.get(3)?;
+                Ok(IndexedResource {
+                    id: row.get(0)?,
+                    notebook_id: row.get(1)?,
+                    relative_path: row.get(2)?,
+                    kind: parse_resource_kind(&kind).ok_or(rusqlite::Error::InvalidQuery)?,
+                    format: row.get(4)?,
+                    is_directory: row.get(5)?,
+                    size_bytes: row.get::<_, i64>(6)?.max(0) as u64,
+                    modified_ms: row.get::<_, i64>(7)?.max(0) as u64,
+                    fingerprint: row.get(8)?,
+                    created_at: row.get(9)?,
+                    updated_at: row.get(10)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(sqlite_to_io)
+    }
+
+    /// Register or refresh any supported file path without reading its content.
+    pub fn ensure_indexed_resource(
+        &self,
+        notebook_id: &str,
+        relative_path: &str,
+        kind: ResourceKind,
         absolute_path: &Path,
-    ) -> std::io::Result<MediaResource> {
-        let relative_path = normalize_media_relative_path(relative_path)?;
-        let id = media_resource_id(notebook_id, &relative_path)?;
-        let metadata = fs::metadata(absolute_path)?;
-        if !metadata.is_file() {
+    ) -> std::io::Result<IndexedResource> {
+        let relative_path = normalize_resource_relative_path(relative_path)?;
+        let id = resource_catalog_id(notebook_id, &relative_path)?;
+        let path_type = fs::symlink_metadata(absolute_path)?;
+        if path_type.file_type().is_symlink() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "media resource is not a file",
+                "indexed resource cannot be a symbolic link",
             ));
         }
-        let size_bytes = metadata.len();
+        let metadata = fs::metadata(absolute_path)?;
+        let is_directory = path_type.is_dir() && is_directory_resource_bundle(absolute_path);
+        if !metadata.is_file() && !is_directory {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "indexed resource is not a file",
+            ));
+        }
+        let size_bytes = if is_directory { 0 } else { metadata.len() };
         let modified = modified_ms(absolute_path);
-        let fingerprint = stable_fingerprint(absolute_path, size_bytes);
+        let fingerprint = (kind.is_media() && !is_directory)
+            .then(|| stable_fingerprint(absolute_path, size_bytes));
+        let format = resource_format_for_path(absolute_path);
         let conn = self.open_notebook_db(notebook_id)?;
-        let legacy_import_pending = conn
+        let legacy_import_pending = kind.has_media_properties() && conn
             .query_row(
                 "SELECT 1 FROM notebook_index_meta
                  WHERE key = 'media_legacy_sidecars_imported_v1'",
@@ -483,17 +842,32 @@ impl MemoFile {
             .optional()
             .map_err(sqlite_to_io)?
             .is_none();
-        let mut existing = self.read_media_resource_record(notebook_id, &relative_path)?;
+        let mut existing = conn
+            .query_row(
+                "SELECT properties, properties_revision, created_at
+                 FROM resource_catalog WHERE notebook_id=?1 AND relative_path=?2",
+                params![notebook_id, relative_path],
+                |row| {
+                    Ok((
+                        serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(0)?)
+                            .unwrap_or_else(|_| serde_json::json!({})),
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(sqlite_to_io)?;
 
-        // Preserve database properties when a file was renamed outside Flowix.
-        // Only associate an old row when its previous
-        // media path is gone and the fingerprint is unique; identical copies
-        // must not steal one another's metadata.
-        if existing.is_none() {
+        // Media properties can follow an out-of-app rename when the sampled
+        // fingerprint uniquely identifies a file whose old path disappeared.
+        if kind.is_media() && existing.is_none() {
+            let fingerprint = fingerprint.as_deref().unwrap_or_default();
             let mut candidates = conn
                 .prepare(
-                    "SELECT id, relative_path FROM media_resources
-                     WHERE notebook_id = ?1 AND fingerprint = ?2 AND relative_path <> ?3
+                    "SELECT id, relative_path FROM resource_catalog
+                     WHERE notebook_id = ?1 AND kind IN ('image', 'video')
+                       AND fingerprint = ?2 AND relative_path <> ?3
                      LIMIT 2",
                 )
                 .map_err(sqlite_to_io)?
@@ -512,26 +886,39 @@ impl MemoFile {
                     .map_err(std::io::Error::other)?;
                 if !old_absolute.is_file() {
                     conn.execute(
-                        "UPDATE media_resources SET id = ?1, relative_path = ?2, updated_at = ?3,
+                        "UPDATE resource_catalog SET id = ?1, relative_path = ?2, updated_at = ?3,
                              missing_since = NULL, deleted_at = NULL
                          WHERE notebook_id = ?4 AND id = ?5",
                         params![id, relative_path, now_ms(), notebook_id, candidate_id],
                     )
                     .map_err(sqlite_to_io)?;
-                    existing = self.read_media_resource_record(notebook_id, &relative_path)?;
+                    existing = conn
+                        .query_row(
+                            "SELECT properties, properties_revision, created_at
+                             FROM resource_catalog WHERE notebook_id=?1 AND relative_path=?2",
+                            params![notebook_id, relative_path],
+                            |row| Ok((
+                                serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(0)?)
+                                    .unwrap_or_else(|_| serde_json::json!({})),
+                                row.get::<_, i64>(1)?,
+                                row.get::<_, i64>(2)?,
+                            )),
+                        )
+                        .optional()
+                        .map_err(sqlite_to_io)?;
                 }
             }
         }
         let created_at = existing
             .as_ref()
-            .map(|record| record.resource.created_at)
+            .map(|record| record.2)
             .unwrap_or_else(now_ms);
         let updated_at = now_ms();
         let properties = existing
             .as_ref()
-            .map(|record| record.resource.properties.clone())
+            .map(|record| record.0.clone())
             .unwrap_or_else(|| {
-                if !legacy_import_pending {
+                if !kind.has_media_properties() || !legacy_import_pending {
                     return serde_json::json!({});
                 }
                 match Self::read_legacy_media_properties(absolute_path) {
@@ -548,14 +935,17 @@ impl MemoFile {
             });
         conn.execute(
             r#"
-            INSERT INTO media_resources
-                (id, notebook_id, relative_path, kind, size_bytes, modified_ms,
+            INSERT INTO resource_catalog
+                (id, notebook_id, relative_path, kind, format, is_directory, size_bytes, modified_ms,
                  fingerprint, properties, properties_revision, missing_since, deleted_at,
                  created_at, updated_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, NULL, NULL, ?9, ?10)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                    NULL, NULL, ?12, ?13)
             ON CONFLICT(notebook_id, relative_path) DO UPDATE SET
                 id = excluded.id,
                 kind = excluded.kind,
+                format = excluded.format,
+                is_directory = excluded.is_directory,
                 size_bytes = excluded.size_bytes,
                 modified_ms = excluded.modified_ms,
                 fingerprint = excluded.fingerprint,
@@ -568,31 +958,49 @@ impl MemoFile {
                 notebook_id,
                 relative_path,
                 kind.as_str(),
+                format,
+                is_directory,
                 size_bytes as i64,
                 modified as i64,
                 fingerprint,
                 serde_json::to_string(&properties).unwrap_or_else(|_| "{}".to_string()),
+                existing.as_ref().map(|record| record.1).unwrap_or(0),
                 created_at,
                 updated_at,
             ],
         )
         .map_err(sqlite_to_io)?;
-        Ok(MediaResource {
+        Ok(IndexedResource {
             id,
             notebook_id: notebook_id.to_string(),
             relative_path: relative_path.clone(),
             kind,
+            format,
+            is_directory,
             size_bytes,
             modified_ms: modified,
-            fingerprint: Some(fingerprint),
-            properties,
-            properties_revision: existing
-                .as_ref()
-                .map(|record| record.resource.properties_revision)
-                .unwrap_or(0),
+            fingerprint,
             created_at,
             updated_at,
         })
+    }
+
+    /// Media compatibility wrapper over the shared catalog.
+    pub fn ensure_media_resource(
+        &self,
+        notebook_id: &str,
+        relative_path: &str,
+        kind: MediaResourceKind,
+        absolute_path: &Path,
+    ) -> std::io::Result<MediaResource> {
+        let indexed = self.ensure_indexed_resource(
+            notebook_id,
+            relative_path,
+            kind.resource_kind(),
+            absolute_path,
+        )?;
+        self.read_media_resource(notebook_id, &indexed.relative_path)?
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "media resource missing after refresh"))
     }
 
     pub fn update_media_resource_properties(
@@ -628,7 +1036,7 @@ impl MemoFile {
             .map_err(|error| std::io::Error::other(error.to_string()))?;
         let changed = if let Some(expected_revision) = expected_revision {
             conn.execute(
-                "UPDATE media_resources SET properties = ?1, updated_at = ?2,
+                "UPDATE resource_catalog SET properties = ?1, updated_at = ?2,
                     properties_revision = properties_revision + 1
                  WHERE notebook_id = ?3 AND id = ?4 AND deleted_at IS NULL
                     AND properties_revision = ?5",
@@ -642,7 +1050,7 @@ impl MemoFile {
             )
         } else {
             conn.execute(
-                "UPDATE media_resources SET properties = ?1, updated_at = ?2,
+                "UPDATE resource_catalog SET properties = ?1, updated_at = ?2,
                     properties_revision = properties_revision + 1
                  WHERE notebook_id = ?3 AND id = ?4 AND deleted_at IS NULL",
                 params![serialized, updated_at, notebook_id, resource_id],
@@ -653,7 +1061,7 @@ impl MemoFile {
             if expected_revision.is_some()
                 && conn
                     .query_row(
-                        "SELECT 1 FROM media_resources
+                        "SELECT 1 FROM resource_catalog
                          WHERE notebook_id = ?1 AND id = ?2 AND deleted_at IS NULL",
                         params![notebook_id, resource_id],
                         |_| Ok(()),
@@ -671,7 +1079,7 @@ impl MemoFile {
         }
         let relative_path: String = conn
             .query_row(
-                "SELECT relative_path FROM media_resources WHERE notebook_id = ?1 AND id = ?2",
+                "SELECT relative_path FROM resource_catalog WHERE notebook_id = ?1 AND id = ?2",
                 params![notebook_id, resource_id],
                 |row| row.get(0),
             )
@@ -688,7 +1096,7 @@ impl MemoFile {
         let now = now_ms();
         let changed = conn
             .execute(
-                "UPDATE media_resources
+                "UPDATE resource_catalog
                  SET missing_since = COALESCE(missing_since, ?1),
                      deleted_at = ?1, updated_at = ?1
                  WHERE notebook_id = ?2 AND id = ?3",
@@ -698,10 +1106,10 @@ impl MemoFile {
         Ok(changed > 0)
     }
 
-    /// Refresh or retire one media catalog path after a filesystem event.
-    /// File bytes remain untouched; a missing resource is retained briefly so
-    /// a rename can preserve its identity and user properties.
-    pub fn refresh_media_resource_path(
+    /// Refresh or retire one supported file path after a filesystem event.
+    /// A missing resource is retained briefly so a rename can preserve its
+    /// identity and, for media, its user properties.
+    pub fn refresh_indexed_resource_path(
         &self,
         notebook_id: &str,
         relative_path: &str,
@@ -716,17 +1124,18 @@ impl MemoFile {
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "media path is excluded by notebook policy",
+                "resource path is excluded by notebook policy",
             ));
         }
         let absolute = super::notebook_path_from_relative(&root, relative_path)
             .map_err(std::io::Error::other)?;
         match fs::symlink_metadata(&absolute) {
             Ok(metadata) => {
-                if metadata.file_type().is_symlink() || !metadata.is_file() {
+                let is_directory = metadata.is_dir() && is_directory_resource_bundle(&absolute);
+                if metadata.file_type().is_symlink() || (!metadata.is_file() && !is_directory) {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
-                        "media resource is not a regular file",
+                        "resource is not a regular file",
                     ));
                 }
                 let canonical_root = fs::canonicalize(&root)?;
@@ -734,22 +1143,22 @@ impl MemoFile {
                 if !canonical_path.starts_with(&canonical_root) {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
-                        "media path leaves notebook",
+                        "resource path leaves notebook",
                     ));
                 }
-                let Some(kind) = media_kind_for_path(&absolute) else {
+                let Some(kind) = resource_kind_for_path(&absolute) else {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
-                        "unsupported media resource type",
+                        "unsupported resource type",
                     ));
                 };
-                self.ensure_media_resource(notebook_id, relative_path, kind, &absolute)?;
+                self.ensure_indexed_resource(notebook_id, relative_path, kind, &absolute)?;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 let conn = self.open_notebook_db(notebook_id)?;
                 let now = now_ms();
                 conn.execute(
-                    "UPDATE media_resources
+                    "UPDATE resource_catalog
                      SET missing_since = COALESCE(missing_since, ?1),
                          deleted_at = ?1, updated_at = ?1
                      WHERE notebook_id = ?2 AND relative_path = ?3",
@@ -762,18 +1171,30 @@ impl MemoFile {
         Ok(())
     }
 
+    /// Media-only compatibility wrapper.
+    pub fn refresh_media_resource_path(
+        &self,
+        notebook_id: &str,
+        relative_path: &str,
+    ) -> std::io::Result<()> {
+        if media_kind_for_path(Path::new(relative_path)).is_none() {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a media path"));
+        }
+        self.refresh_indexed_resource_path(notebook_id, relative_path)
+    }
+
     /// Move a catalog row after a confirmed same-notebook filesystem rename.
     /// The resource ID changes with the path while user properties remain on the row.
     /// Returns false when the old path is unknown or the destination already
     /// has a catalog record; callers can then use ordinary path refresh.
-    pub fn move_media_resource_path(
+    pub fn move_indexed_resource_path(
         &self,
         notebook_id: &str,
         old_relative_path: &str,
         new_relative_path: &str,
     ) -> std::io::Result<bool> {
-        let old_relative_path = normalize_media_relative_path(old_relative_path)?;
-        let new_relative_path = normalize_media_relative_path(new_relative_path)?;
+        let old_relative_path = normalize_resource_relative_path(old_relative_path)?;
+        let new_relative_path = normalize_resource_relative_path(new_relative_path)?;
         if old_relative_path == new_relative_path {
             return Ok(false);
         }
@@ -789,28 +1210,31 @@ impl MemoFile {
         let new_absolute = super::notebook_path_from_relative(&root, &new_relative_path)
             .map_err(std::io::Error::other)?;
         let metadata = fs::symlink_metadata(&new_absolute)?;
-        if metadata.file_type().is_symlink() || !metadata.is_file()
+        let is_directory = metadata.is_dir() && is_directory_resource_bundle(&new_absolute);
+        if metadata.file_type().is_symlink() || (!metadata.is_file() && !is_directory)
             || !fs::canonicalize(&new_absolute)?.starts_with(fs::canonicalize(&root)?)
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "renamed media path is not a regular notebook file",
+                "renamed resource path is not a regular notebook file",
             ));
         }
-        let kind = media_kind_for_path(&new_absolute).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "unsupported media resource type")
+        let kind = resource_kind_for_path(&new_absolute).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "unsupported resource type")
         })?;
-        let size = metadata.len();
+        let format = resource_format_for_path(&new_absolute);
+        let size = if is_directory { 0 } else { metadata.len() };
         let modified = modified_ms(&new_absolute);
-        let fingerprint = stable_fingerprint(&new_absolute, size);
-        let new_id = media_resource_id(notebook_id, &new_relative_path)?;
+        let fingerprint = (kind.is_media() && !is_directory)
+            .then(|| stable_fingerprint(&new_absolute, size));
+        let new_id = resource_catalog_id(notebook_id, &new_relative_path)?;
         let mut conn = self.open_notebook_db(notebook_id)?;
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sqlite_to_io)?;
         let destination_exists = tx
             .query_row(
-                "SELECT 1 FROM media_resources WHERE notebook_id=?1 AND relative_path=?2",
+                "SELECT 1 FROM resource_catalog WHERE notebook_id=?1 AND relative_path=?2",
                 params![notebook_id, new_relative_path],
                 |_| Ok(()),
             )
@@ -822,14 +1246,16 @@ impl MemoFile {
         }
         let changed = tx
             .execute(
-                "UPDATE media_resources SET id=?1, relative_path=?2, kind=?3, size_bytes=?4,
-                    modified_ms=?5, fingerprint=?6, missing_since=NULL, deleted_at=NULL,
-                    updated_at=?7
-                 WHERE notebook_id=?8 AND relative_path=?9",
+                "UPDATE resource_catalog SET id=?1, relative_path=?2, kind=?3, format=?4,
+                    is_directory=?5, size_bytes=?6, modified_ms=?7, fingerprint=?8,
+                    missing_since=NULL, deleted_at=NULL, updated_at=?9
+                 WHERE notebook_id=?10 AND relative_path=?11",
                 params![
                     new_id,
                     new_relative_path,
                     kind.as_str(),
+                    format,
+                    is_directory,
                     size as i64,
                     modified as i64,
                     fingerprint,
@@ -843,6 +1269,125 @@ impl MemoFile {
         Ok(changed > 0)
     }
 
+    /// Media-only compatibility wrapper.
+    pub fn move_media_resource_path(
+        &self,
+        notebook_id: &str,
+        old_relative_path: &str,
+        new_relative_path: &str,
+    ) -> std::io::Result<bool> {
+        if media_kind_for_path(Path::new(new_relative_path)).is_none() {
+            return Ok(false);
+        }
+        self.move_indexed_resource_path(notebook_id, old_relative_path, new_relative_path)
+    }
+
+    /// Copy the previous media index into the shared catalog and remove the
+    /// legacy table in the same SQLite transaction. The job can safely retry
+    /// after a crash because either all rows and the drop commit, or none do.
+    pub fn migrate_legacy_media_resources_to_catalog(
+        &self,
+        notebook_id: &str,
+    ) -> std::io::Result<usize> {
+        let mut conn = self.open_notebook_db(notebook_id)?;
+        let has_legacy_table: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='media_resources')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_to_io)?;
+        if !has_legacy_table {
+            return Ok(0);
+        }
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(sqlite_to_io)?;
+        let rows = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT notebook_id, relative_path, kind, size_bytes, modified_ms,
+                            fingerprint, properties, properties_revision, missing_since,
+                            deleted_at, created_at, updated_at
+                     FROM media_resources WHERE notebook_id=?1 ORDER BY relative_path",
+                )
+                .map_err(sqlite_to_io)?;
+            let rows = statement
+                .query_map([notebook_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, Option<i64>>(8)?,
+                        row.get::<_, Option<i64>>(9)?,
+                        row.get::<_, i64>(10)?,
+                        row.get::<_, i64>(11)?,
+                    ))
+                })
+                .map_err(sqlite_to_io)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_to_io)?
+        };
+        let mut migrated = 0;
+        for (row_notebook_id, path, old_kind, size, modified, fingerprint, properties,
+             properties_revision, missing_since, deleted_at, created_at, updated_at) in rows {
+            let relative_path = normalize_resource_relative_path(&path)?;
+            let kind = match parse_kind(&old_kind) {
+                Some(MediaResourceKind::Image) => ResourceKind::Image,
+                Some(MediaResourceKind::Video) => ResourceKind::Video,
+                None => resource_kind_for_path(Path::new(&relative_path)).ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid legacy media kind")
+                })?,
+            };
+            let id = resource_catalog_id(&row_notebook_id, &relative_path)?;
+            let format = resource_format_for_path(Path::new(&relative_path));
+            tx.execute(
+                "INSERT INTO resource_catalog
+                    (id, notebook_id, relative_path, kind, format, size_bytes, modified_ms,
+                     fingerprint, properties, properties_revision, missing_since, deleted_at,
+                     created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                 ON CONFLICT(notebook_id, relative_path) DO UPDATE SET
+                    id=excluded.id, kind=excluded.kind, format=excluded.format,
+                    is_directory=0,
+                    size_bytes=excluded.size_bytes, modified_ms=excluded.modified_ms,
+                    fingerprint=COALESCE(excluded.fingerprint, resource_catalog.fingerprint),
+                    properties=CASE WHEN excluded.properties <> '{}' OR resource_catalog.properties = '{}'
+                                    THEN excluded.properties ELSE resource_catalog.properties END,
+                    properties_revision=MAX(resource_catalog.properties_revision, excluded.properties_revision),
+                    missing_since=excluded.missing_since, deleted_at=excluded.deleted_at,
+                    created_at=MIN(resource_catalog.created_at, excluded.created_at),
+                    updated_at=MAX(resource_catalog.updated_at, excluded.updated_at)",
+                params![
+                    id,
+                    row_notebook_id,
+                    relative_path,
+                    kind.as_str(),
+                    format,
+                    size,
+                    modified,
+                    fingerprint,
+                    properties,
+                    properties_revision,
+                    missing_since,
+                    deleted_at,
+                    created_at,
+                    updated_at,
+                ],
+            )
+            .map_err(sqlite_to_io)?;
+            migrated += 1;
+        }
+        tx.execute("DROP TABLE media_resources", [])
+            .map_err(sqlite_to_io)?;
+        tx.commit().map_err(sqlite_to_io)?;
+        Ok(migrated)
+    }
+
     /// Replace historical generated media IDs and normalize media library
     /// references. Database and document updates are idempotent so startup can
     /// safely retry after an interrupted run.
@@ -852,9 +1397,23 @@ impl MemoFile {
             .map_err(std::io::Error::other)?;
         let mut conn = self.open_notebook_db(notebook_id)?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(sqlite_to_io)?;
+        let has_legacy_table: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='media_resources')",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_to_io)?;
+        let identity_table = if has_legacy_table {
+            "media_resources"
+        } else {
+            "resource_catalog"
+        };
         let rows = {
             let mut statement = tx
-                .prepare("SELECT id, relative_path FROM media_resources WHERE notebook_id=?1 ORDER BY relative_path")
+                .prepare(&format!(
+                    "SELECT id, relative_path FROM {identity_table} WHERE notebook_id=?1 ORDER BY relative_path"
+                ))
                 .map_err(sqlite_to_io)?;
             let rows = statement
                 .query_map([notebook_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
@@ -864,8 +1423,8 @@ impl MemoFile {
         let mut updates = Vec::new();
         let mut targets = HashSet::new();
         for (old_id, old_path) in rows {
-            let relative_path = normalize_media_relative_path(&old_path)?;
-            let id = media_resource_id(notebook_id, &relative_path)?;
+            let relative_path = normalize_resource_relative_path(&old_path)?;
+            let id = resource_catalog_id(notebook_id, &relative_path)?;
             if !targets.insert(id.clone()) {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "duplicate canonical media resource identity"));
             }
@@ -876,13 +1435,13 @@ impl MemoFile {
         }
         for (old_id, temporary_id, _, _) in &updates {
             tx.execute(
-                "UPDATE media_resources SET id=?1 WHERE notebook_id=?2 AND id=?3",
+                &format!("UPDATE {identity_table} SET id=?1 WHERE notebook_id=?2 AND id=?3"),
                 params![temporary_id, notebook_id, old_id],
             ).map_err(sqlite_to_io)?;
         }
         for (_, temporary_id, id, relative_path) in &updates {
             tx.execute(
-                "UPDATE media_resources SET id=?1, relative_path=?2 WHERE notebook_id=?3 AND id=?4",
+                &format!("UPDATE {identity_table} SET id=?1, relative_path=?2 WHERE notebook_id=?3 AND id=?4"),
                 params![id, relative_path, notebook_id, temporary_id],
             ).map_err(sqlite_to_io)?;
         }
@@ -935,28 +1494,46 @@ impl MemoFile {
         Ok(changed)
     }
 
-    /// Rebuild the media catalog from notebook files. The media file remains
-    /// on disk, while resource properties are restored from the notebook
-    /// database and are not regenerated from sibling files.
+    /// Rebuild the shared catalog from supported notebook files. File contents
+    /// are not parsed; existing media properties remain attached to their rows.
     pub fn reconcile_media_resources(&self, notebook_id: &str) -> std::io::Result<usize> {
-        self.reconcile_media_resources_background(notebook_id, &|| true)
+        self.reconcile_resources(notebook_id)
     }
 
     pub fn reconcile_media_resources_background(
         &self, notebook_id: &str, keep_running: &dyn Fn() -> bool,
     ) -> std::io::Result<usize> {
+        self.reconcile_resources_background(notebook_id, keep_running)
+    }
+
+    pub fn reconcile_resources(&self, notebook_id: &str) -> std::io::Result<usize> {
+        self.reconcile_resources_background(notebook_id, &|| true)
+    }
+
+    pub fn reconcile_resources_background(
+        &self, notebook_id: &str, keep_running: &dyn Fn() -> bool,
+    ) -> std::io::Result<usize> {
+        self.reconcile_resources_background_with_changes(notebook_id, keep_running)
+            .map(|(indexed, _changed_kinds)| indexed)
+    }
+
+    /// Reconcile the shared catalog and report which visible resource kinds changed.
+    /// The background worker uses this to avoid unrelated refresh events after a scan.
+    pub fn reconcile_resources_background_with_changes(
+        &self, notebook_id: &str, keep_running: &dyn Fn() -> bool,
+    ) -> std::io::Result<(usize, Vec<ResourceKind>)> {
         let root = self
             .memo_base_for_notebook_id_result(notebook_id)
             .map_err(std::io::Error::other)?;
         // Snapshot the catalog once. Unchanged files need neither another
-        // SQLite connection nor a fingerprint read and write on every launch.
-        let existing: HashMap<String, (String, u64, u64, bool)> = {
+        // SQLite connection nor a media fingerprint read on every launch.
+        let existing: HashMap<String, (String, String, bool, u64, u64, bool)> = {
             let conn = self.open_notebook_db(notebook_id)?;
             let mut statement = conn
                 .prepare(
-                    "SELECT relative_path, kind, size_bytes, modified_ms,
-                            fingerprint IS NOT NULL AND missing_since IS NULL AND deleted_at IS NULL
-                     FROM media_resources WHERE notebook_id = ?1",
+                    "SELECT relative_path, kind, format, is_directory, size_bytes, modified_ms,
+                            missing_since IS NULL AND deleted_at IS NULL
+                     FROM resource_catalog WHERE notebook_id = ?1",
                 )
                 .map_err(sqlite_to_io)?;
             let rows = statement
@@ -965,9 +1542,11 @@ impl MemoFile {
                         row.get::<_, String>(0)?,
                         (
                             row.get::<_, String>(1)?,
-                            row.get::<_, i64>(2)?.max(0) as u64,
-                            row.get::<_, i64>(3)?.max(0) as u64,
-                            row.get::<_, bool>(4)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, bool>(3)?,
+                            row.get::<_, i64>(4)?.max(0) as u64,
+                            row.get::<_, i64>(5)?.max(0) as u64,
+                            row.get::<_, bool>(6)?,
                         ),
                     ))
                 })
@@ -977,10 +1556,14 @@ impl MemoFile {
         let policy = self.file_management_policy(notebook_id);
         let mut seen = HashSet::new();
         let mut indexed = 0usize;
+        let mut changed_kinds = BTreeSet::new();
         for entry in walkdir::WalkDir::new(&root)
             .follow_links(false)
             .into_iter()
             .filter_entry(|entry| {
+                if entry.depth() > 0 && is_inside_directory_resource_bundle(entry.path(), &root) {
+                    return false;
+                }
                 entry.path().strip_prefix(&root)
                     .is_ok_and(|relative| relative.as_os_str().is_empty() || !policy.is_ignored_at(&root, relative))
             })
@@ -993,16 +1576,20 @@ impl MemoFile {
                     return Err(std::io::Error::other(error));
                 }
             };
-            if !entry.file_type().is_file() {
+            let is_directory = entry.file_type().is_dir()
+                && is_directory_resource_bundle(entry.path());
+            if !entry.file_type().is_file() && !is_directory {
                 continue;
             }
-            let Some(kind) = media_kind_for_path(entry.path()) else {
+            let Some(kind) = resource_kind_for_path(entry.path()) else {
                 continue;
             };
             let relative = super::notebook_relative_path(&root, entry.path())
                 .map_err(std::io::Error::other)?;
-            if let Some((old_kind, old_size, old_modified, active)) = existing.get(&relative) {
+            let format = resource_format_for_path(entry.path());
+            if let Some((old_kind, old_format, old_is_directory, old_size, old_modified, active)) = existing.get(&relative) {
                 let metadata = entry.metadata().map_err(std::io::Error::other)?;
+                let indexed_size = if is_directory { 0 } else { metadata.len() };
                 let modified = metadata
                     .modified()
                     .ok()
@@ -1011,16 +1598,24 @@ impl MemoFile {
                     .unwrap_or(0);
                 if *active
                     && old_kind == kind.as_str()
-                    && *old_size == metadata.len()
+                    && old_format == &format
+                    && *old_is_directory == is_directory
+                    && *old_size == indexed_size
                     && *old_modified == modified
                 {
                     seen.insert(relative);
                     indexed += 1;
                     continue;
                 }
+                if *active {
+                    if let Some(old_kind) = parse_resource_kind(old_kind) {
+                        changed_kinds.insert(old_kind);
+                    }
+                }
             }
-            match self.ensure_media_resource(notebook_id, &relative, kind, entry.path()) {
+            match self.ensure_indexed_resource(notebook_id, &relative, kind, entry.path()) {
                 Ok(_) => {
+                    changed_kinds.insert(kind);
                     seen.insert(relative);
                     indexed += 1;
                 }
@@ -1031,20 +1626,20 @@ impl MemoFile {
         let conn = self.open_notebook_db(notebook_id)?;
         let mut statement = conn
             .prepare(
-                "SELECT id, relative_path, missing_since, deleted_at
-                      FROM media_resources WHERE notebook_id = ?1",
+                "SELECT id, relative_path, kind, missing_since, deleted_at
+                      FROM resource_catalog WHERE notebook_id = ?1",
             )
             .map_err(sqlite_to_io)?;
-        let stale: Vec<(String, String, Option<i64>, Option<i64>)> = statement
+        let stale: Vec<(String, String, String, Option<i64>, Option<i64>)> = statement
             .query_map(params![notebook_id], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?))
             })
             .map_err(sqlite_to_io)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(sqlite_to_io)?;
         drop(statement);
         let now = now_ms();
-        for (id, relative, missing_since, deleted_at) in stale {
+        for (id, relative, kind, missing_since, deleted_at) in stale {
             if !keep_running() { return Err(std::io::Error::from(std::io::ErrorKind::Interrupted)); }
             if !root.is_dir() { return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "notebook unavailable")); }
             if !seen.contains(&relative) {
@@ -1064,8 +1659,8 @@ impl MemoFile {
                     return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "notebook unavailable"));
                 }
                 let first_missing_at = missing_since.unwrap_or(now);
-                conn.execute(
-                    "UPDATE media_resources
+                let updated = conn.execute(
+                    "UPDATE resource_catalog
                      SET missing_since = COALESCE(missing_since, ?1),
                          updated_at = CASE WHEN missing_since IS NULL THEN ?1 ELSE updated_at END
                      WHERE notebook_id = ?2 AND id = ?3 AND relative_path = ?4
@@ -1073,12 +1668,17 @@ impl MemoFile {
                     params![first_missing_at, notebook_id, id, relative, missing_since, deleted_at],
                 )
                 .map_err(sqlite_to_io)?;
-                if first_missing_at < now - MEDIA_MISSING_RETENTION_MS
+                if updated > 0 && missing_since.is_none() && deleted_at.is_none() {
+                    if let Some(kind) = parse_resource_kind(&kind) {
+                        changed_kinds.insert(kind);
+                    }
+                }
+                if first_missing_at < now - RESOURCE_MISSING_RETENTION_MS
                     || deleted_at.is_some()
-                        && deleted_at.unwrap_or(now) < now - MEDIA_MISSING_RETENTION_MS
+                        && deleted_at.unwrap_or(now) < now - RESOURCE_MISSING_RETENTION_MS
                 {
                     conn.execute(
-                        "DELETE FROM media_resources
+                        "DELETE FROM resource_catalog
                          WHERE notebook_id = ?1 AND id = ?2 AND relative_path = ?3
                            AND missing_since = ?4 AND deleted_at IS ?5",
                         params![notebook_id, id, relative, first_missing_at, deleted_at],
@@ -1094,7 +1694,7 @@ impl MemoFile {
             [],
         )
         .map_err(sqlite_to_io)?;
-        Ok(indexed)
+        Ok((indexed, changed_kinds.into_iter().collect()))
     }
 }
 
@@ -1146,7 +1746,7 @@ mod tests {
         }).unwrap();
         assert!(path.is_file());
         let conn = memo.open_notebook_db("nb_media_test").unwrap();
-        let missing: Option<i64> = conn.query_row("SELECT missing_since FROM media_resources WHERE id=?1", [&before.id], |row| row.get(0)).unwrap();
+        let missing: Option<i64> = conn.query_row("SELECT missing_since FROM resource_catalog WHERE id=?1", [&before.id], |row| row.get(0)).unwrap();
         assert!(missing.is_none());
     }
 
@@ -1158,7 +1758,7 @@ mod tests {
         memo.reconcile_media_resources("nb_media_test").unwrap();
         let before = memo.read_media_resource("nb_media_test", "old.png").unwrap().unwrap();
         let conn = memo.open_notebook_db("nb_media_test").unwrap();
-        conn.execute("UPDATE media_resources SET missing_since=1, deleted_at=1 WHERE id=?1", [&before.id]).unwrap();
+        conn.execute("UPDATE resource_catalog SET missing_since=1, deleted_at=1 WHERE id=?1", [&before.id]).unwrap();
         fs::remove_file(&old_path).unwrap();
         let checks = std::cell::Cell::new(0);
         memo.reconcile_media_resources_background("nb_media_test", &|| {
@@ -1166,7 +1766,7 @@ mod tests {
             if checks.get() == 2 {
                 fs::write(root.join("new.png"), b"image").unwrap();
                 conn.execute(
-                    "UPDATE media_resources SET id=?1, relative_path='new.png', missing_since=NULL, deleted_at=NULL WHERE id=?2",
+                    "UPDATE resource_catalog SET id=?1, relative_path='new.png', missing_since=NULL, deleted_at=NULL WHERE id=?2",
                     params![media_resource_id("nb_media_test", "new.png").unwrap(), before.id],
                 ).unwrap();
             }
@@ -1175,7 +1775,7 @@ mod tests {
         let after = memo.read_media_resource("nb_media_test", "new.png").unwrap().unwrap();
         assert_eq!(after.id, media_resource_id("nb_media_test", "new.png").unwrap());
         assert_ne!(after.id, before.id);
-        let missing: Option<i64> = conn.query_row("SELECT missing_since FROM media_resources WHERE id=?1", [&after.id], |row| row.get(0)).unwrap();
+        let missing: Option<i64> = conn.query_row("SELECT missing_since FROM resource_catalog WHERE id=?1", [&after.id], |row| row.get(0)).unwrap();
         assert!(missing.is_none());
     }
 
@@ -1189,7 +1789,7 @@ mod tests {
         let after = memo.read_media_resource("nb_media_test", "kept.png").unwrap().unwrap();
         assert_eq!(before.id, after.id);
         let conn = memo.open_notebook_db("nb_media_test").unwrap();
-        let missing: Option<i64> = conn.query_row("SELECT missing_since FROM media_resources WHERE id=?1", [&before.id], |row| row.get(0)).unwrap();
+        let missing: Option<i64> = conn.query_row("SELECT missing_since FROM resource_catalog WHERE id=?1", [&before.id], |row| row.get(0)).unwrap();
         assert!(missing.is_none());
     }
 
@@ -1329,7 +1929,7 @@ mod tests {
         ).unwrap();
         let conn = memo.open_notebook_db("nb_media_test").unwrap();
         conn.execute(
-            "UPDATE media_resources SET id='media_old_photo' WHERE notebook_id='nb_media_test' AND relative_path='photo.png'",
+            "UPDATE resource_catalog SET id='media_old_photo' WHERE notebook_id='nb_media_test' AND relative_path='photo.png'",
             [],
         ).unwrap();
         drop(conn);
@@ -1361,11 +1961,11 @@ mod tests {
         ).unwrap();
         let conn = memo.open_notebook_db("nb_media_test").unwrap();
         conn.execute(
-            "UPDATE media_resources SET id='media_old_photo' WHERE notebook_id='nb_media_test' AND relative_path='photo.png'",
+            "UPDATE resource_catalog SET id='media_old_photo' WHERE notebook_id='nb_media_test' AND relative_path='photo.png'",
             [],
         ).unwrap();
         let stored_id: String = conn.query_row(
-            "SELECT id FROM media_resources WHERE notebook_id='nb_media_test' AND relative_path='photo.png'",
+            "SELECT id FROM resource_catalog WHERE notebook_id='nb_media_test' AND relative_path='photo.png'",
             [],
             |row| row.get(0),
         ).unwrap();
@@ -1565,7 +2165,7 @@ mod tests {
         {
             let conn = memo_file.open_notebook_db("nb_media_test").unwrap();
             conn.execute(
-                "UPDATE media_resources SET updated_at = 123 WHERE relative_path = 'photo.png'",
+                "UPDATE resource_catalog SET updated_at = 123 WHERE relative_path = 'photo.png'",
                 [],
             )
             .unwrap();

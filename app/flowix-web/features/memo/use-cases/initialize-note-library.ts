@@ -106,14 +106,20 @@ async function performInitialization(startupNotebookId?: string | null): Promise
 }
 
 /** Resolve notebook identity without making the cards query a startup gate. */
-async function performNotebookContextInitialization(startupNotebookId?: string | null): Promise<void> {
+async function performNotebookContextInitialization(
+  startupNotebookId?: string | null | Promise<string | null>,
+  notebooksPromise?: ReturnType<typeof notebookRepository.list>,
+): Promise<void> {
   const store = useNoteStore.getState();
   store.setStartupPhase('loading');
 
   try {
-    const notebooks = await notebookRepository.list();
+    const [notebooks, requestedNotebookId] = await Promise.all([
+      notebooksPromise ?? notebookRepository.list(),
+      Promise.resolve(startupNotebookId),
+    ]);
     const latestStore = useNoteStore.getState();
-    const persistedNotebookId = startupNotebookId
+    const persistedNotebookId = requestedNotebookId
       ?? latestStore.selectedNotebookId
       ?? latestStore.selectedNotebook?.id
       ?? null;
@@ -137,10 +143,13 @@ async function performNotebookContextInitialization(startupNotebookId?: string |
 }
 
 /** Main-window bootstrap shared by cards, folders, and conversations. */
-export function initializeNotebookContext(startupNotebookId?: string | null): Promise<void> {
+export function initializeNotebookContext(
+  startupNotebookId?: string | null | Promise<string | null>,
+  notebooksPromise?: ReturnType<typeof notebookRepository.list>,
+): Promise<void> {
   if (notebookContextPromise) return notebookContextPromise;
 
-  notebookContextPromise = performNotebookContextInitialization(startupNotebookId).finally(() => {
+  notebookContextPromise = performNotebookContextInitialization(startupNotebookId, notebooksPromise).finally(() => {
     notebookContextPromise = null;
   });
   return notebookContextPromise;

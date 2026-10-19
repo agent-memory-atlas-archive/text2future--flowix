@@ -16,12 +16,14 @@ export interface NoteListItem {
   kind: 'path-note';
   notebookId: string;
   relativePath: string;
+  /** Ephemeral React identity retained across an in-session path rename. */
+  renderKey?: string;
   filename: string;
   title: string;
   preview: string;
   thumbnail: string | null;
   tags: string[];
-  todos: { id: string; content: string; status: string }[];
+  todos: { content: string; status: string }[];
   agents: AgentThreadItem[];
   createdAt: number;
   updatedAt: number;
@@ -32,7 +34,7 @@ export interface NoteListItem {
 }
 
 export function noteListItemKey(item: NoteListItem): string {
-  return `path:${item.notebookId}:${item.relativePath}`;
+  return item.renderKey ?? `path:${item.notebookId}:${item.relativePath}`;
 }
 
 export function noteListItemRelativePath(item: NoteListItem): string {

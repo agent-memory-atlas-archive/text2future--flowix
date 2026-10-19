@@ -1,4 +1,4 @@
-import { Node, mergeAttributes, type MarkdownToken } from "@tiptap/core";
+import { Node, mergeAttributes } from "@tiptap/core";
 import { Plugin, TextSelection } from "@tiptap/pm/state";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import type { AgentTypeKey } from "@/types/agent";
@@ -12,13 +12,10 @@ import { useAgentSessionStore } from "@features/agent/store/agent-session-store"
 import { buildInitialInstanceRuntimeConfig } from "@features/agent/store/initial-runtime-config";
 import {
   DEFAULT_AGENT_THREAD_CARD_TITLE as DEFAULT_TITLE,
-  FLOWIX_AGENT_THREAD_CARD_MARKER,
-  parseFlowixAgentThreadCardComment,
-  parseAgentThreadCardMarkdown,
-  renderAgentThreadCardMarkdown,
   encodeAgentThreadCardInputAttachments,
   decodeAgentThreadCardInputAttachments,
 } from "@features/agent/thread-card/agent-thread-card-markdown";
+import { agentThreadCardMarkdownSpec } from "@features/agent/thread-card/agent-thread-card-markdown-spec";
 import { focusAgentThreadCardInput } from "@features/agent/thread-card/agent-thread-card-dom";
 import { AgentThreadCardView } from "@features/agent/thread-card/agent-thread-card-view";
 import {
@@ -291,39 +288,5 @@ export const AgentThreadCard = Node.create<{ workspaceHost: WorkspaceHostId }>({
       );
   },
 
-  markdownTokenizer: {
-    name: "agentThreadCard",
-    level: "block" as const,
-    start(src: string) {
-      const commentIndex = src.search(
-        new RegExp(`^<!--[ \\t]*${FLOWIX_AGENT_THREAD_CARD_MARKER}[ \\t]+\\{`, "m"),
-      );
-      const legacyIndex = src.indexOf("::agent-thread-card");
-      if (commentIndex < 0) return legacyIndex;
-      if (legacyIndex < 0) return commentIndex;
-      return Math.min(commentIndex, legacyIndex);
-    },
-    tokenize(src: string) {
-      const comment = parseFlowixAgentThreadCardComment(src);
-      if (comment) {
-        return {
-          type: "agentThreadCard",
-          raw: comment.raw,
-          metadata: comment.metadata,
-        };
-      }
-
-      const match = /^::agent-thread-card\{([^}]*)\}[ \t]*(?:\n|$)/.exec(src);
-      if (!match) return undefined;
-      return { type: "agentThreadCard", raw: match[0], attrs: match[1] };
-    },
-  },
-
-  parseMarkdown(token: MarkdownToken) {
-    return parseAgentThreadCardMarkdown(token);
-  },
-
-  renderMarkdown(node) {
-    return renderAgentThreadCardMarkdown(node);
-  },
+  ...agentThreadCardMarkdownSpec,
 });

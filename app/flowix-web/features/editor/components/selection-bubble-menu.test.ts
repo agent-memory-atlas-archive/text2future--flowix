@@ -1,7 +1,11 @@
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { afterEach, describe, expect, it } from 'vitest';
-import { hasFormattableTextSelection } from '@features/editor/components/selection-bubble-menu-state';
+import {
+  getSelectionBubbleMenuSnapshot,
+  hasFormattableTextSelection,
+  sameSelectionBubbleMenuSnapshot,
+} from '@features/editor/components/selection-bubble-menu-state';
 
 const editors: Editor[] = [];
 
@@ -55,5 +59,14 @@ describe('hasFormattableTextSelection', () => {
     editor.setEditable(false);
 
     expect(hasFormattableTextSelection(editor)).toBe(false);
+  });
+
+  it('keeps equal transaction snapshots referentially reusable and detects button state changes', () => {
+    const editor = createEditor('<p>Alpha beta</p>');
+    editor.commands.setTextSelection({ from: 1, to: 6 });
+    const first = getSelectionBubbleMenuSnapshot(editor);
+    const same = getSelectionBubbleMenuSnapshot(editor);
+    expect(sameSelectionBubbleMenuSnapshot(first, same)).toBe(true);
+    expect(sameSelectionBubbleMenuSnapshot(first, { ...same, boldEnabled: !same.boldEnabled })).toBe(false);
   });
 });

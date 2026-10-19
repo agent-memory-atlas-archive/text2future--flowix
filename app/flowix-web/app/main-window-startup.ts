@@ -83,8 +83,8 @@ async function performMainWindowStartup(): Promise<void> {
       useWorkspaceStartupStore.setState({ nativePhase: 'ready', nativeStage: 'workspacePreparation', nativeProgress: null, nativeError: null });
       logStage('native-ready');
     }
-    const startupNotebookId = nativeRuntime
-      ? await runTask('notebook-selection', async () => {
+    const startupNotebookIdPromise = nativeRuntime
+      ? runTask('notebook-selection', async () => {
           try {
             return await boot.getStartupNotebookId();
           } catch (error) {
@@ -92,9 +92,10 @@ async function performMainWindowStartup(): Promise<void> {
             throw error;
           }
         })
-      : null;
+      : Promise.resolve(null);
+    await runTask('notebook-context', () => initializeNotebookContext(startupNotebookIdPromise));
+    await startupNotebookIdPromise;
     logStage('notebook-selected');
-    await runTask('notebook-context', () => initializeNotebookContext(startupNotebookId));
     const hasNotebook = getWorkspaceMemoState().notebooks.length > 0;
     const desiredTarget = hasNotebook ? captureWorkspaceRestoreTarget() : null;
     const navigationRevision = getWorkspaceNavigationRevision();

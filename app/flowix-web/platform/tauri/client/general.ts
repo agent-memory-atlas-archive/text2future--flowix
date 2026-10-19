@@ -22,6 +22,8 @@ export const boot = {
     invoke<void>('set_version_initialization_completed', { completed }),
   retryStartup: () => invoke<void>('retry_startup'),
   getStartupStatus: () => invoke<StartupStatus>('get_startup_status'),
+  waitForStartupStatusChange: (previous: StartupStatus) =>
+    invoke<StartupStatus>('wait_for_startup_status_change', { previous }),
   getStartupNotebookId: () => invoke<string | null>('get_startup_notebook_id'),
   notifyStartupInteractive: () => invoke<void>('notify_startup_interactive'),
   recordStartupStage: (stage: string, frontendElapsedMs: number, startupAttemptId: string) =>

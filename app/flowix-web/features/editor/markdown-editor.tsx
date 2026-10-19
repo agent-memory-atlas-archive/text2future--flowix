@@ -24,8 +24,8 @@ import { markDocumentOpenTrace } from '@/lib/document-open-perf';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
 import type { WorkspaceHostId } from '@features/workspace/public/host-api';
 import { CodeBlockShiki } from '@features/editor/extensions/codeblock-shiki/codeblock-shiki';
-import { normalizeMarkdownTableEmptyCells } from './markdown-normalization';
-import { createMarkdownEditorExtensions, isEmptyMarkdownPlaceholderOnly, serializeEditorMarkdown } from './markdown-editor-extensions';
+import { createMarkdownEditorExtensions, serializeEditorMarkdown } from './markdown-editor-extensions';
+import { isEmptyMarkdownPlaceholderOnly } from './markdown-normalization';
 
 interface MarkdownEditorProps {
   /** Absolute or notebook-relative path of the note owning editor uploads. */
@@ -282,7 +282,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   const serializeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const serializeIdleCallbackRef = useRef<number | null>(null);
   const onEditorScrollRef = useRef(onEditorScroll);
-  const contentRef = useRef(normalizeMarkdownTableEmptyCells(content));
+  const contentRef = useRef(content);
   const initialParsedContentRef = useRef(initialParsedContent);
   initialParsedContentRef.current = initialParsedContent;
   const isApplyingExternalContentRef = useRef(false);
@@ -349,7 +349,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     pendingSerializeDirtyRef.current = false;
 
     const serializationStarted = performance.now();
-    const markdown = normalizeMarkdownTableEmptyCells(editor.getMarkdown());
+    const markdown = editor.getMarkdown();
     const serializationMs = performance.now() - serializationStarted;
     if (serializationMs > 50) persistenceLog.info('slow serialization', { elapsedMs: serializationMs, characters: markdown.length });
     if (markdown === contentRef.current) {
@@ -426,8 +426,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   const applyExternalContent = useCallback((nextContent: string) => {
     const startedAt = performance.now();
     const editor = editorRef.current;
-    const normalizedNextContent = normalizeMarkdownTableEmptyCells(nextContent);
-    if (!editor || normalizedNextContent === contentRef.current) {
+    if (!editor || nextContent === contentRef.current) {
       return;
     }
 
@@ -437,11 +436,9 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     // serializes, it is only a reconciliation echo. Calling setContent here
     // would unnecessarily destroy the editor's history and make the previous
     // paste appear non-undoable.
-    const currentEditorContent = normalizeMarkdownTableEmptyCells(
-      serializeEditorMarkdown(editor),
-    );
-    if (normalizedNextContent === currentEditorContent) {
-      contentRef.current = normalizedNextContent;
+    const currentEditorContent = serializeEditorMarkdown(editor);
+    if (nextContent === currentEditorContent) {
+      contentRef.current = nextContent;
       return;
     }
 
@@ -453,14 +450,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     const scrollTop = scrollEl?.scrollTop ?? 0;
     const scrollLeft = scrollEl?.scrollLeft ?? 0;
 
-    contentRef.current = normalizedNextContent;
+    contentRef.current = nextContent;
     isApplyingExternalContentRef.current = true;
     try {
       editor
         .chain()
         .setMeta(SKIP_AGENT_THREAD_CARD_CLEANUP_META, true)
         .setMeta('addToHistory', false)
-        .setContent(normalizedNextContent, { contentType: 'markdown', emitUpdate: false })
+        .setContent(nextContent, { contentType: 'markdown', emitUpdate: false })
         .run();
       normalizeTaskItemPlaceholders(editor);
       resetEditorHistory(editor);
@@ -468,7 +465,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       isApplyingExternalContentRef.current = false;
     }
     logEditorPerf('MarkdownEditor:setContent', startedAt, {
-      nextChars: normalizedNextContent.length,
+      nextChars: nextContent.length,
     });
 
     const docSize = editor.state.doc.content.size;
@@ -639,7 +636,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       return;
     }
     const mountStartedAt = performance.now();
-    const initialContent = normalizeMarkdownTableEmptyCells(content);
+    const initialContent = content;
     const parsedContent = initialParsedContentRef.current;
     contentRef.current = initialContent;
 
@@ -876,26 +873,25 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
   useLayoutEffect(() => {
     const editor = editorRef.current;
-    const normalizedContent = normalizeMarkdownTableEmptyCells(content);
     if (editor && pendingSerializeDirtyRef.current) {
       serializePendingChanges({ force: true });
       return;
     }
-    if (!editor || editor.isDestroyed || normalizedContent === contentRef.current) {
+    if (!editor || editor.isDestroyed || content === contentRef.current) {
       return;
     }
 
     const viewState = editor.view as typeof editor.view & { composing?: boolean };
     if (isComposingRef.current || viewState.composing) {
       pendingExternalContentRef.current = {
-        content: normalizedContent,
+        content,
         localEditVersion: localEditVersionRef.current,
       };
       return;
     }
 
     pendingExternalContentRef.current = null;
-    applyExternalContent(normalizedContent);
+    applyExternalContent(content);
   }, [content, applyExternalContent, serializePendingChanges]);
 
   useLayoutEffect(() => {

@@ -4,13 +4,13 @@ use super::*;
 fn title_from_first_heading() {
     let (t, p) = extract_title_and_preview("# Hello\nworld\n");
     assert_eq!(t, "Hello");
-    assert_eq!(p, "world");
+    assert_eq!(p, "Hello");
 }
 
 #[test]
 fn preview_truncates_to_200_chars() {
     let body: String = "x".repeat(500);
-    let (_, p) = extract_title_and_preview(&format!("# T\n{body}"));
+    let (_, p) = extract_title_and_preview(&body);
     assert_eq!(p.chars().count(), 200);
 }
 
@@ -24,33 +24,33 @@ real preview
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "real preview");
+    assert_eq!(p, "Real title");
 }
 
 #[test]
-fn inline_tags_are_removed_but_surrounding_preview_text_remains() {
+fn preview_uses_first_line_after_inline_tag_cleaning() {
     let md = "\
 # Real title
 before #project/backend after #release
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "before after");
+    assert_eq!(p, "Real title");
 }
 
 #[test]
-fn markdown_headings_and_non_tag_hashes_are_not_removed() {
+fn preview_uses_first_line_and_title_hashes_are_preserved() {
     let md = "\
 # Real title
 Use C# and # heading marker
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "Use C# and # heading marker");
+    assert_eq!(p, "Real title");
 }
 
 /// `::agent-thread-card{...}` 作为单行节点出现在 body 顶部时, 不应
-/// 占用首行 (filename) 也不应霸占第二行 (preview)。
+/// 占用第一条有效正文行 (title / preview)。
 #[test]
 fn agent_thread_card_single_line_is_skipped_for_title_and_preview() {
     let md = "\
@@ -60,7 +60,7 @@ real preview line
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "real preview line");
+    assert_eq!(p, "Real title");
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn agent_thread_card_refs_are_extracted_from_body() {
 }
 
 /// 围栏形态 `:::agent-thread-card ... :::` 同样要在 title / preview 之前
-/// 整段剥离 ── 围栏里夹的多行文本不能算入首行/第二行。
+/// 整段剥离 ── 围栏里夹的多行文本不能作为第一条有效正文行。
 #[test]
 fn agent_thread_card_fenced_block_is_skipped_for_title_and_preview() {
     let md = "\
@@ -90,7 +90,7 @@ real preview line
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "real preview line");
+    assert_eq!(p, "Real title");
 }
 
 /// 围栏允许行首缩进 (A 项: 防御 list / blockquote 嵌套场景) ──
@@ -106,7 +106,7 @@ real preview line
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "real preview line");
+    assert_eq!(p, "Real title");
 }
 
 /// 多段围栏紧邻出现时也都要剥离 ── 不能只剥第一段。
@@ -124,7 +124,7 @@ real preview
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "real preview");
+    assert_eq!(p, "Real title");
 }
 
 /// 缩进的单行节点 (复制粘贴常见) ── 行级剔除应基于 trim 后整行,
@@ -138,7 +138,7 @@ real preview
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "real preview");
+    assert_eq!(p, "Real title");
 }
 
 /// 多张节点堆叠时也都要剥离 ── 不能只剥第一张。
@@ -152,7 +152,7 @@ real preview
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "real preview");
+    assert_eq!(p, "Real title");
 }
 
 /// 纯节点文档 (没有任何用户文本) 派生出的 title / preview 都应为空 ──
@@ -178,11 +178,11 @@ real preview
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "real preview");
+    assert_eq!(p, "Real title");
 }
 
 #[test]
-fn markdown_table_after_title_is_skipped_for_preview() {
+fn markdown_table_after_title_does_not_change_preview() {
     let md = "\
 # Real title
 | Name | Value |
@@ -192,7 +192,7 @@ real preview
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "real preview");
+    assert_eq!(p, "Real title");
 }
 
 #[test]
@@ -204,7 +204,7 @@ real preview
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "left | right");
+    assert_eq!(p, "Real title");
 }
 
 #[test]
@@ -216,7 +216,7 @@ real preview
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "real preview");
+    assert_eq!(p, "Real title");
 }
 
 #[test]
@@ -227,7 +227,7 @@ prefix <note id=\"abc\" notebook=\"nb\" path=\"/tmp/a.md\">Notebook/A</note> suf
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "prefix suffix");
+    assert_eq!(p, "Real title");
 }
 
 #[test]
@@ -241,7 +241,7 @@ real preview
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "real preview");
+    assert_eq!(p, "Real title");
 }
 
 #[test]
@@ -253,7 +253,7 @@ preview ![shot](asset://localhost/shot.png) tail [doc](asset://localhost/doc.pdf
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "preview tail");
+    assert_eq!(p, "Real title");
 }
 
 #[test]
@@ -264,7 +264,7 @@ preview ![image.png](asset://localhost/C%3A%5CUsers%5CAdministrator%5CDocuments%
 ";
     let (t, p) = extract_title_and_preview(md);
     assert_eq!(t, "Real title");
-    assert_eq!(p, "preview tail");
+    assert_eq!(p, "Real title");
 }
 
 #[test]
@@ -518,7 +518,7 @@ fn normalize_search_tag_filter_accepts_optional_hash() {
     assert_eq!(normalize_search_tag_filter("项目//Flowix"), None);
 }
 
-/// 路径式 tag 仍走 strip_code_regions, NUL 占位不影响。
+/// 路径式 tag 复用生产代码的围栏与行内代码预处理, NUL 占位不影响。
 /// 围栏外紧邻的 `#a/b` 仍正确提取, 不被前一行围栏内的 orphan
 /// `//#c` 串错位。
 #[test]
@@ -538,6 +538,18 @@ fn todos_parse_checked_and_unchecked() {
     assert_eq!(v[1].status, "completed");
 }
 
+#[test]
+fn todos_ignore_fenced_examples_and_strip_legacy_identity_comments() {
+    let markdown = "- [ ] keep <!-- flowix-todo-id:legacy_1 -->\n```md\n- [ ] example\n```\n* [x] done\n+ [ ] also keep\n";
+    let todos = extract_todos_from_body(markdown);
+    assert_eq!(todos.len(), 3);
+    assert_eq!(todos[0].content, "keep");
+    assert_eq!(todos[0].status, "pending");
+    assert_eq!(todos[1].content, "done");
+    assert_eq!(todos[1].status, "completed");
+    assert_eq!(todos[2].content, "also keep");
+}
+
 // ============== HTML 实体解码 (title / preview 派生) ==============
 
 /// 行内 `&nbsp;` 不应作为实体字符串泄漏到 title ── 应被解码成 NBSP 后由
@@ -546,7 +558,7 @@ fn todos_parse_checked_and_unchecked() {
 fn inline_nbsp_entity_is_decoded_and_trimmed() {
     let (t, p) = extract_title_and_preview("&nbsp;Hello\n&nbsp;World\n");
     assert_eq!(t, "Hello");
-    assert_eq!(p, "World");
+    assert_eq!(p, "Hello");
 }
 
 /// 行首 `&nbsp;` + 字面内容: NBSP 解码后被 `.trim()` 吃掉; 但**不会**
@@ -615,10 +627,9 @@ fn entity_decode_does_not_break_markdown_stripping() {
 
 // ============== extract_title_and_preview 短路语义 ==============
 
-/// 验证只取前 2 个非空行 ── 后面的内容无论多长都不会影响 title / preview。
-/// 同时隐式验证短路不会破坏语义 (即使输入 100+ 行也只取首二)。
+/// 验证 preview 只使用第一条有效正文行 ── 后续内容不会改变展示结果。
 #[test]
-fn title_and_preview_use_only_first_two_non_empty_lines() {
+fn title_and_preview_use_first_non_empty_line() {
     let mut lines: Vec<String> = vec!["# Title".to_string()];
     for i in 0..200 {
         lines.push(format!("body line {i}"));
@@ -626,7 +637,7 @@ fn title_and_preview_use_only_first_two_non_empty_lines() {
     let input = lines.join("\n");
     let (t, p) = extract_title_and_preview(&input);
     assert_eq!(t, "Title");
-    assert_eq!(p, "body line 0");
+    assert_eq!(p, "Title");
 }
 
 // ============== 边界 / 兜底行为 ==============
@@ -702,7 +713,7 @@ fn other_whitespace_entities_decode_and_collapse() {
         let md = format!("{entity}Hello\nbody\n");
         let (t, p) = extract_title_and_preview(&md);
         assert_eq!(t, "Hello", "entity {entity} ({label}) leaked into title");
-        assert_eq!(p, "body");
+        assert_eq!(p, "Hello");
     }
 }
 
@@ -738,7 +749,7 @@ fn whole_line_whitespace_entity_is_blank() {
         let md = format!("{entity}\n# Real title\nbody\n");
         let (t, p) = extract_title_and_preview(&md);
         assert_eq!(t, "Real title", "entity {entity} should be blank");
-        assert_eq!(p, "body");
+        assert_eq!(p, "Real title");
     }
 }
 

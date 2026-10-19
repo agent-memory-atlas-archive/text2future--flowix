@@ -391,13 +391,15 @@ async function openCollectionFileDirectly(
   filePath: string,
   notebookPath: string,
   notebookId: string,
-  type: 'table' | 'media_library',
+  type: 'table' | 'media_library' | 'work_documents',
   unavailableReason?: string,
   history: 'push' | 'skip' = 'skip',
 ): Promise<void> {
   const target: WorkColumnTarget = type === 'table'
     ? { kind: 'table', filePath, notebookPath, notebookId, ...(unavailableReason ? { unavailableReason } : {}) }
-    : { kind: 'media-library', filePath, notebookPath, notebookId, ...(unavailableReason ? { unavailableReason } : {}) };
+    : type === 'media_library'
+      ? { kind: 'media-library', filePath, notebookPath, notebookId, ...(unavailableReason ? { unavailableReason } : {}) }
+      : { kind: 'external', path: filePath, scopePath: notebookPath, transitionId: null };
   await runNavigation(target, async (requestId) => {
     await getWorkspaceDocumentState().clearDocument();
     if (!isCurrentNavigation(requestId)) return;
@@ -418,7 +420,7 @@ async function openCollectionFile(filePath: string, notebookPath: string | null,
   catch {
     // Invalid content still owns a selectable file surface with a recovery
     // action. Never roll the navigation back merely because parsing failed.
-    await openCollectionFileDirectly(filePath, root, notebook.id, inspectCollectionRecoveryType(source), '集合文件格式无效', options?.history ?? 'push');
+    await openCollectionFileDirectly(filePath, root, notebook.id, inspectCollectionRecoveryType(source, filePath), '集合文件格式无效', options?.history ?? 'push');
     return;
   }
   await openCollectionTarget({ notebookId: notebook.id, collectionId: envelope.collection.id, filePath }, options);
@@ -459,7 +461,7 @@ export async function openFolderCollection(
   let envelope: ReturnType<typeof parseCollectionDocumentV2>;
   try { envelope = parseCollectionDocumentV2(source); }
   catch {
-    await openCollectionFileDirectly(indexPath, notebook.path, notebook.id, inspectCollectionRecoveryType(source), '集合文件格式无效', options?.history ?? 'push');
+    await openCollectionFileDirectly(indexPath, notebook.path, notebook.id, inspectCollectionRecoveryType(source, indexPath), '集合文件格式无效', options?.history ?? 'push');
     return;
   }
   if (envelope.collection.placement !== 'folder') throw new Error('文件夹 .index.yaml 必须声明 placement: folder');
@@ -834,6 +836,17 @@ export async function openExternalTarget(
 ): Promise<WorkspaceContentLocation | null> {
   if (!isRestoreRequestCurrent(options?.restoreRequestId)) return null;
   if (path && /\.index\.yaml$/i.test(path)) {
+    const capturedFileBrowser = options?.fileBrowser ?? captureFileBrowserContext(path, options?.scopePath);
+    const scopePath = options?.scopePath ?? capturedFileBrowser.scopePath;
+    const notebookId = options?.notebookId
+      ?? options?.fileBrowser?.notebookId
+      ?? getWorkspaceMemoState().notebooks.find((notebook) => scopePath && canonicalPath(notebook.path) === canonicalPath(scopePath))?.id
+      ?? capturedFileBrowser.notebookId
+      ?? null;
+    await openCollectionFile(path, scopePath, notebookId, { history: options?.history, destination: options?.destination, restoreRequestId: options?.restoreRequestId });
+    return null;
+  }
+  if (path && /\.workdocs\.ya?ml$/i.test(path)) {
     const capturedFileBrowser = options?.fileBrowser ?? captureFileBrowserContext(path, options?.scopePath);
     const scopePath = options?.scopePath ?? capturedFileBrowser.scopePath;
     const notebookId = options?.notebookId

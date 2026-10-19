@@ -96,6 +96,7 @@ export function NoteNavigationDrawer({
       />
       <aside
         ref={drawerRef}
+        data-note-navigation-surface
         role="dialog"
         tabIndex={-1}
         aria-label={t('memo.navigation.notebookNavigation')}

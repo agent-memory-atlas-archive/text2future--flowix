@@ -15,6 +15,8 @@ export interface SaveContext {
   scopePath: string | null;
   /** Immutable buffer revision represented by this save request. */
   revision: number;
+  /** Explicit verification/write requests bypass the acknowledged-content shortcut. */
+  force?: boolean;
   /**
    * Read the current expectedContent (CAS expected value) just before the
    * IPC fires. Returning a fresh value here is what makes coalescing
@@ -45,8 +47,20 @@ export function scheduleSave(ctx: SaveContext, content: string): Promise<boolean
   return enqueueDocumentCommit(ctx.queueKey, 'body', async () => {
     if (ctx.isBlocked?.()) return false;
     const snapshot = ctx.latest?.() ?? { content, revision: ctx.revision };
+    // Keep the in-flight revision aligned even when equivalent bytes only
+    // need acknowledgement; onSaved must be able to clear that revision.
     ctx.onStarted?.(snapshot.revision);
-    const savedContent = await runOne({ ...ctx, revision: snapshot.revision }, snapshot.content);
+    let savedContent: string | null;
+    if (!ctx.force && snapshot.content === ctx.readExpected()) {
+      // A previous job may have saved these bytes while this intent waited.
+      // Acknowledge the newer equivalent revision without sending a second IPC.
+      const displayId = ctx.queueKey.startsWith('md:') ? ctx.queueKey.slice(3) : null;
+      const path = displayId ? findFileDisplayPath(displayId) ?? ctx.path : ctx.path;
+      ctx.onSaved(path, snapshot.content, snapshot.revision, snapshot.content, false);
+      savedContent = snapshot.content;
+    } else {
+      savedContent = await runOne({ ...ctx, revision: snapshot.revision }, snapshot.content);
+    }
     const latest = ctx.latest?.();
     if (savedContent !== null && latest && latest.content !== savedContent && !ctx.isBlocked?.()) {
       void scheduleSave(ctx, latest.content);

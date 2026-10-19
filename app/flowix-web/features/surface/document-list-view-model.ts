@@ -7,4 +7,10 @@ export interface DocumentListViewContext {
   filters: { resourceKinds?: string[]; tags?: string[]; customFilterId?: string };
   mediaScope?: { relativePath: string; depth: 'direct_children' | 'descendants' };
   mediaDatasetActive?: boolean;
+  workDocumentsFilter?: {
+    file_name_contains?: string;
+    file_type?: string;
+    path_contains?: string;
+    path_scope?: 'all';
+  };
 }

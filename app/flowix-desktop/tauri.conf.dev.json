@@ -18,6 +18,7 @@
     "windows": [
       {
         "title": "Flowix Dev",
+        "transparent": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "trafficLightPosition": {

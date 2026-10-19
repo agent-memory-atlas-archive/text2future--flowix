@@ -1,0 +1,38 @@
+/* Mist exposes the successfully applied native backdrop in the current setup.
+ * Keep this unlayered so theme files cannot override the transparent tokens.
+ * Without a material (including Windows 10), the solid theme palette applies. */
+html[data-window-material][data-theme="mist"] {
+	--background: transparent;
+	--frame-bg: transparent;
+	--list-bg: transparent;
+	--document-bg: transparent;
+	--bg-titlebar: transparent;
+}
+
+html[data-window-material][data-theme="mist"],
+html[data-window-material][data-theme="mist"] :where(
+	body,
+	#root,
+	#app-loading,
+	.flowix-main-layout,
+	[data-window-material-overlay],
+	[data-note-navigation-surface],
+	[data-workspace-host="main-third"]
+) {
+	background: transparent !important;
+}
+
+/* Paint the tint once on the actual frame, beneath the transparent panels. */
+html[data-window-material][data-theme="mist"] {
+	--frame-bg: rgb(0 0 0 / 70%);
+}
+
+html[data-window-material][data-theme="mist"] .flowix-main-layout {
+	background: var(--frame-bg) !important;
+}
+
+/* Keep the editor's floating toolbar surfaces opaque over the material frame. */
+html[data-window-material][data-theme="mist"] [data-workspace-host="main-third"] .markdown-editor .editor-toolbar .toolbar-content,
+html[data-window-material][data-theme="mist"] [data-workspace-host="main-third"] .markdown-editor .editor-toolbar .toolbar-expand-handle {
+	background: var(--card) !important;
+}

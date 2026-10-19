@@ -284,7 +284,7 @@ fn reset_pending_notebooks_with_progress(
                     }
                     memo_file
                         .retire_legacy_memo_index(&notebook.id)
-                        .and_then(|_| memo_file.initialize_media_resource_schema(&notebook.id))
+                        .and_then(|_| memo_file.initialize_resource_catalog_schema(&notebook.id))
                         .map_err(|error| {
                             format!("refresh notebook {} database schema failed: {error}", notebook.id)
                         })?;
@@ -322,7 +322,7 @@ fn reset_pending_notebooks_with_progress(
                         // already rebuilt by a successful reset job.
                         memo_file
                             .retire_legacy_memo_index(&notebook.id)
-                            .and_then(|_| memo_file.initialize_media_resource_schema(&notebook.id))
+                            .and_then(|_| memo_file.initialize_resource_catalog_schema(&notebook.id))
                             .map_err(|error| {
                                 format!(
                                     "initialize notebook {} database schema failed: {error}",
@@ -337,6 +337,33 @@ fn reset_pending_notebooks_with_progress(
                                 "media resource identity migration completed");
                         })
                         .map_err(|error| format!("migrate notebook {} media identities failed: {error}", notebook.id)),
+                    NotebookInitializationJob::MigrateResourceCatalog => {
+                        let migrated = memo_file
+                            .migrate_legacy_media_resources_to_catalog(&notebook.id)
+                            .map_err(|error| format!(
+                                "migrate notebook {} resource catalog failed: {error}", notebook.id
+                            ))?;
+                        let indexed = memo_file
+                            .reconcile_resources(&notebook.id)
+                            .map_err(|error| format!(
+                                "rebuild notebook {} resource catalog failed: {error}", notebook.id
+                            ))?;
+                        tracing::info!(notebook_id = %notebook.id, migrated, indexed,
+                            "shared resource catalog initialized");
+                        Ok(())
+                    }
+                    NotebookInitializationJob::IndexWorkDocuments => {
+                        memo_file
+                            .initialize_resource_catalog_schema(&notebook.id)
+                            .and_then(|_| memo_file.reconcile_resources(&notebook.id))
+                            .map(|indexed| {
+                                tracing::info!(notebook_id = %notebook.id, indexed,
+                                    "work document resource index initialized");
+                            })
+                            .map_err(|error| format!(
+                                "initialize notebook {} work document index failed: {error}", notebook.id
+                            ))
+                    }
                 },
                 report,
                 completed,
@@ -470,8 +497,8 @@ fn reset_notebook(memo_file: &MemoFile, notebook: &NotebookConfig) -> Result<(),
         .retire_legacy_memo_index(&notebook.id)
         .map_err(|error| format!("migrate notebook note index failed: {error}"))?;
     memo_file
-        .initialize_media_resource_schema(&notebook.id)
-        .map_err(|error| format!("initialize notebook media schema failed: {error}"))?;
+        .initialize_resource_catalog_schema(&notebook.id)
+        .map_err(|error| format!("initialize notebook resource catalog schema failed: {error}"))?;
     memo_file.invalidate_caches();
     for name in [
         "view-preferences.json",
@@ -486,8 +513,8 @@ fn reset_notebook(memo_file: &MemoFile, notebook: &NotebookConfig) -> Result<(),
         .reconcile_note_index_blocking(&notebook.id)
         .map_err(|error| format!("rebuild notebook note index failed: {error}"))?;
     memo_file
-        .reconcile_media_resources(&notebook.id)
-        .map_err(|error| format!("rebuild notebook media index failed: {error}"))?;
+        .reconcile_resources(&notebook.id)
+        .map_err(|error| format!("rebuild notebook resource catalog failed: {error}"))?;
 
     // Discard the obsolete configuration after preservation and rebuilding.
     // The pending signal survives until run_job has recorded overall success.

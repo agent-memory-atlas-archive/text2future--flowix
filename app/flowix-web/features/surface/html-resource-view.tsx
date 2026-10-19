@@ -51,7 +51,7 @@ export function HtmlResourceView({
     if (mode !== 'source') return;
     if (state.status === 'loading') {
       reportPresentation?.({ state: {
-        status: 'loading', phase: 'content', message: { key: 'document.file.loading' }, retainContent: state.retainContent,
+        status: 'loading', loadingMode: 'blocking', retainContent: state.retainContent,
       } });
     } else if (state.status === 'missing-note') {
       reportPresentation?.({ state: {
@@ -77,7 +77,7 @@ export function HtmlResourceView({
   useEffect(() => {
     if (mode !== 'preview') return;
     reportPresentation?.({ state: previewState === 'loading'
-      ? { status: 'loading', phase: 'content', message: { key: 'document.file.loading' }, retainContent: false }
+      ? { status: 'loading', loadingMode: 'blocking', retainContent: false }
       : previewState === 'error'
         ? { status: 'error', message: { key: 'document.file.unavailable' },
             actions: [
@@ -165,7 +165,7 @@ export function HtmlResourceView({
         >
           <DocumentContainer
             {...documentProps}
-            onContentStateChange={onContentStateChange}
+            onContentStateChange={reportPresentation ? onContentStateChange : undefined}
             isExternalDocument
             externalScopePath={scopePath}
             readOnly

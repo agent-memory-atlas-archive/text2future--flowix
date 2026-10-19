@@ -40,6 +40,8 @@ function surface(kind: WorkColumnSurfaceKind): WorkColumnSurface {
       };
     case 'media-library-file':
       return { kind, instanceKey: 'library:1', fileIdentity: fileIdentity('/workspace/Media.lib.yaml'), notebookPath: '/workspace', notebookId: null };
+    case 'work-documents-file':
+      return { kind, instanceKey: 'work-documents:1', fileIdentity: fileIdentity('/workspace/documents'), notebookPath: '/workspace', notebookId: null };
     case 'html-file':
       return {
         kind, instanceKey: 'html-file:1', fileIdentity: fileIdentity('/workspace/index.html'), scopePath: '/workspace',

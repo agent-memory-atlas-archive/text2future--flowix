@@ -45,6 +45,7 @@ export const workspaceSurfaceRegistry = Object.freeze({
   'file-video': { rendererId: 'file-video', hosts: ['main-third', 'browser-column'], capabilities: ['fullscreen'], appearance: FILE_MEDIA_APPEARANCE },
   'file-table': { rendererId: 'file-table', hosts: ['main-third', 'browser-column'], capabilities: [], appearance: DOCUMENT_APPEARANCE },
   'file-media-library': { rendererId: 'file-media-library', hosts: ['main-third', 'browser-column'], capabilities: [], appearance: DOCUMENT_APPEARANCE },
+  'file-work-documents': { rendererId: 'file-work-documents', hosts: ['main-third', 'browser-column'], capabilities: [], appearance: DOCUMENT_APPEARANCE },
   'file-html': { rendererId: 'file-html', hosts: ['main-third', 'browser-column'], capabilities: [], appearance: DOCUMENT_APPEARANCE },
   'file-docx': { rendererId: 'file-docx', hosts: ['main-third', 'browser-column'], capabilities: [], appearance: DOCUMENT_APPEARANCE },
   'file-unavailable': { rendererId: 'file-unavailable', hosts: ['main-third', 'browser-column'], capabilities: [], appearance: DOCUMENT_APPEARANCE },
@@ -88,6 +89,7 @@ export function resolveWorkspaceFileSurfaceKind(
   detectedTextContent = false,
 ): WorkspaceFileSurfaceKind {
   if (/\.lib\.ya?ml$/i.test(path)) return 'media-library';
+  if (/\.workdocs\.ya?ml$/i.test(path)) return 'work-documents';
   if (/\.table\.ya?ml$/i.test(path)) return 'table';
   switch (externalFileViewKind(path, mimeType, detectedTextContent)) {
     case 'markdown': return 'markdown';

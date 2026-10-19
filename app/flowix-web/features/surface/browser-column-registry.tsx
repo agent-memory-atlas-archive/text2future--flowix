@@ -13,6 +13,7 @@ import type { FileBrowserViewSurface } from './file-browser-view';
 import { getWorkspaceSurfaceRendererDefinition, WorkspaceSurfaceRendererView } from './workspace-surface-renderer-registry';
 import type { ExternalDocumentProps, WorkspaceSurfaceRendererData, WorkspaceWebNavigationPort } from './workspace-surface-renderer-contract';
 import { registerWorkspaceSurfacePresentationOwner, reportWorkspaceSurfacePresentation } from './workspace-surface-runtime';
+import { workspaceSurfaceRetainsInitialContent } from './workspace-surface-renderer-registry';
 import type { SurfacePresentationUpdate } from '@features/workspace/model/surface-contract';
 import type { SurfaceLifecycle } from '@features/workspace/model/surface-contract';
 import { registerWorkspaceSurfaceLifecycle, registerWorkspaceSurfaceHostView } from '@features/workspace/public/surface-lifecycle-api';
@@ -41,11 +42,12 @@ export interface BrowserFolderCollectionSurface extends SurfaceBase {
   notebookPath: string;
   folderPath: string;
   folderName: string;
+  viewMode?: 'work-documents';
 }
 
 export type BrowserFileBrowserSurface = SurfaceBase
   & FileBrowserViewSurface
-  & { collectionType?: 'table' | 'media_library'; collectionUnavailableReason?: string; collectionDisplay?: CollectionDisplayDescriptor; documentProps: ExternalDocumentProps }
+  & { collectionType?: 'table' | 'media_library' | 'work_documents'; collectionUnavailableReason?: string; collectionDisplay?: CollectionDisplayDescriptor; documentProps: ExternalDocumentProps }
   & (
     | { activeFilePath: string; fileIdentity: FileDisplayIdentity }
     | { activeFilePath: null; fileIdentity?: never }
@@ -105,7 +107,8 @@ export function resolveBrowserColumnSurface(
   switch (tab.target.kind) {
     case 'folder-collection':
       return { ...base, kind: 'collection', notebookId: tab.target.notebookId,
-        notebookPath: tab.target.notebookPath, folderPath: tab.target.folderPath, folderName: tab.target.folderName };
+        notebookPath: tab.target.notebookPath, folderPath: tab.target.folderPath, folderName: tab.target.folderName,
+        viewMode: tab.target.viewMode };
     case 'media':
       return {
         ...base,
@@ -164,7 +167,7 @@ export function resolveBrowserColumnSurface(
 function browserSurfaceData(surface: BrowserColumnSurface): WorkspaceSurfaceRendererData {
   switch (surface.kind) {
     case 'collection': return { kind: 'collection', notebookId: surface.notebookId,
-      notebookPath: surface.notebookPath, folderPath: surface.folderPath, folderName: surface.folderName };
+      notebookPath: surface.notebookPath, folderPath: surface.folderPath, folderName: surface.folderName, viewMode: surface.viewMode };
     case 'media': return { kind: 'media', fileIdentity: surface.fileIdentity, notebookPath: surface.notebookPath,
       notebookId: surface.notebookId, resourceKind: surface.resourceKind };
     case 'agent-conversation': return { kind: 'agent-conversation', instanceId: surface.instanceId };
@@ -214,12 +217,15 @@ function BrowserRegisteredSurfaceView({ surface, focused }: { surface: BrowserCo
       useBrowserColumnStore.getState().updateTabMetadata(surface.tabId, metadata);
     }
   }, [presentationOwner, surface.tabId]);
+  const retainInitialContent = workspaceSurfaceRetainsInitialContent(browserSurfaceData(surface));
   const registerLifecycle = useCallback((lifecycle: SurfaceLifecycle | null, owner?: object) => {
     registerWorkspaceSurfaceLifecycle(surface.tabId, lifecycle, owner);
   }, [surface.tabId]);
   useLayoutEffect(() => registerWorkspaceSurfaceHostView('browser-column', surface.tabId), [surface.tabId]);
-  useLayoutEffect(() => registerWorkspaceSurfacePresentationOwner(surface.tabId, presentationOwner),
-    [presentationOwner, surface.tabId]);
+  useLayoutEffect(() => registerWorkspaceSurfacePresentationOwner(surface.tabId, presentationOwner, {
+    state: { status: 'loading', loadingMode: 'blocking', retainContent: retainInitialContent },
+  }),
+    [presentationOwner, retainInitialContent, surface.tabId]);
   return <WorkspaceSurfaceRendererView
     surface={browserSurfaceData(surface)}
     context={{ host: 'browser-column', viewId: surface.tabId, focused,

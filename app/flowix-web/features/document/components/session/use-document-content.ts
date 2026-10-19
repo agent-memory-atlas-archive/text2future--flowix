@@ -30,10 +30,6 @@ import {
   type DocumentContainerState,
   type LoadContentOptions,
 } from '@features/document/components/session/types';
-import {
-  countTextUnits,
-  extractBodyContent,
-} from '@features/document/components/session/document-utils';
 
 interface UseDocumentContentOptions {
   identity: DocumentIdentity;
@@ -115,7 +111,7 @@ export function useDocumentContent({
   const [state, setState] = useState<DocumentContainerState>(initialDocumentContainerState);
   // Buffer state (content / lastSavedContent / pendingContent) lives in
   // the document session service now, not in this hook. We only track
-  // UI state here (charCount, isLoading, etc.).
+  // UI state here (loading, metadata, errors, etc.).
   //
   // Monotonic counter for the latest reloadDocument call. Stale IPC
   // reads compare against this and abort.
@@ -178,24 +174,13 @@ export function useDocumentContent({
         // the checkpoint after confirming there is no unsaved title input.
         void clearRecoveryDraftThrough(identity, recovery.revision);
       }
-      // A document heading does not imply that the file was just created.
-      const initialContent = recovery
-        && recovery.originalPath === path
-        ? recovery.content
-        : buf.content;
-      const initialBody = extractBodyContent(initialContent);
-      const initialCharCount = countTextUnits(initialBody);
-
       setState({
-        fullContent: initialContent,
         isLoaded: true,
         isLoading: false,
         error: null,
         errorKind: null,
         isScrolled: false,
         isNewlyCreated: false,
-        charCount: initialCharCount,
-        tokenCount: Math.ceil(initialCharCount / 4),
         createdAt: '',
         updatedAt: '',
         updatedAtDate: null,
@@ -211,7 +196,6 @@ export function useDocumentContent({
       logOpenDocPerf('applyLoadedContent', startedAt, {
         transitionId,
         bytes: fullContent.length,
-        chars: initialCharCount,
       });
     },
     [identity, externalScopePath, isolatedSession, transitionId],
@@ -246,14 +230,11 @@ export function useDocumentContent({
       if (skipContentLoad) {
         setState((prev) => ({
           ...prev,
-          fullContent: '',
           isLoaded: false,
           isLoading: false,
           error: null,
           errorKind: null,
           isScrolled: false,
-          charCount: 0,
-          tokenCount: 0,
         }));
         if (!isolatedSession && transitionId !== null) {
           useDocumentStore.getState().finishDocumentTransition(transitionId);

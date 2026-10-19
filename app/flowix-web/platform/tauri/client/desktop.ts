@@ -75,6 +75,7 @@ export interface DocumentPageItem {
   fullPath: string;
   name: string;
   resourceKind: 'note' | 'image' | 'video' | 'other' | 'folder';
+  isDirectory?: boolean;
   sizeBytes: number | null;
   modifiedMs: number | null;
   createdMs: number | null;
@@ -110,7 +111,7 @@ export interface CollectionIndexItem {
   indexSequence: number;
   relativePath: string;
   collectionId: string | null;
-  collectionType: 'table' | 'media_library';
+  collectionType: 'table' | 'media_library' | 'work_documents';
   name: string;
   schemaVersion: number | null;
   payloadSchemaVersion: number | null;
@@ -200,6 +201,16 @@ export const files = {
     cursor?: string | null;
     limit?: number;
   }) => invoke<DocumentPage>('list_document_page', { request }),
+  listWorkDocumentsPage: (notebookId: string, cursor?: string | null, limit?: number, filter?: {
+    fileNameContains?: string;
+    resourceKind?: string;
+    path?: string;
+  }) => invoke<DocumentPage>('list_work_documents_page', {
+    notebookId, cursor, limit,
+    fileNameContains: filter?.fileNameContains,
+    resourceKind: filter?.resourceKind,
+    path: filter?.path,
+  }),
   listTableDocuments: async (notebookId: string): Promise<TableDocumentListItem[]> =>
     (await collections.list(notebookId, 'table')).filter((item) => item.collectionId !== null && item.relativePath.split('/').pop()?.toLocaleLowerCase() !== '.index.yaml').map((item) => ({
       relativePath: item.relativePath, collectionId: item.collectionId!, name: item.name,
@@ -369,6 +380,7 @@ export interface FileBrowserDirectoriesChangedEvent {
 
 export const windows = {
   showMain: () => invoke<void>('show_main_window'),
+  getWindowMaterial: () => invoke<'none' | 'mica' | 'vibrancy'>('get_window_material'),
   openPreferences: (tab?: string) => invoke<void>('open_preferences_window', { tab }),
   applyWindowTheme: (theme: ThemeId) => invoke<void>('apply_window_theme', { theme }),
   applyMenuLanguage: (language: 'zh-CN' | 'en-US') =>

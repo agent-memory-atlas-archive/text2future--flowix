@@ -1,5 +1,6 @@
 import { useTitleEditCaret } from '@shared/hooks/use-title-edit-caret';
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronRight, Folder, Inbox, LoaderCircle, Play } from 'lucide-react';
 import { DotsThreeIcon, FunnelIcon, PlusIcon, TrashSimpleIcon } from '@phosphor-icons/react';
 import { files, mediaResources, type DocumentPageItem, type NotebookFolderOption } from '@platform/tauri/client';
@@ -17,7 +18,9 @@ import type { DocumentListViewContext } from './document-list-view-model';
 import { useDocumentListData } from './use-document-list-data';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
 import { requestMediaPreview } from './media-preview-tasks';
+import { openPath } from '@platform/tauri/opener';
 import { MediaLibraryFilterPanel } from '@features/media-library/media-library-filter-panel';
+import { normalizeWorkDocumentsCondition, WORK_DOCUMENT_KINDS, type WorkDocumentsFilterCondition } from '@features/work-documents/model';
 import documentCardPlaceholder from '@/assets/placeholder-document-card.jpg';
 import imageCardPlaceholder from '@/assets/placeholder-image-card.jpg';
 import videoCardPlaceholder from '@/assets/placeholder-video-card.jpg';
@@ -27,20 +30,69 @@ import pptCardPlaceholder from '@/assets/placeholder-ppt-card.jpg';
 import excelCardPlaceholder from '@/assets/placeholder-excel-card.jpg';
 import otherCardPlaceholder from '@/assets/placeholder-other-card.jpg';
 import folderCardPlaceholder from '@/assets/placeholder-folder-card.png';
+import { WorkDocumentsLoadingSkeleton } from '@shared/ui/work-documents-loading-skeleton';
 
 // Keep the loading effect stable when ordinary folders omit media records.
 const EMPTY_MEDIA_LIBRARY_RECORDS: MediaLibraryRecord[] = [];
 const MEDIA_CARD_MIN_WIDTH = 160;
 const MEDIA_COLUMN_GAP = 2;
+const MEDIA_CARD_ESTIMATED_HEIGHT = 320;
+
+const VirtualizedMediaColumn = memo(function VirtualizedMediaColumn({
+  items,
+  scrollerRef,
+  scrollMargin,
+  renderCard,
+}: {
+  items: readonly DocumentPageItem[];
+  scrollerRef: RefObject<HTMLDivElement | null>;
+  scrollMargin: number;
+  renderCard: (item: DocumentPageItem) => ReactNode;
+}) {
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => scrollerRef.current,
+    initialRect: { width: MEDIA_CARD_MIN_WIDTH, height: 600 },
+    estimateSize: () => MEDIA_CARD_ESTIMATED_HEIGHT,
+    getItemKey: (index) => items[index]?.fullPath ?? index,
+    measureElement: (element) => {
+      const measured = element.getBoundingClientRect().height;
+      return measured > 0 ? measured : MEDIA_CARD_ESTIMATED_HEIGHT;
+    },
+    scrollMargin,
+    gap: MEDIA_COLUMN_GAP,
+    overscan: 4,
+  });
+
+  return (
+    <div className="relative min-w-0 flex-1" style={{ height: virtualizer.getTotalSize() }}>
+      {virtualizer.getVirtualItems().map((virtualItem) => {
+        const item = items[virtualItem.index];
+        if (!item) return null;
+        return (
+          <div
+            key={virtualItem.key}
+            data-index={virtualItem.index}
+            ref={virtualizer.measureElement}
+            className="absolute left-0 top-0 w-full min-w-0 py-px"
+            style={{ transform: `translateY(${virtualItem.start - scrollMargin}px)` }}
+          >
+            {renderCard(item)}
+          </div>
+        );
+      })}
+    </div>
+  );
+});
 
 function cardPlaceholder(item: DocumentPageItem): string {
   if (item.resourceKind === 'folder') return folderCardPlaceholder;
   const extension = fileExtension(item.name);
-  if (item.resourceKind === 'note' || extension === 'md' || extension === 'markdown') return documentCardPlaceholder;
+  if (item.resourceKind === 'note' || ['md', 'markdown', 'doc', 'docx', 'odt', 'pages', 'wps', 'html', 'htm'].includes(extension)) return documentCardPlaceholder;
   if (item.resourceKind === 'image') return imageCardPlaceholder;
   if (item.resourceKind === 'video') return videoCardPlaceholder;
   if (extension === 'pdf') return pdfCardPlaceholder;
-  if (['ppt', 'pptx', 'pps', 'ppsx', 'odp'].includes(extension)) return pptCardPlaceholder;
+  if (['ppt', 'pptx', 'pps', 'ppsx', 'odp', 'key'].includes(extension)) return pptCardPlaceholder;
   if (['xls', 'xlsx', 'xlsm', 'xlsb', 'csv', 'tsv', 'ods'].includes(extension)) return excelCardPlaceholder;
   if (isCodeTextFilePath(item.fullPath)) return codeCardPlaceholder;
   return otherCardPlaceholder;
@@ -197,13 +249,15 @@ const DocumentCard = memo(function DocumentCard({ item, notebookPath, openItem, 
   </button>;
 });
 
-export function DocumentListView({ listContext, mediaLibrary = false, libraryName = '媒体库', libraryFilePath, mediaLibraryFolderPath, mediaLibraryFilter = {}, mediaLibraryRecords = EMPTY_MEDIA_LIBRARY_RECORDS, mediaLibraryExcludedPaths = [], mediaLibraryDatasetFilter, mediaLibraryViewFilter, onMediaLibraryFilterChange, onRenameLibrary, onAddMedia, onDeleteMedia, onSwitchToTable, libraryActionsDisabled = false, refreshPaused = false, workspaceHost = 'main-third' }: {
+export function DocumentListView({ listContext, mediaLibrary = false, workDocuments = false, libraryName = '媒体库', libraryFilePath, mediaLibraryFolderPath, mediaLibraryFilter = {}, workDocumentsFilter = {}, mediaLibraryRecords = EMPTY_MEDIA_LIBRARY_RECORDS, mediaLibraryExcludedPaths = [], mediaLibraryDatasetFilter, mediaLibraryViewFilter, onMediaLibraryFilterChange, onWorkDocumentsFilterChange, onLoadingChange, onRenameLibrary, onAddMedia, onDeleteMedia, onSwitchToTable, libraryActionsDisabled = false, refreshPaused = false, workspaceHost = 'main-third' }: {
   listContext: DocumentListViewContext;
   mediaLibrary?: boolean;
+  workDocuments?: boolean;
   libraryName?: string;
   libraryFilePath?: string;
   mediaLibraryFolderPath?: string;
   mediaLibraryFilter?: MediaLibraryFileCondition;
+  workDocumentsFilter?: WorkDocumentsFilterCondition;
   mediaLibraryRecords?: MediaLibraryRecord[];
   mediaLibraryExcludedPaths?: string[];
   mediaLibraryDatasetFilter?: Record<string, unknown> | null;
@@ -211,6 +265,8 @@ export function DocumentListView({ listContext, mediaLibrary = false, libraryNam
   onAddMedia?: () => Promise<boolean>;
   onDeleteMedia?: (item: DocumentPageItem) => Promise<boolean>;
   onMediaLibraryFilterChange?: (condition: MediaLibraryFileCondition) => Promise<boolean>;
+  onWorkDocumentsFilterChange?: (condition: WorkDocumentsFilterCondition) => Promise<boolean>;
+  onLoadingChange?: (loading: boolean) => void;
   onRenameLibrary?: (title: string) => Promise<void>;
   onSwitchToTable?: () => void;
   libraryActionsDisabled?: boolean;
@@ -222,7 +278,10 @@ export function DocumentListView({ listContext, mediaLibrary = false, libraryNam
   const {
     items, linkedItems, folders, hasMediaDataset, hasLinkedMedia, loading, loadingLinkedItems,
     moreError, hasMore, error, loadMore, refresh,
-  } = useDocumentListData({ listContext, mediaLibrary, mediaLibraryRecords, refreshPaused });
+  } = useDocumentListData({ listContext, mediaLibrary, workDocuments, mediaLibraryRecords, refreshPaused });
+  useEffect(() => {
+    if (workDocuments) onLoadingChange?.(loading);
+  }, [loading, onLoadingChange, workDocuments]);
   const [addingMedia, setAddingMedia] = useState(false);
   const [mediaToDelete, setMediaToDelete] = useState<DocumentPageItem | null>(null);
   const [deletingMedia, setDeletingMedia] = useState(false);
@@ -232,12 +291,22 @@ export function DocumentListView({ listContext, mediaLibrary = false, libraryNam
   const [mediaNameQuery, setMediaNameQuery] = useState('');
   const [mediaPathQuery, setMediaPathQuery] = useState('');
   const [mediaPathIsAllQuery, setMediaPathIsAllQuery] = useState(false);
-  const [mediaTypeQuery, setMediaTypeQuery] = useState<'any' | 'image' | 'video'>('any');
+  const [mediaTypeQuery, setMediaTypeQuery] = useState<string>('any');
   const [mediaFiltersOpen, setMediaFiltersOpen] = useState(false);
   const [mediaDataFiltersOpen, setMediaDataFiltersOpen] = useState(false);
   const [folderPickerOpen, setFolderPickerOpen] = useState(false);
   const [folderOptions, setFolderOptions] = useState<NotebookFolderOption[]>([]);
   const [folderOptionsLoading, setFolderOptionsLoading] = useState(false);
+  const activeFileCondition = workDocuments ? workDocumentsFilter : mediaLibraryFilter;
+  const workDocumentKindOptions = [
+    { value: 'any', label: t('workDocuments.kind.any') },
+    { value: WORK_DOCUMENT_KINDS[0], label: t('workDocuments.kind.document') },
+    { value: WORK_DOCUMENT_KINDS[1], label: t('workDocuments.kind.spreadsheet') },
+    { value: WORK_DOCUMENT_KINDS[2], label: t('workDocuments.kind.presentation') },
+    { value: WORK_DOCUMENT_KINDS[3], label: t('workDocuments.kind.web') },
+    { value: WORK_DOCUMENT_KINDS[4], label: t('workDocuments.kind.archive') },
+    { value: WORK_DOCUMENT_KINDS[5], label: t('workDocuments.kind.database') },
+  ];
   const { inputRef: libraryTitleInputRef, captureCaret: captureLibraryTitleCaret } = useTitleEditCaret(editingLibraryTitle);
   useEffect(() => {
     if (!editingLibraryTitle) setLibraryTitleDraft(libraryName);
@@ -275,7 +344,9 @@ export function DocumentListView({ listContext, mediaLibrary = false, libraryNam
   const [viewport, setViewport] = useState({ top: 0, height: 600, width: 600 });
   const scrollRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
+  const mediaGridRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const [mediaGridScrollMargin, setMediaGridScrollMargin] = useState(0);
   const previewObserverRef = useRef<IntersectionObserver | null>(null);
   const previewCallbacksRef = useRef(new Map<Element, () => void>());
   const observeMediaCard = useCallback((node: Element, onNear: () => void) => {
@@ -306,26 +377,54 @@ export function DocumentListView({ listContext, mediaLibrary = false, libraryNam
   useEffect(() => {
     const element = scrollRef.current;
     if (!element) return;
-    const update = () => setViewport((current) => ({
-      ...current,
-      top: Math.max(0, element.scrollTop - (headerRef.current?.offsetHeight ?? 0) - 8),
-      height: element.clientHeight,
-      width: element.clientWidth - 40,
-    }));
-    update();
-    const resize = new ResizeObserver(update);
+    // Scroll fires far more often than the viewport actually changes. Coalesce
+    // to one measurement per frame and bail out when the numbers are identical,
+    // otherwise every scroll event re-rendered the whole card grid.
+    const measure = () => setViewport((current) => {
+      const top = Math.max(0, element.scrollTop - (headerRef.current?.offsetHeight ?? 0) - 8);
+      const height = element.clientHeight;
+      const width = element.clientWidth - 40;
+      return current.top === top && current.height === height && current.width === width
+        ? current
+        : { top, height, width };
+    });
+    const measureMediaGridOffset = () => {
+      const grid = mediaGridRef.current;
+      if (!grid) return;
+      const gridTop = grid.getBoundingClientRect().top;
+      const scrollTop = element.getBoundingClientRect().top;
+      const next = Math.max(0, gridTop - scrollTop + element.scrollTop);
+      setMediaGridScrollMargin((current) => current === next ? current : next);
+    };
+    let frame = 0;
+    const schedule = () => {
+      if (frame !== 0) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        measure();
+        measureMediaGridOffset();
+      });
+    };
+    measure();
+    measureMediaGridOffset();
+    const resize = new ResizeObserver(schedule);
     resize.observe(element);
     if (headerRef.current) resize.observe(headerRef.current);
-    if (!mediaLibrary) element.addEventListener('scroll', update, { passive: true });
-    return () => { resize.disconnect(); element.removeEventListener('scroll', update); };
+    if (mediaGridRef.current) resize.observe(mediaGridRef.current);
+    if (!mediaLibrary) element.addEventListener('scroll', schedule, { passive: true });
+    return () => {
+      if (frame !== 0) cancelAnimationFrame(frame);
+      resize.disconnect();
+      element.removeEventListener('scroll', schedule);
+    };
   }, [mediaLibrary]);
   useEffect(() => {
     scrollRef.current?.scrollTo(0, 0);
   }, [listContext.displayId]);
   useEffect(() => {
-    if (!mediaLibrary) return;
+    if (!mediaLibrary && !workDocuments) return;
     scrollRef.current?.scrollTo(0, 0);
-  }, [mediaLibrary, mediaLibraryFilter.file_name_contains, mediaLibraryFilter.file_type, mediaLibraryFilter.path_contains, resourceKindsKey]);
+  }, [mediaLibrary, workDocuments, activeFileCondition.file_name_contains, activeFileCondition.file_type, activeFileCondition.path_contains, activeFileCondition.path_scope, resourceKindsKey]);
   useEffect(() => {
     if (!folderPickerOpen || !listContext.notebookPath) return;
     let active = true;
@@ -357,10 +456,16 @@ export function DocumentListView({ listContext, mediaLibrary = false, libraryNam
     observer.observe(endRef.current);
     return () => observer.disconnect();
   }, [hasMore, loadMore, moreError]);
-  const appliedMediaNameQuery = (mediaLibraryFilter.file_name_contains ?? '').trim().toLocaleLowerCase();
-  const appliedMediaPathQuery = (mediaLibraryFilter.path_contains ?? '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLocaleLowerCase();
-  const excludedMediaPathSet = new Set(mediaLibraryExcludedPaths.map((path) => path.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLocaleLowerCase()));
-  const visibleItems = mediaLibrary
+  const appliedMediaNameQuery = (activeFileCondition.file_name_contains ?? '').trim().toLocaleLowerCase();
+  const appliedMediaPathQuery = (activeFileCondition.path_contains ?? '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLocaleLowerCase();
+  const excludedMediaPathSet = useMemo(
+    () => new Set(mediaLibraryExcludedPaths.map((path) => path.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').toLocaleLowerCase())),
+    [mediaLibraryExcludedPaths],
+  );
+  // Derived once per data/filter change. Previously this ran on every render,
+  // including each scroll frame, so the whole list was re-filtered and de-duped
+  // dozens of times per second while scrolling.
+  const visibleItems = useMemo(() => (mediaLibrary
     ? [...new Map([
       ...linkedItems.filter((item) => !excludedMediaPathSet.has(mediaItemRelativePath(item.fullPath, listContext.notebookPath).toLocaleLowerCase())
         && matchesMediaRuleFilter(item, listContext.notebookPath, mediaLibraryViewFilter)),
@@ -371,34 +476,63 @@ export function DocumentListView({ listContext, mediaLibrary = false, libraryNam
         && matchesMediaRuleFilter(item, listContext.notebookPath, mediaLibraryViewFilter)
       )) : []),
     ].map((item) => [canonicalPath(item.fullPath), item])).values()]
-    : [...folders, ...items];
+    : [...folders, ...items]), [
+    mediaLibrary,
+    linkedItems,
+    items,
+    folders,
+    hasMediaDataset,
+    mediaLibraryViewFilter,
+    mediaLibraryDatasetFilter,
+    excludedMediaPathSet,
+    listContext.notebookPath,
+  ]);
+  useEffect(() => {
+    if (!mediaLibrary) return;
+    const element = scrollRef.current;
+    const grid = mediaGridRef.current;
+    if (!element || !grid) return;
+    const next = Math.max(
+      0,
+      grid.getBoundingClientRect().top
+        - element.getBoundingClientRect().top
+        + element.scrollTop,
+    );
+    setMediaGridScrollMargin((current) => current === next ? current : next);
+  }, [mediaLibrary, visibleItems.length]);
   const mediaFilterCount = (appliedMediaNameQuery ? 1 : 0)
     + (appliedMediaPathQuery ? 1 : 0)
-    + (mediaLibraryFilter.file_type ? 1 : 0);
+    + (activeFileCondition.file_type ? 1 : 0)
+    + (activeFileCondition.path_scope === 'all' ? 1 : 0);
   const saveMediaFilters = useCallback(async (pathOverride?: string | null) => {
-    if (!onMediaLibraryFilterChange) return false;
+    if (workDocuments ? !onWorkDocumentsFilterChange : !onMediaLibraryFilterChange) return false;
     const pathIsAll = pathOverride === null || (pathOverride === undefined && mediaPathIsAllQuery);
-    const condition = normalizeMediaLibraryFileCondition({
+    const rawCondition = {
       file_name_contains: mediaNameQuery.trim(),
       file_type: mediaTypeQuery === 'any' ? undefined : mediaTypeQuery,
       path_contains: pathIsAll ? undefined : (pathOverride ?? mediaPathQuery).trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, ''),
       path_scope: pathIsAll ? 'all' : undefined,
-    });
-    const currentPath = (mediaLibraryFilter.path_contains ?? '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-    if (pathOverride === undefined && condition.file_name_contains === (mediaLibraryFilter.file_name_contains?.trim() || undefined)
-      && condition.file_type === mediaLibraryFilter.file_type
+    };
+    const condition = workDocuments
+      ? normalizeWorkDocumentsCondition(rawCondition as WorkDocumentsFilterCondition)
+      : normalizeMediaLibraryFileCondition(rawCondition as MediaLibraryFileCondition);
+    const currentPath = (activeFileCondition.path_contains ?? '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (pathOverride === undefined && condition.file_name_contains === (activeFileCondition.file_name_contains?.trim() || undefined)
+      && condition.file_type === activeFileCondition.file_type
       && condition.path_contains === (currentPath || undefined)
-      && condition.path_scope === mediaLibraryFilter.path_scope) return true;
-    return onMediaLibraryFilterChange(condition);
-  }, [mediaLibraryFilter.file_name_contains, mediaLibraryFilter.file_type, mediaLibraryFilter.path_contains, mediaLibraryFilter.path_scope, mediaNameQuery, mediaPathIsAllQuery, mediaPathQuery, mediaTypeQuery, onMediaLibraryFilterChange]);
+      && condition.path_scope === activeFileCondition.path_scope) return true;
+    return workDocuments
+      ? onWorkDocumentsFilterChange!(condition as WorkDocumentsFilterCondition)
+      : onMediaLibraryFilterChange!(condition as MediaLibraryFileCondition);
+  }, [activeFileCondition.file_name_contains, activeFileCondition.file_type, activeFileCondition.path_contains, activeFileCondition.path_scope, mediaNameQuery, mediaPathIsAllQuery, mediaPathQuery, mediaTypeQuery, onMediaLibraryFilterChange, onWorkDocumentsFilterChange, workDocuments]);
   const applyMediaFilters = useCallback(async () => {
     if (await saveMediaFilters()) setMediaFiltersOpen(false);
   }, [saveMediaFilters]);
   const openMediaDatasetMenu = () => {
-    setMediaNameQuery(mediaLibraryFilter.file_name_contains ?? '');
-    setMediaTypeQuery(mediaLibraryFilter.file_type ?? 'any');
-    setMediaPathQuery(mediaLibraryFilter.path_contains ?? '');
-    setMediaPathIsAllQuery(mediaLibraryFilter.path_scope === 'all');
+    setMediaNameQuery(activeFileCondition.file_name_contains ?? '');
+    setMediaTypeQuery(activeFileCondition.file_type ?? 'any');
+    setMediaPathQuery(activeFileCondition.path_contains ?? '');
+    setMediaPathIsAllQuery(activeFileCondition.path_scope === 'all');
     setMediaDataFiltersOpen(false);
     setMediaFiltersOpen(true);
   };
@@ -416,6 +550,8 @@ export function DocumentListView({ listContext, mediaLibrary = false, libraryNam
       autoFocus={!locationOnly}
       locationOnly={locationOnly}
       showLocationMenu={false}
+      busy={libraryActionsDisabled}
+      kindOptions={workDocuments ? workDocumentKindOptions : undefined}
       onFileNameChange={setMediaNameQuery}
       onFileTypeChange={setMediaTypeQuery}
       onPathChange={setMediaPathQuery}
@@ -451,9 +587,12 @@ export function DocumentListView({ listContext, mediaLibrary = false, libraryNam
     Math.max(1, Math.floor((viewport.width + MEDIA_COLUMN_GAP) / (MEDIA_CARD_MIN_WIDTH + MEDIA_COLUMN_GAP))),
     Math.max(1, visibleItems.length),
   );
-  const mediaColumns: DocumentPageItem[][] = Array.from({ length: mediaColumnCount }, () => []);
-  // Appending a page keeps existing cards in their columns while the column count is unchanged.
-  visibleItems.forEach((item, index) => mediaColumns[index % mediaColumnCount].push(item));
+  const mediaColumns = useMemo(() => {
+    const columns: DocumentPageItem[][] = Array.from({ length: mediaColumnCount }, () => []);
+    // Appending a page keeps existing cards in their columns while the column count is unchanged.
+    visibleItems.forEach((item, index) => columns[index % mediaColumnCount].push(item));
+    return columns;
+  }, [visibleItems, mediaColumnCount]);
   const rowHeight = 224;
   const rowCount = Math.ceil(visibleItems.length / columnCount);
   const firstRow = Math.min(Math.max(0, rowCount - 1), Math.max(0, Math.floor(viewport.top / rowHeight) - 2));
@@ -488,10 +627,18 @@ export function DocumentListView({ listContext, mediaLibrary = false, libraryNam
   }, [creating, newTitle, listContext.folderPath, listContext.notebookId, listContext.notebookPath]);
   const openItem = useCallback(async (item: DocumentPageItem) => {
     try {
+      if (workDocuments) {
+        await openPath(item.fullPath);
+        return;
+      }
       if (item.resourceKind === 'folder') {
         if (!listContext.notebookId) throw new Error('无法确定文件夹所属笔记本');
         const { openFolderCollectionFromFolder } = await import('@features/workspace/public/main-window-api');
         await openFolderCollectionFromFolder(listContext.notebookId, item.fullPath, workspaceHost);
+        return;
+      }
+      if (item.isDirectory) {
+        await openPath(item.fullPath);
         return;
       }
       const { openWorkspaceSurface } = await import('@features/workspace/public/open-surface-api');
@@ -502,22 +649,24 @@ export function DocumentListView({ listContext, mediaLibrary = false, libraryNam
           notebookPath: listContext.notebookPath, resourceKind: kind,
         }, options: { browserDisposition: 'focus-existing' } });
       } else {
-        await openWorkspaceSurface({
-          host: 'main-third',
-          target: { kind: 'external', path: item.fullPath, scopePath: listContext.notebookPath, transitionId: null },
-        });
+        const target = { kind: 'external' as const, path: item.fullPath, scopePath: listContext.notebookPath, transitionId: null };
+        if (workspaceHost === 'browser-column') {
+          await openWorkspaceSurface({ host: workspaceHost, target, options: { browserDisposition: 'focus-existing' } });
+        } else {
+          await openWorkspaceSurface({ host: workspaceHost, target });
+        }
       }
     } catch {
       toast.error('打开文件失败');
     }
-  }, [listContext.notebookId, listContext.notebookPath, workspaceHost]);
+  }, [listContext.notebookId, listContext.notebookPath, workDocuments, workspaceHost]);
   return <section className="flex h-full min-h-0 flex-col bg-transparent text-[var(--foreground)]">
     <OverlayScrollbar
       className="flex h-full min-h-0 min-w-0 flex-1"
       scrollerClassName="h-full min-h-0 min-w-0 w-full flex-1 overflow-auto px-5 pb-4"
       scrollerRef={scrollRef}
     >
-    <div ref={headerRef} className={mediaLibrary ? 'multidimensional-table__view-nav -mx-5 flex min-w-0 shrink-0 items-center justify-between gap-1 px-4' : '-mx-5 flex flex-wrap items-center justify-between gap-2 px-5 pt-3'}>
+    <div ref={headerRef} className={mediaLibrary || workDocuments ? 'multidimensional-table__view-nav -mx-5 flex min-w-0 shrink-0 items-center justify-between gap-1 px-4' : '-mx-5 flex flex-wrap items-center justify-between gap-2 px-5 pt-3'}>
       {mediaLibrary ? <>
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1">
           <div className="flex h-7 min-w-0 max-w-full flex-[0_1_auto] -translate-x-[2px] items-center gap-1.5" title={libraryName}>
@@ -634,6 +783,72 @@ export function DocumentListView({ listContext, mediaLibrary = false, libraryNam
             ><PlusIcon size={14} weight="bold" aria-hidden="true" /></Button>}
           </div>
         </div>
+      </> : workDocuments ? <>
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1">
+          <div className="flex h-7 min-w-0 max-w-full flex-[0_1_auto] items-center gap-1.5" title={libraryName}>
+            <NotebookTreeResourceIcon path={libraryFilePath ?? 'work-documents.index.yaml'} collectionType="work_documents" className="h-5 w-5 shrink-0" />
+            {editingLibraryTitle ? <input
+              ref={libraryTitleInputRef}
+              aria-label={t('workDocuments.titleLabel')}
+              value={libraryTitleDraft}
+              disabled={renamingLibraryTitle}
+              onChange={(event) => setLibraryTitleDraft(event.currentTarget.value)}
+              onBlur={(event) => { void commitLibraryTitle(event.currentTarget.value); }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); }
+                else if (event.key === 'Escape') { event.preventDefault(); setLibraryTitleDraft(libraryName); setEditingLibraryTitle(false); }
+              }}
+              className="box-border h-[22px] min-w-[2em] max-w-full flex-[0_1_auto] rounded border-0 bg-[var(--muted)] px-0.5 py-1 text-sm font-medium leading-none text-[var(--foreground)] outline-none"
+            /> : <button
+              type="button"
+              onDoubleClick={(event) => { if (!onRenameLibrary || renamingLibraryTitle) return; event.preventDefault(); captureLibraryTitleCaret(event.currentTarget, event.clientX, event.clientY); beginLibraryTitleEdit(); }}
+              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === 'F2') { event.preventDefault(); beginLibraryTitleEdit(); } }}
+              aria-label={`${t('workDocuments.renameLabel')}: ${libraryName}`}
+              title={onRenameLibrary ? `${t('workDocuments.renameHint')}: ${libraryName}` : libraryName}
+              disabled={!onRenameLibrary || renamingLibraryTitle}
+              className="inline-flex min-w-[2em] max-w-full flex-[0_1_auto] items-center truncate rounded border-0 bg-transparent px-0.5 py-1 text-left text-sm font-medium leading-none text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:opacity-100"
+            >{libraryName}</button>}
+            {renamingLibraryTitle && <span role="status" aria-label={t('memo.fileTree.renaming')} className="inline-flex shrink-0 items-center text-[var(--muted-foreground)]"><LoaderCircle className="h-3.5 w-3.5 flowix-spin" aria-hidden="true" /></span>}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="text-sm text-[var(--muted-foreground)]">{t('memo.documentList.workDocumentsCount', { count: visibleItems.length, more: hasMore ? '+' : '' })}</span>
+          <span aria-hidden="true" className="h-[1em] w-px shrink-0 bg-[var(--border)]" />
+          <Popover open={mediaFiltersOpen} onOpenChange={(open) => {
+            setMediaFiltersOpen(open);
+            if (open) openMediaDatasetMenu();
+            else { setMediaDataFiltersOpen(false); setFolderPickerOpen(false); void saveMediaFilters(); }
+          }}>
+            <PopoverTrigger asChild>
+              <Button type="button" variant="ghost" size="sm" aria-label={t('workDocuments.filterLabel')} title={t('workDocuments.filterLabel')}
+                disabled={libraryActionsDisabled || !onWorkDocumentsFilterChange}
+                className={`h-7 w-7 rounded-lg p-0 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] data-[state=open]:bg-[var(--muted)] data-[state=open]:text-[var(--foreground)] ${mediaFiltersOpen || mediaFilterCount > 0 ? 'bg-[var(--muted)] text-[var(--foreground)]' : ''}`}>
+                <FunnelIcon size={14} weight="bold" aria-hidden="true" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" side="bottom" sideOffset={0} fitViewport style={{ zIndex: 150 }} ignorePopoverOutside={folderPickerOpen || mediaDataFiltersOpen} className="w-[220px] max-w-[calc(100vw-16px)] rounded-xl p-1.5 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
+              <div className="space-y-0.5">
+                {renderMediaFilterPanel(true)}
+                <Popover open={mediaDataFiltersOpen} onOpenChange={setMediaDataFiltersOpen}>
+                  <div className={`rounded-lg transition-colors ${mediaDataFiltersOpen ? 'bg-[var(--hover-bg)]' : 'hover:bg-[var(--hover-bg)]'}`}>
+                    <PopoverTrigger asChild>
+                      <button type="button" className="flex h-8 w-full items-center justify-between rounded-lg px-1.5 text-left text-sm">
+                        <span>{t('mediaLibrary.dataConditions')}</span>
+                        <span className="flex items-center gap-1 text-sm text-[var(--muted-foreground)]">
+                          {mediaNameQuery.trim() || mediaTypeQuery !== 'any' ? t('mediaLibrary.conditionsSet') : t('mediaLibrary.conditionsEmpty')}
+                          <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                        </span>
+                      </button>
+                    </PopoverTrigger>
+                  </div>
+                  <PopoverContent side="left" align="start" sideOffset={0} fitViewport style={{ zIndex: 160 }} ignorePopoverOutside={folderPickerOpen} className="max-h-[min(70vh,420px)] w-[320px] max-w-[calc(100vw-16px)] overflow-y-auto rounded-xl p-1.5 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
+                    {renderMediaFilterPanel(false)}
+                  </PopoverContent>
+                </Popover>
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
       </> : <>
       <div className="flex items-center" role="group" aria-label={t('memo.documentList.viewType')}>
         <button
@@ -647,9 +862,15 @@ export function DocumentListView({ listContext, mediaLibrary = false, libraryNam
       </div>
       </>}
     </div>
-      {error ? <div className="flex h-full min-h-[160px] items-center justify-center text-center text-sm text-[var(--muted-foreground)]">不支持读取隐藏/系统文件夹</div>
+      {error ? <div className="flex h-full min-h-[160px] items-center justify-center text-center text-sm text-[var(--muted-foreground)]">
+        {workDocuments ? <div className="flex items-center gap-3">
+          <span>{t('memo.documentList.workDocumentsLoadFailed')}</span>
+          <Button type="button" variant="ghost" size="sm" onClick={refresh}>{t('error.retry')}</Button>
+        </div> : '不支持读取隐藏/系统文件夹'}
+      </div>
         : (loading || (mediaLibrary && loadingLinkedItems)) && visibleItems.length === 0
-        ? <div className="flex h-full min-h-[160px] items-center justify-center text-sm text-[var(--muted-foreground)]">正在整理文件列表…</div>
+        ? workDocuments ? <WorkDocumentsLoadingSkeleton showHeader={false} />
+          : <div className="flex h-full min-h-[160px] items-center justify-center text-sm text-[var(--muted-foreground)]">正在整理文件列表…</div>
         : !loading && visibleItems.length === 0 && !(mediaLibrary && hasMore)
         ? <div className="flex h-full min-h-[160px] items-center justify-center text-sm text-[var(--muted-foreground)]">
               <div className="flex flex-col items-center text-center">
@@ -667,29 +888,36 @@ export function DocumentListView({ listContext, mediaLibrary = false, libraryNam
                   {onAddMedia && <button type="button" disabled={libraryActionsDisabled || addingMedia} onClick={addMedia} className="inline-flex items-center gap-0.5 text-[var(--foreground)] hover:text-[var(--brand)] disabled:opacity-50">
                     添加<ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
                   </button>}
-                </div> : <span>列表内容为空</span>}
+                </div> : workDocuments && mediaFilterCount === 0 ? <div className="flex items-center gap-1">
+                  <span>{t('workDocuments.noDataSelected')}</span>
+                  <button type="button" disabled={libraryActionsDisabled || !onWorkDocumentsFilterChange} onClick={openMediaDatasetMenu} className="inline-flex items-center gap-0.5 text-[var(--foreground)] hover:text-[var(--brand)] disabled:opacity-50">
+                    {t('workDocuments.selectData')}<ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                </div> : workDocuments ? <span>{t('memo.documentList.workDocumentsEmpty')}</span> : <span>列表内容为空</span>}
               </div>
             </div>
           : mediaLibrary && visibleItems.length === 0 && hasMore
             ? <div className="flex h-full min-h-[160px] items-center justify-center text-sm text-[var(--muted-foreground)]">{t('mediaLibrary.searchingMore')}</div>
           : mediaLibrary
-            ? <div className="flex w-full items-start pt-0" style={{ gap: MEDIA_COLUMN_GAP }}>{mediaColumns.map((column, columnIndex) => (
-              <div key={columnIndex} className="flex min-w-0 flex-1 flex-col" style={{ gap: MEDIA_COLUMN_GAP }}>
-                {column.map((item) => (
-                  <div key={item.fullPath} className="min-w-0 py-px">
-                    <DocumentCard
-                      item={item}
-                      notebookPath={listContext.notebookPath}
-                      openItem={openItem}
-                      mediaLibrary
-                      observeMediaCard={observeMediaCard}
-                      onRequestDelete={onDeleteMedia ? setMediaToDelete : undefined}
-                      deleteLabel={t('media.fileTree.delete')}
-                      deleteDisabled={libraryActionsDisabled || deletingMedia}
-                    />
-                  </div>
-                ))}
-              </div>
+            ? <div ref={mediaGridRef} className="flex w-full items-start pt-0" style={{ gap: MEDIA_COLUMN_GAP }}>{mediaColumns.map((column, columnIndex) => (
+              <VirtualizedMediaColumn
+                key={columnIndex}
+                items={column}
+                scrollerRef={scrollRef}
+                scrollMargin={mediaGridScrollMargin}
+                renderCard={(item) => (
+                  <DocumentCard
+                    item={item}
+                    notebookPath={listContext.notebookPath}
+                    openItem={openItem}
+                    mediaLibrary
+                    observeMediaCard={observeMediaCard}
+                    onRequestDelete={onDeleteMedia ? setMediaToDelete : undefined}
+                    deleteLabel={t('media.fileTree.delete')}
+                    deleteDisabled={libraryActionsDisabled || deletingMedia}
+                  />
+                )}
+              />
             ))}</div>
             : <div style={{ paddingTop: firstRow * rowHeight, paddingBottom: Math.max(0, rowCount - lastRow) * rowHeight }}><div className="grid w-full grid-cols-[repeat(auto-fill,minmax(min(100%,200px),1fr))] items-stretch gap-3.5 pt-3">{visibleCards.map((item) => <DocumentCard key={item.fullPath} item={item} notebookPath={listContext.notebookPath} openItem={openItem} />)}</div></div>}
       {moreError && <button type="button" className="mt-4 rounded-lg px-2 py-1 text-sm text-[var(--brand)] hover:bg-[var(--muted)]" onClick={loadMore}>加载失败，点击重试</button>}

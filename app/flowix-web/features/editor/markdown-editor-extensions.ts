@@ -34,6 +34,7 @@ import { tableNeedsHtml } from '@features/editor/extensions/table/flowix-table';
 import { createTablePlugin } from '@features/editor/extensions/table/table-plugin';
 import { StableCaret } from '@features/editor/extensions/stable-caret';
 import { MarkdownParagraph, MarkdownTaskItem } from './markdown-parser-common-extensions';
+import { isEmptyMarkdownPlaceholderOnly } from './markdown-normalization';
 import type { WorkspaceHostId } from '@features/workspace/public/host-api';
 
 interface NestedListMarkdownContext {
@@ -60,19 +61,7 @@ type MarkdownNodeLike = {
 
 const TABLE_CELL_PARENT_TYPES = new Set(['tableCell', 'tableHeader']);
 const LIST_ITEM_PARENT_TYPES = new Set(['listItem', 'taskItem']);
-const EMPTY_MARKDOWN_PLACEHOLDER_RE = /&(?:amp;)?nbsp;/gi;
 const EMPTY_PARAGRAPH_MARKDOWN = '&nbsp;';
-
-function stripEmptyMarkdownPlaceholders(value: string): string {
-  return value
-    .replace(/\u00a0/g, '')
-    .replace(EMPTY_MARKDOWN_PLACEHOLDER_RE, '')
-    .trim();
-}
-
-export function isEmptyMarkdownPlaceholderOnly(value: string): boolean {
-  return stripEmptyMarkdownPlaceholders(value) === '';
-}
 
 function getParentType(ctx: MarkdownRenderContext): string {
   return ctx.parentType || '';
@@ -159,10 +148,13 @@ function markAmbiguousBoldRunsAsHtml(node: JSONContent): JSONContent {
 
   const content = node.content.map(child => markAmbiguousBoldRunsAsHtml(child));
   if (node.type !== 'paragraph' && node.type !== 'heading') {
-    return { ...node, content };
+    return content.every((child, index) => child === node.content![index])
+      ? node
+      : { ...node, content };
   }
 
-  const nextContent = content.map(child => ({ ...child, marks: child.marks ? [...child.marks] : child.marks }));
+  let nextContent = content;
+  let changed = content.some((child, index) => child !== node.content![index]);
   let index = 0;
   while (index < nextContent.length) {
     const child = nextContent[index];
@@ -192,17 +184,24 @@ function markAmbiguousBoldRunsAsHtml(node: JSONContent): JSONContent {
 
     if (isAmbiguous) {
       for (let runIndex = runStart; runIndex <= index; runIndex += 1) {
-        const marks = nextContent[runIndex].marks ?? [];
-        nextContent[runIndex].marks = marks.map(mark => (
-          mark.type === 'bold' ? { ...mark, type: 'htmlStrongFallback' } : mark
-        ));
+        const runChild = nextContent[runIndex];
+        const marks = runChild.marks;
+        if (!marks?.some(mark => mark.type === 'bold')) continue;
+        if (nextContent === content) nextContent = [...content];
+        nextContent[runIndex] = {
+          ...runChild,
+          marks: marks.map(mark => (
+            mark.type === 'bold' ? { ...mark, type: 'htmlStrongFallback' } : mark
+          )),
+        };
+        changed = true;
       }
     }
 
     index += 1;
   }
 
-  return { ...node, content: nextContent };
+  return changed ? { ...node, content: nextContent } : node;
 }
 
 export function serializeEditorMarkdown(editor: Editor): string {

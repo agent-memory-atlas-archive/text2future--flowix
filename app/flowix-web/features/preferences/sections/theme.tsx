@@ -13,7 +13,7 @@ interface ThemeSectionProps {
   updateSettings: (updates: Partial<{ theme: ThemeId }>) => Promise<void>;
 }
 
-const THEME_DISPLAY_ORDER: readonly ThemeId[] = ['system', 'rock', 'light', 'dark', 'ember'];
+const THEME_DISPLAY_ORDER: readonly ThemeId[] = ['system', 'mist', 'rock', 'light', 'dark', 'ember'];
 
 /**
  * 主题预览卡片。点击即应用; 当前激活卡片有强边框 + 右上角对勾。

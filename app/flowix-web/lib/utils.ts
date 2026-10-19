@@ -63,6 +63,12 @@ export function isMediaLibraryFilename(filename: string | null | undefined): boo
   return /\.lib\.ya?ml$/i.test(basename) || /\.index\.yaml$/i.test(basename);
 }
 
+export function isCollectionIndexFilename(filename: string | null | undefined): boolean {
+  if (!filename) return false;
+  const basename = filename.split(/[\\/]/).pop() ?? filename;
+  return /\.index\.ya?ml$/i.test(basename);
+}
+
 export function mediaLibraryExtension(filename: string | null | undefined): string {
   if (!filename) return '';
   const basename = filename.split(/[\\/]/).pop() ?? filename;

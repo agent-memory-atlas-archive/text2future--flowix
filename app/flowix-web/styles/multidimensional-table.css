@@ -64,6 +64,11 @@
   opacity: 1;
 }
 
+.multidimensional-table__view-tabs-scroll-area {
+  overflow-y: hidden;
+  overscroll-behavior-y: none;
+}
+
 .multidimensional-table__condition-tab {
   display: inline-flex;
   align-items: center;
@@ -521,7 +526,7 @@ button.multidimensional-table__primary-title--placeholder {
   line-height: 1.1rem;
 }
 
-[data-theme='dark'] .multidimensional-table__option-chip {
+:is([data-theme='dark'], [data-theme='mist']) .multidimensional-table__option-chip {
   --multidimensional-table-option-lightness: 0.76;
   --multidimensional-table-option-text-lightness: 0.82;
 }
@@ -558,6 +563,10 @@ button.multidimensional-table__primary-title--placeholder {
   min-width: 0;
   overflow: hidden;
   background: var(--document-bg);
+}
+
+.table-reference-node__surface--unavailable {
+  background: var(--editor-block-bg);
 }
 
 .multidimensional-table__view-nav-actions {

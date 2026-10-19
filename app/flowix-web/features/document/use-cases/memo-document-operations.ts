@@ -1,6 +1,5 @@
 import { notes } from '@platform/tauri/client';
-import { updateNoteLinksAfterMove } from '@features/memo/services/note-link-rewriter';
-import type { DocumentPathRequest, DocumentWriteOutcome, DocumentWriteRequest, EditableDocumentOperations } from './editable-document-operations';
+import type { DocumentPathRequest, DocumentWriteOutcome, DocumentWriteRequest } from './editable-document-operations';
 
 /** Resolve notebook-relative note addresses from file paths for Markdown CRUD. */
 export const memoDocumentOperations = {
@@ -15,17 +14,4 @@ export const memoDocumentOperations = {
       ? { status: 'saved', ...result }
       : { status: 'refused' };
   },
-  renameTitle: async (request: { path: string; title: string; expectedFilename: string; expectedContent: string }) => {
-    const result = await notes.renameTitle({
-      filePath: request.path,
-      title: request.title,
-      expectedFilename: request.expectedFilename,
-      expectedContent: request.expectedContent,
-    });
-    // Modern results are applied by the shared notebook-change subscription.
-    if (!result.notebookChange && result.path !== request.path) updateNoteLinksAfterMove(request.path, result.path);
-    return result;
-  },
-} satisfies Pick<EditableDocumentOperations, 'read' | 'write'> & {
-  renameTitle: (request: { path: string; title: string; expectedFilename: string; expectedContent: string }) => ReturnType<typeof notes.renameTitle>;
 };

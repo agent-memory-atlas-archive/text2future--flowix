@@ -22,14 +22,14 @@ import {
 import { ChevronRight, Loader2, MoreHorizontal } from 'lucide-react';
 
 import { toast } from '@/lib/toast';
-import { cn, displayTitleFromFilename, isMediaLibraryFilename, isTableDocumentFilename } from '@/lib/utils';
+import { cn, displayTitleFromFilename, isCollectionIndexFilename, isMediaLibraryFilename, isTableDocumentFilename } from '@/lib/utils';
 import { canonicalDirectoryPath, canonicalPath, joinNotebookMemoPath } from '@/lib/path';
 import { useI18n } from '@/lib/i18n';
 import { MemoCardActions } from '@features/memo/components/memo-card-actions';
 import { NotebookCreateContextMenuItems } from '@features/memo/components/notebook-create-context-menu';
 import { NotebookCopyContextMenu } from '@features/memo/components/notebook-copy-context-menu';
 import { noteRepository } from '@features/memo/services/note-repository';
-import { NOTE_COLOR_HEX, useNoteStore } from '@features/memo/store/note-store';
+import { NOTE_COLOR_HEX, noteIndexFor, noteLookupKey, useNoteStore } from '@features/memo/store/note-store';
 import type { NoteColor, NoteListItem } from '@/types/note-item';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, useContextMenuContext } from '@shared/ui/context-menu';
 import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
@@ -201,14 +201,15 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
     || (isTableDocumentFilename(item.name) && !isMediaLibraryFilename(item.name)));
   const isMediaLibrary = !isFolder && (Boolean(mediaLibraryViewVisibility)
     || (isMediaLibraryFilename(item.name) && !isTableDocumentFilename(item.name)));
-  const isExtensionlessDocument = isNote || isTableDocument || isMediaLibrary;
+  const isCollectionIndex = !isFolder && isCollectionIndexFilename(item.name);
+  const isExtensionlessDocument = isNote || isTableDocument || isMediaLibrary || isCollectionIndex;
   const [pathNote, setPathNote] = useState<NoteListItem | null>(null);
   const storeNote = useNoteStore((state) => {
     const notebook = state.notebooks.find((candidate) => item.fullPath.toLowerCase().startsWith(`${candidate.path.replace(/[\\/]+$/, '').toLowerCase()}\\`)
       || item.fullPath.toLowerCase().startsWith(`${candidate.path.replace(/[\\/]+$/, '').toLowerCase()}/`));
     if (!notebook) return null;
     const relativePath = item.fullPath.slice(notebook.path.replace(/[\\/]+$/, '').length + 1).replace(/\\/g, '/');
-    return state.notes.find((candidate) => candidate.notebookId === notebook.id && candidate.relativePath === relativePath) ?? null;
+    return noteIndexFor(state.notes).get(noteLookupKey(notebook.id, relativePath)) ?? null;
   });
   const displayedMemo = storeNote ?? pathNote;
   const displayedIcon = displayedMemo
@@ -433,7 +434,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
             aria-hidden="true"
             className={cn(
               'relative flex h-[18px] w-[18px] shrink-0 items-center justify-center',
-              'text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)]',
+              'text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] [[data-theme="mist"]_&]:text-[var(--foreground)]',
             )}
           >
             {isFolder ? (
@@ -479,7 +480,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
               onKeyDown={(event) => event.stopPropagation()}
               className={cn(
               'relative h-[18px] w-[18px] shrink-0',
-              'text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)]',
+              'text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] [[data-theme="mist"]_&]:text-[var(--foreground)]',
             )}>
               <span
                 className="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0"
@@ -492,7 +493,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
               )} />
             </button>
           ) : (
-            <span className={'relative flex h-[18px] w-[18px] shrink-0 items-center justify-center text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)]'}>
+            <span className={'relative flex h-[18px] w-[18px] shrink-0 items-center justify-center text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] [[data-theme="mist"]_&]:text-[var(--foreground)]'}>
               {noteIcon ? (
                 <img
                   src={noteIcon.src}

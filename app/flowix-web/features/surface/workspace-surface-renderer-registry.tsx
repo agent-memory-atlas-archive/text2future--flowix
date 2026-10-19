@@ -16,6 +16,10 @@ import type {
 } from '@features/workspace/public/surface-api';
 import { useWorkspaceSurfaceRendererLazy, WorkspaceSurfaceErrorBoundary, WorkspaceSurfaceStateView } from './workspace-surface-state-view';
 import { registerStartupSurfaceHostView, useWorkspaceSurfacePresentation } from './workspace-surface-runtime';
+import { CsvTableLoadingSkeleton } from '@shared/ui/csv-table-loading-skeleton';
+import { MultidimensionalTableLoadingSkeleton } from '@shared/ui/multidimensional-table-loading-skeleton';
+import { MediaLibraryLoadingSkeleton } from '@shared/ui/media-library-loading-skeleton';
+import { WorkDocumentsLoadingSkeleton } from '@shared/ui/work-documents-loading-skeleton';
 
 export type { WorkspaceSurfaceRendererData, WorkspaceSurfaceRenderContext } from './workspace-surface-renderer-contract';
 import type { WorkspaceSurfaceRendererData, WorkspaceSurfaceRenderContext } from './workspace-surface-renderer-contract';
@@ -85,6 +89,7 @@ const rendererImplementations = {
   'file-video': implementRenderer('file-video', () => import('./workspace-surface-renderers').then((module) => ({ default: module.VideoRenderer }))),
   'file-table': implementRenderer('file-table', () => import('./workspace-surface-renderers').then((module) => ({ default: module.TableRenderer }))),
   'file-media-library': implementRenderer('file-media-library', () => import('./workspace-surface-renderers').then((module) => ({ default: module.MediaLibraryRenderer }))),
+  'file-work-documents': implementRenderer('file-work-documents', () => import('./workspace-surface-renderers').then((module) => ({ default: module.WorkDocumentsCollectionRenderer }))),
   'file-html': implementRenderer('file-html', () => import('./workspace-surface-renderers').then((module) => ({ default: module.HtmlRenderer }))),
   'file-docx': implementRenderer('file-docx', () => import('./workspace-surface-renderers').then((module) => ({ default: module.DocxRenderer }))),
   'file-unavailable': implementRenderer('file-unavailable', () => import('./workspace-surface-renderers').then((module) => ({ default: module.UnavailableRenderer }))),
@@ -130,9 +135,31 @@ export function getWorkspaceSurfaceRendererDefinition(surface: WorkspaceSurfaceR
   const props = surface.props;
   const fileKind = props.collectionType === 'table' ? 'table'
     : props.collectionType === 'media_library' ? 'media-library'
+    : props.collectionType === 'work_documents' ? 'work-documents'
     : resolveWorkspaceFileSurfaceKind(props.activeFilePath!);
   const contentKind = `file-${fileKind}` as const;
   return { ...definition, appearance: workspaceSurfaceAppearance(contentKind), capabilities: workspaceSurfaceCapabilities(contentKind) };
+}
+
+type InitialSurfaceSkeleton = 'csv' | 'table' | 'media-library' | 'work-documents';
+
+function initialSurfaceSkeleton(surface: WorkspaceSurfaceRendererData): InitialSurfaceSkeleton | null {
+  if (surface.kind === 'file-csv') return 'csv';
+  if (surface.kind === 'file-table') return 'table';
+  if (surface.kind === 'file-media-library') return 'media-library';
+  if (surface.kind === 'file-work-documents') return 'work-documents';
+  if (surface.kind === 'collection') return surface.viewMode === 'work-documents' ? 'work-documents' : null;
+  if (surface.kind !== 'file-browser' || !surface.props.activeFilePath) return null;
+  const fileKind = surface.props.collectionType === 'table' ? 'table'
+    : surface.props.collectionType === 'media_library' ? 'media-library'
+    : surface.props.collectionType === 'work_documents' ? 'work-documents'
+    : resolveWorkspaceFileSurfaceKind(surface.props.activeFilePath);
+  return fileKind === 'csv' || fileKind === 'table' || fileKind === 'media-library' || fileKind === 'work-documents'
+    ? fileKind : null;
+}
+
+export function workspaceSurfaceRetainsInitialContent(surface: WorkspaceSurfaceRendererData): boolean {
+  return initialSurfaceSkeleton(surface) !== null;
 }
 
 export function WorkspaceSurfaceRendererView({
@@ -149,6 +176,7 @@ export function WorkspaceSurfaceRendererView({
   useEffect(() => registerStartupSurfaceHostView(context.host, context.viewId), [context.host, context.viewId]);
   const appearance = runtime.appearance ?? definition.appearance;
   const resolvedState = runtime.state ?? state;
+  const loadingOwner = context.host === 'main-third' ? 'host' : 'surface';
   const contentIdentity = surface.kind === 'file-browser'
     ? surface.props.fileIdentity?.displayId ?? surface.props.activeFilePath ?? 'folder'
     : 'fileIdentity' in surface ? surface.fileIdentity.displayId : '';
@@ -158,13 +186,23 @@ export function WorkspaceSurfaceRendererView({
   const backgroundClass = appearance.contentBackground === 'document'
     ? 'bg-[var(--document-bg)]'
     : 'bg-[var(--agent-bg,var(--document-bg))]';
+  const initialSkeleton = initialSurfaceSkeleton(surface);
+  const suspenseFallback = initialSkeleton === 'csv'
+    ? <CsvTableLoadingSkeleton />
+    : initialSkeleton === 'table'
+      ? <MultidimensionalTableLoadingSkeleton />
+      : initialSkeleton === 'media-library'
+        ? <MediaLibraryLoadingSkeleton />
+        : initialSkeleton === 'work-documents'
+          ? <WorkDocumentsLoadingSkeleton />
+    : loadingOwner === 'host' ? null : <WorkspaceSurfaceStateView
+      appearance={appearance}
+      state={{ status: 'loading', loadingMode: 'blocking', retainContent: false }}
+    />;
   return <div data-workspace-surface={surface.kind} data-surface-capabilities={(runtime.capabilities ?? definition.capabilities).join(' ')} className={`flex h-full min-h-0 w-full flex-col ${backgroundClass}`}>
-    <WorkspaceSurfaceErrorBoundary key={`${context.viewId}:${surface.kind}:${contentIdentity}`} appearance={appearance}>
-      <WorkspaceSurfaceStateView state={resolvedState} appearance={appearance} keepContentMounted>
-        <Suspense fallback={<WorkspaceSurfaceStateView
-          appearance={appearance}
-          state={{ status: 'loading', phase: 'renderer', message: { key: 'memo.navigation.loading' }, retainContent: false }}
-        />}>
+    <WorkspaceSurfaceErrorBoundary key={`${context.viewId}:${surface.kind}:${contentIdentity}`} appearance={appearance} reportPresentation={context.reportPresentation} onRendererError={context.onRendererError}>
+      <WorkspaceSurfaceStateView state={resolvedState} appearance={appearance} keepContentMounted loadingOwner={loadingOwner}>
+        <Suspense fallback={suspenseFallback}>
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">{definition.render(surface, context)}</div>
         </Suspense>
       </WorkspaceSurfaceStateView>

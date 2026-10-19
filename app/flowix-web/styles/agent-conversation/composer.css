@@ -333,11 +333,24 @@
 }
 
 .agent-conversation-surface .agent-composer__model-value {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+  line-height: 1.6;
+}
+
+.agent-conversation-surface .agent-composer__model-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 1.6;
+}
+
+.agent-conversation-surface .agent-composer__model-effort {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  font-weight: 400;
 }
 
 .agent-conversation-surface .agent-composer__mode-value {

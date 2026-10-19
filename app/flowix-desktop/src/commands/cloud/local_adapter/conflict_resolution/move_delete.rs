@@ -68,7 +68,7 @@ pub(crate) fn resolve_v2_move_conflict(
         crate::watcher::runtime::mark_self_write_missing_for(app, &target);
         if attachment {
             memo_file
-                .refresh_media_resource_path(&movement.notebook_id, &movement.to_path)
+                .refresh_indexed_resource_path(&movement.notebook_id, &movement.to_path)
                 .map_err(sync_error)?;
         } else {
             memo_file

@@ -161,15 +161,16 @@ impl Default for ProductUpdatesConfig {
 }
 
 /// Serde enum for persisted themes. Missing or invalid preference files fall
-/// back to `PreferenceFile::default()`, whose default theme is Rock.
+/// back to `PreferenceFile::default()`, whose default theme is Rock. Mist
+/// remains a separate theme so it can opt into native backdrop styling.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
     System,
     Light,
     Dark,
+    Mist,
     #[default]
-    #[serde(alias = "mist")]
     Rock,
     /// 暖米纸面 + 珊瑚橙焦�?(主色 #FB6A42), �?rock 占据同一"克制�?
     /// �?+ 单色�?槽位但走暖色�?���?前�? css/theme/ember.css 提供色板�?

@@ -15,7 +15,7 @@ export type ContentIdentity =
   | { kind: 'media'; path: string }
   | { kind: 'external'; path: string }
   | { kind: 'file-browser'; folderPath: string }
-  | { kind: 'folder-collection'; notebookId: string; folderPath: string }
+  | { kind: 'folder-collection'; notebookId: string; folderPath: string; viewMode?: 'work-documents' }
   | { kind: 'web'; url: string }
   | { kind: 'agent-conversation'; instanceId: string };
 
@@ -38,7 +38,7 @@ export function contentIdentityKey(
     }
     case 'folder-collection': {
       const folderPath = identity.folderPath.trim();
-      return folderPath ? `folder-collection:${JSON.stringify([identity.notebookId, canonicalPath(folderPath)])}` : null;
+      return folderPath ? `folder-collection:${JSON.stringify([identity.notebookId, canonicalPath(folderPath), identity.viewMode ?? 'chooser'])}` : null;
     }
     case 'web': {
       const url = canonicalUrl(identity.url);

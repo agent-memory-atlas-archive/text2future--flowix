@@ -70,11 +70,6 @@ pub struct Memo {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TodoItem {
-    /// Stable identity within a memo.  It is deliberately part of the memo
-    /// projection so metadata does not have to use the mutable task text as
-    /// its key.
-    #[serde(default)]
-    pub id: String,
     pub content: String,
     pub status: String,
 }

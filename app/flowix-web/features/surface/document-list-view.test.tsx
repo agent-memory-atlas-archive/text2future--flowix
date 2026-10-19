@@ -47,8 +47,15 @@ describe('DocumentListView folder loading', () => {
     probe.read.mockReset();
     probe.mediaRead.mockReset();
     probe.listeners.clear();
-    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
     vi.stubGlobal('IntersectionObserver', class { observe() {} disconnect() {} unobserve() {} });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      () => new DOMRect(0, 0, 600, 600),
+    );
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(600);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600);
     scrollToDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo');
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: () => {} });
     host = document.createElement('div');
@@ -61,6 +68,7 @@ describe('DocumentListView folder loading', () => {
     host.remove();
     if (scrollToDescriptor) Object.defineProperty(HTMLElement.prototype, 'scrollTo', scrollToDescriptor);
     else Reflect.deleteProperty(HTMLElement.prototype, 'scrollTo');
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -184,5 +192,36 @@ describe('DocumentListView folder loading', () => {
     await act(async () => root.render(<DocumentListView listContext={scopedSurface} mediaLibrary libraryActionsDisabled />));
     expect(probe.mediaRead).toHaveBeenCalledTimes(1);
     expect(host.querySelector('[title="photo.png"]')).not.toBeNull();
+  });
+
+  it('mounts only nearby cards for a large media library', async () => {
+    probe.mediaRead.mockResolvedValue({
+      ...mediaPage('large'),
+      resources: Array.from({ length: 1000 }, (_, index) => ({
+        id: `photo-${index}`,
+        notebookId: 'notes',
+        relativePath: `large/photo-${index}.png`,
+        kind: 'image' as const,
+        sizeBytes: 10,
+        modifiedMs: index,
+        fingerprint: null,
+        properties: {},
+        propertiesRevision: 0,
+        createdAt: index,
+        updatedAt: index,
+      })),
+    });
+    const scopedSurface: DocumentListViewContext = {
+      ...listContext,
+      displayId: 'large-library',
+      filters: { resourceKinds: ['image'] },
+      mediaScope: { relativePath: 'large', depth: 'descendants' },
+    };
+
+    await act(async () => root.render(<DocumentListView listContext={scopedSurface} mediaLibrary />));
+
+    const mountedCards = host.querySelectorAll('[title$=".png"]');
+    expect(mountedCards.length).toBeGreaterThan(0);
+    expect(mountedCards.length).toBeLessThan(100);
   });
 });

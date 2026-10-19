@@ -33,8 +33,8 @@ impl FileRevision {
         Some(Self::from_bytes(&bytes))
     }
 
-    /// Media events use a stat revision so observing a large video never
-    /// reads its full contents on the watcher worker.
+    /// Indexed resources use a stat revision so observing a large file never
+    /// reads its contents on the watcher worker.
     pub fn read_metadata(path: &std::path::Path) -> Option<Self> {
         let metadata = std::fs::metadata(path).ok()?;
         let modified = metadata.modified().ok()?

@@ -10,7 +10,7 @@ export type WorkspaceSurfaceCapability =
 
 export type WorkspaceFileSurfaceKind =
   | 'markdown' | 'code' | 'csv' | 'image' | 'video' | 'table'
-  | 'media-library' | 'html' | 'docx' | 'unavailable';
+  | 'media-library' | 'work-documents' | 'html' | 'docx' | 'unavailable';
 
 /** Canonical surface kinds shared by the Work and Browser hosts. */
 export type WorkspaceSurfaceKind =
@@ -19,7 +19,7 @@ export type WorkspaceSurfaceKind =
   | 'plugin-workbench' | 'collection';
 
 
-/** Appearance dimensions are independent: header styling never determines loading styling. */
+/** Appearance dimensions are independent: header styling never determines state or loading presentation. */
 export type SurfaceHeaderStyle = 'document' | 'agent' | 'media';
 export type SurfaceBackground = 'document' | 'agent' | 'media';
 export interface SurfaceAppearance {
@@ -48,8 +48,10 @@ export interface SurfaceNotice {
   actions?: readonly SurfaceAction[];
 }
 export type SurfaceEmptyReason = 'no-target' | 'stale-context' | 'invalid-target' | 'invalid-artifact' | 'no-content';
+/** `blocking` shows the surface loader; `background` keeps the renderer mounted and delegates progress to it. */
 export type SurfaceState =
-  | { status: 'loading'; phase: 'navigation' | 'renderer' | 'content'; message?: SurfaceMessage; retainContent: boolean }
+  | { status: 'loading'; loadingMode: 'blocking'; retainContent: boolean }
+  | { status: 'loading'; loadingMode: 'background'; retainContent: true }
   | { status: 'empty'; reason: SurfaceEmptyReason; message: SurfaceMessage; actions?: readonly SurfaceAction[] }
   | { status: 'ready'; notices?: readonly SurfaceNotice[] }
   | { status: 'unavailable'; reason: 'missing' | 'forbidden' | 'unsupported' | 'stale-context'; message: SurfaceMessage; actions?: readonly SurfaceAction[] }

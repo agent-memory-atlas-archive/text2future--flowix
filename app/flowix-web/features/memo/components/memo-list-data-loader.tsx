@@ -54,12 +54,13 @@ export function MemoListDataLoader({
   onLoadStart,
   onLoadSuccess,
 }: MemoListDataLoaderProps) {
-  const startupQuerySkippedRef = useRef<string | null>(null);
-  const inFlightRequestRef = useRef<{
+  // One lifecycle record owns deduplication and completion for the rendered
+  // query revision. Data response ordering belongs to the store session.
+  const requestRef = useRef<{
     fingerprint: string;
-    promise: Promise<boolean>;
+    promise?: Promise<boolean>;
+    applied: boolean;
   } | null>(null);
-  const completedRequestFingerprintRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,10 +102,8 @@ export function MemoListDataLoader({
         initialMemoQueryKey === queryKey
         && memoListQueryKey === queryKey
         && memoListRefreshTrigger === 0
-        && startupQuerySkippedRef.current !== queryKey
       ) {
-        startupQuerySkippedRef.current = queryKey;
-        completedRequestFingerprintRef.current = fingerprint;
+        requestRef.current = { fingerprint, applied: true };
         setLoadedMemoListQueryKey(queryKey);
         setIsMemoListLoading(false);
         onLoadSuccess?.(queryKey);
@@ -113,18 +112,19 @@ export function MemoListDataLoader({
       // A completed list request updates memoListQueryKey, which is also an
       // effect dependency. Remember that query revision so this state update
       // cannot immediately issue the same request again.
-      if (completedRequestFingerprintRef.current === fingerprint) {
+      if (requestRef.current?.fingerprint === fingerprint && requestRef.current.applied) {
         setLoadedMemoListQueryKey(queryKey);
         setIsMemoListLoading(false);
         return;
       }
       setIsMemoListLoading(true);
-      let request = inFlightRequestRef.current;
+      let request = requestRef.current;
       // Effect re-entry for the exact same query revision shares its request;
       // a newer invalidation has a different fingerprint and fetches again.
       if (!request || request.fingerprint !== fingerprint) {
         request = {
           fingerprint,
+          applied: false,
           promise: loadNotes({
             notebookId: selectedNotebookId,
             filter: activeFilter,
@@ -133,7 +133,7 @@ export function MemoListDataLoader({
             source: 'memo-list-loader',
           }),
         };
-        inFlightRequestRef.current = request;
+        requestRef.current = request;
       }
       try {
         const applied = await request.promise;
@@ -143,12 +143,12 @@ export function MemoListDataLoader({
           // superseded. Accept only that exact applied query; otherwise the
           // rerendered current query owns the next readiness report.
           if (memoListQueryKey === queryKey) {
-            completedRequestFingerprintRef.current = fingerprint;
+            request.applied = true;
             setLoadedMemoListQueryKey(queryKey);
           }
           return;
         }
-        completedRequestFingerprintRef.current = fingerprint;
+        request.applied = true;
         setLoadedMemoListQueryKey(queryKey);
         onLoadSuccess?.(queryKey);
       } catch (error) {
@@ -156,8 +156,8 @@ export function MemoListDataLoader({
           onLoadError(error);
         }
       } finally {
-        if (inFlightRequestRef.current === request) {
-          inFlightRequestRef.current = null;
+        if (!cancelled && requestRef.current === request && !request.applied) {
+          requestRef.current = null;
         }
         if (!cancelled) {
           setIsMemoListLoading(false);

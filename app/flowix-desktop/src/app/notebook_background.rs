@@ -331,9 +331,14 @@ impl NotebookBackground {
             if media {
                 let memo = MemoFile::new(config.clone());
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    memo.reconcile_media_resources_background(&id, &keep_running)
+                    // Resource catalogs can outlive the app version that
+                    // introduced new indexed file kinds. Refresh their schema
+                    // before scanning so existing notebooks remain usable
+                    // when a new version-initialization pass is not pending.
+                    memo.initialize_resource_catalog_schema(&id)?;
+                    memo.reconcile_resources_background_with_changes(&id, &keep_running)
                 }))
-                .unwrap_or_else(|_| Err(std::io::Error::other("media maintenance panicked")));
+                .unwrap_or_else(|_| Err(std::io::Error::other("resource catalog maintenance panicked")));
                 let mut queue = self.queue.lock().unwrap_or_else(|p| p.into_inner());
                 queue.active = None;
                 queue.active_media = false;
@@ -341,14 +346,17 @@ impl NotebookBackground {
                     return;
                 }
                 let status = match result {
-                    Ok(_) => {
+                    Ok((_indexed, changed_kinds)) => {
                         let status = queue.update_media_status(&id, "ready", None);
                         drop(queue);
-                        let _ = app.emit(
-                            "file-management-changed",
-                            serde_json::json!({ "notebookId": id,
-                            "notebookPath": memo.get_notebook_config_by_id(&id).map(|n| n.path) }),
-                        );
+                        if !changed_kinds.is_empty() {
+                            let _ = app.emit(
+                                "file-management-changed",
+                                serde_json::json!({ "notebookId": id,
+                                "notebookPath": memo.get_notebook_config_by_id(&id).map(|n| n.path),
+                                "resourceKinds": changed_kinds }),
+                            );
+                        }
                         let _ = app.emit(MEDIA_EVENT, status.clone());
                         continue;
                     }
@@ -356,7 +364,7 @@ impl NotebookBackground {
                         queue.enqueue_media(id.clone(), false)
                     }
                     Err(error) => {
-                        tracing::warn!(notebook = %id, %error, "background media maintenance unavailable");
+                        tracing::warn!(notebook = %id, %error, "background resource catalog maintenance unavailable");
                         queue.update_media_status(&id, "failed", Some(error.to_string()))
                     }
                 };

@@ -137,6 +137,8 @@ export const useDocumentStore = create<DocumentStore>()(
         ) {
           return state;
         }
+        if (state.currentDocumentPath === canonicalNewPath
+          && state.activeExternalSession.fileIdentity.path === canonicalNewPath) return state;
         return {
           currentDocumentPath: canonicalNewPath,
           activeExternalSession: {

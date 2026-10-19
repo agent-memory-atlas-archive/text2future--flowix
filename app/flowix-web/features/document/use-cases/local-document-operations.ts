@@ -4,11 +4,12 @@ import { externalDocuments } from '@platform/tauri/client';
 import { files } from '@platform/tauri/client/desktop';
 import { updateNoteLinksAfterMove } from '@features/memo/services/note-link-rewriter';
 import { beginExternalDocumentRename, isExternalDocumentRenameInProgress } from '@features/document/store/external-document-operation';
+import { beginNotebookPathRename } from '@platform/tauri/notebook-change-events';
 
 import type { EditableDocumentOperations } from './editable-document-operations';
 
 /** Persistence boundary for Markdown and other editable local files. */
-export const localDocumentOperations: EditableDocumentOperations = {
+export const localDocumentOperations: Omit<EditableDocumentOperations, 'rename'> = {
   read: ({ path, scopePath }) => externalDocuments.read(path, scopePath),
   write: async ({ path, content, expectedContent, scopePath }) => {
     const result = await externalDocuments.write({
@@ -21,20 +22,6 @@ export const localDocumentOperations: EditableDocumentOperations = {
       ? { status: 'saved', path: canonicalPath(result.path), content: result.content }
       : result;
   },
-  rename: async ({ path, name, scopePath, notebookId, collectionId }) => {
-    if (!scopePath) throw new Error('A file scope is required to rename this document');
-    if (/\.(?:(?:table|lib)\.ya?ml|index\.yaml)$/i.test(path)) {
-      const title = name.replace(/\.(?:(?:table|lib)\.ya?ml|index\.yaml)$/i, '');
-      const result = await renameCollectionAtPath(path, scopePath, title, notebookId, collectionId);
-      if (result.errorCode) throw new Error(`集合已更新，但操作尚未完成：${result.errorCode}`);
-      return { path: result.filePath };
-    }
-    const renamedPath = canonicalPath(await files.rename(path, name, scopePath));
-    if (/\.(?:md|markdown)$/i.test(path) && renamedPath !== canonicalPath(path)) {
-      updateNoteLinksAfterMove(path, renamedPath);
-    }
-    return { path: renamedPath };
-  },
   delete: async ({ path, scopePath }) => {
     const deleted = await files.delete(path, scopePath ?? undefined);
     if (!deleted) throw new Error('delete_file returned false');
@@ -42,14 +29,35 @@ export const localDocumentOperations: EditableDocumentOperations = {
   },
 };
 
-export interface RenameMarkdownTitleRequest {
+// Only the guarded rename use case below may reach the native mutation.
+const renameLocalPath: EditableDocumentOperations['rename'] = async ({ path, name, scopePath, notebookId, collectionId }) => {
+  if (!scopePath) throw new Error('A file scope is required to rename this document');
+  if (/\.(?:(?:table|lib)\.ya?ml|index\.yaml)$/i.test(path)) {
+    const title = name.replace(/\.(?:(?:table|lib)\.ya?ml|index\.yaml)$/i, '');
+    const result = await renameCollectionAtPath(path, scopePath, title, notebookId, collectionId);
+    if (result.errorCode) throw new Error(`集合已更新，但操作尚未完成：${result.errorCode}`);
+    return { path: result.filePath };
+  }
+  const renamedPath = canonicalPath(await files.rename(path, name, scopePath));
+  if (/\.(?:md|markdown)$/i.test(path) && renamedPath !== canonicalPath(path)) {
+    updateNoteLinksAfterMove(path, renamedPath);
+  }
+  return { path: renamedPath };
+};
+
+export interface RenameLocalDocumentFileRequest {
   path: string;
-  title: string;
+  name: string;
   scopePath: string;
+  /** Explicitly null for files outside a registered notebook. */
+  notebook: { id: string; path: string } | null;
   displayId: string;
+  collectionId?: string;
   expectFollowupWrite?: boolean;
   onPathChanged: (oldPath: string, newPath: string) => void;
 }
+
+export type RenameMarkdownTitleRequest = Omit<RenameLocalDocumentFileRequest, 'name'> & { title: string };
 
 export interface RenameMarkdownTitleResult {
   path: string;
@@ -74,17 +82,23 @@ export function markdownFilenameForTitle(path: string, requestedTitle: string): 
  * open editor buffers and publishing the new path before releasing the rename
  * lock. The backend owns index and table-reference maintenance.
  */
-export async function renameMarkdownTitle({
+export async function renameMarkdownTitle({ title, ...request }: RenameMarkdownTitleRequest): Promise<RenameMarkdownTitleResult | null> {
+  const name = markdownFilenameForTitle(request.path, title);
+  return name ? renameLocalDocumentFile({ ...request, name }) : null;
+}
+
+/** Rename an exact filename with the same session/event protection as a title edit. */
+export async function renameLocalDocumentFile({
   path,
-  title,
+  name: filename,
   scopePath,
+  notebook,
   displayId,
+  collectionId,
   expectFollowupWrite = false,
   onPathChanged,
-}: RenameMarkdownTitleRequest): Promise<RenameMarkdownTitleResult | null> {
+}: RenameLocalDocumentFileRequest): Promise<RenameMarkdownTitleResult> {
   const sourcePath = canonicalPath(path);
-  const filename = markdownFilenameForTitle(sourcePath, title);
-  if (!filename) return null;
   const currentFilename = sourcePath.split(/[\\/]/).pop() ?? '';
   if (filename === currentFilename) {
     return { path: sourcePath, filename, changed: false };
@@ -93,10 +107,23 @@ export async function renameMarkdownTitle({
     throw new Error('此笔记正在重命名，请稍后重试');
   }
 
+  const rootPrefix = notebook ? `${canonicalPath(notebook.path).replace(/\/+$/, '')}/` : null;
+  const relativePath = rootPrefix && sourcePath.startsWith(rootPrefix)
+    ? sourcePath.slice(rootPrefix.length) : null;
+  if (notebook && (!notebook.path || !relativePath)) {
+    throw new Error('Rename source must belong to the supplied notebook');
+  }
+
   const operation = beginExternalDocumentRename(displayId);
   const cancelExpectedDelete = operation.expectSourceDelete(sourcePath);
+  let finishNotebookRename: ((succeeded: boolean) => void) | undefined;
+  let renameConfirmed = false;
   try {
-    const renamed = await localDocumentOperations.rename({ path: sourcePath, name: filename, scopePath });
+    if (notebook && relativePath) {
+      finishNotebookRename = beginNotebookPathRename(notebook.id, relativePath);
+    }
+    const renamed = await renameLocalPath({ path: sourcePath, name: filename, scopePath, notebookId: notebook?.id, collectionId });
+    renameConfirmed = true;
     if (expectFollowupWrite) operation.expectFollowupWrite(renamed.path);
     onPathChanged(sourcePath, renamed.path);
     return {
@@ -105,9 +132,11 @@ export async function renameMarkdownTitle({
       changed: true,
     };
   } catch (error) {
-    cancelExpectedDelete();
+    // A projection failure cannot undo the already confirmed filesystem move.
+    if (!renameConfirmed) cancelExpectedDelete();
     throw error;
   } finally {
+    finishNotebookRename?.(renameConfirmed);
     operation.finish();
   }
 }

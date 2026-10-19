@@ -213,6 +213,7 @@ export async function flushDocument(
       queueKey,
       path: canonicalPath(path),
       revision,
+      force: callbacks?.force,
       scopePath: callbacks?.scopePath ?? null,
       readExpected: () => buf.lastSavedContent,
       latest: () => ({ content: buf.content, revision: buf.capturedRevision }),

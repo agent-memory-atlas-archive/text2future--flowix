@@ -1,3 +1,5 @@
+import { applyNoteListChanges, type NoteListChange } from './note-list-projection';
+import { NoteListSession } from './note-list-session';
 import { useNotebookBackgroundStore } from '@features/memo/store/notebook-background-store';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
@@ -14,7 +16,7 @@ import {
 import { normalizePluginId } from '@features/plugin/plugin-note';
 
 import type { NoteColor, NoteListItem } from '@/types/note-item';
-import type { CreatedNoteDocument } from '@platform/tauri/client';
+import type { CreatedNoteDocument, NoteEntry } from '@platform/tauri/client';
 export { NOTE_COLORS } from '@/types/note-item';
 
 // Clear the retired Memo list UI state when this module loads; Note state uses a new key.
@@ -51,6 +53,31 @@ interface MemoListPageQuery {
 }
 
 const MEMO_LIST_PAGE_SIZE = 50;
+
+/**
+ * O(1) lookup for "the note behind this tree row". Rows used to call
+ * `state.notes.find(...)` inside their store selector, which made every note
+ * update cost `visible rows × notes` string comparisons. The index is keyed by
+ * the array identity, so it is rebuilt only when the list actually changes.
+ */
+const noteIndexCache = new WeakMap<readonly NoteListItem[], Map<string, NoteListItem>>();
+
+export function noteLookupKey(notebookId: string, relativePath: string): string {
+  return `${notebookId}\u0000${relativePath}`;
+}
+
+export function noteIndexFor(notes: readonly NoteListItem[]): Map<string, NoteListItem> {
+  let index = noteIndexCache.get(notes);
+  if (!index) {
+    index = new Map();
+    for (const note of notes) {
+      index.set(noteLookupKey(note.notebookId, note.relativePath), note);
+    }
+    noteIndexCache.set(notes, index);
+  }
+  return index;
+}
+
 const memoListRequestLogger = createLogger('memo-list-query');
 const recentMemoListRequestCounts = new Map<string, { startedAt: number; count: number }>();
 
@@ -131,26 +158,10 @@ export interface Notebook {
 
 /** 最近在资料文件树中打开的文档。只持久化路径，不缓存文档内容。 */
 // 把前端的 `ExtendedFilterType` 转成后端识别的 `FilterType`。
-// 'color' 是前端专用, 在后端没有意义 → 退化成 'all' 拉全量, 由前端 store
-// 在 useMemo 里按 `colorFilter` 二次过滤。其他值原样下发。
+// 颜色由后端独立的 color 参数筛选；自定义条件暂时在每个原始页上筛选。
+// 两者使用 all 查询入口，其余 filter 原样下发。
 function toBackendFilter(filter: ExtendedFilterType): FilterType {
   return filter === 'color' || filter === 'custom' ? 'all' : filter;
-}
-
-function compareNotes(sort: SortType) {
-  return (a: NoteListItem, b: NoteListItem) => {
-    if (a.favorited !== b.favorited) return Number(b.favorited) - Number(a.favorited);
-    if (sort === 'filenameAsc' || sort === 'filenameDesc') {
-      const order = a.filename.toLowerCase().localeCompare(b.filename.toLowerCase())
-        || a.filename.localeCompare(b.filename)
-        || a.relativePath.localeCompare(b.relativePath);
-      return sort === 'filenameDesc' ? -order : order;
-    }
-    const dateOrder = sort === 'updatedAt'
-      ? b.updatedAt - a.updatedAt
-      : b.createdAt - a.createdAt;
-    return dateOrder || b.relativePath.localeCompare(a.relativePath);
-  };
 }
 
 export interface NoteLibraryStore {
@@ -213,16 +224,22 @@ export interface NoteLibraryStore {
   setActiveSort: (sort: SortType) => void;
   setColorFilter: (color: ColorFilterValue) => void;
   triggerRefresh: () => void;
+  triggerNotebookMetadataRefresh: () => void;
   /** Invalidate only the currently selected memo-list query. */
   triggerMemoListRefresh: () => void;
   // Data loading
   loadNotes: (params?: { notebookId?: string; filter?: ExtendedFilterType; sort?: SortType; tagId?: string; source?: string }) => Promise<boolean>;
   upsertCreatedNote: (created: CreatedNoteDocument) => void;
-  updateMemoListItem: (memo: NoteListItem) => void;
+  /** Resume an unloaded query; preserve an existing browsing window. */
+  handleMemoListInvalidation: (notebookId: string) => void;
+  rebaseNoteListPaths: (notebookId: string, from: string, to: string, directory: boolean) => void;
+  /** Patch loaded cards without changing order or cursor; null removes a row. */
+  applyNoteListChange: (notebookId: string, relativePath: string, entry: NoteEntry | null) => void;
+  applyNoteListBatch: (changes: readonly { notebookId: string; relativePath: string; entry: NoteEntry | null }[]) => void;
   loadMoreMemos: () => Promise<boolean>;
   loadNotebooks: () => Promise<void>;
   createNote: (tag: string | undefined, notebookId: string) => Promise<CreatedNoteDocument>;
-  /** Invalidate the Note list after a memo-shaped IPC event. */
+  /** Invalidate the Note list after create/delete events that change its query result. */
   handleMemoEvent: () => void;
 }
 
@@ -259,7 +276,18 @@ function isSidebarNavigationFilter(
     || filter === 'custom';
 }
 
-let loadMemosRequestSeq = 0;
+const listSession = new NoteListSession<NoteListChange>(
+  (change) => `${change.notebookId}\u0000${change.kind}\u0000${change.relativePath}`,
+);
+
+function currentNoteQueryKey(state: NoteLibraryStore): string {
+  return getNoteQueryKey(
+    state.selectedNotebook?.id, state.activeFilter, state.activeSort,
+    state.activeFilter === 'tagged' ? useTagStore.getState().selectedTagId : null,
+    state.colorFilter, state.activePluginId,
+    state.activeFilter === 'custom' ? state.activeCustomFilterId : null,
+  );
+}
 
 function getCustomFilter(notebookId: string, filterId: string | null): CustomFilter | null {
   if (!filterId) return null;
@@ -277,6 +305,47 @@ function mapMemoPage(
     .filter((note) => !customFilter || memoMatchesCustomFilter(note, customFilter));
 }
 
+function matchesMemoListQuery(
+  memo: NoteListItem,
+  query: MemoListPageQuery,
+  customFilter: CustomFilter | null,
+  now = Date.now(),
+): boolean {
+  if (query.pluginId) {
+    return normalizePluginId(memo.properties.flowix_plugin) === query.pluginId;
+  }
+
+  if (query.filter === 'custom') return Boolean(customFilter && memoMatchesCustomFilter(memo, customFilter));
+  if (query.filter === 'color') {
+    if (query.color === 'any') return memo.colors.length > 0;
+    if (query.color === 'none') return memo.colors.length === 0;
+    return Boolean(query.color && memo.colors.includes(query.color));
+  }
+  if (query.filter === 'favorited') return memo.favorited;
+  if (query.filter === 'todos') return memo.todos.length > 0;
+  if (query.filter === 'agents') return memo.agents.length > 0;
+  if (query.filter === 'tagged') {
+    if (!query.tagId) return memo.tags.length > 0;
+    return memo.tags.some((tag) => tag === query.tagId || tag.startsWith(`${query.tagId}/`));
+  }
+  if (query.filter === 'thisWeek' || query.filter === 'thisMonth') {
+    const date = new Date(now);
+    const start = query.filter === 'thisWeek'
+      ? Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - ((date.getUTCDay() + 6) % 7))
+      : Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
+    return memo.createdAt >= start && memo.createdAt <= now;
+  }
+  return true;
+}
+
+function applySessionUpdates(
+  notes: NoteListItem[],
+  query: MemoListPageQuery,
+  customFilter: CustomFilter | null,
+): NoteListItem[] {
+  return applyNoteListChanges(notes, listSession.changes(), note => matchesMemoListQuery(note, query, customFilter));
+}
+
 function mergeMemoListItems(
   existing: readonly NoteListItem[],
   incoming: readonly NoteListItem[],
@@ -292,7 +361,7 @@ function mergeMemoListItems(
 }
 
 function invalidatePendingMemoLoads(): void {
-  loadMemosRequestSeq += 1;
+  listSession.invalidate();
 }
 
 export const useNoteStore = create<NoteLibraryStore>()(
@@ -432,6 +501,7 @@ export const useNoteStore = create<NoteLibraryStore>()(
       }),
       setActiveSort: (sort) => set({ activeSort: sort }),
       setColorFilter: (color) => set({ colorFilter: color }),
+      triggerNotebookMetadataRefresh: () => set(state => ({ refreshTrigger: state.refreshTrigger + 1 })),
       triggerRefresh: () => set((state) => ({
         refreshTrigger: state.refreshTrigger + 1,
         memoListRefreshTrigger: state.memoListRefreshTrigger + 1,
@@ -441,47 +511,54 @@ export const useNoteStore = create<NoteLibraryStore>()(
       })),
 
       loadNotes: async (params) => {
-        const requestSeq = ++loadMemosRequestSeq;
         const state = get();
         const notebookId = params?.notebookId || state.selectedNotebook?.id;
         if (!notebookId) return false;
-        await useCustomFilterStore.getState().loadNotebookFilters(notebookId);
-        if (requestSeq !== loadMemosRequestSeq) return false;
-        const filter = params?.filter || state.activeFilter;
-        const pluginId = state.activePluginId;
-        const customFilterId = filter === 'custom' ? state.activeCustomFilterId : null;
-        const sort = params?.sort || state.activeSort;
-        const tagId = params?.tagId
-          ?? (filter === 'tagged' ? useTagStore.getState().selectedTagId ?? undefined : undefined);
-        const color = filter === 'color' ? state.colorFilter : undefined;
-        const queryKey = getNoteQueryKey(
-          notebookId,
-          filter,
-          sort,
-          tagId ?? null,
-          color ?? state.colorFilter,
-          pluginId,
-          customFilterId,
-        );
-        const customFilter = getCustomFilter(notebookId, customFilterId);
-        const query: MemoListPageQuery & { notebookId: string } = {
-          notebookId,
-          filter,
-          sort,
-          tagId,
-          color,
-          pluginId,
-          customFilterId,
-        };
+        const requestSeq = listSession.beginQuery();
         try {
+          await useCustomFilterStore.getState().loadNotebookFilters(notebookId);
+          if (!listSession.isCurrent(requestSeq)) return false;
+          const filter = params?.filter || state.activeFilter;
+          const pluginId = state.activePluginId;
+          const customFilterId = filter === 'custom' ? state.activeCustomFilterId : null;
+          const sort = params?.sort || state.activeSort;
+          const tagId = params?.tagId
+            ?? (filter === 'tagged' ? useTagStore.getState().selectedTagId ?? undefined : undefined);
+          const color = filter === 'color' ? state.colorFilter : undefined;
+          const queryKey = getNoteQueryKey(
+            notebookId,
+            filter,
+            sort,
+            tagId ?? null,
+            color ?? state.colorFilter,
+            pluginId,
+            customFilterId,
+          );
+          const customFilter = getCustomFilter(notebookId, customFilterId);
+          const query: MemoListPageQuery & { notebookId: string } = {
+            notebookId,
+            filter,
+            sort,
+            tagId,
+            color,
+            pluginId,
+            customFilterId,
+          };
           if (query.pluginId) {
             recordMemoListRequest(queryKey, requestSeq, params?.source ?? 'unspecified');
             const indexed = await noteRepository.listAllByPath(query.notebookId);
-            if (requestSeq !== loadMemosRequestSeq) return false;
+            if (!listSession.isCurrent(requestSeq)) return false;
+            const loadedNotes = indexed
+              .filter((note) => normalizePluginId(note.properties.flowix_plugin) === query.pluginId)
+              .map((note) => toNoteListItem(note, query.notebookId));
+            const notes = applySessionUpdates(
+              loadedNotes,
+              query,
+              customFilter,
+            );
+            listSession.finishQuery(requestSeq);
             set({
-              notes: indexed
-                .filter((note) => normalizePluginId(note.properties.flowix_plugin) === query.pluginId)
-                .map((note) => toNoteListItem(note, query.notebookId)),
+              notes,
               memoListQueryKey: queryKey,
               memoListQuery: query,
               memoListNextCursor: null,
@@ -499,15 +576,21 @@ export const useNoteStore = create<NoteLibraryStore>()(
             color: query.color,
             limit: MEMO_LIST_PAGE_SIZE,
           });
-          if (requestSeq !== loadMemosRequestSeq) return false;
-          const notes = mapMemoPage(response.notes, query.notebookId, customFilter);
+          if (!listSession.isCurrent(requestSeq)) return false;
+          const hasMore = response.hasMore ?? Boolean(response.nextCursor);
+          const notes = applySessionUpdates(
+            mapMemoPage(response.notes, query.notebookId, customFilter),
+            query,
+            customFilter,
+          );
 
+          listSession.finishQuery(requestSeq);
           set({
             notes,
             memoListQueryKey: queryKey,
             memoListQuery: query,
             memoListNextCursor: response.nextCursor ?? null,
-            memoListHasMore: response.hasMore ?? Boolean(response.nextCursor),
+            memoListHasMore: hasMore,
           });
           return true;
         } catch (error) {
@@ -521,7 +604,8 @@ export const useNoteStore = create<NoteLibraryStore>()(
           if (message.includes('NOTE_INDEX_UNAVAILABLE')) return false;
           throw error;
         } finally {
-          if (requestSeq === loadMemosRequestSeq) {
+          listSession.finishQuery(requestSeq);
+          if (listSession.isCurrent(requestSeq)) {
             set({ memoListLoadingMore: false });
           }
         }
@@ -546,44 +630,78 @@ export const useNoteStore = create<NoteLibraryStore>()(
         }
         invalidatePendingMemoLoads();
         set((current) => ({
-          notes: [
-            ...current.notes.filter((item) => (
-              item.notebookId !== created.notebookId || item.relativePath !== note.relativePath
-            )),
-            note,
-          ].sort(compareNotes(current.activeSort)),
+          // Explicit creation reveals the new card at the start of this browsing
+          // session. Subsequent query refreshes restore the backend sort order.
+          notes: [note, ...current.notes.filter((item) => (
+            item.notebookId !== created.notebookId || item.relativePath !== note.relativePath
+          ))],
           memoListLoadingMore: false,
         }));
       },
 
-      updateMemoListItem: (memo) => set((state) => {
-        const index = state.notes.findIndex((item) => (
-          item.notebookId === memo.notebookId && item.relativePath === memo.relativePath
-        ));
-        if (index < 0) return state;
-
-        const query = state.memoListQuery;
-        const noLongerMatchesFavoriteFilter = query?.filter === 'favorited' && !memo.favorited;
-        const noLongerMatchesColorFilter = query?.filter === 'color' && query.color
-          ? query.color === 'none'
-            ? memo.colors.length > 0
-            : query.color !== 'any' && !memo.colors.includes(query.color)
-          : false;
-        const notes = [...state.notes];
-        if (noLongerMatchesFavoriteFilter || noLongerMatchesColorFilter) {
-          notes.splice(index, 1);
-        } else {
-          notes[index] = memo;
-          notes.sort(compareNotes(query?.sort ?? state.activeSort));
+      handleMemoListInvalidation: (notebookId) => {
+        const state = get();
+        if (state.selectedNotebook?.id !== notebookId) return;
+        // No current window exists yet after a cold-index/query transition.
+        // Allow the loader to resume automatically when preparation finishes.
+        if (state.memoListQueryKey !== currentNoteQueryKey(state)) {
+          state.triggerMemoListRefresh();
         }
-        return { notes };
-      }),
+      },
+
+      rebaseNoteListPaths: (notebookId, from, to, directory) => {
+        const state = get();
+        if (state.selectedNotebook?.id !== notebookId) return;
+        const source = from.replace(/\\/g, '/');
+        const destination = to.replace(/\\/g, '/');
+        const change: NoteListChange = {
+          kind: 'move', notebookId, relativePath: source,
+          destination, directory,
+        };
+        listSession.remember(change);
+        const query = state.memoListQuery;
+        const notes = query?.notebookId === notebookId
+          ? applyNoteListChanges(state.notes, [change], () => true)
+          : state.notes;
+        const selected = state.selectedNote;
+        let selectedNote = selected;
+        if (selected?.notebookId === notebookId) {
+          const selectedPath = selected.relativePath.replace(/\\/g, '/');
+          if (selectedPath === source || (directory && selectedPath.startsWith(`${source}/`))) {
+            selectedNote = { ...selected, relativePath: `${destination}${selectedPath.slice(source.length)}` };
+          }
+        }
+        if (notes !== state.notes || selectedNote !== selected) set({ notes, selectedNote });
+      },
+
+      applyNoteListChange: (notebookId, relativePath, entry) => {
+        get().applyNoteListBatch([{ notebookId, relativePath, entry }]);
+      },
+
+      applyNoteListBatch: (entries) => {
+        const state = get();
+        const changes: NoteListChange[] = entries
+          .filter(change => change.notebookId === state.selectedNotebook?.id)
+          .map(({ notebookId, relativePath, entry }) => ({
+            kind: 'entry', notebookId,
+            relativePath: relativePath.replace(/\\/g, '/'),
+            memo: entry ? toNoteListItem(entry, notebookId) : null,
+          }));
+        if (!changes.length) return;
+        for (const change of changes) listSession.remember(change);
+        const query = state.memoListQuery;
+        if (!query?.notebookId || query.notebookId !== state.selectedNotebook?.id) return;
+        const customFilter = getCustomFilter(query.notebookId, query.customFilterId);
+        const notes = applyNoteListChanges(state.notes, changes, note => matchesMemoListQuery(note, query, customFilter));
+        if (notes !== state.notes) set({ notes });
+      },
 
       loadMoreMemos: async () => {
         const state = get();
         const query = state.memoListQuery;
         if (
-          !state.memoListHasMore
+          listSession.loadingQuery
+          || !state.memoListHasMore
           || state.memoListLoadingMore
           || !state.memoListNextCursor
           || !state.memoListQueryKey
@@ -595,20 +713,10 @@ export const useNoteStore = create<NoteLibraryStore>()(
 
         // Do not let a scroll event from the previous query append into a new
         // notebook/filter while its first page is still in flight.
-        const currentQueryKey = getNoteQueryKey(
-              state.selectedNotebook?.id,
-              state.activeFilter,
-              state.activeSort,
-              state.activeFilter === 'tagged'
-                ? useTagStore.getState().selectedTagId
-                : null,
-              state.colorFilter,
-              state.activePluginId,
-              state.activeFilter === 'custom' ? state.activeCustomFilterId : null,
-            );
+        const currentQueryKey = currentNoteQueryKey(state);
         if (currentQueryKey !== state.memoListQueryKey) return false;
 
-        const requestSeq = ++loadMemosRequestSeq;
+        const requestSeq = listSession.nextPage();
         const cursor = state.memoListNextCursor;
         set({ memoListLoadingMore: true });
         try {
@@ -621,18 +729,26 @@ export const useNoteStore = create<NoteLibraryStore>()(
             cursor,
             limit: MEMO_LIST_PAGE_SIZE,
           });
-          if (requestSeq !== loadMemosRequestSeq) return false;
+          if (!listSession.isCurrent(requestSeq)) return false;
 
           const customFilter = getCustomFilter(query.notebookId, query.customFilterId);
-          const notes = mapMemoPage(response.notes, query.notebookId, customFilter);
-          set((current) => ({
-            notes: mergeMemoListItems(current.notes, notes),
+          const hasMore = response.hasMore ?? Boolean(response.nextCursor);
+          const notes = applySessionUpdates(
+            mergeMemoListItems(
+              get().notes,
+              mapMemoPage(response.notes, query.notebookId, customFilter),
+            ),
+            query,
+            customFilter,
+          );
+          set({
+            notes,
             memoListNextCursor: response.nextCursor ?? null,
-            memoListHasMore: response.hasMore ?? Boolean(response.nextCursor),
-          }));
+            memoListHasMore: hasMore,
+          });
           return true;
         } finally {
-          if (requestSeq === loadMemosRequestSeq) {
+          if (listSession.isCurrent(requestSeq)) {
             set({ memoListLoadingMore: false });
           }
         }
@@ -689,13 +805,16 @@ export const useNoteStore = create<NoteLibraryStore>()(
         const createTag = tag ?? (createFilter === 'tagged' ? selectedTagId ?? undefined : undefined);
         const result = await noteRepository.create(createTag, notebookId);
         get().upsertCreatedNote(result);
-        // The shared path-created event refreshes notebook queries in every window.
+        // Other windows preserve their loaded window; this window reveals the created card directly.
         useTagStore.getState().triggerMetadataRefresh();
         return result;
       },
-      // The IPC event is still Memo-shaped for compatibility, but the store
-      // only invalidates and reloads its path-keyed Note projection.
-      handleMemoEvent: () => get().triggerRefresh(),
+      // Legacy collection events preserve loaded cards while metadata refreshes.
+      handleMemoEvent: () => {
+        const state = get();
+        if (state.selectedNotebook) state.handleMemoListInvalidation(state.selectedNotebook.id);
+        state.triggerNotebookMetadataRefresh();
+      },
     }),
     {
       name: STORAGE_KEYS.NOTE,

@@ -40,6 +40,7 @@ function documentHeaderPresentation(
     case 'video-file':
     case 'table-file':
     case 'media-library-file':
+    case 'work-documents-file':
     case 'unavailable-file':
       return { externalFilePath: surface.fileIdentity.path };
     default:

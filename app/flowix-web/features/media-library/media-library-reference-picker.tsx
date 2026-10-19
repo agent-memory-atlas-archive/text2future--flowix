@@ -19,14 +19,14 @@ import {
   type CollectionReferencePickerAnchor,
 } from '@features/collection/reference-picker';
 
-function MediaLibraryReferencePicker({ editor, replaceRange, generation }: {
+function MediaLibraryReferencePicker({ editor, replaceRange, generation, ownerNotebookId }: {
   editor: Editor;
   replaceRange: CollectionReferenceInsertRange;
   generation: number;
+  ownerNotebookId: string | null;
 }) {
-  const notebookItems = useNoteStore((state) => state.notebooks);
-  const selectedNotebook = useNoteStore((state) => state.selectedNotebook);
-  const notebooks = useMemo(() => notebookItems.filter((notebook) => !notebook.missing), [notebookItems]);
+  const ownerNotebook = useNoteStore((state) => state.notebooks.find((notebook) => notebook.id === ownerNotebookId && !notebook.missing));
+  const notebooks = useMemo(() => ownerNotebook ? [ownerNotebook] : [], [ownerNotebook]);
   const [candidates, setCandidates] = useState<CollectionReferenceCandidate[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
@@ -79,12 +79,20 @@ function MediaLibraryReferencePicker({ editor, replaceRange, generation }: {
 
   const select = async (candidate: CollectionReferenceCandidate) => {
     if (openingPath || !current()) return;
+    if (candidate.notebookId !== editor.storage.attachmentLink?.getNotebookId?.()) {
+      toast.warning('只能插入当前笔记本中的媒体库');
+      return;
+    }
     setOpeningPath(candidate.relativePath);
     try {
       const filePath = joinNotebookMemoPath(candidate.notebookPath, candidate.relativePath);
       if (!filePath) throw new Error('媒体库路径无效');
       const source = await externalDocuments.read(filePath, candidate.notebookPath);
       if (!current()) return;
+      if (candidate.notebookId !== editor.storage.attachmentLink?.getNotebookId?.()) {
+        setOpeningPath(null);
+        return;
+      }
       const document = parseMediaLibrary(source);
       if (document.collection.id !== candidate.collectionId) throw new Error('媒体库文件已更新，请重新选择');
       if (editor.isDestroyed || !editor.isEditable) {
@@ -108,8 +116,8 @@ function MediaLibraryReferencePicker({ editor, replaceRange, generation }: {
   const create = async () => {
     const name = query.trim();
     if (!name || creating || !current()) return;
-    if (!selectedNotebook || selectedNotebook.missing) {
-      toast.error('请先选择可用的笔记本');
+    if (!ownerNotebook || ownerNotebook.id !== editor.storage.attachmentLink?.getNotebookId?.()) {
+      toast.error('无法确定当前笔记本');
       return;
     }
     if (editor.isDestroyed || !editor.isEditable) {
@@ -119,16 +127,21 @@ function MediaLibraryReferencePicker({ editor, replaceRange, generation }: {
     }
     setCreating(true);
     try {
-      const preferences = await files.getNotebookViewPreferences(selectedNotebook.path);
-      const { filePath, document } = await createMediaLibraryFile(selectedNotebook.path, preferences.defaultCreateFolder, name);
+      const preferences = await files.getNotebookViewPreferences(ownerNotebook.path);
+      const { filePath, document } = await createMediaLibraryFile(ownerNotebook.path, preferences.defaultCreateFolder, name);
       if (!current()) return;
-      const root = canonicalPath(selectedNotebook.path).replace(/\/+$/, '');
+      if (editor.storage.attachmentLink?.getNotebookId?.() !== ownerNotebook.id) {
+        toast.warning('当前笔记本已切换，请在当前笔记本中重新插入媒体库');
+        setCreating(false);
+        return;
+      }
+      const root = canonicalPath(ownerNotebook.path).replace(/\/+$/, '');
       const canonicalFile = canonicalPath(filePath);
       const relativePath = canonicalFile.startsWith(`${root}/`) ? canonicalFile.slice(root.length + 1) : null;
       if (!relativePath) throw new Error('媒体库路径不在当前笔记本内');
       const inserted = editor.chain().focus().insertContentAt(replaceRange, {
         type: 'mediaLibraryReference',
-        attrs: { notebookId: selectedNotebook.id, relativePath, collectionId: document.collection.id },
+        attrs: { notebookId: ownerNotebook.id, relativePath, collectionId: document.collection.id },
       }).run();
       if (!inserted) throw new Error('无法在当前位置插入媒体库引用');
       closeCollectionReferencePicker(generation);
@@ -172,9 +185,11 @@ function MediaLibraryReferencePicker({ editor, replaceRange, generation }: {
 }
 
 export function openMediaLibraryReferencePicker(editor: Editor, replaceRange: CollectionReferenceInsertRange, anchor: CollectionReferencePickerAnchor) {
+  const ownerNotebookId = editor.storage.attachmentLink?.getNotebookId?.() ?? null;
   openCollectionReferencePicker(editor, replaceRange, anchor, 'media-library', (generation) => <MediaLibraryReferencePicker
     editor={editor}
     replaceRange={replaceRange}
     generation={generation}
+    ownerNotebookId={ownerNotebookId}
   />);
 }

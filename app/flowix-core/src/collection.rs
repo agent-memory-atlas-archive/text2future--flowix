@@ -10,12 +10,15 @@ pub enum CollectionType {
     Table,
     #[serde(rename = "media", alias = "media_library")]
     MediaLibrary,
+    #[serde(rename = "work_documents")]
+    WorkDocuments,
 }
 impl CollectionType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Table => "table",
             Self::MediaLibrary => "media_library",
+            Self::WorkDocuments => "work_documents",
         }
     }
 }
@@ -65,7 +68,7 @@ pub fn display_name_for_path(path: &std::path::Path, placement: CollectionPlacem
     if placement == CollectionPlacement::Folder {
         return filename.into_owned();
     }
-    [".index.yaml", ".index.yml", ".table.yaml", ".table.yml", ".lib.yaml", ".lib.yml"]
+    [".index.yaml", ".index.yml", ".table.yaml", ".table.yml", ".lib.yaml", ".lib.yml", ".workdocs.yaml", ".workdocs.yml"]
         .iter()
         .find_map(|suffix| filename.get(..filename.len().checked_sub(suffix.len())?)
             .filter(|_| filename.to_ascii_lowercase().ends_with(suffix)))
@@ -161,14 +164,19 @@ impl CollectionDocument {
         if self.schema_version == 2 {
             validate_collection_v2(self)?;
         } else {
+            if self.collection.kind == CollectionType::WorkDocuments {
+                return Err("UNSUPPORTED_COLLECTION_VERSION".into());
+            }
             let keys: &[&str] = match self.collection.kind {
                 CollectionType::Table => &["schema_version", "table", "records"],
                 CollectionType::MediaLibrary => &["schema_version", "view", "records"],
+                CollectionType::WorkDocuments => return Err("UNSUPPORTED_COLLECTION_VERSION".into()),
             };
             only_keys(&self.payload, keys)?;
             match self.collection.kind {
                 CollectionType::Table => validate_table(&self.payload)?,
                 CollectionType::MediaLibrary => validate_media_library(&self.payload)?,
+                CollectionType::WorkDocuments => return Err("UNSUPPORTED_COLLECTION_VERSION".into()),
             }
         }
         Ok(())
@@ -240,6 +248,7 @@ impl CollectionDocument {
                     }]}
                 })
             }
+            CollectionType::WorkDocuments => return Err("UNSUPPORTED_COLLECTION_VERSION".into()),
         };
         let normalized = Self {
             format: self.format.clone(),
@@ -519,8 +528,8 @@ fn validate_collection_v2(document: &CollectionDocument) -> Result<(), String> {
             }
         }
     }
-    if document.collection.kind == CollectionType::MediaLibrary && !fields.is_empty() {
-        return Err("MEDIA_COLLECTION_FIELDS_UNSUPPORTED".into());
+    if matches!(document.collection.kind, CollectionType::MediaLibrary | CollectionType::WorkDocuments) && !fields.is_empty() {
+        return Err("COLLECTION_FIELDS_UNSUPPORTED".into());
     }
     let records = dataset.get("records").ok_or("MISSING_COLLECTION_RECORDS")?;
     only_keys(records, &["include", "exclude"])?;
@@ -576,6 +585,7 @@ fn validate_collection_v2(document: &CollectionDocument) -> Result<(), String> {
                         return Err("DUPLICATE_MEDIA_RECORD".into());
                     }
                 }
+                CollectionType::WorkDocuments => return Err("WORK_DOCUMENTS_RECORDS_UNSUPPORTED".into()),
             }
         }
     }
@@ -598,6 +608,7 @@ fn validate_collection_v2(document: &CollectionDocument) -> Result<(), String> {
         let layout_valid = match document.collection.kind {
             CollectionType::Table => matches!(layout, "table" | "kanban" | "calendar" | "gallery"),
             CollectionType::MediaLibrary => layout == "waterfall",
+            CollectionType::WorkDocuments => layout == "gallery",
         };
         if view["name"]
             .as_str()
@@ -739,6 +750,16 @@ fn validate_rule_filter_depth(filter: &Value, collection_type: CollectionType, d
                                     && values
                                         .iter()
                                         .all(|value| matches!(value.as_str(), Some("image" | "video")))
+                            })),
+                    _ => false,
+                },
+                CollectionType::WorkDocuments => match field {
+                    "file_name" | "path" => rule["op"] == "contains" && rule["value"].is_string(),
+                    "kind" => (rule["op"] == "eq"
+                        && matches!(rule["value"].as_str(), Some("document" | "spreadsheet" | "presentation" | "web" | "archive" | "database")))
+                        || (rule["op"] == "in"
+                            && rule["value"].as_array().is_some_and(|values| {
+                                !values.is_empty() && values.iter().all(|value| matches!(value.as_str(), Some("document" | "spreadsheet" | "presentation" | "web" | "archive" | "database")))
                             })),
                     _ => false,
                 },

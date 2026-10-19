@@ -5,7 +5,6 @@ import { Popover, PopoverContent, PopoverTrigger } from '@shared/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shared/ui/select';
 import { useI18n } from '@/lib/i18n';
 import { ResourceFolderIcon } from '@features/surface/resource-file-icon';
-import type { MediaLibraryKind } from './model';
 
 export function MediaLibraryFilterPanel({
   fileName,
@@ -22,6 +21,7 @@ export function MediaLibraryFilterPanel({
   autoFocus = false,
   showLocationMenu = true,
   locationOnly = false,
+  kindOptions,
   onFileNameChange,
   onFileTypeChange,
   onPathChange,
@@ -31,7 +31,7 @@ export function MediaLibraryFilterPanel({
   onApply,
 }: {
   fileName: string;
-  fileType: 'any' | MediaLibraryKind;
+  fileType: string;
   path: string;
   pathIsAll?: boolean;
   /** Set for folder collections whose location cannot be changed. */
@@ -46,15 +46,21 @@ export function MediaLibraryFilterPanel({
   showLocationMenu?: boolean;
   locationOnly?: boolean;
   onFileNameChange: (value: string) => void;
-  onFileTypeChange: (value: 'any' | MediaLibraryKind) => void;
+  onFileTypeChange: (value: string) => void;
   onPathChange: (value: string) => void;
   onPathSelected?: (value: string | null) => Promise<boolean | void> | boolean | void;
   onFolderPickerOpenChange: (open: boolean) => void;
   onReset: () => void;
   onApply: () => void;
+  kindOptions?: Array<{ value: string; label: string }>;
 }) {
   const { t } = useI18n();
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
+  const resolvedKindOptions = kindOptions ?? [
+    { value: 'any', label: t('mediaLibrary.all') },
+    { value: 'image', label: t('mediaLibrary.images') },
+    { value: 'video', label: t('mediaLibrary.videos') },
+  ];
   useEffect(() => {
     if (fixedFolderPath !== undefined && folderPickerOpen) onFolderPickerOpenChange(false);
   }, [fixedFolderPath, folderPickerOpen, onFolderPickerOpenChange]);
@@ -173,14 +179,12 @@ export function MediaLibraryFilterPanel({
       </label>
       <div className="grid min-w-0 grid-cols-[64px_minmax(0,1fr)] items-center gap-2">
         <span className="px-0.5 text-sm text-[var(--foreground)]">{t('mediaLibrary.filterType')}</span>
-        <Select value={fileType} disabled={busy} onValueChange={(value) => onFileTypeChange(value as 'any' | MediaLibraryKind)}>
+        <Select value={fileType} disabled={busy} onValueChange={onFileTypeChange}>
           <SelectTrigger className="h-8 min-w-0 w-full rounded-lg bg-transparent px-2 text-left text-sm">
-            <SelectValue>{fileType === 'image' ? t('mediaLibrary.images') : fileType === 'video' ? t('mediaLibrary.videos') : t('mediaLibrary.all')}</SelectValue>
+            <SelectValue>{resolvedKindOptions.find((option) => option.value === fileType)?.label ?? t('mediaLibrary.all')}</SelectValue>
           </SelectTrigger>
           <SelectContent align="start" fitViewport style={{ zIndex: 170 }} className="flowix-preferences-select-content">
-            <SelectItem value="any">{t('mediaLibrary.all')}</SelectItem>
-            <SelectItem value="image">{t('mediaLibrary.images')}</SelectItem>
-            <SelectItem value="video">{t('mediaLibrary.videos')}</SelectItem>
+            {resolvedKindOptions.map((option) => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}
           </SelectContent>
         </Select>
       </div>

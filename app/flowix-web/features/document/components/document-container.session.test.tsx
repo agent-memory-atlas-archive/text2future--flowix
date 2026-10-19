@@ -138,7 +138,9 @@ describe('real document container session lifecycle', () => {
     expect(doc.editors.left).toBeUndefined();
     expect(onContentStateChange).toHaveBeenLastCalledWith({ status: 'loading', retainContent: true });
     expect(onSurfaceLifecycleReady).not.toHaveBeenCalled();
-    expect(container.querySelector('[role="status"]')).not.toBeNull();
+    // A caller-provided content-state callback owns its loading presentation;
+    // DocumentContainer only renders its fallback spinner without that callback.
+    expect(container.querySelector('[role="status"]')).toBeNull();
     await act(async () => {
       finishParse({
         id: 1,

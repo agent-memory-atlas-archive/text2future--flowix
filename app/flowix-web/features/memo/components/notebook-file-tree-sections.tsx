@@ -18,6 +18,11 @@ interface SectionFrameProps {
 interface NotebookPinnedSectionProps extends SectionFrameProps {
   items: DocTreeItem[];
   renderItem: (item: DocTreeItem) => ReactNode;
+  hasPreviousPage: boolean;
+  hasMoreItems: boolean;
+  loadingMore: boolean;
+  onLoadPrevious: () => void;
+  onLoadMore: () => void;
 }
 
 export function NotebookPinnedSection({
@@ -27,6 +32,11 @@ export function NotebookPinnedSection({
   sectionActions,
   items,
   renderItem,
+  hasPreviousPage,
+  hasMoreItems,
+  loadingMore,
+  onLoadPrevious,
+  onLoadMore,
 }: NotebookPinnedSectionProps) {
   const { t } = useI18n();
 
@@ -57,7 +67,33 @@ export function NotebookPinnedSection({
         </button>
         <div className="ml-auto flex items-center">{sectionActions}</div>
       </div>
-      {!collapsed && <div className="flex flex-col gap-0.5">{items.map(renderItem)}</div>}
+      {!collapsed && <div className="flex flex-col gap-0.5">
+        {items.map(renderItem)}
+        {(hasPreviousPage || hasMoreItems) && (
+          <div className="flex h-8 items-center justify-between gap-2 px-2 text-xs text-[var(--muted-foreground)]">
+            {hasPreviousPage ? (
+              <button
+                type="button"
+                className="rounded px-1 hover:text-[var(--foreground)]"
+                disabled={loadingMore}
+                onClick={onLoadPrevious}
+              >
+                {t('memo.fileTree.previousPinnedPage')}
+              </button>
+            ) : <span />}
+            {hasMoreItems ? (
+              <button
+                type="button"
+                className="rounded px-1 hover:text-[var(--foreground)] disabled:opacity-60"
+                disabled={loadingMore}
+                onClick={onLoadMore}
+              >
+                {t(loadingMore ? 'memo.fileTree.loadingMorePinned' : 'memo.fileTree.loadMorePinned')}
+              </button>
+            ) : <span />}
+          </div>
+        )}
+      </div>}
     </section>
   );
 }

@@ -4,7 +4,7 @@ import { collectionDisplayDescriptor, findCollectionDisplayPath } from '@/lib/co
 import { useExternalFileContentDetection } from '@features/editor/use-external-file-content-detection';
 import { resolveWorkspaceFileSurfaceKind, workspaceSurfaceAppearance } from '@features/workspace/public/surface-api';
 import { FileBrowserView } from './file-browser-view';
-import { useLayoutEffect } from 'react';
+import { useCallback, useLayoutEffect, useMemo } from 'react';
 import { getWorkspaceSurfaceRendererDefinition } from './workspace-surface-renderer-registry';
 import type { WorkspaceSurfaceRendererData, WorkspaceSurfaceRenderContext } from './workspace-surface-renderer-contract';
 import { WorkspaceSurfaceStateView } from './workspace-surface-state-view';
@@ -29,11 +29,33 @@ export function FileBrowserRenderer({ surface: data, context }: {
     ? 'media-library'
     : surface.collectionType === 'table'
       ? 'table'
+      : surface.collectionType === 'work_documents'
+        ? 'work-documents'
       : resolveWorkspaceFileSurfaceKind(surface.activeFilePath ?? '', null, isTextContent);
   const dynamicKind = `file-${fileKind}` as const;
   const collectionLocationLoading = Boolean(surface.fileIdentity
     && collectionDisplayDescriptor(surface.fileIdentity.displayId)
     && !findCollectionDisplayPath(surface.fileIdentity.displayId));
+  const resetUnavailableCollectionView = useCallback(async () => {
+    if (!surface.activeFilePath) return;
+    try {
+      await resetCurrentCollectionView(surface.activeFilePath, surface.scopePath, surface.notebookId, { host: 'browser-column', tabId: context.viewId });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '重置当前视图失败');
+    }
+  }, [context.viewId, surface.activeFilePath, surface.notebookId, surface.scopePath]);
+  const unavailableState = useMemo(() => ({
+    status: 'unavailable' as const,
+    reason: 'unsupported' as const,
+    message: {
+      key: 'document.file.unavailable',
+      ...(surface.collectionUnavailableReason ? { fallbackText: surface.collectionUnavailableReason } : {}),
+    },
+    actions: [{
+      id: 'reset-current-collection-view', label: { key: 'collection.resetCurrentView' }, enabled: true,
+      run: resetUnavailableCollectionView,
+    }],
+  }), [resetUnavailableCollectionView, surface.collectionUnavailableReason]);
   // Publish the resolver baseline before content renderers publish their state.
   useLayoutEffect(() => {
     if (!surface.activeFilePath) {
@@ -45,42 +67,35 @@ export function FileBrowserRenderer({ surface: data, context }: {
       return;
     }
     const state = contentDetectionLoading
-          ? { status: 'loading' as const, phase: 'content' as const, message: { key: 'document.file.loading' }, retainContent: true }
+          ? { status: 'loading' as const, loadingMode: 'blocking' as const, retainContent: true }
         : surface.collectionUnavailableReason
-          ? { status: 'unavailable' as const, reason: 'unsupported' as const, message: { key: 'document.file.unavailable', fallbackText: surface.collectionUnavailableReason } }
+          ? unavailableState
           : collectionLocationLoading
-            ? { status: 'loading' as const, phase: 'navigation' as const, message: { key: 'document.file.loading' }, retainContent: true }
-          : { status: 'loading' as const, phase: 'renderer' as const, message: { key: 'document.file.loading' }, retainContent: true };
+            ? { status: 'loading' as const, loadingMode: 'blocking' as const, retainContent: true }
+          : { status: 'loading' as const, loadingMode: 'blocking' as const, retainContent: true };
     context.reportPresentation?.({
       appearance: workspaceSurfaceAppearance(dynamicKind),
       capabilities: workspaceSurfaceCapabilities(dynamicKind),
       state,
     });
-  }, [collectionLocationLoading, context.reportPresentation, dynamicKind, contentDetectionLoading, surface.activeFilePath, surface.collectionUnavailableReason]);
+  }, [collectionLocationLoading, context.reportPresentation, dynamicKind, contentDetectionLoading, surface.activeFilePath, surface.collectionUnavailableReason, unavailableState]);
   if (!surface.activeFilePath) {
     return <FileBrowserView surface={{ ...surface, sourceMenuEnabled: false }} />;
   }
 
   const stateAppearance = workspaceSurfaceAppearance(`file-${fileSurfaceKind ?? 'unavailable'}`);
-  if (surface.collectionUnavailableReason) return <WorkspaceSurfaceStateView
+  if (surface.collectionUnavailableReason) return context.reportPresentation ? null : <WorkspaceSurfaceStateView
     appearance={stateAppearance}
-    state={{
-      status: 'unavailable', reason: 'unsupported', message: { key: 'document.file.loading' },
-      actions: [{
-        id: 'reset-current-collection-view', label: { key: 'collection.resetCurrentView' }, enabled: true,
-        run: async () => {
-          try { await resetCurrentCollectionView(surface.activeFilePath!, surface.scopePath, surface.notebookId, { host: 'browser-column', tabId: context.viewId }); }
-          catch (error) { toast.error(error instanceof Error ? error.message : '重置当前视图失败'); }
-        },
-      }],
-    }}
+    state={unavailableState}
     messageOverride={surface.collectionUnavailableReason}
   />;
-  if (surface.fileIdentity && collectionDisplayDescriptor(surface.fileIdentity.displayId) && !findCollectionDisplayPath(surface.fileIdentity.displayId)) return <WorkspaceSurfaceStateView
-    appearance={stateAppearance}
-    state={{ status: 'loading', phase: 'navigation', message: { key: 'document.file.loading' }, retainContent: false }}
-    messageOverride="正在解析集合位置…"
-  />;
+  if (surface.fileIdentity && collectionDisplayDescriptor(surface.fileIdentity.displayId) && !findCollectionDisplayPath(surface.fileIdentity.displayId)) {
+    return context.reportPresentation ? null : <WorkspaceSurfaceStateView
+      appearance={stateAppearance}
+      state={{ status: 'loading', loadingMode: 'blocking', retainContent: false }}
+      messageOverride="正在解析集合位置…"
+    />;
+  }
   if (contentDetectionLoading) return null;
   const filePath = surface.activeFilePath;
   const fileIdentity = surface.fileIdentity;
@@ -117,6 +132,12 @@ export function FileBrowserRenderer({ surface: data, context }: {
     case 'media-library':
       fileSurface = {
         kind: 'file-media-library', fileIdentity, notebookPath: surface.scopePath,
+        notebookId: surface.notebookId ?? null, expectedCollectionId,
+      };
+      break;
+    case 'work-documents':
+      fileSurface = {
+        kind: 'file-work-documents', fileIdentity, notebookPath: surface.scopePath,
         notebookId: surface.notebookId ?? null, expectedCollectionId,
       };
       break;

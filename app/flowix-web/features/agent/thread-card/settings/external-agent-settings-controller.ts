@@ -20,15 +20,6 @@ import {
   formatModelDisplayLabel,
 } from "@features/agent/config/codex-options";
 
-const PI_THINKING_OPTIONS = [
-  { id: "off", label: "Off" },
-  { id: "minimal", label: "Minimal" },
-  { id: "low", label: "Low" },
-  { id: "medium", label: "Medium" },
-  { id: "high", label: "High" },
-  { id: "xhigh", label: "Extra High" },
-  { id: "max", label: "Max" },
-] as const;
 import {
   supportsAgentRuntimeSetting,
   type AgentAccessOption,
@@ -75,6 +66,31 @@ import {
   isFlowixCloudModelOption,
 } from "@features/agent/thread-card/settings/model-picker/pi-model-picker";
 import type { AgentModelOption } from "@features/agent/thread-card/settings/model-picker/model-picker-types";
+
+const PI_THINKING_OPTIONS = [
+  { id: "off", label: "Off" },
+  { id: "minimal", label: "Minimal" },
+  { id: "low", label: "Low" },
+  { id: "medium", label: "Medium" },
+  { id: "high", label: "High" },
+  { id: "xhigh", label: "Extra High" },
+  { id: "max", label: "Max" },
+] as const;
+
+/** Efforts a Codex composer can select; `off`/`minimal` only exist for other runtimes. */
+type CodexComposerEffort = Extract<
+  AgentCodexReasoningEffort,
+  "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+>;
+
+const CODEX_COMPOSER_EFFORT_LABEL_KEYS = {
+  low: "agent.reasoningDepth.composer.low",
+  medium: "agent.reasoningDepth.composer.medium",
+  high: "agent.reasoningDepth.composer.high",
+  xhigh: "agent.reasoningDepth.composer.xhigh",
+  max: "agent.reasoningDepth.composer.max",
+  ultra: "agent.reasoningDepth.composer.ultra",
+} satisfies Record<CodexComposerEffort, I18nKey>;
 
 const CODEX_SETTINGS_POPOVER_WIDTH_PX = 212;
 const CODEX_SETTINGS_POPOVER_MAX_HEIGHT_PX = 280;
@@ -331,6 +347,7 @@ export class ExternalAgentSettingsController {
         });
         useAgentDataStore.getState().setUserPreference(typeKey, { model: selectedModel });
         this.syncCodexThreadSetting(instanceId, kind, value);
+        this.refreshModelDisplays();
         return;
       }
       if (kind === "permission") {
@@ -364,6 +381,7 @@ export class ExternalAgentSettingsController {
         value as AgentCodexReasoningEffort,
       );
       this.syncCodexThreadSetting(instanceId, kind, value);
+      this.refreshModelDisplays();
       return;
     }
     // Without a conversation, update this Agent's global preference directly.
@@ -378,6 +396,7 @@ export class ExternalAgentSettingsController {
             ?? this.defaultReasoningForModel(value),
         });
       }
+      this.refreshModelDisplays();
       return;
     }
     if (kind === "permission") {
@@ -397,6 +416,7 @@ export class ExternalAgentSettingsController {
       model,
       value as AgentCodexReasoningEffort,
     );
+    this.refreshModelDisplays();
   }
 
   private syncCodexThreadSetting(
@@ -560,7 +580,7 @@ export class ExternalAgentSettingsController {
         ? this.createEmptyControl(
             "model",
             this.t("agent.model.title"),
-            this.getComposerModelDisplayLabel(),
+            this.getComposerModelDisplay().text,
           )
         : null;
       this.reasoningButton = null;
@@ -610,7 +630,7 @@ export class ExternalAgentSettingsController {
     if (!this.supportsRuntimeSetting("model")) return null;
     const button = createExternalAgentWorkspaceControl(
       this.t("agent.model.title"),
-      this.getComposerModelDisplayLabel(),
+      this.getComposerModelDisplay().text,
       (anchor) => this.toggleSettingsPopover("model", anchor),
     );
     if (this.getTypeKey() === "pi") button.setAttribute("aria-haspopup", "dialog");
@@ -703,11 +723,22 @@ export class ExternalAgentSettingsController {
 
   refreshComposerModelButton(): void {
     if (!this.composerModelButton) return;
-    const label = this.getComposerModelDisplayLabel();
+    const display = this.getComposerModelDisplay();
+    const label = display.text;
     const valueEl = this.composerModelButton.querySelector<HTMLElement>(
       ".agent-composer__model-value",
     );
-    if (valueEl) valueEl.textContent = label;
+    if (valueEl && display.effort) {
+      const model = document.createElement("span");
+      model.className = "agent-composer__model-name";
+      model.textContent = display.model;
+      const effort = document.createElement("span");
+      effort.className = "agent-composer__model-effort";
+      effort.textContent = display.effort;
+      valueEl.replaceChildren(model, effort);
+    } else if (valueEl) {
+      valueEl.textContent = label;
+    }
     this.composerModelButton.title = `${this.t("agent.model.title")}: ${label}`;
     this.composerModelButton.setAttribute(
       "aria-label",
@@ -796,7 +827,7 @@ export class ExternalAgentSettingsController {
       if (labelElement) labelElement.textContent = label;
       this.piModelNotice.setAttribute("aria-label", label);
     }
-    this.refreshComposerModelButton();
+    this.refreshModelDisplays();
     this.refreshComposerModeButton();
     this.refreshComposerPermissionButton();
     this.refreshComposerWorkspaceButton();
@@ -810,12 +841,6 @@ export class ExternalAgentSettingsController {
       this.workspaceDisplay.setAttribute(
         "aria-label",
         `${this.t("agent.workspace.title")}: ${nextValue}`,
-      );
-    }
-    if (this.modelButton) {
-      updateExternalAgentEmptyControl(
-        this.modelButton,
-        this.getComposerModelDisplayLabel(),
       );
     }
     if (this.permissionButton) {
@@ -834,6 +859,16 @@ export class ExternalAgentSettingsController {
       updateExternalAgentEmptyControl(
         this.reasoningButton,
         this.getCurrentCodexReasoningLabel(),
+      );
+    }
+  }
+
+  private refreshModelDisplays(): void {
+    this.refreshComposerModelButton();
+    if (this.modelButton) {
+      updateExternalAgentEmptyControl(
+        this.modelButton,
+        this.getComposerModelDisplay().text,
       );
     }
   }
@@ -1808,26 +1843,47 @@ export class ExternalAgentSettingsController {
       && this.localSupportedModels.length === 0;
   }
 
-  /**
-   * Composer 模型控件的展示值 ── 支持 reasoning 的 runtime (当前仅 Codex)
-   * 在模型名后追加当前推理深度, 例 "GPT-5.5 · medium"; 其余类型 / 模型名
-   * 尚未加载 (DSH 异步默认) 时退回纯模型名。深度小写展示, 与下拉项
-   * ("Medium") 同词但更贴 footer 的轻量语气。
-   */
-  private getComposerModelDisplayLabel(): string {
+  /** Model control text and optional styled Codex effort label. */
+  private getComposerModelDisplay(): {
+    text: string;
+    model: string;
+    effort?: string;
+  } {
     const label = this.getCurrentExternalModelLabel();
-    if (!label || !this.supportsRuntimeSetting("reasoning")) return label;
-    return `${label} · ${this.getCurrentCodexReasoningLabel().toLowerCase()}`;
+    if (!label || !this.supportsRuntimeSetting("reasoning")) {
+      return { text: label, model: label };
+    }
+    if (this.getTypeKey() === "codex") {
+      const effortId = this.getCurrentCodexReasoningEffort();
+      const labelKey = effortId in CODEX_COMPOSER_EFFORT_LABEL_KEYS
+        ? CODEX_COMPOSER_EFFORT_LABEL_KEYS[effortId as CodexComposerEffort]
+        : undefined;
+      const effort = labelKey ? this.t(labelKey) : this.getCurrentCodexReasoningLabel();
+      return { text: `${label} ${effort}`, model: label, effort };
+    }
+    return {
+      text: `${label} · ${this.getCurrentCodexReasoningLabel().toLowerCase()}`,
+      model: label,
+    };
   }
 
   private getCurrentCodexReasoningLabel(): string {
-    const effort =
-      this.readRuntimeSetting("reasoning") ??
-      "medium";
+    const options = this.getCodexReasoningOptions();
+    const effort = this.getCurrentCodexReasoningEffort(options);
     return (
-      this.getCodexReasoningOptions().find((option) => option.id === effort)?.label ??
+      options.find((option) => option.id === effort)?.label ??
       "Medium"
     );
+  }
+
+  private getCurrentCodexReasoningEffort(
+    options = this.getCodexReasoningOptions(),
+  ): AgentCodexReasoningEffort {
+    const configured = this.readRuntimeSetting("reasoning");
+    return options.find((option) => option.id === configured)?.id
+      ?? options.find((option) => option.id === "medium")?.id
+      ?? options[0]?.id
+      ?? "medium";
   }
 
   private getCodexReasoningOptions(): typeof CODEX_REASONING_OPTIONS {

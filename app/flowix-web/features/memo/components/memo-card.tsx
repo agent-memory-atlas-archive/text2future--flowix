@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { ChevronRight, ListTodo } from 'lucide-react';
+import { ChevronRight, ListTodo, Loader2 } from 'lucide-react';
 import { PushPin } from '@phosphor-icons/react';
 import { NOTE_COLOR_HEX, useNoteStore } from '@features/memo/store/note-store';
 import {
@@ -43,6 +43,7 @@ interface MemoCardProps {
   onFavoriteToggle: (memo: NoteListItem) => void;
   onDelete: (memo: NoteListItem) => void;
   onColorsChange?: (memo: NoteListItem, colors: NoteColor[]) => void;
+  onKeepAliveChange?: (memo: NoteListItem, active: boolean) => void;
   runningAgentType?: AgentTypeKey;
 }
 
@@ -69,6 +70,7 @@ interface MemoCardShellProps {
   onFavoriteToggle: (memo: NoteListItem) => void;
   onDelete: (memo: NoteListItem) => void;
   onColorsChange?: (memo: NoteListItem, colors: NoteColor[]) => void;
+  onKeepAliveChange?: (memo: NoteListItem, active: boolean) => void;
 }
 
 function thumbnailSrc(thumbnail: string | null | undefined): string | null {
@@ -150,11 +152,19 @@ function MemoCardShell({
   onFavoriteToggle,
   onDelete,
   onColorsChange,
+  onKeepAliveChange,
 }: MemoCardShellProps) {
   const { t } = useI18n();
+  const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   const [renameSaving, setRenameSaving] = useState(false);
+  const keepsRowAlive = contextMenuOpen || renameOpen || renameSaving;
+  useEffect(() => {
+    if (!keepsRowAlive) return;
+    onKeepAliveChange?.(memo, true);
+    return () => onKeepAliveChange?.(memo, false);
+  }, [memo, keepsRowAlive, onKeepAliveChange]);
 
   const openRename = () => {
     setRenameDraft(displayTitleFromFilename(memo.filename));
@@ -177,11 +187,11 @@ function MemoCardShell({
         path,
         title,
         scopePath: notebook.path,
+        notebook,
         displayId: identity.displayId,
         onPathChanged: (oldPath, newPath) => replaceExternalDocumentPath(identity.displayId, oldPath, newPath),
       });
       if (result?.changed) {
-        useNoteStore.getState().triggerRefresh();
         toast.success(t('memo.fileTree.renamed', { name: title }));
       }
       setRenameOpen(false);
@@ -218,7 +228,7 @@ function MemoCardShell({
 
   return (
     <>
-      <ContextMenu>
+      <ContextMenu onOpenChange={setContextMenuOpen}>
         <ContextMenuTrigger asChild>
           {card}
         </ContextMenuTrigger>
@@ -242,7 +252,7 @@ function MemoCardShell({
           <DialogHeader>
             <DialogTitle>{t('memo.fileTree.rename')}</DialogTitle>
           </DialogHeader>
-          <form onSubmit={(event) => void submitRename(event)} className="space-y-4">
+          <form onSubmit={(event) => void submitRename(event)} className="space-y-4" aria-busy={renameSaving}>
             <Input
               autoFocus
               value={renameDraft}
@@ -254,7 +264,8 @@ function MemoCardShell({
                 {t('common.cancel')}
               </Button>
               <Button type="submit" disabled={renameSaving || !renameDraft.trim()}>
-                {t('document.version.confirm')}
+                {renameSaving && <Loader2 className="flowix-spin" aria-hidden="true" />}
+                {renameSaving ? t('memo.fileTree.renaming') : t('document.version.confirm')}
               </Button>
             </div>
           </form>
@@ -378,6 +389,7 @@ export function MemoCardImpl({
   onDelete,
   onColorsChange,
   runningAgentType,
+  onKeepAliveChange,
 }: MemoCardProps) {
   const { t } = useI18n();
   const thumbnail = thumbnailSrc(memo.thumbnail);
@@ -416,6 +428,7 @@ export function MemoCardImpl({
       onFavoriteToggle={onFavoriteToggle}
       onDelete={onDelete}
       onColorsChange={onColorsChange}
+      onKeepAliveChange={onKeepAliveChange}
     >
       <DetailedMemoCardBody {...bodyProps} />
     </MemoCardShell>

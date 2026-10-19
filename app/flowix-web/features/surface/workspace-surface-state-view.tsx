@@ -5,7 +5,7 @@ import { CenteredLoadingSpinner } from '@shared/ui/centered-loading-spinner';
 import { WorkspaceEmptyState } from '@shared/ui/workspace-empty-state';
 import { useI18n } from '@/lib/i18n';
 import type { I18nKey } from '@/lib/i18n/locales';
-import type { SurfaceAppearance, SurfaceMessage, SurfaceState } from '@features/workspace/public/surface-api';
+import type { SurfaceAppearance, SurfaceMessage, SurfacePresentationUpdate, SurfaceState } from '@features/workspace/public/surface-api';
 
 const WorkspaceSurfaceRendererRetryContext = createContext<object>({});
 const rendererCache = new WeakMap<object, WeakMap<object, unknown>>();
@@ -47,6 +47,7 @@ export function WorkspaceSurfaceStateView({
   children,
   messageOverride,
   keepContentMounted = false,
+  loadingOwner = 'surface',
 }: {
   state: SurfaceState;
   appearance: Readonly<SurfaceAppearance>;
@@ -55,6 +56,8 @@ export function WorkspaceSurfaceStateView({
   messageOverride?: string;
   /** Renderer-owned async state must not unmount the renderer publishing it. */
   keepContentMounted?: boolean;
+  /** The parent host can provide one loading layer for the entire surface. */
+  loadingOwner?: 'surface' | 'host';
 }) {
   const { t } = useI18n();
   const message = 'message' in state && state.message
@@ -63,7 +66,8 @@ export function WorkspaceSurfaceStateView({
   const detailText = state.status === 'error' ? state.detailText : undefined;
 
   if (keepContentMounted) {
-    const contentVisible = state.status === 'ready' || state.status === 'loading' && state.retainContent;
+    const contentVisible = state.status === 'ready' || state.status === 'loading'
+      && state.retainContent;
     return <div className="relative flex h-full min-h-0 w-full flex-col">
       {state.status === 'ready' && <WorkspaceSurfaceStateView key="notices" state={state} appearance={appearance} />}
       {/* Keep a bounded flex viewport through this slot; renderers own scrolling. */}
@@ -71,8 +75,10 @@ export function WorkspaceSurfaceStateView({
         aria-hidden={contentVisible ? undefined : true} inert={!contentVisible}>
         {children}
       </div>
-      {state.status !== 'ready' && <div key="state" className={`absolute inset-0 z-10 ${state.status === 'loading' && state.retainContent ? 'opacity-90' : ''}`}>
-        <WorkspaceSurfaceStateView state={state} appearance={appearance} messageOverride={messageOverride} />
+      {state.status !== 'ready' && !(state.status === 'loading'
+        && (state.loadingMode === 'background' || loadingOwner === 'host')) && <div key="state"
+        className={`absolute inset-0 z-10 ${state.status === 'loading' ? 'pointer-events-none' : ''}`}>
+        <WorkspaceSurfaceStateView state={state} appearance={appearance} messageOverride={messageOverride} loadingOwner={loadingOwner} />
       </div>}
     </div>;
   }
@@ -97,15 +103,17 @@ export function WorkspaceSurfaceStateView({
   }
 
   if (state.status === 'loading') {
+    if (state.loadingMode === 'background') return <>{children}</>;
+    if (loadingOwner === 'host') return null;
     if (state.retainContent && children) {
-      return <div className={`relative h-full min-h-0 w-full ${backgroundClass(appearance)}`}>
+      return <div className="relative h-full min-h-0 w-full">
         <div className="h-full min-h-0 w-full">{children}</div>
-        <div className={`absolute inset-0 z-10 flex min-h-0 flex-col ${backgroundClass(appearance)} opacity-90`}>
+        <div className="pointer-events-none absolute inset-0 z-10 flex min-h-0 flex-col">
           <CenteredLoadingSpinner className="min-h-0 flex-1" />
         </div>
       </div>;
     }
-    return <div className={`flex h-full min-h-0 w-full flex-col ${backgroundClass(appearance)}`}>
+    return <div className="pointer-events-none flex h-full min-h-0 w-full flex-col">
       <CenteredLoadingSpinner className="min-h-0 flex-1" />
     </div>;
   }
@@ -133,6 +141,8 @@ export function WorkspaceSurfaceStateView({
 
 interface WorkspaceSurfaceErrorBoundaryProps {
   appearance: Readonly<SurfaceAppearance>;
+  reportPresentation?: (update: SurfacePresentationUpdate) => void;
+  onRendererError?: () => void;
   children: ReactNode;
 }
 
@@ -157,9 +167,18 @@ export class WorkspaceSurfaceErrorBoundary extends Component<
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('[WorkspaceSurface] Renderer failed:', error, info);
+    this.props.reportPresentation?.({ state: {
+      status: 'error',
+      message: { key: 'error.unexpected' },
+      actions: [{ id: 'retry', label: { key: 'error.retry' }, enabled: true, run: this.retry }],
+    } });
+    this.props.onRendererError?.();
   }
 
   private retry = () => {
+    this.props.reportPresentation?.({ state: {
+      status: 'loading', loadingMode: 'blocking', retainContent: false,
+    } });
     this.setState(({ retryKey }) => ({ error: null, retryKey: retryKey + 1 }));
   };
 

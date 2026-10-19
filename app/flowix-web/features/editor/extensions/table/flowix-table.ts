@@ -2,6 +2,8 @@ import { DOMSerializer } from '@tiptap/pm/model';
 import { getExtensionField } from '@tiptap/core';
 import type { Editor } from '@tiptap/core';
 import { Table } from '@tiptap/extension-table';
+import { isEmptyMarkdownPlaceholderOnly } from '../../markdown-normalization';
+import { scanHead } from '@features/editor/markdown-tokenizer-start';
 import type {
   JSONContent,
   MarkdownParseHelpers,
@@ -238,7 +240,21 @@ export function tableNeedsHtml(node: JSONContent): boolean {
 
 export const FlowixTable = Table.extend({
   parseMarkdown(this: { parent?: (token: MarkdownToken, helpers: MarkdownParseHelpers) => JSONContent }, token, helpers) {
-    const parsed = this.parent ? this.parent(token, helpers) : { type: 'table', content: [] };
+    // Table's parser builds cell paragraphs directly, bypassing Paragraph.parseMarkdown.
+    // Check source tokens and parsed text so formatting and additional encoding survive.
+    const parsed = this.parent ? this.parent(token, {
+      ...helpers,
+      parseInline(tokens) {
+        const content = helpers.parseInline(tokens);
+        const isEmptyCell = tokens.every(part => part.type === 'text'
+          && isEmptyMarkdownPlaceholderOnly(part.raw ?? part.text ?? ''))
+          && content.every(part => part.type === 'text'
+            && !part.marks?.length
+            && typeof part.text === 'string'
+            && isEmptyMarkdownPlaceholderOnly(part.text));
+        return isEmptyCell ? [] : content;
+      },
+    }) : { type: 'table', content: [] };
     if (Array.isArray(parsed) || parsed.type !== 'table') return parsed;
 
     const flowixToken = token as FlowixTableToken;
@@ -264,7 +280,15 @@ export const FlowixTable = Table.extend({
     const widths = getColumnWidths(node);
     const { rowHeader, columnHeader } = getHeaderModes(node);
     const normalizedNode = normalizeNodeForMarkdown(node, rowHeader, columnHeader);
-    const rendered = this.parent?.(normalizedNode, helpers, ctx) ?? '';
+    const rendered = this.parent?.(normalizedNode, {
+      ...helpers,
+      // The standard table renderer renders paragraphs with the table as their
+      // parent. Remove reserved empty-paragraph markers locally, before padding.
+      renderChildren(nodes, separator) {
+        const value = helpers.renderChildren(nodes, separator);
+        return isEmptyMarkdownPlaceholderOnly(value) ? '' : value;
+      },
+    }, ctx) ?? '';
     const hasExplicitWidth = widths.some(width => width !== null);
     return (hasExplicitWidth || !rowHeader || columnHeader)
       ? `${renderTableMetadata(widths, rowHeader, columnHeader)}${rendered}`
@@ -275,8 +299,9 @@ export const FlowixTable = Table.extend({
     name: 'table',
     level: 'block' as const,
     start: (src: string) => {
-      const versionedIndex = src.search(/^<!--[ \t]*flowix:table[ \t]+\{/m);
-      const legacyIndex = src.search(/^<!--[ \t]*flowix:table-widths=/m);
+      const head = scanHead(src);
+      const versionedIndex = head.search(/^<!--[ \t]*flowix:table[ \t]+\{/m);
+      const legacyIndex = head.search(/^<!--[ \t]*flowix:table-widths=/m);
       if (versionedIndex < 0) return legacyIndex;
       if (legacyIndex < 0) return versionedIndex;
       return Math.min(versionedIndex, legacyIndex);

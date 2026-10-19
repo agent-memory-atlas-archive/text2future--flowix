@@ -35,3 +35,23 @@ export function markTagsCollapsedByAncestor(
     return { ...tag, collapsedByAncestor };
   });
 }
+
+/** Keep rows mounted through the collapse animation, then remove settled subtrees. */
+export function markTagsDuringCollapseTransition(
+  tagOptions: MemoTagTreeItem[],
+  collapsedTagIds: ReadonlySet<string>,
+  settledCollapsedTagIds: ReadonlySet<string>,
+): CollapsibleTagTreeItem[] {
+  const activeTags = markTagsCollapsedByAncestor(tagOptions, collapsedTagIds);
+  const settledCollapsed = new Set(
+    [...collapsedTagIds].filter((id) => settledCollapsedTagIds.has(id)),
+  );
+  if (settledCollapsed.size === 0) return activeTags;
+
+  const settledHiddenIds = new Set(
+    markTagsCollapsedByAncestor(tagOptions, settledCollapsed)
+      .filter((tag) => tag.collapsedByAncestor)
+      .map((tag) => tag.id),
+  );
+  return activeTags.filter((tag) => !settledHiddenIds.has(tag.id));
+}

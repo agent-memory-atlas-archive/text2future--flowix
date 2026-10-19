@@ -7,7 +7,7 @@ import type { WorkspaceSurfaceRendererData } from './workspace-surface-renderer-
 export function workspaceSurfaceRendererDataFromWorkSurface(surface: WorkColumnSurface): WorkspaceSurfaceRendererData {
   switch (surface.kind) {
     case 'folder-collection': return { kind: 'collection', notebookId: surface.notebookId,
-      notebookPath: surface.notebookPath, folderPath: surface.folderPath, folderName: surface.folderName };
+      notebookPath: surface.notebookPath, folderPath: surface.folderPath, folderName: surface.folderName, viewMode: surface.viewMode };
     case 'media': return { kind: 'media', fileIdentity: surface.fileIdentity, notebookPath: surface.notebookPath, notebookId: surface.notebookId, resourceKind: surface.resourceKind };
     case 'agent-conversation': return { kind: 'agent-conversation', instanceId: surface.instanceId };
     case 'mindmap': return { kind: 'mindmap', props: surface.props };
@@ -31,6 +31,7 @@ export function workspaceSurfaceRendererDataFromWorkSurface(surface: WorkColumnS
       } };
     }
     case 'media-library-file': return { kind: 'file-media-library', fileIdentity: surface.fileIdentity, notebookPath: surface.notebookPath, notebookId: surface.notebookId };
+    case 'work-documents-file': return { kind: 'file-work-documents', fileIdentity: surface.fileIdentity, notebookPath: surface.notebookPath, notebookId: surface.notebookId, expectedCollectionId: surface.expectedCollectionId };
     case 'html-file': return { kind: 'file-html', fileIdentity: surface.fileIdentity, scopePath: surface.scopePath, documentProps: surface.props };
     case 'unavailable-file':
       return externalFileViewKind(surface.fileIdentity.path) === 'docx'

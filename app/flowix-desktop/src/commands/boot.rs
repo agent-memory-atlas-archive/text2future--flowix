@@ -64,6 +64,22 @@ pub fn get_startup_status(state: State<'_, AppState>) -> StartupStatus {
 }
 
 #[tauri::command]
+pub async fn wait_for_startup_status_change(
+    previous: StartupStatus,
+    app: tauri::AppHandle,
+) -> StartupStatus {
+    let startup = app.state::<AppState>().startup.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        startup.wait_for_status_change(&previous, std::time::Duration::from_secs(10))
+    })
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!("startup status wait task failed: {error}");
+        app.state::<AppState>().startup.status()
+    })
+}
+
+#[tauri::command]
 pub fn get_startup_notebook_id(state: State<'_, AppState>) -> Option<String> {
     crate::lock_utils::read_lock(&state.memo_file, "memo_file").current_notebook_id_value()
 }
@@ -94,8 +110,12 @@ pub fn record_startup_stage(
     // and separators.
     let task_event = stage.starts_with("task:")
         && stage.len() <= 96
-        && stage.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_:".contains(&b))
-        && [":start", ":complete", ":failed"].iter().any(|suffix| stage.ends_with(*suffix));
+        && stage
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_:".contains(&b))
+        && [":start", ":complete", ":failed"]
+            .iter()
+            .any(|suffix| stage.ends_with(*suffix));
     if !ALLOWED.contains(&stage.as_str()) && !task_event {
         return;
     }

@@ -93,9 +93,9 @@ pub(crate) fn resolve_v2_file_put_conflict(
                 }
             }
             crate::watcher::runtime::mark_self_write_missing_for(app, &path);
-            if flowix_core::memo_file::media_kind_for_path(&path).is_some() {
+            if flowix_core::memo_file::resource_kind_for_path(&path).is_some() {
                 memo_file
-                    .refresh_media_resource_path(&material.notebook_id, &material.remote.filename)
+                    .refresh_indexed_resource_path(&material.notebook_id, &material.remote.filename)
                     .map_err(sync_error)?;
             }
             let _ = app.emit(
@@ -124,8 +124,8 @@ pub(crate) fn resolve_v2_file_put_conflict(
             crate::watcher::runtime::mark_self_write_for(app, &destination);
             flowix_core::memo_file::rename_file_noclobber(&path, &destination)
                 .map_err(sync_error)?;
-            if flowix_core::memo_file::media_kind_for_path(&destination).is_some() {
-                if let Err(error) = memo_file.move_media_resource_path(
+            if flowix_core::memo_file::resource_kind_for_path(&destination).is_some() {
+                if let Err(error) = memo_file.move_indexed_resource_path(
                     &material.notebook_id,
                     &material.remote.filename,
                     &target.filename,
@@ -179,7 +179,7 @@ pub(crate) fn resolve_v2_file_put_conflict(
                     && destination.exists()
                     && flowix_core::memo_file::rename_file_noclobber(&destination, &path).is_ok()
                 {
-                    let restored = memo_file.move_media_resource_path(
+                    let restored = memo_file.move_indexed_resource_path(
                         &material.notebook_id,
                         material
                             .relocated
@@ -204,9 +204,9 @@ pub(crate) fn resolve_v2_file_put_conflict(
             }
         }
         crate::watcher::runtime::mark_self_write_content_for(app, &destination, remote);
-        if flowix_core::memo_file::media_kind_for_path(&destination).is_some() {
+        if flowix_core::memo_file::resource_kind_for_path(&destination).is_some() {
             memo_file
-                .refresh_media_resource_path(
+                .refresh_indexed_resource_path(
                     &material.notebook_id,
                     material
                         .relocated

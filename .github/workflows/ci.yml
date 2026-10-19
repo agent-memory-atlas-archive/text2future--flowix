@@ -63,6 +63,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Protected note rename boundary
+        run: |
+          npm run check:note-rename-boundaries
+          npm run test:note-rename-boundaries
+
       - name: Typecheck
         run: npx tsc --noEmit
 

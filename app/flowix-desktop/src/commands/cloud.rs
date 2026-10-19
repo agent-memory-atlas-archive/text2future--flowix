@@ -612,7 +612,7 @@ pub fn restore_local_path_version(
     schedule_notebook_sync_observation(app.clone(), notebook_id.clone(), true);
     if attachment {
         memo_file
-            .refresh_media_resource_path(&notebook_id, &relative_path)
+            .refresh_indexed_resource_path(&notebook_id, &relative_path)
             .map_err(sync_error)?;
         let _ = app.emit(
             "media-properties-changed",
@@ -967,9 +967,9 @@ pub fn cloud_resolve_attachment_conflict(
                     .map_err(sync_error)?;
                 let backup_relative =
                     flowix_core::memo_file::notebook_relative_path(root, &backup)?;
-                if flowix_core::memo_file::media_kind_for_path(&backup).is_some() {
+                if flowix_core::memo_file::resource_kind_for_path(&backup).is_some() {
                     memo_file
-                        .refresh_media_resource_path(&notebook_id, &backup_relative)
+                        .refresh_indexed_resource_path(&notebook_id, &backup_relative)
                         .map_err(sync_error)?;
                 }
                 state
@@ -1014,9 +1014,9 @@ pub fn cloud_resolve_attachment_conflict(
             }
         }
         crate::watcher::runtime::mark_self_write_for(&app, &original);
-        if flowix_core::memo_file::media_kind_for_path(&original).is_some() {
+        if flowix_core::memo_file::resource_kind_for_path(&original).is_some() {
             memo_file
-                .refresh_media_resource_path(&notebook_id, &relative_path)
+                .refresh_indexed_resource_path(&notebook_id, &relative_path)
                 .map_err(sync_error)?;
         }
         state
@@ -1056,9 +1056,9 @@ pub fn cloud_resolve_attachment_conflict(
             return Err("CLOUD_CONFLICT_COPY_CHANGED".into());
         }
     }
-    if flowix_core::memo_file::media_kind_for_path(&copy).is_some() {
+    if flowix_core::memo_file::resource_kind_for_path(&copy).is_some() {
         memo_file
-            .refresh_media_resource_path(&notebook_id, &conflict_path)
+            .refresh_indexed_resource_path(&notebook_id, &conflict_path)
             .map_err(sync_error)?;
     }
     state
@@ -1155,9 +1155,9 @@ pub async fn cloud_restore_note_revision(
                     .map_err(sync_error)?;
             }
             let backup_relative = flowix_core::memo_file::notebook_relative_path(root, &backup)?;
-            if attachment && flowix_core::memo_file::media_kind_for_path(&backup).is_some() {
+            if attachment && flowix_core::memo_file::resource_kind_for_path(&backup).is_some() {
                 memo_file
-                    .refresh_media_resource_path(&notebook_id, &backup_relative)
+                    .refresh_indexed_resource_path(&notebook_id, &backup_relative)
                     .map_err(sync_error)?;
             }
             state
@@ -1206,9 +1206,9 @@ pub async fn cloud_restore_note_revision(
     }
     if attachment {
         crate::watcher::runtime::mark_self_write_for(&app, &path);
-        if flowix_core::memo_file::media_kind_for_path(&path).is_some() {
+        if flowix_core::memo_file::resource_kind_for_path(&path).is_some() {
             memo_file
-                .refresh_media_resource_path(&notebook_id, &relative_path)
+                .refresh_indexed_resource_path(&notebook_id, &relative_path)
                 .map_err(sync_error)?;
         }
         let _ = app.emit(

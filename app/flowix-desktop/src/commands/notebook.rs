@@ -13,7 +13,8 @@ use flowix_sync::V2LocalNotebook;
 
 use super::agent_workspace::AGENT_WORKSPACE_CHANGED_EVENT;
 use super::helpers::{
-    refresh_watcher_roots, switch_notebook_trusting_index, watch_created_notebook,
+    record_created_notebook_access, refresh_current_notebook_watcher,
+    switch_notebook_trusting_index,
 };
 use crate::app::state::{AppState, NotebookImportStatus, NotebookImportStatusKind};
 
@@ -406,9 +407,16 @@ fn set_current_notebook_inner(
         return Err(error);
     }
 
+    let active_watcher_id =
+        crate::commands::helpers::rebind_current_notebook_watcher_while_transition_locked(
+            state, app,
+        );
+    drop(_transition);
     if let Some(notebook_id) = notebook_id.as_deref() {
         state.notebook_background.prioritize(notebook_id);
-        crate::commands::helpers::retry_notebook_watch(state, app, notebook_id);
+    }
+    if let Some(notebook_id) = active_watcher_id {
+        state.notebook_background.request(&notebook_id, true, true);
     }
     Ok(())
 }
@@ -419,9 +427,6 @@ fn activate_created_notebook(
     app: &AppHandle,
 ) -> Result<(), String> {
     set_current_notebook_inner(Some(config.id.clone()), state, app)?;
-    // A newly registered root must be watched immediately; otherwise changes
-    // made before the next app restart are invisible to the memo index.
-    watch_created_notebook(state, app, config);
     tracing::info!("[create_notebook] selected notebook id={}", config.id);
     Ok(())
 }
@@ -670,8 +675,9 @@ pub async fn create_notebook(
             activate_created_notebook(&config, state.inner(), &app)?;
         } else {
             // The onboarding flow activates the notebook only after all steps are
-            // complete. Keep the new root watched without changing global state.
-            watch_created_notebook(state.inner(), &app, &config);
+            // complete. Register its directory access now; the watcher attaches
+            // when the notebook becomes the selected one.
+            record_created_notebook_access(state.inner(), &app, &config);
         }
         dispatcher::emit_to(&app, NOTEBOOKS_CHANGED_EVENT, ());
 
@@ -787,7 +793,7 @@ pub fn create_notebook_from_cloud(
     if activate.unwrap_or(true) {
         activate_created_notebook(&config, state.inner(), &app)?;
     } else {
-        watch_created_notebook(state.inner(), &app, &config);
+        record_created_notebook_access(state.inner(), &app, &config);
     }
     dispatcher::emit_to(&app, NOTEBOOKS_CHANGED_EVENT, ());
 
@@ -821,7 +827,6 @@ pub fn update_notebook(
     drop(memo_file);
 
     notify_notebook_workspace_changed(&app);
-    refresh_watcher_roots(state.inner(), &app);
     record_notebook_metadata_change(state.inner(), &app, &updated);
 
     Some(Notebook {
@@ -908,26 +913,30 @@ pub fn delete_notebook(
     // when the deletion is initiated outside the main Webview. The frontend
     // performs the same transition for its workspace state, but the backend
     // must not retain an id that has just been removed.
-    if was_current {
-        if let Err(error) =
-            set_current_notebook_inner(next_notebook_id.clone(), state.inner(), &app)
-        {
-            tracing::error!(
-                deleted_notebook = %id,
-                next_notebook = ?next_notebook_id,
-                %error,
-                "failed to select first remaining notebook after deletion"
-            );
-            // `set_current_notebook_inner` may fail while running migrations;
-            // still repair the cross-process selection record so a restart
-            // cannot resurrect the deleted notebook.
-            if let Err(persist_error) = read_lock(&state.memo_file, "memo_file")
-                .write_selected_notebook_id(next_notebook_id.as_deref())
-            {
-                tracing::error!(%persist_error, "failed to persist deletion fallback notebook");
+    let selection_transition_completed = if was_current {
+        match set_current_notebook_inner(next_notebook_id.clone(), state.inner(), &app) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::error!(
+                    deleted_notebook = %id,
+                    next_notebook = ?next_notebook_id,
+                    %error,
+                    "failed to select first remaining notebook after deletion"
+                );
+                // `set_current_notebook_inner` may fail while running migrations;
+                // still repair the cross-process selection record so a restart
+                // cannot resurrect the deleted notebook.
+                if let Err(persist_error) = read_lock(&state.memo_file, "memo_file")
+                    .write_selected_notebook_id(next_notebook_id.as_deref())
+                {
+                    tracing::error!(%persist_error, "failed to persist deletion fallback notebook");
+                }
+                false
             }
         }
-    }
+    } else {
+        false
+    };
 
     if let Err(error) = state.cloud_sync.record_v2_notebook_delete(&id) {
         tracing::warn!("failed to persist cloud notebook deletion {id}: {error}");
@@ -936,7 +945,9 @@ pub fn delete_notebook(
     }
 
     notify_notebook_workspace_changed(&app);
-    refresh_watcher_roots(state.inner(), &app);
+    if was_current && !selection_transition_completed {
+        refresh_current_notebook_watcher(state.inner(), &app);
+    }
     dispatcher::emit_to(&app, NOTEBOOKS_CHANGED_EVENT, ());
     Ok(true)
 }
@@ -1046,7 +1057,7 @@ pub fn clear_notebooks(state: State<AppState>, app: AppHandle) -> Result<bool, S
         }
     }
     notify_notebook_workspace_changed(&app);
-    refresh_watcher_roots(state.inner(), &app);
+    refresh_current_notebook_watcher(state.inner(), &app);
     Ok(ok)
 }
 

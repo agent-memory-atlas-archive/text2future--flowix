@@ -50,14 +50,14 @@ vi.mock('@features/agent/store/agent-workspace-store', () => ({
     selector({ workspaceActions: { loadInitial: mocks.loadWorkspace } })
   ),
 }));
-vi.mock('@features/editor/extensions/note-link', () => ({
+vi.mock('@features/editor/extensions/note-link/memo-resolver', () => ({
   invalidateNotebookCache: mocks.invalidateNotebookCache,
   prewarmNotebookCache: mocks.prewarmNotebookCache,
 }));
-vi.mock('@features/editor/extensions/note-mention', () => ({
+vi.mock('@features/editor/extensions/note-mention/note-mention-data', () => ({
   invalidateMentionNotes: mocks.invalidateMentionNotes,
 }));
-vi.mock('@features/editor/extensions/tag-mention', () => ({
+vi.mock('@features/editor/extensions/tag-mention/tag-mention-data', () => ({
   invalidateMentionTags: mocks.invalidateMentionTags,
 }));
 vi.mock('@platform/tauri/client', () => ({

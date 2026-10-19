@@ -8,7 +8,7 @@ export interface MainWindowMemoEventActions {
   openPathInBrowserColumn: (notebookId: string, relativePath: string) => Promise<void>;
   reportOpenFailure: (error: unknown) => void;
   handleMemoCreated: (memo: MemoItem) => void;
-  handleMemoUpdated: (memo: MemoItem) => void;
+  handleMemoUpdated: (event: Extract<MemoEvent, { kind: 'updated' }>) => void;
   handleMemoDeleted: () => void;
   removeBrowserColumnTabsByPath: (path: string) => void;
   clearWorkspaceTargetByPath?: (path: string) => void;
@@ -87,7 +87,7 @@ export function handleMainWindowMemoEvent(
   if (event.kind === 'created') {
     actions.handleMemoCreated(event.memo);
   } else if (event.kind === 'updated') {
-    actions.handleMemoUpdated(event.memo);
+    actions.handleMemoUpdated(event);
   } else {
     actions.handleMemoDeleted();
   }

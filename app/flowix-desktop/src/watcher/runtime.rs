@@ -7,9 +7,9 @@ use crate::watcher::manager::MemoWatcher;
 use flowix_core::memo_file::atomic_write_bytes;
 
 /// Read a fresh registry snapshot without acquiring AppState's MemoFile lock.
-/// Call while holding the watcher binding lock, so delayed rebinds cannot apply
-/// older snapshots. Never replace this with a global MemoFile read: document
-/// operations hold that lock while recording watcher self-write marks.
+/// Call under the notebook transition lock so the selected ID and binding use
+/// one coherent transition. Document operations hold the MemoFile lock while
+/// recording self-writes, so keep this registry read independent of that lock.
 /// The facade uses the current registry path and does not run legacy migrations.
 pub(crate) fn read_registered_notebooks(
     config_dir: &Path,
@@ -17,8 +17,8 @@ pub(crate) fn read_registered_notebooks(
     flowix_core::memo_file::MemoFile::new(config_dir.to_path_buf()).read_notebook_configs()
 }
 
-/// After recovery, reconcile the roots that really attached. The integration
-/// layer owns queue admission; the watcher manager only owns OS bindings.
+/// Reconcile only the roots that actually attached.
+#[cfg(test)]
 pub(crate) fn reconcile_bound_roots(
     watcher: &MemoWatcher,
     configs: &[flowix_core::memo_file::NotebookConfig],

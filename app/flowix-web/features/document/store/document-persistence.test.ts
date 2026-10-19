@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { applyLoadedDocumentContent, getDocumentBuffer, recordDocumentEdit, saveDocumentContent, protectDocumentDraft, prepareDocumentLeave, registerDocumentCapture, registerDocumentPersistence, flushAllDocumentSessions, reconcileUnsavedExternalDocumentChange } from './document-session-service';
-import { waitForDocumentCommits } from './document-commit-queue';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { applyLoadedDocumentContent, discardDocumentDraft, getDocumentBuffer, recordDocumentEdit, saveDocumentContent, protectDocumentDraft, prepareDocumentLeave, registerDocumentCapture, registerDocumentPersistence, flushAllDocumentSessions, reconcileUnsavedExternalDocumentChange } from './document-session-service';
+import { cancelDocumentCapture, waitForDocumentCommits } from './document-commit-queue';
+import { getDocumentSession } from './document-runtime-session';
+import { releaseDocumentBuffer } from './buffer-registry';
 
 const mocks = vi.hoisted(() => ({ write: vi.fn(), checkpoint: vi.fn() }));
 vi.mock('../use-cases/local-document-operations', () => ({ localDocumentOperations: { write: mocks.write } }));
@@ -10,18 +12,34 @@ vi.mock('./recovery-draft-store', () => ({
 }));
 
 let sequence = 0;
-function document() {
+type TestDocumentIdentity = { kind: 'md'; path: string; displayId: string };
+const createdDocuments: TestDocumentIdentity[] = [];
+function document(): TestDocumentIdentity {
   const identity = { kind: 'md' as const, path: '/review.md', displayId: 'review-' + ++sequence };
   applyLoadedDocumentContent(identity, identity.path, 'A');
+  createdDocuments.push(identity);
   return identity;
 }
-function save(identity: ReturnType<typeof document>) {
+function save(identity: TestDocumentIdentity) {
   return saveDocumentContent({ identity, path: identity.path, content: getDocumentBuffer(identity).content });
 }
 describe('persistence under slow and failed writes', () => {
   beforeEach(() => {
     mocks.write.mockReset().mockImplementation(async request => ({ status: 'saved', path: request.path, content: request.content }));
     mocks.checkpoint.mockReset().mockResolvedValue(true);
+  });
+  afterEach(async () => {
+    for (const identity of createdDocuments.splice(0)) {
+      const key = 'md:' + identity.displayId;
+      cancelDocumentCapture(key);
+      await waitForDocumentCommits(key);
+      const session = getDocumentSession(identity);
+      session.captures.clear();
+      session.adapters.clear();
+      session.retainedAdapter = undefined;
+      discardDocumentDraft(identity);
+      releaseDocumentBuffer(identity.displayId);
+    }
   });
   it('writes undo back to A after a delayed save of B, without another input event', async () => {
     const identity = document(); let complete!: (value: unknown) => void;

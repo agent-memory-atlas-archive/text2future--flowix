@@ -18,7 +18,7 @@ type PreviewProps = {
   reportPresentation?: ReportPresentation;
 };
 const LOADING: SurfaceState = {
-  status: 'loading', phase: 'content', message: { key: 'document.file.loading' }, retainContent: false,
+  status: 'loading', loadingMode: 'blocking', retainContent: false,
 };
 
 function filenameFromPath(filePath: string): string {

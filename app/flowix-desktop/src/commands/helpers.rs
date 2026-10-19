@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
 use crate::config::{path_is_inside, path_is_inside_reserved_directory};
 use crate::lock_utils::read_lock;
@@ -82,18 +82,23 @@ impl From<flowix_core::FlowixError> for FileOperationFailure {
     }
 }
 
-pub(crate) fn watch_created_notebook(state: &AppState, app: &AppHandle, config: &NotebookConfig) {
+pub(crate) fn record_created_notebook_access(
+    state: &AppState,
+    app: &AppHandle,
+    config: &NotebookConfig,
+) {
     state
         .security_bookmarks
         .record_accessible_directory(Path::new(&config.path));
-    if let Some(watcher) = current_watcher(app) {
-        if let Ok(mut guard) = watcher.write() {
-            if guard.add_notebook_root(config) {
-                return;
-            }
-        }
+    let is_current = {
+        read_lock(&state.memo_file, "memo_file")
+            .current_notebook_id_value()
+            .as_deref()
+            == Some(config.id.as_str())
+    };
+    if is_current {
+        refresh_current_notebook_watcher(state, app);
     }
-    refresh_watcher_roots(state, app);
 }
 
 /// Resolve a notebook-relative Markdown address without consulting the legacy
@@ -157,48 +162,51 @@ pub(crate) fn refresh_notebook_note_index(memo_file: &MemoFile, path: &Path) {
     }
 }
 
-pub(crate) fn refresh_watcher_roots(state: &AppState, app: &AppHandle) {
-    let Some(watcher) = current_watcher(app) else { return; };
-    let Ok(mut guard) = watcher.write() else { return; };
-    // Snapshot under the same lock as binding so delayed callers cannot
-    // overwrite a newer bind with metadata read before taking the lock.
-    let configs = match crate::watcher::runtime::read_registered_notebooks(state.user_config.config_dir()) {
-        Ok(configs) => configs,
-        Err(error) => {
-            tracing::warn!(%error, "watcher roots snapshot unavailable; retaining current bindings");
-            return;
-        }
-    };
-    guard.rebind_all(app.clone(), configs.clone());
-    drop(guard);
-    // A full rebind has a short gap. Reconcile once after binding so changes
-    // made during that gap are included even if no filesystem event arrives.
-    for config in &configs {
-        state.notebook_background.request(&config.id, false, true);
-    }
-}
-
-pub(crate) fn retry_notebook_watch(state: &AppState, app: &AppHandle, notebook_id: &str) {
-    let Some(config) =
-        read_lock(&state.memo_file, "memo_file").get_notebook_config_by_id(notebook_id)
-    else {
-        return;
+fn rebind_current_notebook_watcher_locked(state: &AppState, app: &AppHandle) -> Option<String> {
+    // The notebook transition lock serializes this snapshot with selection
+    // changes. Drop the MemoFile read guard before taking the watcher lock.
+    let (active_id, active_config) = {
+        let memo_file = read_lock(&state.memo_file, "memo_file");
+        let active_id = memo_file.current_notebook_id_value();
+        let active_config = active_id
+            .as_deref()
+            .and_then(|notebook_id| memo_file.get_notebook_config_by_id(notebook_id));
+        (active_id, active_config)
     };
     let Some(watcher) = current_watcher(app) else {
-        return;
+        return None;
     };
-    let Ok(mut watcher) = watcher.write() else {
-        return;
+    let Ok(mut guard) = watcher.write() else {
+        return None;
     };
-    if watcher.is_watching(notebook_id) {
-        return;
+    guard.rebind_current_notebook(
+        app.clone(),
+        active_id.as_deref(),
+        active_config,
+    );
+    active_id.filter(|notebook_id| guard.is_watching(notebook_id))
+}
+
+pub(crate) fn rebind_current_notebook_watcher_while_transition_locked(
+    state: &AppState,
+    app: &AppHandle,
+) -> Option<String> {
+    rebind_current_notebook_watcher_locked(state, app)
+}
+
+pub(crate) fn refresh_current_notebook_watcher(state: &AppState, app: &AppHandle) {
+    let active_id = {
+        let _transition = state
+            .notebook_transition
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        rebind_current_notebook_watcher_locked(state, app)
+    };
+    // The rebind has a short gap. Reconcile only the root that actually
+    // attached, so inactive notebooks are never pulled into watcher work.
+    if let Some(notebook_id) = active_id {
+        state.notebook_background.request(&notebook_id, false, true);
     }
-    if !watcher.add_notebook_root(&config) {
-        tracing::warn!(notebook_id, "notebook watch retry failed");
-        return;
-    }
-    drop(watcher);
-    state.notebook_background.request(notebook_id, true, true);
 }
 
 pub(crate) fn set_notebook_watching_suspended(app: &AppHandle, notebook_id: &str, suspended: bool) {
@@ -210,7 +218,17 @@ pub(crate) fn set_notebook_watching_suspended(app: &AppHandle, notebook_id: &str
 }
 
 pub(crate) fn refresh_notebook_watcher(state: &AppState, app: &AppHandle, notebook_id: &str) {
-    let config = read_lock(&state.memo_file, "memo_file").get_notebook_config_by_id(notebook_id);
+    let transition = state
+        .notebook_transition
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let config = {
+        let memo_file = read_lock(&state.memo_file, "memo_file");
+        if memo_file.current_notebook_id_value().as_deref() != Some(notebook_id) {
+            return;
+        }
+        memo_file.get_notebook_config_by_id(notebook_id)
+    };
     if let (Some(config), Some(watcher)) = (config, current_watcher(app)) {
         if let Ok(mut watcher) = watcher.write() {
             if watcher.refresh_notebook_root(&config) {
@@ -219,7 +237,8 @@ pub(crate) fn refresh_notebook_watcher(state: &AppState, app: &AppHandle, notebo
         }
     }
     // Startup and watcher failures still use the established full recovery path.
-    refresh_watcher_roots(state, app);
+    drop(transition);
+    refresh_current_notebook_watcher(state, app);
 }
 
 pub(crate) fn switch_notebook_trusting_index(

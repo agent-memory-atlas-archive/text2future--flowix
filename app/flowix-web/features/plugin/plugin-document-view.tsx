@@ -27,12 +27,12 @@ export function PluginDocumentView({
   const canvasRef = useRef<HTMLDivElement>(null);
   const rendererRef = useRef<PluginArtifactRendererHandle>(null);
   const requestSequenceRef = useRef(0);
+  const loadRef = useRef<() => Promise<void>>(async () => {});
   const currentNotePathRef = useRef(notePath);
   currentNotePathRef.current = notePath;
   const retryPresentation = useCallback(() => {
-    // Re-mount the renderer; its effect starts a fresh artifact resolution.
-    reportPresentation?.({ state: { status: 'ready' } });
-  }, [reportPresentation]);
+    void loadRef.current();
+  }, []);
 
   const load = useCallback(async () => {
     const requestSequence = ++requestSequenceRef.current;
@@ -40,7 +40,7 @@ export function PluginDocumentView({
       && currentNotePathRef.current === notePath;
     setError(null);
     reportPresentation?.({
-      state: { status: 'loading', phase: 'content', message: { key: 'memo.navigation.loading' }, retainContent: true },
+      state: { status: 'loading', loadingMode: 'blocking', retainContent: true },
     });
     try {
       const resolved = await artifacts.resolve(notePath);
@@ -77,6 +77,7 @@ export function PluginDocumentView({
       }
     }
   }, [notePath, reportPresentation, retryPresentation, transitionId]);
+  loadRef.current = load;
 
   useEffect(() => {
     void load();
@@ -100,7 +101,7 @@ export function PluginDocumentView({
       <button className="inline-flex items-center gap-2 rounded-lg border px-3 py-2" onClick={() => void load()}><ArrowClockwiseIcon size={16} weight="bold" />重试</button>
     </div>;
   }
-  if (!artifact) return <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">正在加载插件产物…</div>;
+  if (!artifact) return reportPresentation ? null : <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">正在加载插件产物…</div>;
 
   const canRenderContent = artifact.content != null && artifact.content.length > 0;
   if (!canRenderContent) {

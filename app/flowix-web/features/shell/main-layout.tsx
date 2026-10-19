@@ -281,7 +281,13 @@ export function MainLayout({
     step: state.nativeStep,
     error: state.nativeError,
   })));
-  const workspaceStartup = useWorkspaceStartupStore();
+  // Only the failure banner reads this store. Subscribing to the whole store
+  // re-rendered the entire layout (memo list, titlebar, status bar) on every
+  // startup progress tick.
+  const workspaceStartup = useWorkspaceStartupStore(useShallow((state) => ({
+    status: state.status,
+    error: state.error,
+  })));
   // Native error UI remains in the layout; the root overlay owns all loading visuals.
   const startupStatus = nativeStartup;
   const documentHistory = useShellDocumentHistory();
@@ -581,16 +587,13 @@ export function MainLayout({
     ? workColumnPresentation.content.surface.instanceKey
     : '';
   const workRuntimePresentation = useWorkspaceSurfacePresentation(workSurfaceViewId);
+  const workSurfaceBlockingLoading = workRuntimePresentation.state?.status === 'loading'
+    && workRuntimePresentation.state.loadingMode === 'blocking';
+  const workSurfaceFailed = workRuntimePresentation.state?.status === 'error'
+    || workRuntimePresentation.state?.status === 'unavailable';
   const workCapabilities = workRuntimePresentation.capabilities ?? workColumnPresentation.capabilities;
   const workHeaderStyle = workRuntimePresentation.appearance?.headerStyle ?? workColumnPresentation.chrome;
   const isAgentConversationDetail = workColumnPresentation.header.kind === 'agent';
-  const workColumnLoadingTone = navigationState.phase === 'loading'
-    ? navigationState.pendingTarget?.kind === 'agent-conversation'
-      ? 'agent'
-      : navigationState.pendingTarget?.kind === 'media'
-        ? 'media'
-        : 'document'
-    : workColumnPresentation.chrome;
   const handleToggleDefaultFolder = useCallback(async (target: {
     filePath: string;
     notebookPath: string;
@@ -901,12 +904,11 @@ export function MainLayout({
                 focused={focusedHostId === 'main-third'}
                 startupIdentity={JSON.stringify(navigationState.target)}
               />
-              {(isDocumentTransitioning
+              {((isDocumentTransitioning && !workSurfaceFailed)
+                || workSurfaceBlockingLoading
                 || (navigationState.phase === 'loading' && navigationState.showWorkColumnLoading)) && (
                 <CenteredLoadingSpinner
-                  className={workColumnLoadingTone === 'agent' || workColumnLoadingTone === 'media'
-                    ? 'absolute inset-0 z-40 bg-[var(--agent-bg,var(--document-bg))]'
-                    : 'absolute inset-0 z-40 bg-[var(--document-bg)]'}
+                  className="pointer-events-none absolute inset-0 z-40"
                   label={notebookSwitching ? t('memo.navigation.preparingNotebook') : undefined}
                 />
               )}

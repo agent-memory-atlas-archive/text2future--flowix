@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type RefObject } from 'react';
 
 import { canonicalPath, samePath, uniquePaths } from '@/lib/path';
+import { findFileDisplayId } from '@/lib/file-display-registry';
 import { TREE_ROW_HEIGHT, TREE_ROW_SIZE } from './notebook-tree-layout';
 import type { VisibleTreeNode } from './use-folder-tree';
 
@@ -59,13 +60,14 @@ export function useNotebookTreeInteraction({
   const [focusedTreePath, setFocusedTreePath] = useState<string | null>(null);
   const selectedFilePathsRef = useRef<string[]>([]);
   const selectionAnchorPathRef = useRef<string | null>(null);
-  const previousActiveFilePathRef = useRef(activeFilePath ? canonicalPath(activeFilePath) : null);
+  const activePath = activeFilePath ? canonicalPath(activeFilePath) : null;
+  const activeDisplayId = activeFilePath ? findFileDisplayId(activeFilePath) : null;
+  const previousActiveFileRef = useRef({ path: activePath, displayId: activeDisplayId });
   const pendingActiveFileScrollPathRef = useRef(activeFilePath ? canonicalPath(activeFilePath) : null);
   const [navigationPolicies, setNavigationPolicies] = useState<NotebookTreeNavigationPolicies>({
     active: null,
     pending: null,
   });
-  const activePath = activeFilePath ? canonicalPath(activeFilePath) : null;
   const navigationPolicyForActivePath = getNavigationPolicyForPath(activePath, navigationPolicies);
   const activeFileShouldReveal = !activeFilePath
     || navigationPolicyForActivePath?.policy !== 'preserve';
@@ -104,9 +106,29 @@ export function useNotebookTreeInteraction({
   }, [onNoteSelect, setNavigationPolicy]);
 
   useLayoutEffect(() => {
-    const nextActivePath = activeFilePath ? canonicalPath(activeFilePath) : null;
-    if (previousActiveFilePathRef.current === nextActivePath) return;
-    previousActiveFilePathRef.current = nextActivePath;
+    const nextActivePath = activePath;
+    const { path: previousPath, displayId: previousDisplayId } = previousActiveFileRef.current;
+    if (previousPath === nextActivePath) {
+      // The registry can move before activeFilePath's store projection. Keep
+      // the previous ID through that temporary old-path lookup miss.
+      if (activeDisplayId) previousActiveFileRef.current = { path: nextActivePath, displayId: activeDisplayId };
+      return;
+    }
+    const sameDisplay = activeDisplayId !== null && previousDisplayId === activeDisplayId;
+    previousActiveFileRef.current = { path: nextActivePath, displayId: activeDisplayId };
+    if (sameDisplay && previousPath && nextActivePath) {
+      // A rename keeps the same surface. Carry selection/focus to its new
+      // locator even if the tree's asynchronous directory read is still stale.
+      const rebase = (path: string) => samePath(path, previousPath) ? nextActivePath : path;
+      const anchor = selectionAnchorPathRef.current;
+      updateSelection(selectedFilePathsRef.current.map(rebase), anchor ? rebase(anchor) : null);
+      setFocusedTreePath(current => current ? rebase(current) : null);
+      setNavigationPolicies(current => ({
+        active: current.active ? { ...current.active, path: rebase(current.active.path) } : null,
+        pending: current.pending ? { ...current.pending, path: rebase(current.pending.path) } : null,
+      }));
+      return;
+    }
     const requestedPolicy = nextActivePath
       && navigationPolicies.pending?.path === nextActivePath
       ? navigationPolicies.pending
@@ -114,11 +136,12 @@ export function useNotebookTreeInteraction({
     setNavigationPolicies({ active: requestedPolicy, pending: null });
     if (selectedFilePathsRef.current.length === 0 && selectionAnchorPathRef.current === null) return;
     updateSelection([], null);
-  }, [activeFilePath, navigationPolicies.pending, updateSelection]);
+  }, [activePath, activeDisplayId, navigationPolicies.pending, updateSelection]);
 
   useEffect(() => {
     const currentPaths = selectedFilePathsRef.current;
-    const nextPaths = currentPaths.filter((path) => treeItemPaths.has(canonicalPath(path)));
+    const nextPaths = currentPaths.filter((path) => treeItemPaths.has(canonicalPath(path))
+      || Boolean(activeFilePath && samePath(path, activeFilePath)));
     if (nextPaths.length === currentPaths.length) return;
     const anchorPath = selectionAnchorPathRef.current;
     updateSelection(
@@ -127,7 +150,7 @@ export function useNotebookTreeInteraction({
         ? anchorPath
         : nextPaths[nextPaths.length - 1] ?? null,
     );
-  }, [treeItemPaths, updateSelection]);
+  }, [treeItemPaths, activeFilePath, updateSelection]);
 
   const focusTreeItem = useCallback((path: string) => {
     setFocusedTreePath(path);
@@ -209,13 +232,16 @@ export function useNotebookTreeInteraction({
   }, [focusTreeItem, tree, visibleTreeItems]);
 
   useEffect(() => {
-    const hasFocusedItem = focusedTreePath
-      && visibleTreeItems.some(({ item }) => samePath(item.fullPath, focusedTreePath));
-    if (hasFocusedItem) return;
     const fallback = activeFileShouldReveal && activeFilePath && visibleTreeItems.some(({ item }) => samePath(item.fullPath, activeFilePath))
       ? activeFilePath
       : visibleTreeItems[0]?.item.fullPath ?? null;
-    if (fallback !== focusedTreePath) setFocusedTreePath(fallback);
+    setFocusedTreePath(current => {
+      // Read the state after the rename layout effect, rather than replacing
+      // its rebased focus with a fallback computed from the stale tree.
+      if (current && (visibleTreeItems.some(({ item }) => samePath(item.fullPath, current))
+        || (activeFilePath && samePath(current, activeFilePath)))) return current;
+      return fallback;
+    });
   }, [activeFileShouldReveal, activeFilePath, focusedTreePath, visibleTreeItems]);
 
   useEffect(() => {

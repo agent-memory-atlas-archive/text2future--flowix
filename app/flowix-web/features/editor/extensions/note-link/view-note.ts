@@ -2,9 +2,8 @@
 
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { NodeView as ProseMirrorNodeView, EditorView } from '@tiptap/pm/view';
-import { DecorationSet } from '@tiptap/pm/view';
 import { Node, nodeInputRule, nodePasteRule, type InputRuleMatch, type JSONContent, type PasteRuleMatch } from '@tiptap/core';
-import { NodeSelection, Plugin, PluginKey, type EditorState } from '@tiptap/pm/state';
+import { NodeSelection } from '@tiptap/pm/state';
 
 import { noteLinkForIndexedPath } from '@features/editor/extensions/note-link/memo-resolver';
 import { openNoteByNotebookPath, openNoteByPhysicalPath } from '@features/memo/public/note-navigation-api';
@@ -19,7 +18,7 @@ export type { NoteReferenceAttrs } from './note-reference-markdown';
 export { isRelativeNoteDestination, parseWikiNoteLinkAtStart, splitObsidianTarget } from './note-reference-markdown';
 import { translate, type I18nKey } from '@/lib/i18n';
 import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
-import { createTerminalInlineAtomCaretDecorations } from '@features/editor/extensions/shared/terminal-inline-atom-caret';
+import { createInlineAtomMaintenancePlugin, removeHardBreaksAroundInlineAtoms } from '@features/editor/extensions/shared/inline-atom-maintenance';
 import {
   createInlineAtomCloseIcon,
   createInlineAtomNodeView,
@@ -110,58 +109,6 @@ function findWikiNotePasteMatches(text: string): PasteRuleMatch[] {
     if (parsed) matches.push({ index, text: parsed.raw, data: parsed });
   }
   return matches;
-}
-
-// ─── HardBreak 清理 ───────────────────────────────────────────────────────────
-
-/**
- * 删掉 noteReference 节点前后紧邻的 hardBreak 节点。
- *
- * 触发场景:用户在编辑器里按 Shift+Enter 硬换行(产生 hardBreak),然后在下一
- * 行粘贴物理路径 → 落盘 markdown 形如 `foo  \n<note ...>...</note>`。再次打
- * 开时,marked 把 hardBreak 和 noteReference 还原成 ProseMirror 节点,渲染时
- * hardBreak 强制占一行,视觉上卡片"头顶"多出一行空白。
- *
- * 另一类场景是卡片已经在块末尾,后面残留同块 hardBreak,视觉上表现为
- * "卡片末尾多一行"。这类同样需要清掉,否则重新打开/粘贴后仍会复现。
- *
- * 完全对照 fileAttachment 节点(`attachment-link/nodes/view-file.ts` 同名函数)
- * 的处理方式 — 二者都是 inline atom 节点,同样受 hardBreak 残留影响。
- */
-function removeHardBreaksAroundNoteReferences(state: EditorState) {
-  const deletions: Array<{ from: number; to: number }> = [];
-  const seen = new Set<string>();
-
-  const pushDeletion = (from: number, to: number) => {
-    const key = `${from}:${to}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    deletions.push({ from, to });
-  };
-
-  state.doc.descendants((node: ProseMirrorNode, pos: number) => {
-    if (node.type.name !== 'noteReference') return;
-
-    const $pos = state.doc.resolve(pos);
-    const nodeBefore = $pos.nodeBefore;
-    if (nodeBefore?.type.name === 'hardBreak') {
-      pushDeletion(pos - nodeBefore.nodeSize, pos);
-    }
-    const afterPos = pos + node.nodeSize;
-    const $after = state.doc.resolve(afterPos);
-    const nodeAfter = $after.nodeAfter;
-    if (nodeAfter?.type.name === 'hardBreak') {
-      pushDeletion(afterPos, afterPos + nodeAfter.nodeSize);
-    }
-  });
-
-  if (deletions.length === 0) return null;
-
-  const tr = state.tr;
-  deletions.reverse().forEach(({ from, to }) => {
-    tr.delete(from, to);
-  });
-  return tr;
 }
 
 // ─── NodeView ─────────────────────────────────────────────────────────────────
@@ -628,7 +575,6 @@ class NoteReferenceView implements ProseMirrorNodeView {
 // ─── Node definition ──────────────────────────────────────────────────────────
 
 function createNoteReferenceExtension(presentation: 'document' | 'composer') {
-  const caretPluginKey = new PluginKey<DecorationSet>(`noteReferenceTerminalCaret:${presentation}`);
   return Node.create({
     name: 'noteReference',
     group: 'inline',
@@ -743,39 +689,14 @@ function createNoteReferenceExtension(presentation: 'document' | 'composer') {
       return ({ node, view, getPos }) => new NoteReferenceView(node, view, getPos as () => number | undefined, presentation);
     },
 
-    // ─── HardBreak 清理 ───────────────────────────────────────────────────────
-    // 与 fileAttachment 同源(`attachment-link/nodes/view-file.ts:onCreate / addProseMirrorPlugins`):
-    // 编辑器刚创建时扫一遍,后续每次文档变动也扫一遍,防止用户手动在卡片
-    // 前后插入换行(Shift+Enter)导致卡片头部或末尾出现同块空行。
-
+    // Normalize imported legacy content once, then maintain changed textblocks.
     onCreate() {
-      const tr = removeHardBreaksAroundNoteReferences(this.editor.state);
-      if (tr?.docChanged) {
-        this.editor.view.dispatch(tr);
-      }
+      const tr = removeHardBreaksAroundInlineAtoms(this.editor.state, ['noteReference']);
+      if (tr?.docChanged) this.editor.view.dispatch(tr);
     },
 
     addProseMirrorPlugins() {
-      return [
-        new Plugin({
-          key: caretPluginKey,
-          state: {
-            init: (_, state) => createTerminalInlineAtomCaretDecorations(state.doc, 'noteReference'),
-            apply: (transaction, value, _oldState, newState) => (
-              transaction.docChanged
-                ? createTerminalInlineAtomCaretDecorations(newState.doc, 'noteReference')
-                : value
-            ),
-          },
-          props: {
-            decorations: (state) => caretPluginKey.getState(state) ?? DecorationSet.empty,
-          },
-          appendTransaction: (transactions, _oldState, newState) => {
-            if (!transactions.some(transaction => transaction.docChanged)) return null;
-            return removeHardBreaksAroundNoteReferences(newState);
-          },
-        }),
-      ];
+      return [createInlineAtomMaintenancePlugin(['noteReference'])];
     },
 
     addInputRules() {

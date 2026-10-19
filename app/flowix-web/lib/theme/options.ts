@@ -41,6 +41,12 @@ export const THEME_OPTIONS: ThemeOption[] = [
     preview: { background: '#0e1014', surface: '#16191f', primary: '#e4bf46', accent: '#262a31' },
   },
   {
+    id: 'mist',
+    labelKey: 'theme.mist.label',
+    descriptionKey: 'theme.mist.description',
+    preview: { background: '#0e1014', surface: '#16191f', primary: '#e4bf46', accent: '#262a31' },
+  },
+  {
     id: 'rock',
     labelKey: 'theme.rock.label',
     descriptionKey: 'theme.rock.description',

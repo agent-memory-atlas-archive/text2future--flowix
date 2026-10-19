@@ -12,7 +12,7 @@
     "windows": [
       {
         "title": "Flowix Dev",
-        "transparent": false,
+        "transparent": true,
         "decorations": false,
         "width": 1100,
         "height": 720,

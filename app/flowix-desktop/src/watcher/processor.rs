@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flowix_core::memo_file::{
-    media_kind_for_path, FileManagementPolicy, notebook_relative_path, MemoFile,
+    resource_kind_for_path, FileManagementPolicy, notebook_relative_path, MemoFile,
 };
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -52,15 +52,41 @@ fn refresh_path(
     ctx: &NotebookWatchContext,
     path: &Path,
 ) -> Result<DispatchOutcome, String> {
+    refresh_path_with_content(memo_file, ctx, path, None)
+}
+
+fn refresh_path_with_content(
+    memo_file: &MemoFile,
+    ctx: &NotebookWatchContext,
+    path: &Path,
+    content: Option<&str>,
+) -> Result<DispatchOutcome, String> {
     let relative_path = indexable_relative_path(ctx, path)?;
-    memo_file.refresh_note_path(&ctx.notebook_id, &relative_path)
-        .map_err(|error| error.to_string())?;
+    match content {
+        Some(content) => memo_file.refresh_note_path_with_content(
+            &ctx.notebook_id,
+            &relative_path,
+            content,
+        ),
+        None => memo_file.refresh_note_path(&ctx.notebook_id, &relative_path),
+    }
+    .map_err(|error| error.to_string())?;
     Ok(DispatchOutcome::PathIndexed { relative_path })
 }
 
 fn emit_path_changed(app: &AppHandle, ctx: &NotebookWatchContext, relative_path: &str, deleted: bool) {
+    emit_path_changed_with_content(app, ctx, relative_path, deleted, None);
+}
+
+fn emit_path_changed_with_content(
+    app: &AppHandle,
+    ctx: &NotebookWatchContext,
+    relative_path: &str,
+    deleted: bool,
+    content: Option<&str>,
+) {
     emit_path_changed_ui(app, ctx, relative_path, deleted);
-    record_cloud_path_change(app, ctx, relative_path, deleted);
+    record_cloud_path_change_with_content(app, ctx, relative_path, deleted, content);
 }
 
 fn emit_path_changed_ui(app: &AppHandle, ctx: &NotebookWatchContext, relative_path: &str, deleted: bool) {
@@ -72,11 +98,23 @@ fn emit_path_changed_ui(app: &AppHandle, ctx: &NotebookWatchContext, relative_pa
 }
 
 fn record_cloud_path_change(app: &AppHandle, ctx: &NotebookWatchContext, relative_path: &str, deleted: bool) {
+    record_cloud_path_change_with_content(app, ctx, relative_path, deleted, None);
+}
+
+fn record_cloud_path_change_with_content(
+    app: &AppHandle,
+    ctx: &NotebookWatchContext,
+    relative_path: &str,
+    deleted: bool,
+    content: Option<&str>,
+) {
     if !relative_path.is_empty() {
         if let Some(state) = app.try_state::<crate::app::state::AppState>() {
             let cloud_id = flowix_sync::v2_path_note_id(&ctx.notebook_id, relative_path);
             let fingerprint = if deleted {
                 "deleted".to_string()
+            } else if let Some(content) = content {
+                flowix_sync::v2_content_hash(content.as_bytes())
             } else {
                 std::fs::read(ctx.root.join(relative_path))
                     .map(|bytes| flowix_sync::v2_content_hash(&bytes))
@@ -117,17 +155,31 @@ fn record_confirmed_cloud_move(
     }
 }
 
-fn refresh_media_path(memo_file: &MemoFile, ctx: &NotebookWatchContext, path: &Path) -> Result<(), String> {
+fn refresh_resource_path(memo_file: &MemoFile, ctx: &NotebookWatchContext, path: &Path) -> Result<(), String> {
     let relative_path = notebook_relative_path(&ctx.root, path)?;
     if FileManagementPolicy::from_notebook_root(&ctx.root)
         .is_ignored_at(&ctx.root, Path::new(&relative_path)) {
         return Ok(());
     }
-    memo_file.refresh_media_resource_path(&ctx.notebook_id, &relative_path)
+    memo_file.refresh_indexed_resource_path(&ctx.notebook_id, &relative_path)
         .map_err(|error| error.to_string())
 }
 
-fn process_media_event(
+fn enclosing_package_document(ctx: &NotebookWatchContext, path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .skip(1)
+        .take_while(|ancestor| *ancestor != ctx.root.as_path())
+        .find(|ancestor| {
+            ancestor.is_dir()
+                && ancestor
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "pages" | "key"))
+        })
+        .map(Path::to_path_buf)
+}
+
+fn process_indexed_resource_event(
     event: &RawFsEvent,
     memo_file: &Arc<std::sync::RwLock<MemoFile>>,
     ctx: &NotebookWatchContext,
@@ -135,14 +187,14 @@ fn process_media_event(
     if matches!(event.kind, FsEventKind::DirectoryChange) {
         return false;
     }
-    let old_media = event.rename_from.as_ref().is_some_and(|path| media_kind_for_path(path).is_some());
-    let new_media = media_kind_for_path(&event.path).is_some();
-    if !old_media && !new_media {
+    let old_resource = event.rename_from.as_ref().is_some_and(|path| resource_kind_for_path(path).is_some());
+    let new_resource = resource_kind_for_path(&event.path).is_some();
+    if !old_resource && !new_resource {
         return false;
     }
     let Ok(memo_file) = memo_file.read() else { return true; };
-    let Ok(_write_guard) = memo_file.operation_locks().notebook_read(&ctx.notebook_id, "watcher_media_refresh") else { return true; };
-    if old_media && new_media {
+    let Ok(_write_guard) = memo_file.operation_locks().notebook_read(&ctx.notebook_id, "watcher_resource_refresh") else { return true; };
+    if old_resource && new_resource {
         if let Some(old_path) = event.rename_from.as_ref() {
             if event.rename_from_notebook_id.as_ref().is_none_or(|id| id == &ctx.notebook_id) {
                 let old_root = event.rename_from_root.as_ref().unwrap_or(&ctx.root);
@@ -150,27 +202,27 @@ fn process_media_event(
                     notebook_relative_path(old_root, old_path),
                     notebook_relative_path(&ctx.root, &event.path),
                 ) {
-                    match memo_file.move_media_resource_path(&ctx.notebook_id, &old_relative, &new_relative) {
+                    match memo_file.move_indexed_resource_path(&ctx.notebook_id, &old_relative, &new_relative) {
                         Ok(true) => return true,
                         Ok(false) => {},
-                        Err(error) => tracing::warn!("media rename refresh failed: {error}"),
+                        Err(error) => tracing::warn!("resource rename refresh failed: {error}"),
                     }
                 }
             }
         }
     }
-    if new_media {
-        if let Err(error) = refresh_media_path(&memo_file, ctx, &event.path) {
-            tracing::warn!(path = %event.path.display(), "media path refresh failed: {error}");
+    if new_resource {
+        if let Err(error) = refresh_resource_path(&memo_file, ctx, &event.path) {
+            tracing::warn!(path = %event.path.display(), "resource path refresh failed: {error}");
         }
     }
-    if let Some(old_path) = event.rename_from.as_ref().filter(|_| old_media) {
+    if let Some(old_path) = event.rename_from.as_ref().filter(|_| old_resource) {
         let old_ctx = NotebookWatchContext {
             notebook_id: event.rename_from_notebook_id.clone().unwrap_or_else(|| ctx.notebook_id.clone()),
             root: event.rename_from_root.clone().unwrap_or_else(|| ctx.root.clone()),
         };
-        if let Err(error) = refresh_media_path(&memo_file, &old_ctx, old_path) {
-            tracing::warn!(path = %old_path.display(), "old media path refresh failed: {error}");
+        if let Err(error) = refresh_resource_path(&memo_file, &old_ctx, old_path) {
+            tracing::warn!(path = %old_path.display(), "old resource path refresh failed: {error}");
         }
     }
     // A type-changing rename may also add or remove a Markdown note.
@@ -211,12 +263,51 @@ impl PathNoteEventProcessor {
         app: &AppHandle,
         memo_file: &Arc<std::sync::RwLock<MemoFile>>,
         ctx: &NotebookWatchContext,
+        stable_content: Option<&str>,
     ) {
         if let Some(previous) = &event.rename_from {
             crate::commands::external_document_watch::rebase_path(app, previous, &event.path);
         }
 
-        if process_media_event(event, memo_file, ctx) {
+        let old_bundle = event.rename_from.as_ref().and_then(|path| {
+            let old_ctx = NotebookWatchContext {
+                notebook_id: event.rename_from_notebook_id.clone().unwrap_or_else(|| ctx.notebook_id.clone()),
+                root: event.rename_from_root.clone().unwrap_or_else(|| ctx.root.clone()),
+            };
+            enclosing_package_document(&old_ctx, path).map(|bundle| (old_ctx, bundle))
+        });
+        let new_bundle = enclosing_package_document(ctx, &event.path);
+        if old_bundle.is_some() || new_bundle.is_some() {
+            if let Ok(memo_file) = memo_file.read() {
+                if let Some((old_ctx, bundle)) = &old_bundle {
+                    if let Ok(relative) = notebook_relative_path(&old_ctx.root, bundle) {
+                        let _ = memo_file.refresh_indexed_resource_path(&old_ctx.notebook_id, &relative);
+                    }
+                }
+                if let Some(bundle) = &new_bundle {
+                    if let Ok(relative) = notebook_relative_path(&ctx.root, bundle) {
+                        let _ = memo_file.refresh_indexed_resource_path(&ctx.notebook_id, &relative);
+                    }
+                }
+                if new_bundle.is_some()
+                    && old_bundle.is_none()
+                    && event.rename_from.as_ref().is_some_and(|path| resource_kind_for_path(path).is_some())
+                {
+                    if let Some(old_path) = &event.rename_from {
+                        let old_ctx = NotebookWatchContext {
+                            notebook_id: event.rename_from_notebook_id.clone().unwrap_or_else(|| ctx.notebook_id.clone()),
+                            root: event.rename_from_root.clone().unwrap_or_else(|| ctx.root.clone()),
+                        };
+                        let _ = refresh_resource_path(&memo_file, &old_ctx, old_path);
+                    }
+                }
+            }
+            if new_bundle.is_some() {
+                return;
+            }
+        }
+
+        if process_indexed_resource_event(event, memo_file, ctx) {
             if let Some(old_path) = event.rename_from.as_ref() {
                 if let Ok(memo_file) = memo_file.read() {
                     crate::commands::document_list::rebase_collection_paths_for_move(
@@ -306,6 +397,11 @@ impl PathNoteEventProcessor {
             }
             app.state::<crate::app::state::AppState>().notebook_background
                 .request(&ctx.notebook_id, true, true);
+            if event.path.is_dir() {
+                let _ = app.state::<crate::app::state::AppState>()
+                    .notebook_background
+                    .request_media(&ctx.notebook_id);
+            }
             drop(_write_guard);
             let old_path_is_markdown = is_markdown_path(old_path);
             let new_path_is_markdown = is_markdown_path(&event.path);
@@ -365,23 +461,35 @@ impl PathNoteEventProcessor {
         match event.kind {
             FsEventKind::Create => {
                 crate::commands::document_list::refresh_view_document_path(&memo_file, &event.path);
-                match refresh_path(&memo_file, ctx, &event.path) {
+                match refresh_path_with_content(&memo_file, ctx, &event.path, stable_content) {
                     Ok(DispatchOutcome::PathIndexed { relative_path }) => {
                         crate::commands::path_change::NotebookPathCreated::from_external_tool(
                             ctx.notebook_id.clone(),
                             relative_path.clone(),
                         )
                         .emit(app);
-                        record_cloud_path_change(app, ctx, &relative_path, false);
+                        record_cloud_path_change_with_content(
+                            app,
+                            ctx,
+                            &relative_path,
+                            false,
+                            stable_content,
+                        );
                     }
                     Err(error) => tracing::debug!(path = %event.path.display(), "path refresh skipped: {error}"),
                 }
             }
             FsEventKind::Modify | FsEventKind::Remove => {
                 crate::commands::document_list::refresh_view_document_path(&memo_file, &event.path);
-                match refresh_path(&memo_file, ctx, &event.path) {
+                match refresh_path_with_content(&memo_file, ctx, &event.path, stable_content) {
                     Ok(DispatchOutcome::PathIndexed { relative_path }) => {
-                        emit_path_changed(app, ctx, &relative_path, !event.path.exists());
+                        emit_path_changed_with_content(
+                            app,
+                            ctx,
+                            &relative_path,
+                            !event.path.exists(),
+                            stable_content,
+                        );
                     }
                     Err(error) => tracing::debug!(path = %event.path.display(), "path refresh skipped: {error}"),
                 }
@@ -397,6 +505,9 @@ impl PathNoteEventProcessor {
         crate::commands::document_list::refresh_view_document_catalog(memo_file, &ctx.notebook_id, &ctx.root);
         app.state::<crate::app::state::AppState>().notebook_background
             .request(&ctx.notebook_id, false, true);
+        let _ = app.state::<crate::app::state::AppState>()
+            .notebook_background
+            .request_media(&ctx.notebook_id);
         emit_path_changed(app, ctx, "", false);
     }
 
@@ -406,11 +517,11 @@ impl PathNoteEventProcessor {
         ctx: &NotebookWatchContext,
         path: &Path,
     ) {
-        if media_kind_for_path(path).is_some() {
+        if resource_kind_for_path(path).is_some() {
             let Ok(memo_file) = memo_file.read() else { return; };
-            let Ok(_write_guard) = memo_file.operation_locks().notebook_read(&ctx.notebook_id, "watcher_media_removal") else { return; };
-            if let Err(error) = refresh_media_path(&memo_file, ctx, path) {
-                tracing::warn!(path = %path.display(), "media removal refresh failed: {error}");
+            let Ok(_write_guard) = memo_file.operation_locks().notebook_read(&ctx.notebook_id, "watcher_resource_removal") else { return; };
+            if let Err(error) = refresh_resource_path(&memo_file, ctx, path) {
+                tracing::warn!(path = %path.display(), "resource removal refresh failed: {error}");
             }
             return;
         }

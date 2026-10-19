@@ -23,7 +23,7 @@ const LIGHT_BORDER_COLOR: u32 = 0x00BCBCBC; // COLORREF for #BCBCBC
 #[cfg(target_os = "windows")]
 fn border_color_for_theme(theme: Theme, system: Option<tauri::Theme>) -> u32 {
     let is_dark = match theme {
-        Theme::Dark => true,
+        Theme::Dark | Theme::Mist => true,
         Theme::System => system == Some(tauri::Theme::Dark),
         Theme::Light | Theme::Rock | Theme::Ember => false,
     };
@@ -82,6 +82,7 @@ pub fn theme_background_color(
         // dark   oklch(0.173 0.009 265) -> #0E1014
         Theme::Dark => tauri::utils::config::Color(0x0E, 0x10, 0x14, A),
         // rock   oklch(0.988 0.006 92)  -> #FCFBF7
+        Theme::Mist => tauri::utils::config::Color(0xFC, 0xFB, 0xF7, A),
         Theme::Rock => tauri::utils::config::Color(0xFC, 0xFB, 0xF7, A),
         // ember  oklch(0.985 0.005 50)  -> #FDF9F7
         Theme::Ember => tauri::utils::config::Color(0xFD, 0xF9, 0xF7, A),
@@ -104,7 +105,7 @@ pub fn theme_background_color(
 /// 注意: macOS �?`set_theme` �?app-wide (非单窗口), 任一窗口设置即全局生效�?
 pub fn os_theme_for(theme: Theme) -> Option<tauri::Theme> {
     match theme {
-        Theme::Dark => Some(tauri::Theme::Dark),
+        Theme::Dark | Theme::Mist => Some(tauri::Theme::Dark),
         Theme::Light | Theme::Rock | Theme::Ember => Some(tauri::Theme::Light),
         Theme::System => None,
     }
@@ -126,10 +127,20 @@ pub fn apply_window_chrome_theme(window: &tauri::WebviewWindow, theme: Theme) {
         }
         // Resolve System after clearing any explicit per-window theme override.
         let system = win.theme().ok();
+        let is_main_window = win.label() == "main";
+        if is_main_window {
+            crate::window_material::apply_main_window_material(&win, theme);
+        }
         let color = theme_background_color(theme, system);
         apply_window_border_color(&win, theme, system);
-        if let Err(e) = win.set_background_color(Some(color)) {
-            tracing::warn!("[window_chrome] set_background_color failed: {e}");
+        if is_main_window && crate::window_material::is_active() {
+            if let Err(e) = win.set_background_color(Some(tauri::utils::config::Color(0, 0, 0, 0))) {
+                tracing::warn!("[window_chrome] clear material window background failed: {e}");
+            }
+        } else {
+            if let Err(e) = win.set_background_color(Some(color)) {
+                tracing::warn!("[window_chrome] set_background_color failed: {e}");
+            }
         }
     }) {
         tracing::warn!("[window_chrome] run_on_main_thread failed: {e}");

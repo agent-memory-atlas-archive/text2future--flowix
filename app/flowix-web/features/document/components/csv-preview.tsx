@@ -6,6 +6,7 @@ import type { SurfaceLifecycle, SurfacePresentationUpdate, SurfaceState } from '
 import { TabulatorFull as Tabulator, type CellComponent, type ColumnDefinition } from 'tabulator-tables';
 import { externalDocuments } from '@platform/tauri/client/memos';
 import { clearActionableNotice, upsertActionableNotice } from '@features/notifications/actionable-notice-store';
+import { CsvTableLoadingSkeleton } from '@shared/ui/csv-table-loading-skeleton';
 import { useI18n } from '@/lib/i18n';
 import './csv-preview.css';
 
@@ -295,7 +296,7 @@ export function CsvPreview({ filePath, scopePath, onSurfaceLifecycleReady, repor
     const title = filePath.split(/[\\/]/).filter(Boolean).pop() ?? filePath;
     let surfaceState: SurfaceState;
     if (state.status === 'loading') {
-      surfaceState = { status: 'loading', phase: 'content', message: { key: 'document.file.loading' }, retainContent: false };
+      surfaceState = { status: 'loading', loadingMode: 'blocking', retainContent: true };
     } else if (state.status === 'error') {
       surfaceState = {
         status: 'error', message: { key: 'document.file.unavailable', fallbackText: state.message },
@@ -850,7 +851,7 @@ export function CsvPreview({ filePath, scopePath, onSurfaceLifecycleReady, repor
     }
   }
 
-  if (reportPresentation && state.status === 'loading') return null;
+  if (reportPresentation && state.status === 'loading') return <CsvTableLoadingSkeleton />;
   if (reportPresentation && state.status === 'error') return null;
   if (state.status === 'loading') return <div className="csv-preview__status">正在读取 CSV…</div>;
   if (state.status === 'error') {

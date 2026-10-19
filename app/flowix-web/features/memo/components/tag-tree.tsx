@@ -44,7 +44,7 @@ import {
   migratePinnedByParentOnPathChange,
   type TagDropPosition,
 } from '@features/memo/components/tag-reorder';
-import { markTagsCollapsedByAncestor } from '@features/memo/components/tag-collapse';
+import { markTagsDuringCollapseTransition } from '@features/memo/components/tag-collapse';
 import { system } from '@platform/tauri/client';
 import { canUseNativeContextMenu, logNativeContextMenuError, popupNativeContextMenu } from '@platform/tauri/native-context-menu';
 import { loadNativeMenuIcons } from '@platform/tauri/native-menu-icons';
@@ -124,6 +124,7 @@ export function TagTree({
   // 顺序, 这里另存一份是为迁移 / diff 持久化。
   const [pinnedByParent, setPinnedByParent] = useState<Record<string, string[]>>({});
   const [collapsedTagIds, setCollapsedTagIds] = useState<string[]>([]);
+  const [settledCollapsedTagIds, setSettledCollapsedTagIds] = useState<string[]>([]);
   // 行内重命名编辑态: editingTagId 命中时标签名 span 替换为 input。
   const [editingTagId, setEditingTagId] = useState<string | null>(null);
   const [editingTagName, setEditingTagName] = useState('');
@@ -137,6 +138,7 @@ export function TagTree({
 
   const hiddenTagIdSet = useMemo(() => new Set(hiddenTagIds), [hiddenTagIds]);
   const collapsedTagIdSet = useMemo(() => new Set(collapsedTagIds), [collapsedTagIds]);
+  const settledCollapsedTagIdSet = useMemo(() => new Set(settledCollapsedTagIds), [settledCollapsedTagIds]);
   const childTagIdSet = useMemo(() => {
     const ids = new Set<string>();
     for (const tag of tagOptions) {
@@ -145,11 +147,15 @@ export function TagTree({
     return ids;
   }, [tagOptions]);
   const visibleTagOptions = useMemo(() => {
-    // 不过滤折叠子树, 而是全量渲染并标记 collapsedByAncestor;
-    // 折叠的子树行留在 DOM 中, 由外层 .tag-collapse-track 过渡高度和透明度。
-    // 基于 parentId 祖先链判定，避免嵌套折叠节点覆盖外层折叠范围。
-    return markTagsCollapsedByAncestor(tagOptions, collapsedTagIdSet);
-  }, [collapsedTagIdSet, tagOptions]);
+    // Keep descendants through the 80ms CSS transition, then drop their rows
+    // from the DOM until the parent is expanded again.
+    return markTagsDuringCollapseTransition(tagOptions, collapsedTagIdSet, settledCollapsedTagIdSet);
+  }, [collapsedTagIdSet, settledCollapsedTagIdSet, tagOptions]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSettledCollapsedTagIds(collapsedTagIds), 100);
+    return () => window.clearTimeout(timer);
+  }, [collapsedTagIds]);
 
   useEffect(() => {
     let cancelled = false;

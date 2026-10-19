@@ -41,13 +41,17 @@ pub enum NotebookInitializationJob {
     ResetLegacyStorage,
     InitializeSchema,
     MigrateMediaResourceIdentity,
+    MigrateResourceCatalog,
+    IndexWorkDocuments,
 }
 
 impl NotebookInitializationJob {
-    pub const ALL: [Self; 3] = [
+    pub const ALL: [Self; 5] = [
         Self::ResetLegacyStorage,
         Self::InitializeSchema,
         Self::MigrateMediaResourceIdentity,
+        Self::MigrateResourceCatalog,
+        Self::IndexWorkDocuments,
     ];
 
     pub fn key(self, notebook_id: &str) -> String {
@@ -55,6 +59,8 @@ impl NotebookInitializationJob {
             Self::ResetLegacyStorage => "storage_reset_v1",
             Self::InitializeSchema => "storage_schema_v1",
             Self::MigrateMediaResourceIdentity => "media_resource_identity_v1",
+            Self::MigrateResourceCatalog => "resource_catalog_v1",
+            Self::IndexWorkDocuments => "work_documents_resource_index_v1",
         };
         format!("{prefix}:notebook:{notebook_id}")
     }

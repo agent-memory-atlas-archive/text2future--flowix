@@ -6,11 +6,11 @@
 //! state machine to observe while the blocking migration work runs on a
 //! dedicated thread.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum StartupPhase {
     Pending,
@@ -19,14 +19,14 @@ pub enum StartupPhase {
     Failed,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum StartupStage {
     Initialization,
     WorkspacePreparation,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartupProgress {
     pub percent: u8,
@@ -35,7 +35,7 @@ pub struct StartupProgress {
     pub task: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartupStatus {
     pub phase: StartupPhase,
@@ -87,6 +87,33 @@ impl StartupCoordinator {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .status
             .clone()
+    }
+
+    /// Wait until the startup snapshot changes or the bounded wait expires.
+    /// The caller passes its last snapshot so updates between the snapshot IPC
+    /// and this wait cannot be missed.
+    pub fn wait_for_status_change(
+        &self,
+        previous: &StartupStatus,
+        timeout: Duration,
+    ) -> StartupStatus {
+        let deadline = Instant::now() + timeout;
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        while state.status == *previous {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            state = self
+                .changed
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .0;
+        }
+        state.status.clone()
     }
 
     pub fn elapsed_ms(&self) -> u128 {
@@ -287,6 +314,16 @@ mod tests {
             coordinator.wait_until_ready(),
             Err("disk unavailable".to_string())
         );
+    }
+
+    #[test]
+    fn status_wait_returns_on_progress_and_does_not_miss_an_earlier_update() {
+        let coordinator = StartupCoordinator::new();
+        let previous = coordinator.status();
+        coordinator.mark_running(StartupStage::Initialization, "indexing");
+        let changed = coordinator.wait_for_status_change(&previous, Duration::from_millis(1));
+        assert_eq!(changed.phase, StartupPhase::Running);
+        assert_eq!(changed.step, "indexing");
     }
 
     #[test]

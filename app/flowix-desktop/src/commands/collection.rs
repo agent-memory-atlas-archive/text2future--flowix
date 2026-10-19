@@ -2,8 +2,8 @@
 use crate::{app::state::AppState, lock_utils::read_lock};
 use flowix_core::{
     collection::{
-        display_name_for_path, valid_id, validate_properties, CollectionDocument, CollectionPlacement, CollectionProperty,
-        CollectionType,
+        display_name_for_path, valid_id, validate_properties, CollectionDocument,
+        CollectionPlacement, CollectionProperty, CollectionType,
     },
     memo_file::{
         atomic_write_bytes, rename_file_noclobber, FileLockIntent, FileManagementPolicy, MemoFile,
@@ -26,9 +26,13 @@ use tauri::{Emitter, Manager, State};
 type LocalFolderMoves = HashMap<(String, String, String), std::time::Instant>;
 static LOCAL_FOLDER_MOVES: OnceLock<Mutex<LocalFolderMoves>> = OnceLock::new();
 pub(crate) fn consume_local_folder_move(notebook_id: &str, previous: &str, next: &str) -> bool {
-    let Ok(mut moves) = LOCAL_FOLDER_MOVES.get_or_init(Default::default).lock() else { return false; };
+    let Ok(mut moves) = LOCAL_FOLDER_MOVES.get_or_init(Default::default).lock() else {
+        return false;
+    };
     moves.retain(|_, time| time.elapsed() < std::time::Duration::from_secs(10));
-    moves.remove(&(notebook_id.into(), previous.into(), next.into())).is_some()
+    moves
+        .remove(&(notebook_id.into(), previous.into(), next.into()))
+        .is_some()
 }
 
 static CATALOGS: OnceLock<Mutex<HashMap<String, Arc<Mutex<bool>>>>> = OnceLock::new();
@@ -48,6 +52,8 @@ pub fn collection_type_for_path(path: &Path) -> Option<CollectionType> {
         Some(CollectionType::Table)
     } else if name.ends_with(".lib.yaml") || name.ends_with(".lib.yml") {
         Some(CollectionType::MediaLibrary)
+    } else if name.ends_with(".workdocs.yaml") || name.ends_with(".workdocs.yml") {
+        Some(CollectionType::WorkDocuments)
     } else {
         None
     }
@@ -77,6 +83,9 @@ fn collection_path_matches_placement(
                     }
                     CollectionType::MediaLibrary => {
                         has_nonempty_stem(".lib.yaml") || has_nonempty_stem(".lib.yml")
+                    }
+                    CollectionType::WorkDocuments => {
+                        has_nonempty_stem(".workdocs.yaml") || has_nonempty_stem(".workdocs.yml")
                     }
                 }
         }
@@ -167,7 +176,11 @@ impl CollectionCatalog {
             INSERT OR IGNORE INTO collection_catalog_meta VALUES('schema_version',1),('sequence',0);
             CREATE TABLE IF NOT EXISTS collection_operations(operation_id TEXT PRIMARY KEY, body TEXT NOT NULL, status TEXT NOT NULL, error_code TEXT);")
             .map_err(|e| e.to_string())?;
-        Ok(Self { notebook_id: id.to_owned(), root, conn })
+        Ok(Self {
+            notebook_id: id.to_owned(),
+            root,
+            conn,
+        })
     }
     fn checked_path(&self, relative: &str) -> Result<PathBuf, String> {
         Self::checked_path_at_root(&self.root, relative)
@@ -187,8 +200,10 @@ impl CollectionCatalog {
         let parent_path = result.parent().ok_or("INVALID_COLLECTION_PATH")?;
         let parent = match dunce::canonicalize(parent_path) {
             Ok(parent) => parent,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound
-                && path.file_name().is_some_and(|name| name == ".index.yaml") => {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && path.file_name().is_some_and(|name| name == ".index.yaml") =>
+            {
                 // A folder rename's source or target directory can be absent during recovery.
                 dunce::canonicalize(parent_path.parent().ok_or("INVALID_COLLECTION_PATH")?)
                     .map_err(|error| error.to_string())?
@@ -426,6 +441,8 @@ impl CollectionCatalog {
                     collection_id: row.get(1)?,
                     collection_type: if kind == "table" {
                         CollectionType::Table
+                    } else if kind == "work_documents" {
+                        CollectionType::WorkDocuments
                     } else {
                         CollectionType::MediaLibrary
                     },
@@ -514,7 +531,11 @@ impl CollectionCatalog {
     fn recover(&mut self, memo: &MemoFile) -> Result<(), String> {
         self.recover_with_completion(memo, &|_| {})
     }
-    fn recover_with_completion(&mut self, memo: &MemoFile, complete: &impl Fn(&CollectionMutationResult)) -> Result<(), String> {
+    fn recover_with_completion(
+        &mut self,
+        memo: &MemoFile,
+        complete: &impl Fn(&CollectionMutationResult),
+    ) -> Result<(), String> {
         let pending = {
             let mut statement = self
                 .conn
@@ -534,21 +555,43 @@ impl CollectionCatalog {
             } else {
                 let (item, _, content, document) = self.read(&operation.collection_id)?;
                 complete(&CollectionMutationResult {
-                    operation_id: operation.operation_id.clone(), status: "completed".into(),
-                    collection_id: operation.collection_id.clone(), actual_name: item.name.clone(),
-                    previous_relative_path: operation.previous_path.clone(), notebook_path: self.root.to_string_lossy().into_owned(),
-                    actual_relative_path: item.relative_path, actual_revision: document.collection.revision,
-                    index_sequence: item.index_sequence, content, error_code: None,
-                    directory_move: if operation.directory_move { Some(DirectoryMove {
-                        previous_relative_path: Path::new(&operation.previous_path).parent().ok_or("INVALID_COLLECTION_PATH")?.to_string_lossy().replace('\\', "/"),
-                        relative_path: Path::new(&operation.target_path).parent().ok_or("INVALID_COLLECTION_PATH")?.to_string_lossy().replace('\\', "/"),
-                    }) } else { None },
+                    operation_id: operation.operation_id.clone(),
+                    status: "completed".into(),
+                    collection_id: operation.collection_id.clone(),
+                    actual_name: item.name.clone(),
+                    previous_relative_path: operation.previous_path.clone(),
+                    notebook_path: self.root.to_string_lossy().into_owned(),
+                    actual_relative_path: item.relative_path,
+                    actual_revision: document.collection.revision,
+                    index_sequence: item.index_sequence,
+                    content,
+                    error_code: None,
+                    directory_move: if operation.directory_move {
+                        Some(DirectoryMove {
+                            previous_relative_path: Path::new(&operation.previous_path)
+                                .parent()
+                                .ok_or("INVALID_COLLECTION_PATH")?
+                                .to_string_lossy()
+                                .replace('\\', "/"),
+                            relative_path: Path::new(&operation.target_path)
+                                .parent()
+                                .ok_or("INVALID_COLLECTION_PATH")?
+                                .to_string_lossy()
+                                .replace('\\', "/"),
+                        })
+                    } else {
+                        None
+                    },
                 });
             }
         }
         Ok(())
     }
-    fn apply_operation(&mut self, operation: &FileOperation, memo: &MemoFile) -> Result<i64, String> {
+    fn apply_operation(
+        &mut self,
+        operation: &FileOperation,
+        memo: &MemoFile,
+    ) -> Result<i64, String> {
         let source = self.checked_path(&operation.previous_path)?;
         let target = self.checked_path(&operation.target_path)?;
         let temporary = operation
@@ -571,7 +614,8 @@ impl CollectionCatalog {
         if document.collection.id != operation.collection_id {
             return Err("COLLECTION_IDENTITY_CHANGED".into());
         }
-        if operation.directory_move && document.collection.placement != CollectionPlacement::Folder {
+        if operation.directory_move && document.collection.placement != CollectionPlacement::Folder
+        {
             return Err("COLLECTION_PLACEMENT_CHANGED".into());
         }
         if disk != operation.expected_content && disk != operation.next_content {
@@ -587,8 +631,16 @@ impl CollectionCatalog {
         }
         if source != target && current != target {
             let move_entry = |from: &Path, to: &Path| {
-                let from = if operation.directory_move { from.parent().ok_or("INVALID_COLLECTION_PATH")? } else { from };
-                let to = if operation.directory_move { to.parent().ok_or("INVALID_COLLECTION_PATH")? } else { to };
+                let from = if operation.directory_move {
+                    from.parent().ok_or("INVALID_COLLECTION_PATH")?
+                } else {
+                    from
+                };
+                let to = if operation.directory_move {
+                    to.parent().ok_or("INVALID_COLLECTION_PATH")?
+                } else {
+                    to
+                };
                 rename_file_noclobber(from, to).map_err(|error| error.to_string())
             };
             if let Some(temporary) = &temporary {
@@ -610,20 +662,45 @@ impl CollectionCatalog {
         };
         self.conn.execute("UPDATE collection_operations SET status='completed',error_code=NULL WHERE operation_id=?1",[&operation.operation_id]).map_err(|e|e.to_string())?;
         if operation.directory_move {
-            let previous = Path::new(&operation.previous_path).parent().ok_or("INVALID_COLLECTION_PATH")?.to_string_lossy().replace('\\', "/");
-            let next = Path::new(&operation.target_path).parent().ok_or("INVALID_COLLECTION_PATH")?.to_string_lossy().replace('\\', "/");
+            let previous = Path::new(&operation.previous_path)
+                .parent()
+                .ok_or("INVALID_COLLECTION_PATH")?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let next = Path::new(&operation.target_path)
+                .parent()
+                .ok_or("INVALID_COLLECTION_PATH")?
+                .to_string_lossy()
+                .replace('\\', "/");
             if let Ok(mut moves) = LOCAL_FOLDER_MOVES.get_or_init(Default::default).lock() {
                 moves.retain(|_, time| time.elapsed() < std::time::Duration::from_secs(10));
-                moves.insert((self.notebook_id.clone(), previous, next), std::time::Instant::now());
+                moves.insert(
+                    (self.notebook_id.clone(), previous, next),
+                    std::time::Instant::now(),
+                );
             }
         }
         Ok(sequence)
     }
 
-    fn finish_directory_move(&mut self, memo: &MemoFile, operation: &FileOperation, mut paths: Vec<PathBuf>) -> Result<i64, String> {
-        let previous = Path::new(&operation.previous_path).parent().ok_or("INVALID_COLLECTION_PATH")?.to_string_lossy().replace('\\', "/");
-        let next = Path::new(&operation.target_path).parent().ok_or("INVALID_COLLECTION_PATH")?.to_string_lossy().replace('\\', "/");
-        memo.rebase_directory_indexes(&self.notebook_id, &previous, &next).map_err(|error| error.to_string())?;
+    fn finish_directory_move(
+        &mut self,
+        memo: &MemoFile,
+        operation: &FileOperation,
+        mut paths: Vec<PathBuf>,
+    ) -> Result<i64, String> {
+        let previous = Path::new(&operation.previous_path)
+            .parent()
+            .ok_or("INVALID_COLLECTION_PATH")?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let next = Path::new(&operation.target_path)
+            .parent()
+            .ok_or("INVALID_COLLECTION_PATH")?
+            .to_string_lossy()
+            .replace('\\', "/");
+        memo.rebase_directory_indexes(&self.notebook_id, &previous, &next)
+            .map_err(|error| error.to_string())?;
         // The catalog already knows descendant collections. Rebase their locators
         // without scanning ordinary notes, media files or unrelated directories.
         let prefix = format!("{previous}/");
@@ -635,19 +712,28 @@ impl CollectionCatalog {
         }
         let mut sequence = self.refresh(&paths)?;
         let mut changed_paths = Vec::new();
-        for item in self.list(None)?.into_iter().filter(|item| item.parse_state == "valid") {
+        for item in self
+            .list(None)?
+            .into_iter()
+            .filter(|item| item.parse_state == "valid")
+        {
             let path = self.root.join(&item.relative_path);
             let source = fs::read_to_string(&path).map_err(|error| error.to_string())?;
             let mut document = CollectionDocument::parse(&source)?.normalized_v2()?;
-            if !document.rebase_paths_for_notebook(&self.notebook_id, &previous, &next)? { continue; }
+            if !document.rebase_paths_for_notebook(&self.notebook_id, &previous, &next)? {
+                continue;
+            }
             document.revise()?;
             if fs::read_to_string(&path).map_err(|error| error.to_string())? != source {
                 return Err("COLLECTION_CONTENT_CONFLICT".into());
             }
-            atomic_write_bytes(&path, document.serialize()?.as_bytes()).map_err(|error| error.to_string())?;
+            atomic_write_bytes(&path, document.serialize()?.as_bytes())
+                .map_err(|error| error.to_string())?;
             changed_paths.push(path);
         }
-        if !changed_paths.is_empty() { sequence = self.refresh(&changed_paths)?; }
+        if !changed_paths.is_empty() {
+            sequence = self.refresh(&changed_paths)?;
+        }
         Ok(sequence)
     }
 }
@@ -775,15 +861,28 @@ fn target_relative_path(
     }
 
     if document.collection.placement == CollectionPlacement::Folder {
-        let name = request.new_name.as_deref().ok_or("INVALID_COLLECTION_NAME")?.trim();
-        let folder = Path::new(&item.relative_path).parent()
+        let name = request
+            .new_name
+            .as_deref()
+            .ok_or("INVALID_COLLECTION_NAME")?
+            .trim();
+        let folder = Path::new(&item.relative_path)
+            .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .ok_or("NOTEBOOK_ROOT_RENAME_FORBIDDEN")?;
-        return Ok(folder.parent().unwrap_or(Path::new(""))
-            .join(name).join(".index.yaml")
-            .to_string_lossy().replace('\\', "/"));
+        return Ok(folder
+            .parent()
+            .unwrap_or(Path::new(""))
+            .join(name)
+            .join(".index.yaml")
+            .to_string_lossy()
+            .replace('\\', "/"));
     }
-    let name = request.new_name.as_deref().ok_or("INVALID_COLLECTION_NAME")?.trim();
+    let name = request
+        .new_name
+        .as_deref()
+        .ok_or("INVALID_COLLECTION_NAME")?
+        .trim();
     Ok(Path::new(&item.relative_path)
         .parent()
         .unwrap_or(Path::new(""))
@@ -823,7 +922,9 @@ fn mutate(
     mutate_with_completion(memo, request, &|_| {})
 }
 fn mutate_with_completion(
-    memo: &MemoFile, request: &CollectionMutation, complete: &impl Fn(&CollectionMutationResult),
+    memo: &MemoFile,
+    request: &CollectionMutation,
+    complete: &impl Fn(&CollectionMutationResult),
 ) -> Result<CollectionMutationResult, String> {
     if request.operation_id.trim().is_empty() {
         return Err("INVALID_OPERATION_ID".into());
@@ -855,9 +956,12 @@ fn mutate_with_completion(
                 &[&request.notebook_id],
                 "mutate_collection_structure",
                 || {
-                    with_catalog(memo, &request.notebook_id, |catalog| catalog.recover_with_completion(memo, complete))
-                        .map_err(std::io::Error::other)?;
-                    let result = mutate_locked(memo, request, None).map_err(std::io::Error::other)?;
+                    with_catalog(memo, &request.notebook_id, |catalog| {
+                        catalog.recover_with_completion(memo, complete)
+                    })
+                    .map_err(std::io::Error::other)?;
+                    let result =
+                        mutate_locked(memo, request, None).map_err(std::io::Error::other)?;
                     complete(&result);
                     Ok(Ok(result))
                 },
@@ -874,7 +978,8 @@ fn mutate_with_completion(
         FileLockIntent::Existing,
         "mutate_collection",
         |locked_path| {
-            let result = mutate_locked(memo, request, Some(locked_path)).map_err(std::io::Error::other)?;
+            let result =
+                mutate_locked(memo, request, Some(locked_path)).map_err(std::io::Error::other)?;
             complete(&result);
             Ok(Ok(result))
         },
@@ -892,7 +997,9 @@ fn mutate_locked(
             "SELECT EXISTS(SELECT 1 FROM collection_operations WHERE status='blocked' AND json_extract(body,'$.collection_id')=?1)",
             [&request.collection_id], |row| row.get(0),
         ).map_err(|error| error.to_string())?;
-        if blocked { return Err("COLLECTION_RECOVERY_BLOCKED".into()); }
+        if blocked {
+            return Err("COLLECTION_RECOVERY_BLOCKED".into());
+        }
         let (item, path, source, mut document) = catalog.read(&request.collection_id)?;
         if let Some(locked_path) = locked_path {
             if dunce::canonicalize(&path).map_err(|error| error.to_string())? != locked_path {
@@ -935,9 +1042,18 @@ fn mutate_locked(
         ) {
             return Err("COLLECTION_TYPE_EXTENSION_MISMATCH".into());
         }
-        let directory_move = document.collection.placement == CollectionPlacement::Folder && target != path;
-        let source_entry = if directory_move { path.parent().ok_or("INVALID_COLLECTION_PATH")? } else { path.as_path() };
-        let target_entry = if directory_move { target.parent().ok_or("INVALID_COLLECTION_PATH")? } else { target.as_path() };
+        let directory_move =
+            document.collection.placement == CollectionPlacement::Folder && target != path;
+        let source_entry = if directory_move {
+            path.parent().ok_or("INVALID_COLLECTION_PATH")?
+        } else {
+            path.as_path()
+        };
+        let target_entry = if directory_move {
+            target.parent().ok_or("INVALID_COLLECTION_PATH")?
+        } else {
+            target.as_path()
+        };
         let case_only = target != path
             && target_entry.exists()
             && dunce::canonicalize(target_entry).ok() == dunce::canonicalize(source_entry).ok();
@@ -945,16 +1061,32 @@ fn mutate_locked(
             return Err("FILE_EXISTS".into());
         }
         if directory_move {
-            let previous = Path::new(&item.relative_path).parent().ok_or("INVALID_COLLECTION_PATH")?.to_string_lossy().replace('\\', "/");
-            let next = Path::new(&target_relative).parent().ok_or("INVALID_COLLECTION_PATH")?.to_string_lossy().replace('\\', "/");
-            memo.validate_directory_index_rebase(&request.notebook_id, &previous, &next).map_err(|error| error.to_string())?;
+            let previous = Path::new(&item.relative_path)
+                .parent()
+                .ok_or("INVALID_COLLECTION_PATH")?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let next = Path::new(&target_relative)
+                .parent()
+                .ok_or("INVALID_COLLECTION_PATH")?
+                .to_string_lossy()
+                .replace('\\', "/");
+            memo.validate_directory_index_rebase(&request.notebook_id, &previous, &next)
+                .map_err(|error| error.to_string())?;
         }
         let temporary_path = case_only.then(|| {
             if directory_move {
-                return Path::new(&item.relative_path).parent().and_then(Path::parent)
+                return Path::new(&item.relative_path)
+                    .parent()
+                    .and_then(Path::parent)
                     .unwrap_or(Path::new(""))
-                    .join(format!("__collection_rename_{}", uuid::Uuid::now_v7().simple()))
-                    .join(".index.yaml").to_string_lossy().replace('\\', "/");
+                    .join(format!(
+                        "__collection_rename_{}",
+                        uuid::Uuid::now_v7().simple()
+                    ))
+                    .join(".index.yaml")
+                    .to_string_lossy()
+                    .replace('\\', "/");
             }
             Path::new(&item.relative_path)
                 .parent()
@@ -981,8 +1113,16 @@ fn mutate_locked(
             if directory_move {
                 document.rebase_paths_for_notebook(
                     &request.notebook_id,
-                    &Path::new(&item.relative_path).parent().ok_or("INVALID_COLLECTION_PATH")?.to_string_lossy().replace('\\', "/"),
-                    &Path::new(&target_relative).parent().ok_or("INVALID_COLLECTION_PATH")?.to_string_lossy().replace('\\', "/"),
+                    &Path::new(&item.relative_path)
+                        .parent()
+                        .ok_or("INVALID_COLLECTION_PATH")?
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                    &Path::new(&target_relative)
+                        .parent()
+                        .ok_or("INVALID_COLLECTION_PATH")?
+                        .to_string_lossy()
+                        .replace('\\', "/"),
                 )?;
             }
             document.revise()?;
@@ -1046,12 +1186,26 @@ fn mutate_locked(
             index_sequence: sequence,
             content,
             error_code,
-            directory_move: if directory_move && actual_path != catalog.root.join(&item.relative_path) {
+            directory_move: if directory_move
+                && actual_path != catalog.root.join(&item.relative_path)
+            {
                 Some(DirectoryMove {
-                    previous_relative_path: Path::new(&item.relative_path).parent().ok_or("INVALID_COLLECTION_PATH")?.to_string_lossy().replace('\\', "/"),
-                    relative_path: actual_path.parent().ok_or("INVALID_COLLECTION_PATH")?.strip_prefix(&catalog.root).map_err(|error| error.to_string())?.to_string_lossy().replace('\\', "/"),
+                    previous_relative_path: Path::new(&item.relative_path)
+                        .parent()
+                        .ok_or("INVALID_COLLECTION_PATH")?
+                        .to_string_lossy()
+                        .replace('\\', "/"),
+                    relative_path: actual_path
+                        .parent()
+                        .ok_or("INVALID_COLLECTION_PATH")?
+                        .strip_prefix(&catalog.root)
+                        .map_err(|error| error.to_string())?
+                        .to_string_lossy()
+                        .replace('\\', "/"),
                 })
-            } else { None },
+            } else {
+                None
+            },
         })
     })
 }
@@ -1094,36 +1248,64 @@ pub async fn mutate_collection(
     app: tauri::AppHandle,
 ) -> Result<CollectionMutationResult, String> {
     let memo = state.memo_file.clone();
-    crate::commands::document_operations::run("mutate_collection", operation_id, window.label().to_owned(), move||{
-        let memo = read_lock(&memo, "memo_file");
-        // Recovery may finish a prior directory move too, so protect the
-        // notebook's open documents until completion has rebased their leases.
-        let _watch_move = memo.get_notebook_config_by_id(&request.notebook_id)
-            .and_then(|notebook| crate::commands::external_document_watch::begin_path_move(&app, Path::new(&notebook.path)));
-        let result=mutate_with_completion(&memo,&request, &|result| emit_mutation_result(&app, &request.notebook_id, result))?;
-        Ok(result)
-    }).await
+    crate::commands::document_operations::run(
+        "mutate_collection",
+        operation_id,
+        window.label().to_owned(),
+        move || {
+            let memo = read_lock(&memo, "memo_file");
+            // Recovery may finish a prior directory move too, so protect the
+            // notebook's open documents until completion has rebased their leases.
+            let _watch_move = memo
+                .get_notebook_config_by_id(&request.notebook_id)
+                .and_then(|notebook| {
+                    crate::commands::external_document_watch::begin_path_move(
+                        &app,
+                        Path::new(&notebook.path),
+                    )
+                });
+            let result = mutate_with_completion(&memo, &request, &|result| {
+                emit_mutation_result(&app, &request.notebook_id, result)
+            })?;
+            Ok(result)
+        },
+    )
+    .await
 }
 
-pub(crate) fn path_change_for_result(notebook_id: &str, result: &CollectionMutationResult) -> Option<super::path_change::NotebookPathMove> {
+pub(crate) fn path_change_for_result(
+    notebook_id: &str,
+    result: &CollectionMutationResult,
+) -> Option<super::path_change::NotebookPathMove> {
     let (previous, next, directory) = match &result.directory_move {
         Some(moved) => (&moved.previous_relative_path, &moved.relative_path, true),
-        None if result.previous_relative_path != result.actual_relative_path =>
-            (&result.previous_relative_path, &result.actual_relative_path, false),
+        None if result.previous_relative_path != result.actual_relative_path => (
+            &result.previous_relative_path,
+            &result.actual_relative_path,
+            false,
+        ),
         None => return None,
     };
     Some(super::path_change::NotebookPathMove {
         change_id: format!("collection:{}:{}", notebook_id, result.operation_id),
-        notebook_id: notebook_id.to_owned(), previous_relative_path: previous.clone(),
-        relative_path: next.clone(), directory,
+        notebook_id: notebook_id.to_owned(),
+        previous_relative_path: previous.clone(),
+        relative_path: next.clone(),
+        directory,
     })
 }
 
-pub(crate) fn emit_mutation_result(app: &tauri::AppHandle, notebook_id: &str, result: &CollectionMutationResult) {
+pub(crate) fn emit_mutation_result(
+    app: &tauri::AppHandle,
+    notebook_id: &str,
+    result: &CollectionMutationResult,
+) {
     if let Some(moved) = &result.directory_move {
         let root = Path::new(&result.notebook_path);
         crate::commands::external_document_watch::rebase_path(
-            app, &root.join(&moved.previous_relative_path), &root.join(&moved.relative_path),
+            app,
+            &root.join(&moved.previous_relative_path),
+            &root.join(&moved.relative_path),
         );
     }
     let _=app.emit("collection-changed",serde_json::json!({"notebookId":notebook_id,"collectionId":result.collection_id,"operationId":result.operation_id,"indexSequence":result.index_sequence,"relativePath":result.actual_relative_path,"previousRelativePath":result.previous_relative_path,"notebookPath":result.notebook_path,"name":result.actual_name,"revision":result.actual_revision,"directoryMove":result.directory_move}));
@@ -1131,35 +1313,70 @@ pub(crate) fn emit_mutation_result(app: &tauri::AppHandle, notebook_id: &str, re
         if let Some(state) = app.try_state::<AppState>() {
             let root = Path::new(&result.notebook_path);
             if let Err(error) = state.thread_manager.rebase_agent_note_paths(
-                notebook_id, notebook_id, &moved.previous_relative_path, &moved.relative_path,
-                &root.join(&moved.previous_relative_path).to_string_lossy(), &root.join(&moved.relative_path).to_string_lossy(),
-            ) { tracing::warn!(notebook_id, "agent references after collection folder move failed: {error}"); }
+                notebook_id,
+                notebook_id,
+                &moved.previous_relative_path,
+                &moved.relative_path,
+                &root.join(&moved.previous_relative_path).to_string_lossy(),
+                &root.join(&moved.relative_path).to_string_lossy(),
+            ) {
+                tracing::warn!(
+                    notebook_id,
+                    "agent references after collection folder move failed: {error}"
+                );
+            }
         }
         let _ = app.emit("file-management-changed", serde_json::json!({ "notebookId": notebook_id, "notebookPath": result.notebook_path, "operationId": result.operation_id }));
     }
-    if let Some(change) = path_change_for_result(notebook_id, result) { change.emit(app); }
+    if let Some(change) = path_change_for_result(notebook_id, result) {
+        change.emit(app);
+    }
 }
 
 /// Tree and title actions share the same collection operation when the directory owns an index.
-pub(crate) fn rename_folder_collection_at_path(memo: &MemoFile, folder: &Path, name: &str, app: &tauri::AppHandle) -> Result<Option<(String, CollectionMutationResult)>, String> {
+pub(crate) fn rename_folder_collection_at_path(
+    memo: &MemoFile,
+    folder: &Path,
+    name: &str,
+    app: &tauri::AppHandle,
+) -> Result<Option<(String, CollectionMutationResult)>, String> {
     let index = folder.join(".index.yaml");
-    if !index.is_file() { return Ok(None); }
-    let document = CollectionDocument::parse(&fs::read_to_string(&index).map_err(|error| error.to_string())?)?;
-    if document.collection.placement != CollectionPlacement::Folder { return Ok(None); }
+    if !index.is_file() {
+        return Ok(None);
+    }
+    let document =
+        CollectionDocument::parse(&fs::read_to_string(&index).map_err(|error| error.to_string())?)?;
+    if document.collection.placement != CollectionPlacement::Folder {
+        return Ok(None);
+    }
     let folder = dunce::canonicalize(folder).map_err(|error| error.to_string())?;
-    let notebook = memo.read_notebook_configs().map_err(|error| error.to_string())?
-        .into_iter().filter_map(|config| {
+    let notebook = memo
+        .read_notebook_configs()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter_map(|config| {
             let root = dunce::canonicalize(&config.path).ok()?;
-            folder.starts_with(&root).then_some((root.components().count(), config))
-        }).max_by_key(|(depth, _)| *depth).map(|(_, notebook)| notebook)
+            folder
+                .starts_with(&root)
+                .then_some((root.components().count(), config))
+        })
+        .max_by_key(|(depth, _)| *depth)
+        .map(|(_, notebook)| notebook)
         .ok_or("NOTEBOOK_NOT_FOUND")?;
     let request = CollectionMutation {
-        notebook_id: notebook.id.clone(), collection_id: document.collection.id.clone(),
-        expected_revision: document.collection.revision, operation_id: uuid::Uuid::now_v7().to_string(),
-        new_name: Some(name.to_owned()), target_relative_path: None, properties: None,
+        notebook_id: notebook.id.clone(),
+        collection_id: document.collection.id.clone(),
+        expected_revision: document.collection.revision,
+        operation_id: uuid::Uuid::now_v7().to_string(),
+        new_name: Some(name.to_owned()),
+        target_relative_path: None,
+        properties: None,
     };
-    let _watch_move = crate::commands::external_document_watch::begin_path_move(app, Path::new(&notebook.path));
-    let result = mutate_with_completion(memo, &request, &|result| emit_mutation_result(app, &request.notebook_id, result))?;
+    let _watch_move =
+        crate::commands::external_document_watch::begin_path_move(app, Path::new(&notebook.path));
+    let result = mutate_with_completion(memo, &request, &|result| {
+        emit_mutation_result(app, &request.notebook_id, result)
+    })?;
     Ok(Some((notebook.id, result)))
 }
 #[tauri::command]
@@ -1263,6 +1480,9 @@ mod tests {
             CollectionType::MediaLibrary => {
                 serde_json::json!({"schema_version":1,"view":{"id":view,"layout":"waterfall","condition":{}},"records":{"data":[]}})
             }
+            CollectionType::WorkDocuments => {
+                panic!("work document collections use their dedicated v2 fixture")
+            }
         };
         CollectionDocument::parse(&serde_yaml::to_string(&serde_json::json!({"format":"flowix.collection","schema_version":1,"collection":{"id":format!("col_{}",uuid::Uuid::now_v7().simple()),"type":kind,"name":"Old","revision":0,"created_at":"2026-10-07T00:00:00Z","updated_at":"2026-10-07T00:00:00Z","properties":{"owner":{"type":"Text","value":"张三"}}},"payload":payload})).unwrap()).unwrap()
     }
@@ -1280,7 +1500,8 @@ mod tests {
     fn folder_document(kind: CollectionType) -> CollectionDocument {
         let mut value = document(kind).normalized_v2().unwrap();
         value.collection.placement = CollectionPlacement::Folder;
-        value.payload["dataset"]["source"] = serde_json::json!({"scope":"containing_folder","depth":"descendants"});
+        value.payload["dataset"]["source"] =
+            serde_json::json!({"scope":"containing_folder","depth":"descendants"});
         value
     }
 
@@ -1290,10 +1511,19 @@ mod tests {
         fs::create_dir_all(root.join("Old/child")).unwrap();
         fs::write(root.join("Old/photo.png"), b"image").unwrap();
         fs::write(root.join("Old/note.md"), "hello").unwrap();
-        memo.refresh_media_resource_path(&book, "Old/photo.png").unwrap();
+        memo.refresh_media_resource_path(&book, "Old/photo.png")
+            .unwrap();
         memo.refresh_note_path(&book, "Old/note.md").unwrap();
-        let resource = memo.read_media_resource(&book, "Old/photo.png").unwrap().unwrap();
-        memo.update_media_resource_properties(&book, &resource.id, &serde_json::json!({"caption":"keep"})).unwrap();
+        let resource = memo
+            .read_media_resource(&book, "Old/photo.png")
+            .unwrap()
+            .unwrap();
+        memo.update_media_resource_properties(
+            &book,
+            &resource.id,
+            &serde_json::json!({"caption":"keep"}),
+        )
+        .unwrap();
         let mut original = folder_document(CollectionType::MediaLibrary);
         original.payload["dataset"]["records"]["include"] = serde_json::json!([{
             "id":"rec_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "resource_id":resource.id,
@@ -1302,9 +1532,16 @@ mod tests {
         fs::write(root.join("Old/.index.yaml"), original.serialize().unwrap()).unwrap();
         let mut child = folder_document(CollectionType::Table);
         child.collection.name = "child".into();
-        fs::write(root.join("Old/child/.index.yaml"), child.serialize().unwrap()).unwrap();
-        let mut outside = document(CollectionType::MediaLibrary).normalized_v2().unwrap();
-        outside.payload["dataset"]["source"] = serde_json::json!({"scope":"folder","path":"Old","depth":"descendants"});
+        fs::write(
+            root.join("Old/child/.index.yaml"),
+            child.serialize().unwrap(),
+        )
+        .unwrap();
+        let mut outside = document(CollectionType::MediaLibrary)
+            .normalized_v2()
+            .unwrap();
+        outside.payload["dataset"]["source"] =
+            serde_json::json!({"scope":"folder","path":"Old","depth":"descendants"});
         outside.payload["dataset"]["records"] = original.payload["dataset"]["records"].clone();
         outside.payload["dataset"]["records"]["exclude"] = serde_json::json!([{"resource_id":"path:Old/hidden.png","relative_path":"Old/hidden.png"}]);
         fs::write(root.join("Outside.lib.yaml"), outside.serialize().unwrap()).unwrap();
@@ -1314,29 +1551,69 @@ mod tests {
         assert_eq!(result.actual_relative_path, "New/.index.yaml");
         assert_eq!(result.actual_name, "New");
         assert_eq!(result.actual_revision, 1);
-        assert_eq!(result.directory_move.as_ref().unwrap().previous_relative_path, "Old");
+        assert_eq!(
+            result
+                .directory_move
+                .as_ref()
+                .unwrap()
+                .previous_relative_path,
+            "Old"
+        );
         assert!(!root.join("Old").exists());
         assert!(root.join("New/note.md").is_file());
-        let moved = memo.read_media_resource(&book, "New/photo.png").unwrap().unwrap();
-        assert_eq!(moved.id, flowix_core::memo_file::media_resource_id(&book, "New/photo.png").unwrap());
+        let moved = memo
+            .read_media_resource(&book, "New/photo.png")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            moved.id,
+            flowix_core::memo_file::media_resource_id(&book, "New/photo.png").unwrap()
+        );
         assert_eq!(moved.properties["caption"], "keep");
         let next = CollectionDocument::parse(&result.content).unwrap();
         assert_eq!(next.collection.id, original.collection.id);
-        assert_eq!(next.payload["dataset"]["records"]["include"][0]["relative_path"], "New/photo.png");
-        assert_eq!(next.payload["dataset"]["records"]["include"][0]["resource_id"], moved.id);
-        let other = CollectionDocument::parse(&fs::read_to_string(root.join("Outside.lib.yaml")).unwrap()).unwrap();
+        assert_eq!(
+            next.payload["dataset"]["records"]["include"][0]["relative_path"],
+            "New/photo.png"
+        );
+        assert_eq!(
+            next.payload["dataset"]["records"]["include"][0]["resource_id"],
+            moved.id
+        );
+        let other =
+            CollectionDocument::parse(&fs::read_to_string(root.join("Outside.lib.yaml")).unwrap())
+                .unwrap();
         assert_eq!(other.collection.id, outside.collection.id);
         assert_eq!(other.collection.revision, 1);
         assert_eq!(other.payload["dataset"]["source"]["path"], "New");
-        assert_eq!(other.payload["dataset"]["records"]["include"][0]["relative_path"], "New/photo.png");
-        assert_eq!(other.payload["dataset"]["records"]["include"][0]["resource_id"], moved.id);
-        assert_eq!(other.payload["dataset"]["records"]["exclude"][0]["relative_path"], "New/hidden.png");
-        assert_eq!(other.payload["dataset"]["records"]["exclude"][0]["resource_id"], format!("{book}::New/hidden.png"));
+        assert_eq!(
+            other.payload["dataset"]["records"]["include"][0]["relative_path"],
+            "New/photo.png"
+        );
+        assert_eq!(
+            other.payload["dataset"]["records"]["include"][0]["resource_id"],
+            moved.id
+        );
+        assert_eq!(
+            other.payload["dataset"]["records"]["exclude"][0]["relative_path"],
+            "New/hidden.png"
+        );
+        assert_eq!(
+            other.payload["dataset"]["records"]["exclude"][0]["resource_id"],
+            format!("{book}::New/hidden.png")
+        );
         with_catalog(&memo, &book, |catalog| {
-            assert_eq!(catalog.resolve(&child.collection.id)?.relative_path, "New/child/.index.yaml");
+            assert_eq!(
+                catalog.resolve(&child.collection.id)?.relative_path,
+                "New/child/.index.yaml"
+            );
             Ok(())
-        }).unwrap();
-        assert_eq!(mutate(&memo, &request(&book, &original)).unwrap_err(), "COLLECTION_REVISION_CONFLICT");
+        })
+        .unwrap();
+        assert_eq!(
+            mutate(&memo, &request(&book, &original)).unwrap_err(),
+            "COLLECTION_REVISION_CONFLICT"
+        );
         fs::create_dir(root.join("Occupied")).unwrap();
         let mut occupied = request(&book, &next);
         occupied.new_name = Some("Occupied".into());
@@ -1349,14 +1626,24 @@ mod tests {
         let (memo, _temp, root, book) = fixture();
         let original = folder_document(CollectionType::Table);
         fs::create_dir(root.join("Moved")).unwrap();
-        fs::write(root.join("Moved/.index.yaml"), original.serialize().unwrap()).unwrap();
+        fs::write(
+            root.join("Moved/.index.yaml"),
+            original.serialize().unwrap(),
+        )
+        .unwrap();
         fs::create_dir(root.join("Old")).unwrap();
         let foreign = folder_document(CollectionType::Table);
         fs::write(root.join("Old/.index.yaml"), foreign.serialize().unwrap()).unwrap();
         let result = mutate(&memo, &request(&book, &original)).unwrap();
         assert_eq!(result.previous_relative_path, "Moved/.index.yaml");
         assert_eq!(result.actual_relative_path, "New/.index.yaml");
-        assert_eq!(CollectionDocument::parse(&fs::read_to_string(root.join("Old/.index.yaml")).unwrap()).unwrap().collection.id, foreign.collection.id);
+        assert_eq!(
+            CollectionDocument::parse(&fs::read_to_string(root.join("Old/.index.yaml")).unwrap())
+                .unwrap()
+                .collection
+                .id,
+            foreign.collection.id
+        );
     }
 
     #[test]
@@ -1375,7 +1662,10 @@ mod tests {
         assert!(root.join("old/note.md").exists());
         let root_document = folder_document(CollectionType::Table);
         fs::write(root.join(".index.yaml"), root_document.serialize().unwrap()).unwrap();
-        assert_eq!(mutate(&memo, &request(&book, &root_document)).unwrap_err(), "NOTEBOOK_ROOT_RENAME_FORBIDDEN");
+        assert_eq!(
+            mutate(&memo, &request(&book, &root_document)).unwrap_err(),
+            "NOTEBOOK_ROOT_RENAME_FORBIDDEN"
+        );
         assert!(root.join(".index.yaml").exists());
     }
 
@@ -1386,16 +1676,22 @@ mod tests {
         fs::create_dir(root.join("New")).unwrap();
         fs::write(root.join("Old/photo.png"), b"source").unwrap();
         fs::write(root.join("New/photo.png"), b"previous target").unwrap();
-        memo.refresh_media_resource_path(&book, "Old/photo.png").unwrap();
-        memo.refresh_media_resource_path(&book, "New/photo.png").unwrap();
+        memo.refresh_media_resource_path(&book, "Old/photo.png")
+            .unwrap();
+        memo.refresh_media_resource_path(&book, "New/photo.png")
+            .unwrap();
         fs::remove_dir_all(root.join("New")).unwrap();
-        memo.refresh_media_resource_path(&book, "New/photo.png").unwrap();
+        memo.refresh_media_resource_path(&book, "New/photo.png")
+            .unwrap();
         let original = folder_document(CollectionType::MediaLibrary);
         let source = original.serialize().unwrap();
         fs::write(root.join("Old/.index.yaml"), &source).unwrap();
         let error = mutate(&memo, &request(&book, &original)).unwrap_err();
         assert!(error.contains("DIRECTORY_INDEX_PATH_CONFLICT"));
-        assert_eq!(fs::read_to_string(root.join("Old/.index.yaml")).unwrap(), source);
+        assert_eq!(
+            fs::read_to_string(root.join("Old/.index.yaml")).unwrap(),
+            source
+        );
         assert!(root.join("Old/photo.png").exists());
         assert!(!root.join("New").exists());
     }
@@ -1405,7 +1701,8 @@ mod tests {
         let (memo, _temp, root, book) = fixture();
         fs::create_dir(root.join("Old")).unwrap();
         fs::write(root.join("Old/photo.png"), b"image").unwrap();
-        memo.refresh_media_resource_path(&book, "Old/photo.png").unwrap();
+        memo.refresh_media_resource_path(&book, "Old/photo.png")
+            .unwrap();
         let original = folder_document(CollectionType::MediaLibrary);
         let expected = original.serialize().unwrap();
         fs::write(root.join("Old/.index.yaml"), &expected).unwrap();
@@ -1416,20 +1713,63 @@ mod tests {
         next.revise().unwrap();
         let content = next.serialize().unwrap();
         let operation = FileOperation {
-            operation_id: "recover-folder".into(), collection_id: original.collection.id.clone(),
-            previous_path: "Old/.index.yaml".into(), target_path: "New/.index.yaml".into(),
-            temporary_path: None, expected_content: expected, next_content: content.clone(), directory_move: true,
+            operation_id: "recover-folder".into(),
+            collection_id: original.collection.id.clone(),
+            previous_path: "Old/.index.yaml".into(),
+            target_path: "New/.index.yaml".into(),
+            temporary_path: None,
+            expected_content: expected,
+            next_content: content.clone(),
+            directory_move: true,
         };
-        catalog.conn.execute("INSERT INTO collection_operations VALUES(?1,?2,'pending',NULL)", params![operation.operation_id, serde_json::to_string(&operation).unwrap()]).unwrap();
+        catalog
+            .conn
+            .execute(
+                "INSERT INTO collection_operations VALUES(?1,?2,'pending',NULL)",
+                params![
+                    operation.operation_id,
+                    serde_json::to_string(&operation).unwrap()
+                ],
+            )
+            .unwrap();
         fs::write(root.join("Old/.index.yaml"), content).unwrap();
         fs::rename(root.join("Old"), root.join("New")).unwrap();
         for _ in 0..2 {
-            memo.with_notebook_change(&[&book], "test_folder_recovery", || Ok(catalog.recover(&memo))).unwrap().unwrap();
+            memo.with_notebook_change(&[&book], "test_folder_recovery", || {
+                Ok(catalog.recover(&memo))
+            })
+            .unwrap()
+            .unwrap();
         }
-        assert_eq!(catalog.resolve(&original.collection.id).unwrap().relative_path, "New/.index.yaml");
-        assert_eq!(CollectionDocument::parse(&fs::read_to_string(root.join("New/.index.yaml")).unwrap()).unwrap().collection.revision, 1);
-        assert!(memo.read_media_resource(&book, "New/photo.png").unwrap().is_some());
-        assert_eq!(catalog.conn.query_row("SELECT status FROM collection_operations WHERE operation_id='recover-folder'", [], |row| row.get::<_, String>(0)).unwrap(), "completed");
+        assert_eq!(
+            catalog
+                .resolve(&original.collection.id)
+                .unwrap()
+                .relative_path,
+            "New/.index.yaml"
+        );
+        assert_eq!(
+            CollectionDocument::parse(&fs::read_to_string(root.join("New/.index.yaml")).unwrap())
+                .unwrap()
+                .collection
+                .revision,
+            1
+        );
+        assert!(memo
+            .read_media_resource(&book, "New/photo.png")
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            catalog
+                .conn
+                .query_row(
+                    "SELECT status FROM collection_operations WHERE operation_id='recover-folder'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "completed"
+        );
     }
     #[test]
     fn catalogs_both_types_and_preserves_preferences_on_rebuild() {
@@ -1578,7 +1918,11 @@ mod tests {
     fn supports_case_only_rename_and_indexes_unsupported_versions_read_only() {
         let (memo, _temp, root, book) = fixture();
         let original = document(CollectionType::Table);
-        fs::write(root.join("Old.index.yaml"), original.normalized_v2().unwrap().serialize().unwrap()).unwrap();
+        fs::write(
+            root.join("Old.index.yaml"),
+            original.normalized_v2().unwrap().serialize().unwrap(),
+        )
+        .unwrap();
         let mut rename = request(&book, &original);
         rename.new_name = Some("old".into());
         let result = mutate(&memo, &rename).unwrap();

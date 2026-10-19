@@ -1,4 +1,5 @@
 import { Extension, type MarkdownToken } from '@tiptap/core';
+import { boundedSearch } from '@features/editor/markdown-tokenizer-start';
 
 export const MEDIA_LIBRARY_REFERENCE_MARKER = 'flowix:media-library-reference';
 export const MEDIA_LIBRARY_REFERENCE_VERSION = 1;
@@ -40,7 +41,7 @@ export const mediaLibraryReferenceMarkdownSpec = {
     name: 'mediaLibraryReference',
     level: 'block' as const,
     start(source: string) {
-      return new RegExp(`^<!--[ \\t]*${MEDIA_LIBRARY_REFERENCE_MARKER}[ \\t]+\\{`, 'm').exec(source)?.index ?? -1;
+      return boundedSearch(source, new RegExp(`^<!--[ \\t]*${MEDIA_LIBRARY_REFERENCE_MARKER}[ \\t]+\\{`, 'm'));
     },
     tokenize(source: string) {
       const metadata = mediaLibraryReferenceMetadataFromSource(source);

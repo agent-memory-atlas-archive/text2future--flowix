@@ -46,8 +46,8 @@
   word-break: inherit;
 }
 
-[data-theme="dark"] .markdown-editor .tiptap:not(.agent-composer__input-content) .code-block-wrapper > .code-block-editor > .code-block-content,
-[data-theme="dark"] .code-editor .cm-line {
+:is([data-theme="dark"], [data-theme="mist"]) .markdown-editor .tiptap:not(.agent-composer__input-content) .code-block-wrapper > .code-block-editor > .code-block-content,
+:is([data-theme="dark"], [data-theme="mist"]) .code-editor .cm-line {
   opacity: 0.68;
 }
 

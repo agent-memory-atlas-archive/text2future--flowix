@@ -15,6 +15,7 @@ export {
 export { openWorkspaceSurface } from './open-surface-api';
 export type { OpenWorkspaceSurfaceRequest } from './open-surface-api';
 export { deleteMainExternalDocument } from '@features/workspace/use-cases/delete-main-external-document';
+export { renameWorkspaceFile } from '../use-cases/rename-workspace-file';
 
 export function clearBrowserColumnExternalPath(path: string): void {
   useBrowserColumnStore.getState().clearExternalPath(path);

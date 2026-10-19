@@ -122,6 +122,7 @@ export function getResourceSetiIcon(path: string, variant: SetiThemeVariant): Re
 function getSetiThemeVariant(): SetiThemeVariant {
   if (typeof document === 'undefined') return 'light';
   return document.documentElement.dataset.theme === 'dark'
+    || document.documentElement.dataset.theme === 'mist'
     ? 'dark'
     : 'light';
 }
@@ -186,7 +187,7 @@ export function ResourceFolderIcon({ className, hidden = false }: {
       aria-hidden="true"
       className={`inline-flex items-center justify-center ${className ?? ''} ${hidden
         ? 'text-[var(--muted-foreground)]'
-        : 'text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)]'}`}
+        : 'text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] [[data-theme="mist"]_&]:text-[var(--foreground)]'}`}
     >
       <span className="flex h-full w-full items-center justify-center" dangerouslySetInnerHTML={{ __html: folderIcon }} />
     </span>

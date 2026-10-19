@@ -47,6 +47,11 @@ const headingConfigs: { level: HeadingLevel; icon: React.ReactNode; symbol: stri
 
 const paragraphIcon = <TextTIcon size={16} weight="bold" />;
 
+/** The toolbar only re-renders when an active mark actually changes. */
+function sameToolbarState(left: ToolbarState, right: ToolbarState): boolean {
+  return (Object.keys(right) as (keyof ToolbarState)[]).every((key) => left[key] === right[key]);
+}
+
 const INITIAL_STATE: ToolbarState = {
   heading: null,
   bold: false,
@@ -71,6 +76,7 @@ const iconButtonStyle: React.CSSProperties = {
 export function EditorToolbar({ editor, collapsed, onCollapsedChange }: EditorToolbarProps) {
   const { t } = useI18n();
   const [state, setState] = useState<ToolbarState>(INITIAL_STATE);
+  const stateRef = useRef<ToolbarState>(INITIAL_STATE);
   const [highlightPaletteOpen, setHighlightPaletteOpen] = useState(false);
   const editorRef = useRef<Editor | null>(null);
 
@@ -91,7 +97,7 @@ export function EditorToolbar({ editor, collapsed, onCollapsedChange }: EditorTo
         }
       }
 
-      setState({
+      const nextState: ToolbarState = {
         heading,
         bold: currentEditor.isActive('bold'),
         underline: currentEditor.isActive('underline'),
@@ -102,7 +108,12 @@ export function EditorToolbar({ editor, collapsed, onCollapsedChange }: EditorTo
         highlight: currentEditor.isActive('highlight'),
         strikethrough: currentEditor.isActive('strike'),
         link: currentEditor.isActive('link'),
-      });
+      };
+      // Every transaction (i.e. every keystroke) used to commit a new object,
+      // re-rendering the whole toolbar for states that had not changed.
+      if (sameToolbarState(stateRef.current, nextState)) return;
+      stateRef.current = nextState;
+      setState(nextState);
     };
 
     updateActiveStates();

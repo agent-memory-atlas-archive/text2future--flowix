@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -15,14 +15,15 @@ use tauri::{State, WebviewWindow};
 use crate::config::path_is_inside;
 use crate::lock_utils::read_lock;
 use flowix_core::memo_file::{
-    media_kind_for_path, notebook_path_from_relative, FileManagementPolicy, MediaResourceKind,
+    media_kind_for_path, FileManagementPolicy, MediaResourceKind,
     NoteColor, MemoFile,
 };
 use sha2::{Digest, Sha256};
 use tokio::sync::{Notify, Semaphore};
 
 use super::helpers::{
-    can_access_document_path, can_access_scoped_file, is_attached_notebook_directory,
+    can_access_document_path, can_access_scoped_file, can_access_scoped_file_with_state,
+    is_attached_notebook_directory,
     is_internal_notebook_path, is_registered_notebook_path, is_registered_notebook_root,
     refresh_notebook_note_index, FileOperationFailure,
 };
@@ -187,64 +188,49 @@ fn canonical_path(path: &Path) -> std::path::PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn relative_memo_is_direct_child(relative_path: &Path, relative_directory: &Path) -> bool {
-    relative_path.parent().unwrap_or_else(|| Path::new("")) == relative_directory
-}
-
-/// 读取当前目录直接子项所需的笔记元数据。MemoFile 已缓存当前笔记本
-/// index；这里进一步只为当前目录的 Markdown 条目建立 path map，避免每次
-/// 展开小目录都为整个笔记本执行路径拼接与 canonicalize。
-/// 非笔记本目录返回 None，外部 Markdown 文件继续使用文件系统时间。
-fn memo_tree_metadata_for_directory(
+/// Hydrate only the visible direct children found by the filesystem listing.
+/// The core query uses exact primary keys and decodes only tree-row metadata.
+fn populate_memo_tree_metadata(
     directory_path: &Path,
-    state: &State<AppState>,
-) -> Option<HashMap<std::path::PathBuf, MemoTreeMetadata>> {
-    let memo_file = read_lock(&state.memo_file, "memo_file");
+    items: &mut [DocTreeItem],
+    memo_file_store: &Arc<RwLock<MemoFile>>,
+    notebook_background: &Arc<crate::app::notebook_background::NotebookBackground>,
+) {
+    let memo_file = read_lock(memo_file_store, "memo_file");
     let canonical_directory = canonical_path(directory_path);
-    let config = memo_file
-        .read_notebook_configs()
-        .ok()?
+    let Some(config) = memo_file.read_notebook_configs().ok().and_then(|configs| configs
         .into_iter()
         .filter(|config| path_is_inside(&canonical_directory, Path::new(&config.path)))
-        .max_by_key(|config| Path::new(&config.path).components().count())?;
+        .max_by_key(|config| Path::new(&config.path).components().count())) else { return; };
     let notebook_root = canonical_path(Path::new(&config.path));
-    let relative_directory = canonical_directory
-        .strip_prefix(&notebook_root)
-        .ok()?
-        .to_path_buf();
-    let notes = match memo_file.read_note_entries(&config.id) {
-        Ok(notes) => notes,
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-            state.notebook_background.request(&config.id, true, false);
-            return None;
-        }
-        Err(_) => return None,
+    // Resolve only listed notes, preserving metadata for in-notebook symlinks.
+    let relative_path_for = |item: &DocTreeItem| {
+        canonical_path(Path::new(&item.full_path)).strip_prefix(&notebook_root).ok()
+            .map(|path| path.to_string_lossy().replace('\\', "/"))
     };
-
-    Some(
-        notes
-            .into_iter()
-            .filter_map(|entry| {
-                let relative_path = entry.relative_path;
-                if !relative_memo_is_direct_child(Path::new(&relative_path), &relative_directory) {
-                    return None;
-                }
-                let path =
-                    notebook_path_from_relative(Path::new(&config.path), &relative_path).ok()?;
-                Some((
-                    canonical_path(&path),
-                    MemoTreeMetadata {
-                        created_ms: u64::try_from(entry.created_at).ok(),
-                        memo: DocTreeMemoMeta {
-                            icon: entry.icon,
-                            colors: entry.colors,
-                            favorited: entry.favorited,
-                        },
-                    },
-                ))
-            })
-            .collect(),
-    )
+    let listed_notes: Vec<_> = items.iter().enumerate()
+        .filter(|(_, item)| matches!(item.resource_kind, Some(DocTreeResourceKind::Note)))
+        .filter_map(|(index, item)| relative_path_for(item).map(|path| (index, path)))
+        .collect();
+    let relative_paths: Vec<_> = listed_notes.iter().map(|(_, path)| path.clone()).collect();
+    let metadata = match memo_file.read_note_tree_metadata_for_paths(&config.id, &relative_paths) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            notebook_background.request(&config.id, true, false);
+            return;
+        }
+        Err(_) => return,
+    };
+    let by_path: HashMap<_, _> = metadata.into_iter().map(|entry| (entry.relative_path.clone(), entry)).collect();
+    for (index, relative_path) in listed_notes {
+        let item = &mut items[index];
+        if let Some(entry) = by_path.get(&relative_path) {
+            item.memo_created_ms = u64::try_from(entry.created_at).ok();
+            item.memo_meta = Some(DocTreeMemoMeta {
+                icon: entry.icon.clone(), colors: entry.colors.clone(), favorited: entry.favorited,
+            });
+        }
+    }
 }
 
 fn read_dir_single_level(
@@ -558,8 +544,8 @@ fn refresh_file_management_indexes(
         .reconcile_note_index(&notebook.id)
         .map_err(|error| format!("refresh note index failed: {error}"))?;
     memo_file
-        .reconcile_media_resources(&notebook.id)
-        .map_err(|error| format!("refresh media index failed: {error}"))?;
+        .reconcile_resources(&notebook.id)
+        .map_err(|error| format!("refresh resource catalog failed: {error}"))?;
     crate::commands::document_list::refresh_view_document_catalog_checked(
         &memo_file,
         &notebook.id,
@@ -908,43 +894,71 @@ fn normalize_default_create_folder(folder: Option<String>) -> Result<Option<Stri
 // ==================== IPC ====================
 
 #[tauri::command]
-pub fn get_file_tree(space_path: String, state: State<AppState>) -> Option<Vec<DocTreeItem>> {
-    let path = Path::new(&space_path);
-    if !path.exists()
-        || is_internal_notebook_path(path, &state)
-        || !is_browsable_scope(path, &state)
-    {
-        return None;
-    }
-    let memo_metadata = memo_tree_metadata_for_directory(path, &state);
-    let notebook_policy = notebook_policy_for_path(&state, path);
-    Some(read_dir_single_level_with_policy(
-        path,
-        memo_metadata.as_ref(),
-        notebook_policy
-            .as_ref()
-            .map(|(root, policy)| (root.as_path(), policy)),
-    ))
+pub async fn get_file_tree(
+    space_path: String,
+    app: AppHandle,
+) -> Option<Vec<DocTreeItem>> {
+    let path = Path::new(&space_path).to_path_buf();
+    // Filesystem enumeration and index reads stay off the command thread.
+    let (memo_file, notebook_background, notebook_policy) = {
+        let state = app.state::<AppState>();
+        if !path.exists()
+            || is_internal_notebook_path(&path, &state)
+            || !is_browsable_scope(&path, &state)
+        {
+            return None;
+        }
+        (
+            state.memo_file.clone(),
+            state.notebook_background.clone(),
+            notebook_policy_for_path(&state, &path),
+        )
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut items = read_dir_single_level_with_policy(
+            &path,
+            None,
+            notebook_policy
+                .as_ref()
+                .map(|(root, policy)| (root.as_path(), policy)),
+        );
+        populate_memo_tree_metadata(&path, &mut items, &memo_file, &notebook_background);
+        items
+    })
+    .await
+    .ok()
 }
 
 #[tauri::command]
-pub fn get_dir_children(dir_path: String, state: State<AppState>) -> Vec<DocTreeItem> {
-    let path = Path::new(&dir_path);
-    if !path.exists()
-        || is_internal_notebook_path(path, &state)
-        || !is_browsable_scope(path, &state)
-    {
-        return vec![];
-    }
-    let memo_metadata = memo_tree_metadata_for_directory(path, &state);
-    let notebook_policy = notebook_policy_for_path(&state, path);
-    read_dir_single_level_with_policy(
-        path,
-        memo_metadata.as_ref(),
-        notebook_policy
-            .as_ref()
-            .map(|(root, policy)| (root.as_path(), policy)),
-    )
+pub async fn get_dir_children(dir_path: String, app: AppHandle) -> Vec<DocTreeItem> {
+    let path = Path::new(&dir_path).to_path_buf();
+    let (memo_file, notebook_background, notebook_policy) = {
+        let state = app.state::<AppState>();
+        if !path.exists()
+            || is_internal_notebook_path(&path, &state)
+            || !is_browsable_scope(&path, &state)
+        {
+            return vec![];
+        }
+        (
+            state.memo_file.clone(),
+            state.notebook_background.clone(),
+            notebook_policy_for_path(&state, &path),
+        )
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut items = read_dir_single_level_with_policy(
+            &path,
+            None,
+            notebook_policy
+                .as_ref()
+                .map(|(root, policy)| (root.as_path(), policy)),
+        );
+        populate_memo_tree_metadata(&path, &mut items, &memo_file, &notebook_background);
+        items
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// 文件树可浏览作用域 ── 注册笔记本根 或 资料文件夹 (agent access
@@ -956,16 +970,27 @@ fn is_browsable_scope(path: &Path, state: &State<AppState>) -> bool {
 }
 
 #[tauri::command]
-pub fn read_file(
+pub async fn read_file(
     file_path: String,
     space_path: Option<String>,
-    state: State<AppState>,
+    app: AppHandle,
 ) -> Option<String> {
-    if !can_access_scoped_file(Path::new(&file_path), space_path.as_deref(), &state) {
-        eprintln!("[read_file] refused out-of-scope path: {}", file_path);
-        return None;
+    {
+        let state = app.state::<AppState>();
+        if !can_access_scoped_file_with_state(
+            Path::new(&file_path),
+            space_path.as_deref(),
+            state.inner(),
+        ) {
+            eprintln!("[read_file] refused out-of-scope path: {}", file_path);
+            return None;
+        }
     }
-    fs::read_to_string(&file_path).ok()
+    // Opening a large document should not block the main thread on the read.
+    tauri::async_runtime::spawn_blocking(move || fs::read_to_string(&file_path).ok())
+        .await
+        .ok()
+        .flatten()
 }
 
 const MAX_DOCX_PREVIEW_BYTES: u64 = 50 * 1024 * 1024;
@@ -2141,9 +2166,9 @@ fn rename_path_and_notify(
                 tracing::warn!(notebook_id = %config.id, "V2 index refresh after folder move failed: {error}");
             }
             // The caller switches its folder scope when this command returns.
-            // Keep media queries on the new scope consistent with the filesystem.
-            if let Err(error) = mf.reconcile_media_resources(&config.id) {
-                tracing::warn!(notebook_id = %config.id, "media index refresh after folder move failed: {error}");
+            // Keep the resource catalog on the new scope consistent with the filesystem.
+            if let Err(error) = mf.reconcile_resources(&config.id) {
+                tracing::warn!(notebook_id = %config.id, "resource catalog refresh after folder move failed: {error}");
             }
             if let Ok(root) = dunce::canonicalize(&config.path) {
                 crate::commands::document_list::refresh_view_document_catalog(
@@ -2727,19 +2752,39 @@ mod tests {
     }
 
     #[test]
-    fn memo_metadata_scope_only_matches_direct_directory_children() {
-        assert!(relative_memo_is_direct_child(
-            Path::new("root.md"),
-            Path::new("")
-        ));
-        assert!(relative_memo_is_direct_child(
-            Path::new("projects/note.md"),
-            Path::new("projects")
-        ));
-        assert!(!relative_memo_is_direct_child(
-            Path::new("projects/archive/note.md"),
-            Path::new("projects")
-        ));
+    fn tree_metadata_is_hydrated_for_the_listed_directory_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("book");
+        fs::create_dir_all(root.join("projects/archive")).unwrap();
+        for relative in ["note.md", "projects/note.md", "projects/archive/note.md"] {
+            fs::write(root.join(relative), "body").unwrap();
+        }
+        let memo = MemoFile::new(temp.path().join("config"));
+        memo.initialize_current_registry_storage().unwrap();
+        memo.write_notebook_configs(&[flowix_core::memo_file::NotebookConfig {
+            id: "tree".into(), name: "Tree".into(), icon: None,
+            path: root.to_string_lossy().into_owned(), is_default: true,
+            sort: 0, created_at: 0, updated_at: 0,
+        }]).unwrap();
+        memo.reconcile_note_index("tree").unwrap();
+        let memo = Arc::new(RwLock::new(memo));
+        let background = Arc::new(crate::app::notebook_background::NotebookBackground::default());
+        for directory in [&root, &root.join("projects")] {
+            let mut items = read_dir_single_level(directory, None);
+            populate_memo_tree_metadata(directory, &mut items, &memo, &background);
+            let hydrated: Vec<_> = items.iter().filter(|item| item.memo_meta.is_some()).collect();
+            assert_eq!(hydrated.len(), 1);
+            assert_eq!(hydrated[0].name, "note.md");
+            assert!(hydrated[0].memo_created_ms.is_some());
+            assert!(items.iter().filter(|item| item.item_type == "folder").all(|item| item.memo_meta.is_none()));
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("note.md"), root.join("alias.md")).unwrap();
+            let mut items = read_dir_single_level(&root, None);
+            populate_memo_tree_metadata(&root, &mut items, &memo, &background);
+            assert!(items.iter().find(|item| item.name == "alias.md").unwrap().memo_meta.is_some());
+        }
     }
 
     #[test]

@@ -1,3 +1,4 @@
+import { findDocumentSession, type DocumentRuntimeSession } from './document-runtime-session';
 import { findFileDisplayPath, subscribeFileDisplayRelease } from '@/lib/file-display-registry';
 import { recoveryDrafts } from '@platform/tauri/client/recovery';
 import { canonicalPath } from '@/lib/path';
@@ -170,6 +171,9 @@ async function persistRecoverySnapshot(
     const createdAt = createdAtByKey.get(key) ?? now;
     createdAtByKey.set(key, createdAt);
     if (input.revision <= (savedRecoveryRevisions.get(input.identity.displayId) ?? -1)) return true;
+    const session = findDocumentSession(input.identity.displayId);
+    const previous = session && completedDraftWrites.get(session);
+    if (previous && sameCheckpoint(previous, input)) return true;
     const written = await recoveryDrafts.write(key, {
       ...input,
       identity,
@@ -178,6 +182,9 @@ async function persistRecoverySnapshot(
       updatedAt: now,
     });
 
+    if (written && session && input.revision > (savedRecoveryRevisions.get(input.identity.displayId) ?? -1)) {
+      completedDraftWrites.set(session, input);
+    }
     return written;
   }).catch(() => false);
 }
@@ -210,6 +217,10 @@ export async function clearRecoveryDraftThrough(
   savedRevision: number,
 ): Promise<void> {
   savedRecoveryRevisions.set(identity.displayId, Math.max(savedRevision, savedRecoveryRevisions.get(identity.displayId) ?? -1));
+  const session = findDocumentSession(identity.displayId);
+  if (session && (completedDraftWrites.get(session)?.revision ?? Infinity) <= savedRevision) {
+    completedDraftWrites.delete(session);
+  }
   await enqueueRecoveryOperation(identity, async () => {
     const locator = documentLocator(identity);
     const key = documentLocatorKey(locator);
@@ -312,21 +323,39 @@ export async function flushRecoveryOperations(): Promise<boolean> {
 
 const savedRecoveryRevisions = new Map<string, number>();
 type RecoveryInput = Parameters<typeof persistRecoverySnapshot>[0];
-const pendingDraftWrites = new Map<string, { next: RecoveryInput | null; done: Promise<boolean> }>();
+const completedDraftWrites = new WeakMap<DocumentRuntimeSession, RecoveryInput>();
+function sameCheckpoint(left: RecoveryInput, right: RecoveryInput): boolean {
+  return left.identity.displayId === right.identity.displayId
+    && canonicalPath(left.originalPath) === canonicalPath(right.originalPath)
+    && left.revision === right.revision && left.bodyRevision === right.bodyRevision
+    && left.content === right.content && left.baseContent === right.baseContent
+    && left.title?.revision === right.title?.revision
+    && left.title?.draft === right.title?.draft && left.title?.filename === right.title?.filename;
+}
+const pendingDraftWrites = new Map<string, {
+  active: RecoveryInput | null; next: RecoveryInput | null; done: Promise<boolean>;
+}>();
 /** Replace queued checkpoints instead of retaining every intermediate document. */
 export function persistRecoveryDraft(input: RecoveryInput): Promise<boolean> {
   const key = documentLocatorKey(documentLocator(input.identity));
   const existing = pendingDraftWrites.get(key);
-  if (existing) { existing.next = input; return existing.done; }
+  if (existing) {
+    const latest = existing.next ?? existing.active;
+    if (!latest || (!sameCheckpoint(latest, input)
+      && !(latest.identity.displayId === input.identity.displayId && latest.revision > input.revision))) {
+      existing.next = input;
+    }
+    return existing.done;
+  }
   let finish!: (success: boolean) => void;
   const done = new Promise<boolean>(resolve => { finish = resolve; });
-  const entry = { next: input as RecoveryInput | null, done };
+  const entry = { active: null as RecoveryInput | null, next: input as RecoveryInput | null, done };
   pendingDraftWrites.set(key, entry);
   void (async () => {
     let success = true;
     try {
       while (entry.next) {
-        const snapshot = entry.next; entry.next = null;
+        const snapshot = entry.next; entry.next = null; entry.active = snapshot;
         const path = findFileDisplayPath(snapshot.identity.displayId) ?? snapshot.identity.path;
         success = await persistRecoverySnapshot({ ...snapshot, originalPath: path,
           identity: { ...snapshot.identity, path } }) && success;

@@ -25,6 +25,7 @@ import { canEditMediaLibraryFilter, hasMediaDatasetFilter, mediaCollectionFilter
 import { renameMediaLibrary } from './rename-media-library';
 import { useMediaLibraryActions } from './use-media-library-actions';
 import { useMediaLibraryRefresh } from './use-media-library-refresh';
+import { MediaLibraryLoadingSkeleton } from '@shared/ui/media-library-loading-skeleton';
 
 export function MediaLibraryView({ onSurfaceLifecycleReady, reportPresentation, filePath, fileIdentity, notebookPath: rawNotebookPath, notebookId = null, expectedCollectionId, workspaceHost = 'main-third' }: { onSurfaceLifecycleReady?: (lifecycle: SurfaceLifecycle | null) => void; reportPresentation?: (update: SurfacePresentationUpdate) => void; filePath: string; fileIdentity?: FileDisplayIdentity; notebookPath: string | null; notebookId?: string | null; expectedCollectionId?: string | null; workspaceHost?: 'main-third' | 'browser-column' }) {
   const notebookPath = rawNotebookPath ? canonicalDirectoryPath(rawNotebookPath) : null;
@@ -294,7 +295,7 @@ export function MediaLibraryView({ onSurfaceLifecycleReady, reportPresentation, 
     if (!reportPresentation) return;
     if (loading) {
       reportPresentation({ title: libraryDisplayName, state: {
-        status: 'loading', phase: 'content', message: { key: 'mediaLibrary.opening' }, retainContent: false,
+        status: 'loading', loadingMode: 'blocking', retainContent: true,
       } });
     } else if (error) {
       reportPresentation({ title: libraryDisplayName, state: {
@@ -355,8 +356,9 @@ export function MediaLibraryView({ onSurfaceLifecycleReady, reportPresentation, 
     };
   }, [activeCollectionId, displayId, document?.dataset.filter, mediaScope, notebook?.id, notebookId, notebookPath, resourceKinds]);
 
-  if (loading) return <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">正在打开媒体库…</div>;
-  if (error) return <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--destructive)]">{error}</div>;
+  if (loading) return reportPresentation ? <MediaLibraryLoadingSkeleton /> : <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">正在打开媒体库…</div>;
+  if (error) return reportPresentation ? null : <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--destructive)]">{error}</div>;
+  if (!document && reportPresentation) return null;
   if (!document || !listContext) return <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">媒体库不可用</div>;
 
   return <div className="relative h-full min-h-0">

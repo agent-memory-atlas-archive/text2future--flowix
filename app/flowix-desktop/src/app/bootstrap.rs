@@ -368,6 +368,7 @@ pub fn run() {
                 commands::window_shutdown::install_window(&window);
                 // �?��即�?齐主题背�?��, 消除冷启动白�?(尤其深色主�?)�?
                 let theme = app.state::<AppState>().user_config.get_preference().theme;
+                crate::window_material::apply_main_window_material(&window, theme);
                 crate::window_chrome::apply_window_chrome_theme(&window, theme);
 
                 // Theme::System 时跟�?OS 明暗实时切换窗口背景�? 仅当窗口�??显式
@@ -517,6 +518,7 @@ pub fn run() {
             commands::boot::get_version_initialization_completed,
             commands::boot::set_version_initialization_completed,
             commands::boot::get_startup_status,
+            commands::boot::wait_for_startup_status_change,
             commands::boot::retry_startup,
             commands::boot::get_startup_notebook_id,
             commands::boot::notify_startup_interactive,
@@ -648,6 +650,7 @@ pub fn run() {
             commands::file::get_file_tree,
             commands::file::get_dir_children,
             commands::document_list::list_document_page,
+            commands::document_list::list_work_documents_page,
             commands::collection::list_collections,
             commands::collection::resolve_collection,
             commands::collection::mutate_collection,
@@ -799,6 +802,7 @@ pub fn run() {
             commands::window_input::set_window_close_region,
             commands::window_input::native_close_routing_ready,
             commands::window::apply_window_theme,
+            commands::window::get_window_material,
             commands::window::apply_menu_language,
             commands::external_document_watch::watch_external_document,
             commands::external_document_watch::unwatch_external_document,
@@ -909,13 +913,17 @@ fn spawn_workbench_startup(
                     }
                     start_post_startup_services(app.clone(), external_runtimes);
                     let background = app.state::<AppState>().notebook_background.clone();
-                    // This identity only sets queue priority. Release the global
-                    // MemoFile lock before taking the watcher binding lock.
-                    let current_notebook_id = crate::lock_utils::read_lock(&memo_file, "memo_file")
-                        .current_notebook_id_value();
-                    // Serialize a fresh independent registry snapshot + binding
-                    // with other rebinds, without nesting the global MemoFile lock.
-                    let initial_notebooks = {
+                    // Serialize selection + binding so the active root cannot
+                    // lag behind a concurrent notebook switch.
+                    let (current_notebook_id, initial_notebooks) = {
+                        let app_state = app.state::<AppState>();
+                        let app_state = app_state.inner();
+                        let _transition = app_state
+                            .notebook_transition
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let current_notebook_id = crate::lock_utils::read_lock(&memo_file, "memo_file")
+                            .current_notebook_id_value();
                         let mut watcher = memo_watcher.write().unwrap_or_else(|p| p.into_inner());
                         let configs = crate::watcher::runtime::read_registered_notebooks(
                             user_config_for_watcher.config_dir(),
@@ -923,12 +931,27 @@ fn spawn_workbench_startup(
                         watcher.set_whitelist(user_config_for_watcher.get_preference().watcher);
                         match configs {
                             Ok(configs) => {
-                                watcher.rebind_all(app.clone(), configs.clone());
-                                configs
+                                watcher.rebind_current_notebook(
+                                    app.clone(),
+                                    current_notebook_id.as_deref(),
+                                    configs
+                                        .iter()
+                                        .find(|config| {
+                                            current_notebook_id.as_deref()
+                                                == Some(config.id.as_str())
+                                        })
+                                        .cloned(),
+                                );
+                                (current_notebook_id, configs)
                             }
                             Err(error) => {
                                 tracing::warn!(%error, "startup watcher snapshot unavailable; retry deferred");
-                                Vec::new()
+                                watcher.rebind_current_notebook(
+                                    app.clone(),
+                                    current_notebook_id.as_deref(),
+                                    None,
+                                );
+                                (current_notebook_id, Vec::new())
                             }
                         }
                     };
@@ -978,9 +1001,9 @@ fn spawn_workbench_startup(
     });
 }
 
-/// Retry external/not-yet-mounted notebook roots independently of index work.
-/// A newly attached root gets one reconciliation pass to cover changes made
-/// while its volume was offline. The process exit signal stops this loop.
+/// Retry the selected notebook root independently of index work. A newly
+/// attached root gets one reconciliation pass to cover changes made while its
+/// volume was offline. The process exit signal stops this loop.
 fn spawn_notebook_watch_retry(
     app: tauri::AppHandle,
     memo_watcher: Arc<RwLock<MemoWatcher>>,
@@ -999,41 +1022,68 @@ fn spawn_notebook_watch_retry(
             if stop.load(Ordering::Acquire) {
                 return;
             }
-            let Ok(mut watcher) = memo_watcher.write() else {
-                tracing::warn!("notebook watcher lock unavailable during root retry");
-                continue;
-            };
-            let configs = match crate::watcher::runtime::read_registered_notebooks(&config_dir)
-            {
-                Ok(configs) => configs,
+            let state = app.state::<AppState>();
+            let _transition = state
+                .notebook_transition
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let active_notebook_id = crate::lock_utils::read_lock(&state.memo_file, "memo_file")
+                .current_notebook_id_value();
+            let active_config = match crate::watcher::runtime::read_registered_notebooks(&config_dir) {
+                Ok(configs) => configs
+                    .into_iter()
+                    .find(|config| {
+                        active_notebook_id.as_deref() == Some(config.id.as_str())
+                    }),
                 Err(error) => {
                     tracing::warn!(%error, "could not reload notebook roots for watcher retry");
                     continue;
                 }
             };
+            let Ok(mut watcher) = memo_watcher.write() else {
+                tracing::warn!("notebook watcher lock unavailable during root retry");
+                continue;
+            };
             if !watcher.is_initialized() {
-                watcher.rebind_all(app.clone(), configs.clone());
+                watcher.rebind_current_notebook(
+                    app.clone(),
+                    active_notebook_id.as_deref(),
+                    active_config.clone(),
+                );
                 // Binding alone cannot cover changes made while detached. Only
-                // reconcile roots that actually attached; offline roots retain
-                // their normal retry path and suspended roots stay untouched.
-                crate::watcher::runtime::reconcile_bound_roots(&watcher, &configs, &background);
+                // reconcile the active root if it attached. Inactive roots do
+                // not receive filesystem watches until selected.
+                let attached_id = active_config
+                    .as_ref()
+                    .filter(|config| watcher.is_watching(&config.id))
+                    .map(|config| config.id.clone());
+                drop(watcher);
+                drop(_transition);
+                if let Some(notebook_id) = attached_id {
+                    background.request(&notebook_id, false, true);
+                }
                 continue;
             }
-            for config in &configs {
-                if watcher.is_watching(&config.id)
-                    || watcher.is_notebook_suspended(&config.id)
-                    || !Path::new(&config.path).is_dir()
+            let mut attached_id = None;
+            if let Some(config) = active_config.as_ref() {
+                if !watcher.is_watching(&config.id)
+                    && !watcher.is_notebook_suspended(&config.id)
+                    && Path::new(&config.path).is_dir()
                 {
-                    continue;
+                    if watcher.add_notebook_root(config) {
+                        tracing::info!(notebook_id = %config.id, root = %config.path,
+                            "attached notebook watcher after root became available");
+                        attached_id = Some(config.id.clone());
+                    } else {
+                        tracing::debug!(notebook_id = %config.id, root = %config.path,
+                            "notebook watcher root retry is still unavailable");
+                    }
                 }
-                if watcher.add_notebook_root(config) {
-                    tracing::info!(notebook_id = %config.id, root = %config.path,
-                        "attached notebook watcher after root became available");
-                    background.request(&config.id, false, true);
-                } else {
-                    tracing::debug!(notebook_id = %config.id, root = %config.path,
-                        "notebook watcher root retry is still unavailable");
-                }
+            }
+            drop(watcher);
+            drop(_transition);
+            if let Some(notebook_id) = attached_id {
+                background.request(&notebook_id, false, true);
             }
         }
     });

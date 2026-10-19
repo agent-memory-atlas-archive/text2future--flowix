@@ -1,3 +1,4 @@
+import { terminalInlineAtomCaretPosition } from './shared/terminal-inline-atom-caret';
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey, TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
@@ -144,7 +145,7 @@ function findTerminalInlineAtomCaretAnchor(
   return Array.from(anchors).find((anchor) => (
     anchor.closest('.ProseMirror') === view.dom
     &&
-    anchor.getAttribute('data-terminal-inline-atom-caret-position') === String(position)
+    terminalInlineAtomCaretPosition(anchor) === position
   )) ?? null;
 }
 

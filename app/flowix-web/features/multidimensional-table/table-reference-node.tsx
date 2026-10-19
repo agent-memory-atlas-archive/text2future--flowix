@@ -9,10 +9,12 @@ import { openWorkspaceSurface } from '@features/workspace/public/open-surface-ap
 import { useNoteStore } from '@features/memo/store/note-store';
 import { useAppLanguage } from '@features/preferences/public/runtime-api';
 import { I18nProvider } from '@/lib/i18n/provider';
+import { useI18n } from '@/lib/i18n';
 import { canonicalDirectoryPath, canonicalPath } from '@/lib/path';
 import { useCollectionReference } from '@features/collection/use-collection-reference';
 import { toast } from '@/lib/toast';
 import { Button } from '@shared/ui/button';
+import { NotebookTreeResourceIcon } from '@features/memo/components/file-type-icon';
 import { TableDocumentView } from './table-document-view';
 import { openTableReferencePicker } from './table-reference-picker';
 import {
@@ -53,6 +55,7 @@ class TableReferenceNodeView implements ProseMirrorNodeView {
     const attrs = normalizeTableReferenceAttrs(this.node.attrs);
     this.root.render(<TableReferenceSurface
       attrs={attrs}
+      currentNotebookId={this.editor.storage.attachmentLink?.getNotebookId?.() ?? null}
       editable={this.editor.isEditable}
       onViewChange={(viewId) => this.updateAttrs({ viewId })}
       onRelativePathChange={(relativePath) => this.updateAttrs({ relativePath })}
@@ -112,8 +115,9 @@ class TableReferenceNodeView implements ProseMirrorNodeView {
   }
 }
 
-function TableReferenceSurface({ attrs, editable, onViewChange, onRelativePathChange, onReplace, onRemove }: {
+function TableReferenceSurface({ attrs, currentNotebookId, editable, onViewChange, onRelativePathChange, onReplace, onRemove }: {
   attrs: TableReferenceAttrs;
+  currentNotebookId: string | null;
   editable: boolean;
   onViewChange: (viewId: string) => void;
   onRelativePathChange: (relativePath: string) => void;
@@ -122,10 +126,12 @@ function TableReferenceSurface({ attrs, editable, onViewChange, onRelativePathCh
 }) {
   const language = useAppLanguage();
   const notebook = useNoteStore((state) => state.notebooks.find((item) => item.id === attrs.notebookId));
-  const reference = useCollectionReference(notebook, attrs.collectionId, 'table');
+  const external = !currentNotebookId || currentNotebookId !== attrs.notebookId;
+  const reference = useCollectionReference(external ? undefined : notebook, attrs.collectionId, 'table');
   const fileIdentity = reference.fileIdentity;
   const filePath = fileIdentity?.path ?? null;
-  const displayName = reference.item?.name ?? '多维表格';
+  const displayName = reference.item?.name ?? attrs.relativePath?.split('/').pop()?.replace(/\.(?:table|index)\.ya?ml$/i, '') ?? '多维表格';
+  const unavailable = external || (!filePath && Boolean(reference.error));
 
   const handleFilePathChange = useCallback((nextFilePath: string) => {
     const rootPath = notebook ? canonicalDirectoryPath(notebook.path) : '';
@@ -149,13 +155,49 @@ function TableReferenceSurface({ attrs, editable, onViewChange, onRelativePathCh
   }, [attrs.collectionId, attrs.viewId, notebook]);
 
   return <I18nProvider language={language}>
-    <section className="table-reference-node__surface" contentEditable={false} aria-label={`多维表格：${displayName}`}>
+    <section
+      className={unavailable ? 'table-reference-node__surface table-reference-node__surface--unavailable my-3 overflow-hidden rounded-xl border border-[var(--border)] px-3 pb-3 pt-1.5' : 'table-reference-node__surface'}
+      contentEditable={false}
+      aria-label={`多维表格：${displayName}`}
+    >
       {!attrs.notebookId || !attrs.collectionId
         ? <div className="table-reference-node__message">此多维表格引用信息不完整。</div>
-        : !notebook
-          ? <div className="table-reference-node__message">找不到引用所在的笔记本。</div>
-          : !filePath
-            ? <div className="table-reference-node__message">{reference.error ?? '正在定位多维表格…'}</div>
+        : external
+            ? <>
+              <div className="mb-1.5 flex items-center gap-2">
+                <div className="flex min-w-0 flex-1 items-center gap-1.5 pr-2" title={displayName}>
+                  <NotebookTreeResourceIcon path={attrs.relativePath ?? 'table.yaml'} collectionType="table" className="h-5 w-5 shrink-0" />
+                  <span className="min-w-0 truncate px-0.5 py-1 text-sm font-medium leading-none text-[var(--foreground)]">{displayName}</span>
+                </div>
+                <div className="flex shrink-0 items-center gap-0">
+                  <Button type="button" variant="ghost" size="sm" className="h-7 w-7 rounded-lg p-0 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]" aria-label="打开多维表格" title="打开" disabled>
+                    <ArrowUpRightIcon size={14} weight="bold" aria-hidden="true" />
+                  </Button>
+                  {editable && <Button type="button" variant="ghost" size="sm" title="更换" aria-label="更换多维表格" onClick={(event) => onReplace(event.currentTarget)} className="h-7 w-7 rounded-lg p-0 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"><ArrowsLeftRightIcon size={14} weight="bold" aria-hidden="true" /></Button>}
+                  {editable && <button type="button" className="table-reference-node__remove" aria-label="移除多维表格引用" title="移除引用" onClick={onRemove}><X className="h-4 w-4" aria-hidden="true" /></button>}
+                </div>
+              </div>
+              <div className="py-8 text-center text-sm text-[var(--muted-foreground)]"><TableReferenceErrorMessage error="" external /></div>
+            </>
+          : !notebook
+            ? <div className="table-reference-node__message">找不到引用所在的笔记本。</div>
+            : !filePath
+            ? <>
+              {reference.error && <div className="mb-1.5 flex items-center gap-2">
+                <div className="flex min-w-0 flex-1 items-center gap-1.5 pr-2" title={displayName}>
+                  <NotebookTreeResourceIcon path={attrs.relativePath ?? 'table.yaml'} collectionType="table" className="h-5 w-5 shrink-0" />
+                  <span className="min-w-0 truncate px-0.5 py-1 text-sm font-medium leading-none text-[var(--foreground)]">{displayName}</span>
+                </div>
+                <div className="flex shrink-0 items-center gap-0">
+                  <Button type="button" variant="ghost" size="sm" className="h-7 w-7 rounded-lg p-0 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]" aria-label="打开多维表格" title="打开" disabled>
+                    <ArrowUpRightIcon size={14} weight="bold" aria-hidden="true" />
+                  </Button>
+                  {editable && <Button type="button" variant="ghost" size="sm" title="更换" aria-label="更换多维表格" onClick={(event) => onReplace(event.currentTarget)} className="h-7 w-7 rounded-lg p-0 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"><ArrowsLeftRightIcon size={14} weight="bold" aria-hidden="true" /></Button>}
+                  {editable && <button type="button" className="table-reference-node__remove" aria-label="移除多维表格引用" title="移除引用" onClick={onRemove}><X className="h-4 w-4" aria-hidden="true" /></button>}
+                </div>
+              </div>}
+              <div className={reference.error ? 'py-8 text-center text-sm text-[var(--muted-foreground)]' : 'table-reference-node__message'}>{reference.error ? <TableReferenceErrorMessage error={reference.error} /> : '正在定位多维表格…'}</div>
+            </>
             : <div className="table-reference-node__content">
               <TableDocumentView
                 key={attrs.collectionId}
@@ -192,6 +234,11 @@ function TableReferenceSurface({ attrs, editable, onViewChange, onRelativePathCh
             </div>}
     </section>
   </I18nProvider>;
+}
+
+function TableReferenceErrorMessage({ error, external = false }: { error: string; external?: boolean }) {
+  const { t } = useI18n();
+  return <>{external ? t('collection.notInCurrentNotebook') : error === 'COLLECTION_NOT_FOUND' ? t('multidimensionalTable.collectionNotFound') : error}</>;
 }
 
 export const TableReference = TiptapNode.create({

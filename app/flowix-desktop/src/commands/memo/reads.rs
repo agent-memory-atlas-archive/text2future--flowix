@@ -153,7 +153,7 @@ pub async fn get_path_notes(
         let memo_file = read_lock(&state.memo_file, "memo_file");
         let mut service = NoteService::new(&memo_file);
         let page = service
-            .list_page(
+            .list_indexed_page(
                 &notebook_id,
                 filter.as_deref().unwrap_or("all"),
                 sort.as_deref().unwrap_or("createdAt"),
@@ -285,10 +285,11 @@ pub async fn write_document(
     app: AppHandle,
     window: tauri::WebviewWindow,
 ) -> Result<Option<WriteDocumentResult>, String> {
+    let origin_window_label = window.label().to_owned();
     crate::commands::document_operations::run(
         "save",
         operation_id,
-        window.label().to_owned(),
+        origin_window_label.clone(),
         move || {
             let state = app.state::<AppState>();
             write_document_internal(
@@ -297,6 +298,7 @@ pub async fn write_document(
                 expectedContent.as_deref(),
                 &state,
                 &app,
+                &origin_window_label,
             )
         },
     )
@@ -310,6 +312,7 @@ fn write_document_internal(
     expected_content: Option<&str>,
     state: &State<AppState>,
     app: &AppHandle,
+    origin_window_label: &str,
 ) -> Result<Option<WriteDocumentResult>, String> {
     if !Path::new(file_path).is_absolute() {
         return Err("absolute document path required".into());
@@ -328,7 +331,7 @@ fn write_document_internal(
         return Ok(None);
     }
 
-    let (saved_path, saved_content) = {
+    let (saved_path, saved_content, entry) = {
         let memo_file = read_lock(&state.memo_file, "memo_file");
         let mut service = NoteService::new(&memo_file);
         mark_self_write_for(app, requested_path);
@@ -338,7 +341,9 @@ fn write_document_internal(
             content,
             Some(&current_content),
         ) {
-            Ok(NoteSaveOutcome::Saved(document)) => (document.path, document.body),
+            Ok(NoteSaveOutcome::Saved(document)) => {
+                (document.path, document.body, document.entry)
+            }
             Ok(NoteSaveOutcome::Conflict { .. }) => return Ok(None),
             Err(error) => return Err(error.to_string()),
         }
@@ -346,8 +351,11 @@ fn write_document_internal(
 
     mark_self_write_for(app, &saved_path);
     let _ = app.emit("flowix:path-note-changed", serde_json::json!({
+        "changeId": uuid::Uuid::new_v4().to_string(),
         "notebookId": notebook_id,
         "relativePath": relative_path,
+        "entry": entry,
+        "originWindowLabel": origin_window_label,
     }));
 
     Ok(Some(WriteDocumentResult {
@@ -380,25 +388,34 @@ pub struct PathNoteSearchHit {
 }
 
 #[tauri::command]
-pub fn search_path_notes(
+pub async fn search_path_notes(
     notebook_id: String,
     query: String,
     limit: Option<usize>,
-    state: State<AppState>,
+    app: AppHandle,
 ) -> Result<Vec<PathNoteSearchHit>, String> {
-    let memo_file = read_lock(&state.memo_file, "memo_file");
-    NoteService::new(&memo_file)
-        .search(&notebook_id, &query, limit.unwrap_or(30).clamp(1, 100))
-        .map_err(|error| error.to_string())
-        .map(|hits| {
-            hits.into_iter()
-                .map(|hit| PathNoteSearchHit {
-                    notebook_id: notebook_id.clone(),
-                    relative_path: hit.relative_path,
-                    title: hit.title,
-                    snippet: hit.snippet,
-                    matched_in: hit.matched_in,
-                })
-                .collect()
-        })
+    // Search runs a SQLite query plus a full-text scan. A synchronous command
+    // executes on the main thread, which froze the Webview while typing or
+    // while a background reconcile held the read lock.
+    let memo_file = app.state::<AppState>().memo_file.clone();
+    let limit = limit.unwrap_or(30).clamp(1, 100);
+    tauri::async_runtime::spawn_blocking(move || {
+        let memo_file = read_lock(&memo_file, "memo_file");
+        NoteService::new(&memo_file)
+            .search(&notebook_id, &query, limit)
+            .map_err(|error| error.to_string())
+            .map(|hits| {
+                hits.into_iter()
+                    .map(|hit| PathNoteSearchHit {
+                        notebook_id: notebook_id.clone(),
+                        relative_path: hit.relative_path,
+                        title: hit.title,
+                        snippet: hit.snippet,
+                        matched_in: hit.matched_in,
+                    })
+                    .collect()
+            })
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }

@@ -139,10 +139,16 @@ export async function protectDocumentDraft(
     reason,
   }), RECOVERY_DRAFT_WRITE_TIMEOUT_MS);
   if (protectedByDraft !== true) return false;
+  const wasTitleProtected = isTitleProtected(identity.displayId);
+  const previousDurable = buffer.durableRevision;
+  const previousState = buffer.saveState;
   if (title) markTitleProtected(identity.displayId, title.revision);
   buffer.durableRevision = Math.max(buffer.durableRevision, bodyRevision);
   if (!buffer.conflicted && !buffer.saveError && buffer.savedRevision < buffer.capturedRevision) buffer.saveState = 'protected';
-  notifyDocumentBufferChanged(identity, 'save_settled');
+  if (previousDurable !== buffer.durableRevision || previousState !== buffer.saveState
+    || wasTitleProtected !== isTitleProtected(identity.displayId)) {
+    notifyDocumentBufferChanged(identity, 'save_settled');
+  }
   return true;
 }
 
@@ -162,9 +168,9 @@ export async function reconcileUnsavedExternalDocumentChange(
   const protectedDraft = await protectDocumentDraft(identity, path, 'autosave').catch(() => false);
   captureLatestDocumentContent(identity);
   if (!hasUnsavedLocalChanges(identity)) return;
-  const latestPath = findFileDisplayPath(identity.displayId);
-  if (!latestPath || canonicalPath(latestPath) !== canonicalPath(path)) {
-    if (latestPath) scheduleDocumentSessionSave(identity);
+  const latestPath = findFileDisplayPath(identity.displayId) ?? path;
+  if (canonicalPath(latestPath) !== canonicalPath(path)) {
+    scheduleDocumentSessionSave(identity);
     return;
   }
   if (!protectedDraft || buffer.capturedRevision !== revision) {
@@ -461,11 +467,13 @@ export async function flushAllDocumentSessions(): Promise<boolean> {
       // until its outcome is known, even when a recovery checkpoint exists.
       if (hasDocumentCommit(key)) return false;
       if (await waitWithTimeout(protectedDraft, 3_000) !== true) return false;
+      captureLatestDocumentContent(identity);
       const protectedLatest = await waitWithTimeout(protectDocumentDraft(identity, adapter.path(), 'shutdown'), 3_000);
       captureLatestDocumentContent(identity);
       const buffer = getDocumentBuffer(identity);
       return protectedLatest && buffer.durableRevision >= buffer.capturedRevision
-        && isTitleProtected(identity.displayId) && !hasDocumentCommit(key);
+        && (!hasTitleDraft(identity.displayId) || isTitleProtected(identity.displayId))
+        && !hasDocumentCommit(key);
     }));
     if (!results.every(Boolean)) return false;
 

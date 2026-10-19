@@ -62,8 +62,8 @@ export function formatModelDisplayLabel(key: string): string {
     return `Claude ${family} ${version}`;
   }
 
-  // gpt-m.n-terra → "GPT-m.n terra" ── 品牌与首段保留 "-", 后续段用空格。
-  // codex-xxx-xxx → "Codex xxx xxx" ── 品牌之后一律空格。
+  // gpt-6-luna → "GPT-6 Luna" ── GPT 品牌和版本保留 "-", 后续段用空格并首字母大写。
+  // codex-5-mini → "Codex 5 Mini" ── Codex 品牌之后一律空格。
   // gpt-5.5 → "GPT-5.5"; codex-5 → "Codex 5"。
   const brandMatch = lower.match(/^(gpt|codex)-(.+)$/);
   if (brandMatch) {
@@ -75,10 +75,15 @@ export function formatModelDisplayLabel(key: string): string {
     if (brandLower === "gpt") {
       return tokens.length === 1
         ? `${brand}-${tokens[0]}`
-        : `${brand}-${tokens[0]} ${tokens.slice(1).join(" ")}`;
+        : `${brand}-${tokens[0]} ${tokens.slice(1).map(formatModelNameToken).join(" ")}`;
     }
-    return `${brand} ${tokens.join(" ")}`;
+    return `${brand} ${tokens.map(formatModelNameToken).join(" ")}`;
   }
 
   return key;
+}
+
+function formatModelNameToken(token: string): string {
+  if (!token) return token;
+  return `${token[0].toUpperCase()}${token.slice(1)}`;
 }

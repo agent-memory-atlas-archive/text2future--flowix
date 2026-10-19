@@ -192,7 +192,7 @@ export function DocxPreview({ filePath, scopePath, reportPresentation }: {
       if (warningCount) notices.push({ id: 'conversion-warnings', severity: 'warning', message: { key: 'docx.warnings', params: { count: warningCount } } });
     }
     const state: SurfaceState = previewState === 'loading'
-      ? { status: 'loading', phase: 'content', message: { key: 'docx.loading' }, retainContent: false }
+      ? { status: 'loading', loadingMode: 'blocking', retainContent: false }
       : previewState === 'failed'
         ? { status: 'error', message: previewError ?? { key: 'docx.previewFailed' },
             actions: [{ id: 'retry', label: { key: 'error.retry' }, enabled: true, run: retry }, reveal] }

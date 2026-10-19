@@ -7,6 +7,7 @@ import { toast } from '@/lib/toast';
 import { cn, displayTitleFromFilename, isTableDocumentFilename, tableDocumentExtension } from '@/lib/utils';
 import { files, type DocTreeItem } from '@platform/tauri/client';
 import { localDocumentOperations } from '@features/document/public/file-operations-api';
+import { renameWorkspaceFile } from '@features/workspace/public/shell-api';
 import { openPath } from '@platform/tauri/opener';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
 import {
@@ -165,7 +166,7 @@ export function FolderFileTree({
     if (item.type === 'document') {
       try {
         const extension = isTableDocument ? tableDocumentExtension(item.name) : '';
-        await localDocumentOperations.rename({ path: item.fullPath, name: `${trimmed}${extension}`, scopePath: folderPath });
+        await renameWorkspaceFile({ path: item.fullPath, name: `${trimmed}${extension}`, scopePath: folderPath });
       } catch (error) {
         toast.error(t(String(error).includes('FILE_EXISTS') ? 'memo.fileTree.nameConflict' : 'memo.fileTree.renameFailed'));
         return;
@@ -303,7 +304,7 @@ export function FolderFileTree({
                       <ChevronRight
                         aria-hidden="true"
                         className={cn(
-                          'absolute left-1/2 top-1/2 h-[15px] w-[15px] -translate-x-1/2 -translate-y-1/2 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 group-focus-visible:opacity-100',
+                          'absolute left-1/2 top-1/2 h-[15px] w-[15px] -translate-x-1/2 -translate-y-1/2 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] [[data-theme="mist"]_&]:text-[var(--foreground)] opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 group-focus-visible:opacity-100',
                           isExpanded && 'rotate-90',
                         )}
                       />
@@ -315,7 +316,7 @@ export function FolderFileTree({
                         />
                       ) : (
                         <DefaultFolderIcon className={cn(
-                          'absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0',
+                          'absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] [[data-theme="mist"]_&]:text-[var(--foreground)] transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0',
                         )} />
                       )}
                     </span>

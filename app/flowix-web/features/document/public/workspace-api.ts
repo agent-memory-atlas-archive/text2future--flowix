@@ -104,8 +104,8 @@ export function replaceWorkspaceDocumentPath(
   if (!previous || !next) return false;
   // A command response and its broadcast can confirm the same move. Allow
   // callers to finish projections, but never rebase a display already at C.
-  if (findFileDisplayPath(identity.displayId) === next) return true;
-  if (!rebaseWorkspaceDocumentPath(identity, next)) return false;
+  if (findFileDisplayPath(identity.displayId) !== next
+    && !rebaseWorkspaceDocumentPath(identity, next)) return false;
   useDocumentStore.getState().replaceActiveExternalPath(identity.displayId, next);
   useDocumentHistoryStore.getState().replaceFilePath(previous, next);
   return true;

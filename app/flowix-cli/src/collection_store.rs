@@ -286,6 +286,9 @@ fn validate_file_type(
                     CollectionType::MediaLibrary => {
                         has_nonempty_stem(".lib.yaml") || has_nonempty_stem(".lib.yml")
                     }
+                    CollectionType::WorkDocuments => {
+                        has_nonempty_stem(".workdocs.yaml") || has_nonempty_stem(".workdocs.yml")
+                    }
                 }
         }
     };

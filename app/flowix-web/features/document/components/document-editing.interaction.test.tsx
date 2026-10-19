@@ -12,7 +12,7 @@ import { MemoTitleEditor } from './memo-title-editor';
 import { DocumentSaveStatus } from './document-save-status';
 import { ActionableNoticeHost } from '@features/notifications/actionable-notice-host';
 import { useDocumentAutosave } from './session/use-document-autosave';
-import { initialDocumentContainerState } from './session/types';
+import { DocumentContentBoundary } from './session/document-content-boundary';
 import { notifyDocumentBufferChanged } from '../store/buffer-registry';
 import { applyLoadedDocumentContent, registerDocumentCapture, getDocumentBuffer } from '../store/document-session-service';
 import { ensureFileDisplayIdentity, rebaseFileDisplayPath, reconcileFileDisplays } from '@/lib/file-display-registry';
@@ -39,18 +39,16 @@ function mountDocument() {
     const path = useRef(identity.path);
     const [filename, setFilename] = useState('Original.md');
     const [clicks, setClicks] = useState(0);
-    const [state, setState] = useState({ ...initialDocumentContainerState, fullContent: 'Body', isLoaded: true });
     const capture = useCallback(() => handle.current?.flushPendingChanges() ?? null, []);
     useEffect(() => registerDocumentCapture(identity, capture), [capture]);
-    const autosave = useDocumentAutosave({ identity, filePath: identity.path, getCurrentFilePath: () => path.current,
-      externalScopePath: null, setState,
-      reloadDocument: async () => {}, flushPendingContent: capture });
+    const autosave = useDocumentAutosave({ identity,
+      externalScopePath: null, flushPendingContent: capture });
     return <I18nProvider language="en-US"><ShortcutsProvider overrides={{}}>
       {createPortal(<Toaster />, document.body)}
       <ActionableNoticeHost />
       <button data-testid="click" onClick={() => setClicks(value => value + 1)}>Clicks {clicks}</button>
       <DocumentSaveStatus identity={identity} scopePath={null} />
-      <MarkdownEditor ref={handle} content={state.fullContent} onChange={autosave.handleChange} onDirty={autosave.handleDirty}
+      <DocumentContentBoundary identity={identity}>{content => <MarkdownEditor ref={handle} content={content} onChange={autosave.handleChange} onDirty={autosave.handleDirty}
         onBeforeCreate={value => { editor = value; mounts++; }} editable
         header={<MemoTitleEditor displayId={identity.displayId} filename={filename} editable showPropertiesToggle={false}
           onMoveToBody={() => handle.current?.focusStart?.()}
@@ -60,7 +58,7 @@ function mountDocument() {
             rebaseFileDisplayPath(path.current, next, identity.displayId);
             path.current = next; setFilename(title+'.md'); return title+'.md';
           }} />}
-      />
+      />}</DocumentContentBoundary>
     </ShortcutsProvider></I18nProvider>;
   }
   return { identity, Harness };

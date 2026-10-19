@@ -74,12 +74,20 @@ export interface MediaLibraryFileSurface extends FileSurfaceBase {
   notebookId: string | null;
 }
 
+export interface WorkDocumentsFileSurface extends FileSurfaceBase {
+  kind: 'work-documents-file';
+  notebookPath: string | null;
+  notebookId: string | null;
+  expectedCollectionId?: string | null;
+}
+
 export interface FolderCollectionSurface extends SurfaceBase {
   kind: 'folder-collection';
   notebookId: string;
   notebookPath: string;
   folderPath: string;
   folderName: string;
+  viewMode?: 'work-documents';
 }
 
 export interface HtmlFileSurface extends FileSurfaceBase {
@@ -153,6 +161,7 @@ export type WorkColumnSurface =
   | VideoFileSurface
   | TableFileSurface
   | MediaLibraryFileSurface
+  | WorkDocumentsFileSurface
   | FolderCollectionSurface
   | HtmlFileSurface
   | UnavailableFileSurface

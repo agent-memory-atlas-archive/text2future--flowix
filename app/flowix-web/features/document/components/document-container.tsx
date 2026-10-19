@@ -4,12 +4,10 @@ import type { SurfacePresentationUpdate } from '@features/workspace/public/surfa
 import { getDocumentSession } from '../store/document-runtime-session';
 
 import { useEffect, useCallback, useRef, useMemo, useState } from 'react';
-import { flushSync } from 'react-dom';
 import {
   captureLatestDocumentContent,
   hasDocumentUnsavedChanges,
 } from '@features/document/store/document-session-service';
-import { useDocumentMetricsStore } from '@features/document/store/document-metrics-store';
 import { useDocumentStore } from '@features/document/store/document-store';
 import {
   setDocumentEditorMode,
@@ -31,12 +29,10 @@ import {
   initialDocumentContainerState,
   type DocumentContainerProps,
 } from '@features/document/components/session/types';
-import {
-  countTextUnits,
-  extractBodyContent,
-} from '@features/document/components/session/document-utils';
 import { useDocumentContent } from '@features/document/components/session/use-document-content';
 import { useDocumentAutosave } from '@features/document/components/session/use-document-autosave';
+import { DocumentContentBoundary } from './session/document-content-boundary';
+import { useDocumentMetainfo } from './session/use-document-metainfo';
 import { useExternalDocumentChangeWatch } from '@features/document/components/session/use-external-document-change-watch';
 import {
   LazyDocumentEditor,
@@ -159,9 +155,11 @@ export function DocumentContainer({
     isolatedSession: documentSessionMode === 'isolated',
   });
 
+  const [, refreshMountSource] = useState(0);
+  const contentForMount = getBuffer(documentIdentity)?.content ?? '';
   const markdownParserKey = JSON.stringify([documentInstanceKey, filePath]);
   const parsedMarkdownMatches = parsedMarkdownDocument?.key === markdownParserKey
-    && parsedMarkdownDocument.source === state.fullContent;
+    && parsedMarkdownDocument.source === contentForMount;
   const shouldMountRichEditor = state.isLoaded && !state.isLoading && !state.error && !usesCodeEditor;
   const needsWorkerMarkdownParse = richEditorMountReadyFor !== documentInstanceKey
     && !parsedMarkdownMatches;
@@ -174,7 +172,7 @@ export function DocumentContainer({
       || richEditorMountReadyFor === documentInstanceKey || parsedMarkdownMatches) return;
 
     let cancelled = false;
-    const source = state.fullContent;
+    const source = contentForMount;
     const startedAt = performance.now();
     markDocumentOpenTrace(transitionId, 'editor:markdown-worker-start', {
       contentChars: source.length,
@@ -215,7 +213,7 @@ export function DocumentContainer({
     parsedMarkdownMatches,
     richEditorMountReadyFor,
     shouldMountRichEditor,
-    state.fullContent,
+    contentForMount,
     transitionId,
   ]);
 
@@ -313,12 +311,21 @@ export function DocumentContainer({
   useEffect(() => {
     const key = documentIdentityKey(documentIdentity);
     let cancelled = false;
+    let savedRevision = getBuffer(documentIdentity)?.savedRevision ?? -1;
+    let request = 0;
     const unsubscribe = subscribeDocumentBufferChanges((identity, reason) => {
       if (documentIdentityKey(identity) !== key) return;
       if (reason !== 'save_settled' && reason !== 'merged') return;
+      const revision = getBuffer(documentIdentity)?.savedRevision ?? -1;
+      // Recovery protection also emits save_settled; only a canonical save
+      // can change the file's modification time.
+      if (revision <= savedRevision) return;
+      savedRevision = revision;
+      const currentRequest = ++request;
       void notes.modifiedAt(filePath).then((modifiedAt) => {
-        if (!cancelled && modifiedAt) {
-          setState((previous) => ({ ...previous, updatedAtDate: new Date(modifiedAt) }));
+        if (!cancelled && currentRequest === request && modifiedAt) {
+          setState((previous) => previous.updatedAtDate?.getTime() === new Date(modifiedAt).getTime()
+            ? previous : { ...previous, updatedAtDate: new Date(modifiedAt) });
         }
       }).catch(() => undefined);
     });
@@ -385,16 +392,11 @@ export function DocumentContainer({
     handleChange,
     handleDirty,
   } = useDocumentAutosave({
-    filePath,
-    getCurrentFilePath,
     identity: documentIdentity,
     externalScopePath,
-    setState,
-    reloadDocument,
     flushPendingContent: flushPendingEditorChanges,
     hostId,
     isActive: () => !forcedReadOnly && useWorkspaceFocusStore.getState().focusedHostId === hostId,
-    isolatedSession: documentSessionMode === 'isolated',
   });
 
   const commitExternalTitle = useCallback(async (
@@ -433,10 +435,12 @@ export function DocumentContainer({
 
       // Keep editing live. The shared operation coordinates open buffers,
       // performs the scoped rename, and publishes the new path before unlock.
+      const notebookId = getAttachmentNotebookId();
       const result = await renameMarkdownTitle({
         path: currentPath,
         title: requestedTitle,
         scopePath: externalScopePath,
+        notebook: getWorkspaceMemoState().notebooks.find(notebook => notebook.id === notebookId) ?? null,
         displayId: resolvedExternalDisplayId,
         expectFollowupWrite: options?.expectBodyMutation,
         onPathChanged: (oldPath, newPath) => replaceExternalDocumentPath(resolvedExternalDisplayId, oldPath, newPath),
@@ -448,6 +452,7 @@ export function DocumentContainer({
   }, [
     externalEditorMode,
     externalScopePath,
+    getAttachmentNotebookId,
     isExternalDocument,
     resolvedExternalDisplayId,
     t,
@@ -455,29 +460,11 @@ export function DocumentContainer({
 
   useEffect(() => {
     const key = documentIdentityKey(documentIdentity);
-    const sync = () => {
-      const buffer = getBuffer(documentIdentity);
-      if (!buffer) return;
-      const content = buffer.content;
-      const textUnits = countTextUnits(extractBodyContent(content));
-      const tokenCount = Math.ceil(textUnits / 4);
-      setState((prev) => (
-        prev.fullContent === content
-        && prev.charCount === textUnits
-        && prev.tokenCount === tokenCount
-          ? prev
-          : {
-              ...prev,
-              fullContent: content,
-              charCount: textUnits,
-              tokenCount,
-            }
-      ));
-    };
-    const unsubscribeBuffer = subscribeDocumentBufferChanges((identity, reason) => {
+    const unsubscribeBuffer = subscribeDocumentBufferChanges((identity) => {
       if (documentIdentityKey(identity) !== key) return;
-      if (reason === 'merged') flushSync(sync);
-      else sync();
+      // While an editor is mounting, another surface can publish newer text.
+      // Once mounted, its content boundary owns all live text notifications.
+      if (!editorHandleRef.current) refreshMountSource((version) => version + 1);
     });
     const unsubscribeFocus = useWorkspaceFocusStore.subscribe((next, previous) => {
       if (previous.focusedHostId === hostId && next.focusedHostId !== hostId) {
@@ -493,7 +480,7 @@ export function DocumentContainer({
       unsubscribeBuffer();
       unsubscribeFocus();
     };
-  }, [documentIdentity, flushPendingEditorChanges, hostId, setState]);
+  }, [documentIdentity, hostId]);
 
   useEffect(() => {
     onFlushReady?.(flushDocument, discardDocument);
@@ -526,18 +513,6 @@ export function DocumentContainer({
       onSurfaceLifecycleReady?.(null);
     };
   }, [discardDocument, editorIsReady, flushDocument, hostId, onSurfaceLifecycleReady]);
-  useEffect(() => {
-    if (!filePath) {
-      useDocumentMetricsStore.getState().clear(documentInstanceKey);
-      return;
-    }
-    useDocumentMetricsStore.getState().setCharCount(documentInstanceKey, state.charCount);
-  }, [documentInstanceKey, filePath, state.charCount]);
-
-  useEffect(() => () => {
-    useDocumentMetricsStore.getState().clear(documentInstanceKey);
-  }, [documentInstanceKey]);
-
   useEffect(() => {
     if (!filePath) {
       setState(initialDocumentContainerState);
@@ -586,24 +561,17 @@ export function DocumentContainer({
     reloadDocument,
   });
 
-  const metaInfo = useMemo(() => {
-    return {
-      charCount: state.charCount,
-      tokenCount: state.tokenCount,
-      createdAt: state.createdAt,
-      updatedAt: state.updatedAt,
-      memoPath: null,
-      memoContent: state.fullContent,
-      isFavorited: state.isFavorited,
-      frontmatterMeta: state.frontmatterMeta,
-    };
-  }, [state.charCount, state.tokenCount, state.createdAt, state.updatedAt, state.fullContent, state.isFavorited, state.frontmatterMeta]);
-
-  useEffect(() => {
-    if (filePath) {
-      onMetainfoData?.(metaInfo);
-    }
-  }, [filePath, metaInfo, onMetainfoData]);
+  const metadata = useMemo(() => ({
+    createdAt: state.createdAt, updatedAt: state.updatedAt,
+    isFavorited: state.isFavorited, frontmatterMeta: state.frontmatterMeta,
+  }), [state.createdAt, state.updatedAt, state.isFavorited, state.frontmatterMeta]);
+  useDocumentMetainfo({
+    identity: documentIdentity,
+    loaded: state.isLoaded && Boolean(filePath),
+    active: focusedHostId === hostId,
+    metadata,
+    onMetainfoData,
+  });
 
   if (!filePath) {
     return <WorkspaceEmptyState tone="document" message={t('shell.emptyDocument')} />;
@@ -646,15 +614,16 @@ export function DocumentContainer({
       className="document-container h-full w-full min-w-0 flex flex-col bg-transparent relative overflow-hidden"
     >
       <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden">
-        {!state.error && !editorIsReady && (
-          <CenteredLoadingSpinner className="absolute inset-0 z-10 bg-[var(--document-bg)]" />
+        {!onContentStateChange && !state.error && !editorIsReady && (
+          <CenteredLoadingSpinner className="pointer-events-none absolute inset-0 z-10" />
         )}
+        <DocumentContentBoundary identity={documentIdentity}>{(content) => <>
         {state.isLoaded && !state.isLoading && usesCodeEditor && (
           <LazyCodeEditor
             ref={editorHandleRef}
             key={documentInstanceKey}
             filePath={filePath}
-            content={state.fullContent}
+            content={content}
             editable={!readOnly}
             onChange={handleChange}
             autoFocus={initialFocus === 'body'}
@@ -680,8 +649,8 @@ export function DocumentContainer({
             transitionId={transitionId}
             ref={editorHandleRef}
             key={documentInstanceKey}
-            content={state.fullContent}
-            initialParsedContent={parsedMarkdownMatches ? parsedMarkdownDocument?.document ?? undefined : undefined}
+            content={content}
+            initialParsedContent={parsedMarkdownMatches && parsedMarkdownDocument?.source === content ? parsedMarkdownDocument.document ?? undefined : undefined}
             header={documentHeader}
             editable={!readOnly}
             onDirty={handleDirty}
@@ -719,6 +688,7 @@ export function DocumentContainer({
             onToolbarCollapsedChange={onToolbarCollapsedChange}
           />
         )}
+        </>}</DocumentContentBoundary>
       </div>
     </div>
   );

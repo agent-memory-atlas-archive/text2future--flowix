@@ -23,7 +23,7 @@ export interface WorkspaceContentLocations {
 export function workColumnTargetIdentity(target: WorkColumnTarget): ContentIdentity | null {
   switch (target.kind) {
     case 'folder-collection':
-      return { kind: 'folder-collection', notebookId: target.notebookId, folderPath: target.folderPath };
+      return { kind: 'folder-collection', notebookId: target.notebookId, folderPath: target.folderPath, viewMode: target.viewMode };
     case 'media':
       return { kind: 'media', path: target.filePath };
     case 'external':

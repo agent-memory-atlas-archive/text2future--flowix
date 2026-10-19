@@ -26,7 +26,7 @@ html[data-os="windows"] .markdown-editor .tag-node.tag-node-prefix {
   --document-tag-icon-font-family: 'Flowix Tag Icon Consolas';
 }
 
-[data-theme="dark"] {
+:is([data-theme="dark"], [data-theme="mist"]) {
   --flowix-text-purple: oklch(70% 0.18 300);
   --flowix-text-pink: oklch(74% 0.18 350);
 }

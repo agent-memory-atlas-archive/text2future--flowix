@@ -125,6 +125,43 @@ pub fn extract_body_content(content: &str) -> &str {
     }
 }
 
+/// Parsed body and tolerant frontmatter metadata from one frontmatter match.
+pub(crate) struct ParsedDocument<'a> {
+    pub(crate) body: &'a str,
+    pub(crate) metadata: Result<DocumentMetadata, FrontmatterMetadataError>,
+}
+
+/// Split a document and parse its leading metadata from one frontmatter match.
+/// Derivation needs both values, so this avoids matching the whole document
+/// twice before scanning its Markdown body.
+pub(crate) fn parse_document_tolerant(content: &str) -> ParsedDocument<'_> {
+    let Some(captures) = FRONTMATTER_RE.captures(content) else {
+        return ParsedDocument {
+            body: content,
+            metadata: Ok(empty_document_metadata()),
+        };
+    };
+    let body = captures
+        .get(2)
+        .map(|matched| matched.as_str())
+        .unwrap_or("");
+    let frontmatter = captures
+        .get(1)
+        .map(|matched| matched.as_str())
+        .unwrap_or("");
+    ParsedDocument {
+        body,
+        metadata: extract_document_metadata_tolerant_from_frontmatter(frontmatter),
+    }
+}
+
+fn empty_document_metadata() -> DocumentMetadata {
+    DocumentMetadata {
+        properties: Value::Object(Map::new()),
+        tags: Vec::new(),
+    }
+}
+
 pub fn extract_frontmatter_properties(content: &str) -> Value {
     extract_document_metadata_tolerant(content)
         .map(|metadata| metadata.properties)
@@ -246,18 +283,15 @@ pub(crate) fn extract_document_metadata_preserving_invalid_tag_paths(
 pub(crate) fn extract_document_metadata_tolerant(
     content: &str,
 ) -> Result<DocumentMetadata, FrontmatterMetadataError> {
-    let Some(caps) = FRONTMATTER_RE.captures(content) else {
-        return Ok(DocumentMetadata {
-            properties: Value::Object(Map::new()),
-            tags: Vec::new(),
-        });
-    };
-    let inner = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+    parse_document_tolerant(content).metadata
+}
+
+fn extract_document_metadata_tolerant_from_frontmatter(
+    frontmatter: &str,
+) -> Result<DocumentMetadata, FrontmatterMetadataError> {
+    let inner = frontmatter.trim();
     if inner.is_empty() {
-        return Ok(DocumentMetadata {
-            properties: Value::Object(Map::new()),
-            tags: Vec::new(),
-        });
+        return Ok(empty_document_metadata());
     }
     let parsed = serde_yaml::from_str::<Value>(inner)
         .map_err(|error| FrontmatterMetadataError::InvalidYaml(error.to_string()))?;

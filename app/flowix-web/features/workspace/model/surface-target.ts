@@ -16,7 +16,7 @@ export interface FileBrowserTarget extends FileBrowserContext {
   kind: 'file-browser';
   activeFilePath: string | null;
   collectionDisplay?: CollectionDisplayDescriptor;
-  collectionType?: 'table' | 'media_library';
+  collectionType?: 'table' | 'media_library' | 'work_documents';
   collectionUnavailableReason?: string;
 }
 
@@ -26,7 +26,7 @@ export interface CollectionSurfaceTarget {
   notebookId: string;
   collectionId: string;
   viewId: string | null;
-  collectionType: 'table' | 'media_library';
+  collectionType: 'table' | 'media_library' | 'work_documents';
   filePath: string;
   notebookPath: string;
   name: string;
@@ -40,6 +40,7 @@ export interface FolderCollectionSurfaceTarget {
   notebookId: string;
   notebookPath: string;
   folderName: string;
+  viewMode?: 'work-documents';
 }
 
 export type WorkspaceContentTarget =
@@ -78,7 +79,7 @@ export interface CollectionReferenceSurfaceTarget {
   kind: 'collection-reference';
   notebookId: string;
   collectionId: string;
-  collectionKind?: 'table' | 'media_library';
+  collectionKind?: 'table' | 'media_library' | 'work_documents';
   viewId?: string | null;
   displayId?: string;
   relativePathHint?: string;

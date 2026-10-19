@@ -1,5 +1,7 @@
 'use client';
 
+import { refreshIndexedMemo } from '@features/memo/services/memo-list-refresh-service';
+
 import { useNotebookBackgroundStore } from '@features/memo/store/notebook-background-store';
 import { flushSync } from 'react-dom';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
@@ -19,10 +21,13 @@ import {
   SquarePen,
   Table2,
   GalleryHorizontalEnd,
+  Files,
 } from 'lucide-react';
 import {
   getVisibleCreateFilter,
   NOTE_COLOR_HEX,
+  noteIndexFor,
+  noteLookupKey,
   useNoteStore,
   type ColorFilterValue,
 } from '@features/memo/store/note-store';
@@ -84,6 +89,7 @@ import {
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@shared/ui/dialog';
 import { createTableDocumentFile, type TableViewType } from '@features/multidimensional-table/public/create-api';
 import { createMediaLibraryFile } from '@features/media-library/model';
+import { createWorkDocumentsCollectionFile } from '@features/work-documents/model';
 
 import {
   COLOR_LABEL_KEYS,
@@ -96,6 +102,7 @@ import { NotebookFolderView } from './notebook-folder-view';
 import type { NotebookNoteCreateRequest } from './notebook-file-tree';
 import { parentRelativePathForTreeCreate } from './memo-create-location';
 import { useMemoListPagination } from './memo-list/use-memo-list-pagination';
+import { MemoListRows, type MemoRowKeepAliveChange } from './memo-list/memo-list-rows';
 import {
   findRunningAgentTypeForMemo,
   useRunningAgentTypeIndex,
@@ -167,9 +174,13 @@ export function MemoList({
   const [showScrollTopHint, setShowScrollTopHint] = useState(false);
   const { registerCard, prepareForInsert, onListRendered } =
     useMemoInsertAnimation();
-  // The list uses the OverlayScrollbar's native scrolling and renders its
-  // loaded rows in normal document flow.
+  // Paging and the virtual rows share the OverlayScrollbar's native scroller.
   const listContainerRef = useRef<HTMLDivElement>(null);
+  const [listScrollElement, setListScrollElement] = useState<HTMLDivElement | null>(null);
+  const attachListScroller = useCallback((element: HTMLDivElement | null) => {
+    listContainerRef.current = element;
+    setListScrollElement(element);
+  }, []);
   // 切片订阅: 替代原来的 `useNoteStore()` 全量订阅。每个 useStore 只取用到的字段,
   // 切到 selector 后, 列表里 5k 笔记的任何 set 都不会让本组件不必要地重渲 ──
   // memos 是大头, 但要 memoize (Array equality) 才能跳过 5k 项深比; 不然
@@ -192,6 +203,9 @@ export function MemoList({
   const [newLibraryDialogOpen, setNewLibraryDialogOpen] = useState(false);
   const [newLibraryName, setNewLibraryName] = useState('');
   const [isCreatingLibrary, setIsCreatingLibrary] = useState(false);
+  const [newWorkDocumentsDialogOpen, setNewWorkDocumentsDialogOpen] = useState(false);
+  const [newWorkDocumentsName, setNewWorkDocumentsName] = useState('');
+  const [isCreatingWorkDocuments, setIsCreatingWorkDocuments] = useState(false);
   const [createTemplates, setCreateTemplates] = useState<NoteTemplate[]>([]);
   // A stale Zustand snapshot can survive a Vite HMR update with this field
   // missing even though the current store initializer provides an empty map.
@@ -327,9 +341,16 @@ export function MemoList({
         pendingDocumentPath,
       ))
     : undefined;
+  const selectedNoteItem = selectedNote
+    ? noteIndexFor(notes).get(noteLookupKey(selectedNote.notebookId, selectedNote.relativePath))
+    : undefined;
   const selectedListItemKey = pendingDocumentPath
     ? pendingListItem ? noteListItemKey(pendingListItem) : undefined
-    : selectedNote ? `path:${selectedNote.notebookId}:${selectedNote.relativePath}` : undefined;
+    : selectedNote
+      ? selectedNoteItem
+        ? noteListItemKey(selectedNoteItem)
+        : `path:${selectedNote.notebookId}:${selectedNote.relativePath}`
+      : undefined;
   const [notebookDropdownOpen, setNotebookDropdownOpen] = useState(false);
   const [isCreatingMemo, setIsCreatingMemo] = useState(false);
   const [localNavigationDrawerOpen, setLocalNavigationDrawerOpen] = useState(false);
@@ -588,18 +609,9 @@ export function MemoList({
       : { headerLabel: t('memo.navigation.allNotes'), hasActiveFilter: false };
   })();
 
-  // 颜色筛选现在由后端分页接口执行, 这里保留二次过滤作为防御性兼容:
-  //   'any'  → memo.colors.length > 0
-  //   'none' → memo.colors.length === 0
-  //   具体颜色 → memo.colors.includes(c)
-  // 仅当 activeFilter === 'color' 时启用, 其他 filter 原样透传。
-  const {
-    filteredMemos,
-    onScroll: handleMemoListScroll,
-  } = useMemoListPagination({
-    memos: listItems,
-    activeFilter,
-    colorFilter,
+  const filteredMemos = listItems;
+  const { onScroll: handleMemoListScroll } = useMemoListPagination({
+    itemCount: listItems.length,
     loading: showMemoListLoading,
     hasMorePages: memoListHasMore,
     loadingMorePages: memoListLoadingMore,
@@ -658,6 +670,7 @@ export function MemoList({
   }, []);
 
   const handleFavoriteToggle = useCallback(async (memo: NoteListItem) => {
+    const queryKey = useNoteStore.getState().memoListQueryKey;
     const path = joinNotebookMemoPath(
       useNoteStore.getState().selectedNotebook?.path ?? '',
       noteListItemRelativePath(memo),
@@ -671,17 +684,21 @@ export function MemoList({
         return;
       }
       if (outcome === 'missingCleaned') {
-        useNoteStore.setState((state) => ({
-          notes: state.notes.filter((item) =>
-            item.notebookId !== memo.notebookId || item.relativePath !== memo.relativePath),
-        }));
+        useNoteStore.getState().applyNoteListChange(memo.notebookId, memo.relativePath, null);
         toast.success(t('memo.favorite.missingCleaned'));
         return;
       }
-      useNoteStore.getState().updateMemoListItem({
-        ...memo,
-        favorited: !memo.favorited,
-      });
+      await refreshIndexedMemo(memo.notebookId, memo.relativePath);
+      const state = useNoteStore.getState();
+      // A metadata refresh replaces the card in place. Reload the first page
+      // so pin/unpin uses backend ordering and resets the pagination cursor.
+      // Do not disturb a different notebook or filter opened during the save.
+      if (state.selectedNotebook?.id === memo.notebookId && state.memoListQueryKey === queryKey) {
+        const loaded = await state.loadNotes({ source: 'memo-pin-toggle' });
+        if (loaded && useNoteStore.getState().memoListQueryKey === queryKey) {
+          listContainerRef.current?.scrollTo({ top: 0 });
+        }
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     }
@@ -697,7 +714,7 @@ export function MemoList({
       triggerMemoListRefresh();
       return;
     }
-    useNoteStore.getState().updateMemoListItem({ ...memo, colors });
+    await refreshIndexedMemo(memo.notebookId, memo.relativePath);
   }, [triggerMemoListRefresh]);
 
   const cardRefCacheRef = useRef(new Map<string, (element: HTMLDivElement | null) => void>());
@@ -714,7 +731,7 @@ export function MemoList({
     return ref;
   };
 
-  const renderMemoRow = (memo: NoteListItem) => {
+  const renderMemoRow = (memo: NoteListItem, onKeepAliveChange: MemoRowKeepAliveChange) => {
     const itemKey = noteListItemKey(memo);
     return (
       <div
@@ -733,14 +750,13 @@ export function MemoList({
             onFavoriteToggle={handleFavoriteToggle}
             onDelete={handleRequestDeleteMemo}
             onColorsChange={handleColorsChange}
+            onKeepAliveChange={onKeepAliveChange}
           />
           <hr className={cn('mx-3', DROPDOWN_DIVIDER_SKIN)} />
         </div>
       </div>
     );
   };
-
-  const renderedMemoRows = filteredMemos.map(renderMemoRow);
 
   const handleFilterChange = (filter: typeof activeFilter) => {
     if (filter !== 'tagged') {
@@ -957,6 +973,28 @@ export function MemoList({
     }
   }, [defaultCreateFolder, defaultCreateFolderReady, handleCreateTypeMenuOpenChange, isCreatingLibrary, newLibraryName, selectedNotebook]);
 
+  const handleCreateWorkDocuments = useCallback(async () => {
+    if (!selectedNotebook || selectedNotebook.missing || isCreatingWorkDocuments) return;
+    setIsCreatingWorkDocuments(true);
+    try {
+      const parentRelativePath = defaultCreateFolderReady
+        ? defaultCreateFolder ?? undefined
+        : (await fileApi.getNotebookViewPreferences(selectedNotebook.path)).defaultCreateFolder ?? undefined;
+      const { filePath } = await createWorkDocumentsCollectionFile(selectedNotebook.path, parentRelativePath, newWorkDocumentsName);
+      setNewWorkDocumentsDialogOpen(false);
+      handleCreateTypeMenuOpenChange(false);
+      await openWorkspaceSurface({
+        host: 'main-third',
+        target: { kind: 'external', path: filePath, scopePath: selectedNotebook.path, transitionId: null },
+        options: { notebookId: selectedNotebook.id },
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t('memo.create.workDocumentsCreateFailed'));
+    } finally {
+      setIsCreatingWorkDocuments(false);
+    }
+  }, [defaultCreateFolder, defaultCreateFolderReady, handleCreateTypeMenuOpenChange, isCreatingWorkDocuments, newWorkDocumentsName, selectedNotebook, t]);
+
   const handleCreateAgentConversation = useCallback((typeKey: AgentTypeKey) => {
     if (!selectedNotebookId) return;
     createAndOpenAgentConversation(typeKey, selectedNotebookId);
@@ -1089,6 +1127,23 @@ export function MemoList({
                   <span className="mention-note-title">{t('memo.create.mediaLibrary')}</span>
                 </span>
                 <span className="mention-note-notebook opacity-50">{t('memo.create.mediaImageShort')}/{t('memo.create.mediaVideoShort')}</span>
+              </button>
+              <button
+                type="button"
+                disabled={!selectedNotebook || selectedNotebook.missing || isCreatingWorkDocuments}
+                className="memo-navigation-submenu-item mention-note-item !h-7 !min-h-7 !rounded-lg !py-0 !pl-[6px] !pr-2 hover:bg-[var(--brand)] focus-visible:bg-[var(--brand)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  setNewWorkDocumentsName(t('memo.create.workDocuments'));
+                  handleCreateTypeMenuOpenChange(false);
+                  setNewWorkDocumentsDialogOpen(true);
+                }}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <Files className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span className="mention-note-title">{t('memo.create.workDocuments')}</span>
+                </span>
+                <span className="mention-note-notebook opacity-50">{t('memo.create.workDocumentsTypes')}</span>
               </button>
             </div>
           )}
@@ -1402,6 +1457,22 @@ export function MemoList({
         </DialogContent>
       </Dialog>
 
+      <Dialog open={newWorkDocumentsDialogOpen} onOpenChange={setNewWorkDocumentsDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t('memo.create.workDocumentsTitle')}</DialogTitle>
+            <DialogDescription>{t('memo.create.workDocumentsDescription')}</DialogDescription>
+          </DialogHeader>
+          <form className="mt-4 space-y-4" onSubmit={(event) => { event.preventDefault(); void handleCreateWorkDocuments(); }}>
+            <input autoFocus value={newWorkDocumentsName} onChange={(event) => setNewWorkDocumentsName(event.target.value)} placeholder={t('memo.create.workDocuments')} className="h-9 w-full rounded-lg border border-[var(--border)] bg-transparent px-3 text-sm outline-none focus:border-[var(--brand)]" />
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={() => setNewWorkDocumentsDialogOpen(false)}>{t('dialog.cancel')}</Button>
+              <Button type="submit" size="sm" className="rounded-lg" disabled={!newWorkDocumentsName.trim() || isCreatingWorkDocuments}>{isCreatingWorkDocuments ? t('memo.create.creating') : t('memo.create.confirm')}</Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       <ListSurfaceViewport className="flex">
         {navigationDrawerEnabled && !navigationDrawerControlled && (
           <MemoListNavigationDrawer
@@ -1464,7 +1535,7 @@ export function MemoList({
           <OverlayScrollbar
             className="flex h-full min-h-0 min-w-0 w-full"
             scrollerClassName="min-w-0 w-full flex-1 overflow-y-auto px-1 py-2"
-            scrollerRef={listContainerRef}
+            scrollerRef={attachListScroller}
             onScroll={(event) => {
               setShowScrollTopHint(event.currentTarget.scrollTop > 0);
               handleMemoListScroll(event);
@@ -1478,22 +1549,23 @@ export function MemoList({
             ) : !hasCurrentMemoListData && showMemoListLoading ? (
               <ListSurfaceLoadingState ariaLabel={t('memo.list.loadingLibrary')} />
             ) : filteredMemos.length > 0 ? (
-              <div
-                className="flex min-w-0 w-full flex-col"
-              >
-                {renderedMemoRows}
-              </div>
+              <MemoListRows
+                items={filteredMemos}
+                scrollElement={listScrollElement}
+                queryKey={currentMemoListQueryKey}
+                renderRow={renderMemoRow}
+              />
             ) : (
               <EmptyState hasNotebooks={notebooks.length > 0} />
             )}
             {memoListLoadingMore && filteredMemos.length > 0 && (
               <div
-                className="flex h-10 items-center justify-center gap-2 text-xs text-[var(--muted-foreground)]"
+                className="flex h-10 items-center justify-center"
                 role="status"
                 aria-live="polite"
               >
                 <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                <span>{t('memo.list.loadingMore')}</span>
+                <span className="sr-only">{t('memo.list.loadingMore')}</span>
               </div>
             )}
             {currentMemoListError?.kind === 'more' && (

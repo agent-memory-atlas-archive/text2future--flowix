@@ -4,20 +4,13 @@ import { commitDocumentSession, scheduleDocumentSessionSave, recordDocumentEdit,
   registerDocumentCapture, registerDocumentPersistence, prepareDocumentLeave, discardDocumentDraft } from '../../store/document-session-service';
 import { cancelDocumentCapture } from '../../store/document-commit-queue';
 import { documentIdentityKey, type DocumentIdentity } from '../../store/document-identity';
-import { countTextUnits, extractBodyContent } from './document-utils';
-import type { DocumentContainerState } from './types';
 
 interface UseDocumentAutosaveOptions {
-  filePath: string;
   hostId?: string;
   isActive?: () => boolean;
-  getCurrentFilePath?: () => string;
   identity: DocumentIdentity;
   externalScopePath: string | null;
-  setState: React.Dispatch<React.SetStateAction<DocumentContainerState>>;
-  reloadDocument: (path: string, options?: { preservePending?: boolean; showLoading?: boolean }) => Promise<void>;
   flushPendingContent?: () => string | null;
-  isolatedSession?: boolean;
 }
 
 
@@ -35,7 +28,6 @@ function installVisibilityCapture() {
 /** Views publish input. The session owns scheduling, paths and disk writes. */
 export function useDocumentAutosave(options: UseDocumentAutosaveOptions) {
   const live = useRef(options); live.current = options;
-  const mounted = useRef(true);
   const identity = getDocumentSession(options.identity).identity;
   const key = documentIdentityKey(identity);
   const clearSaveTimer = useCallback(() => cancelDocumentCapture(key), [key]);
@@ -46,12 +38,6 @@ export function useDocumentAutosave(options: UseDocumentAutosaveOptions) {
   const handleChange = useCallback((content: string) => {
     if (live.current.isActive?.() === false && !getDocumentSession(identity).capturing) return;
     const edit = recordDocumentEdit(identity, content);
-    if (mounted.current) {
-      const charCount = countTextUnits(extractBodyContent(content));
-      live.current.setState(previous => previous.fullContent === content ? previous : ({
-        ...previous, fullContent: content, charCount, tokenCount: Math.ceil(charCount / 4),
-      }));
-    }
     if (edit.changed) handleDirty();
   }, [identity, handleDirty]);
   const flushDocument = useCallback(async (_options?: { silent?: boolean }) =>
@@ -61,7 +47,6 @@ export function useDocumentAutosave(options: UseDocumentAutosaveOptions) {
   }, [identity, clearSaveTimer]);
 
   useEffect(() => {
-    mounted.current = true;
     installVisibilityCapture();
     const stopCapture = registerDocumentCapture(identity,
       () => live.current.flushPendingContent?.() ?? null,
@@ -70,7 +55,6 @@ export function useDocumentAutosave(options: UseDocumentAutosaveOptions) {
       capture: () => {}, path: () => identity.path, scopePath: live.current.externalScopePath,
     });
     return () => {
-      mounted.current = false;
       commitDocumentSession(identity);
       stopCapture(); stopPersistence();
     };

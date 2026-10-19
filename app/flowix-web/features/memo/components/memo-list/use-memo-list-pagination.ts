@@ -1,15 +1,10 @@
-import { useCallback, useLayoutEffect, useMemo, type RefObject, type UIEvent } from 'react';
-
-import type { ColorFilterValue } from '@features/memo/store/note-store';
-import type { NoteListItem } from '@/types/note-item';
+import { useCallback, useLayoutEffect, type RefObject, type UIEvent } from 'react';
 
 const MIN_LOAD_MORE_THRESHOLD_PX = 720;
 const LOAD_MORE_VIEWPORT_MULTIPLIER = 2;
 
 interface MemoListPaginationOptions {
-  memos: NoteListItem[];
-  activeFilter: string;
-  colorFilter: ColorFilterValue;
+  itemCount: number;
   loading: boolean;
   hasMorePages: boolean;
   loadingMorePages: boolean;
@@ -18,11 +13,9 @@ interface MemoListPaginationOptions {
   isActive: boolean;
 }
 
-/** Filters loaded pages and requests the next backend page near the list end. */
+/** Requests more of the backend query before the visible window reaches its end. */
 export function useMemoListPagination({
-  memos,
-  activeFilter,
-  colorFilter,
+  itemCount,
   loading,
   hasMorePages,
   loadingMorePages,
@@ -30,13 +23,6 @@ export function useMemoListPagination({
   scrollerRef,
   isActive,
 }: MemoListPaginationOptions) {
-  const filteredMemos = useMemo(() => {
-    if (activeFilter !== 'color') return memos;
-    if (colorFilter === 'any') return memos.filter((memo) => memo.colors.length > 0);
-    if (colorFilter === 'none') return memos.filter((memo) => memo.colors.length === 0);
-    return memos.filter((memo) => memo.colors.includes(colorFilter));
-  }, [activeFilter, colorFilter, memos]);
-
   const loadWhenNearEnd = useCallback((scroller: HTMLDivElement | null) => {
     if (!isActive || loading || loadingMorePages || !hasMorePages || !scroller) return;
     const distanceToBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
@@ -57,8 +43,15 @@ export function useMemoListPagination({
   // Continue filling short viewports and heavily filtered pages until there
   // is enough content to scroll or the backend has no more pages.
   useLayoutEffect(() => {
-    loadWhenNearEnd(scrollerRef.current);
-  }, [filteredMemos.length, hasMorePages, isActive, loading, loadingMorePages, loadWhenNearEnd, scrollerRef]);
+    const scroller = scrollerRef.current;
+    loadWhenNearEnd(scroller);
+    if (!scroller || typeof ResizeObserver === 'undefined') return;
+    // Both the viewport and the card stack can resize without a scroll event.
+    const observer = new ResizeObserver(() => loadWhenNearEnd(scroller));
+    observer.observe(scroller);
+    if (scroller.firstElementChild) observer.observe(scroller.firstElementChild);
+    return () => observer.disconnect();
+  }, [itemCount, loadWhenNearEnd, scrollerRef]);
 
-  return { filteredMemos, onScroll };
+  return { onScroll };
 }

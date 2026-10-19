@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { markTagsCollapsedByAncestor } from '@features/memo/components/tag-collapse';
+import { markTagsCollapsedByAncestor, markTagsDuringCollapseTransition } from '@features/memo/components/tag-collapse';
 import type { MemoTagTreeItem } from '@features/memo/services/memo-list-metadata-service';
 
 function tag(fullPath: string, parentId: string | null): MemoTagTreeItem {
@@ -66,5 +66,17 @@ describe('markTagsCollapsedByAncestor', () => {
     );
 
     expect(result[0].collapsedByAncestor).toBe(true);
+  });
+
+  it('keeps descendants during the collapse transition, then removes their rows', () => {
+    const tags = [tag('AI', null), tag('AI/Agent', 'AI'), tag('AI/Agent/Tools', 'AI/Agent')];
+    const collapsed = new Set(['AI']);
+
+    expect(markTagsDuringCollapseTransition(tags, collapsed, new Set()).map(({ id }) => id))
+      .toEqual(['AI', 'AI/Agent', 'AI/Agent/Tools']);
+    expect(markTagsDuringCollapseTransition(tags, collapsed, collapsed).map(({ id }) => id))
+      .toEqual(['AI']);
+    expect(markTagsDuringCollapseTransition(tags, new Set(), collapsed).map(({ id }) => id))
+      .toEqual(['AI', 'AI/Agent', 'AI/Agent/Tools']);
   });
 });

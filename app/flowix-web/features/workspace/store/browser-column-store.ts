@@ -20,6 +20,7 @@ export type BrowserColumnTarget =
       notebookId: string;
       notebookPath: string;
       folderName: string;
+      viewMode?: 'work-documents';
     }
   | {
       kind: 'media';
@@ -44,6 +45,7 @@ export function canOpenBrowserColumnTargetInWorkColumn(target: BrowserColumnTarg
     if (!target.activeFilePath) return false;
     const fileKind = target.collectionType === 'table' ? 'table'
       : target.collectionType === 'media_library' ? 'media-library'
+      : target.collectionType === 'work_documents' ? 'work-documents'
       : resolveWorkspaceFileSurfaceKind(target.activeFilePath);
     return workspaceSurfaceSupportsHost(`file-${fileKind}`, 'main-third');
   }
@@ -117,7 +119,7 @@ export const BROWSER_COLUMN_FILE_TREE_MAX_WIDTH = 420;
 
 export function browserColumnTargetIdentity(target: BrowserColumnTarget): ContentIdentity {
   switch (target.kind) {
-    case 'folder-collection': return { kind: 'folder-collection', notebookId: target.notebookId, folderPath: target.folderPath };
+    case 'folder-collection': return { kind: 'folder-collection', notebookId: target.notebookId, folderPath: target.folderPath, viewMode: target.viewMode };
     case 'media': return { kind: 'media', path: target.filePath };
     case 'file-browser': return target.collectionDisplay ? { kind: 'collection', ...target.collectionDisplay } : target.activeFilePath
       ? { kind: 'external', path: target.activeFilePath }
@@ -242,7 +244,8 @@ function parseBrowserColumnTarget(value: unknown): BrowserColumnTarget | null {
       return nonEmptyString(value.folderPath) && nonEmptyString(value.notebookId)
         && nonEmptyString(value.notebookPath) && typeof value.folderName === 'string'
         ? { kind: 'folder-collection', folderPath: value.folderPath, notebookId: value.notebookId,
-            notebookPath: value.notebookPath, folderName: value.folderName }
+            notebookPath: value.notebookPath, folderName: value.folderName,
+            ...(value.viewMode === 'work-documents' ? { viewMode: value.viewMode } : {}) }
         : null;
     case 'media':
       return nonEmptyString(value.filePath)
@@ -278,7 +281,7 @@ function parseBrowserColumnTarget(value: unknown): BrowserColumnTarget | null {
       return nonEmptyString(value.folderPath) || nonEmptyString(value.activeFilePath)
         ? {
             kind: 'file-browser',
-            ...(value.collectionType === 'table' || value.collectionType === 'media_library' ? { collectionType: value.collectionType } : {}),
+            ...(value.collectionType === 'table' || value.collectionType === 'media_library' || value.collectionType === 'work_documents' ? { collectionType: value.collectionType } : {}),
             ...(value.collectionDisplay && typeof value.collectionDisplay === 'object' && 'collectionId' in value.collectionDisplay && 'displayId' in value.collectionDisplay && 'notebookId' in value.collectionDisplay && typeof value.collectionDisplay.collectionId === 'string' && typeof value.collectionDisplay.displayId === 'string' && typeof value.collectionDisplay.notebookId === 'string' ? { collectionDisplay: { collectionId: value.collectionDisplay.collectionId, displayId: value.collectionDisplay.displayId, notebookId: value.collectionDisplay.notebookId, viewId: 'viewId' in value.collectionDisplay && typeof value.collectionDisplay.viewId === 'string' ? value.collectionDisplay.viewId : null } } : {}),
             folderPath: nonEmptyString(value.folderPath) ? value.folderPath : null,
             notebookId: nonEmptyString(value.notebookId) ? value.notebookId : null,
