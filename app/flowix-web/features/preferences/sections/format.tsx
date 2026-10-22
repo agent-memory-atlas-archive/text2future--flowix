@@ -22,6 +22,7 @@ import {
   DOCUMENT_WIDTH_STEP,
   DOCUMENT_WIDTH_FULL_THRESHOLD,
   DEFAULT_USER_SETTINGS,
+  type FormatConfig,
 } from '@/lib/constants';
 import { FieldRow, SectionHeader } from '@features/preferences/sections/primitives';
 import { useI18n } from '@/lib/i18n';
@@ -41,21 +42,9 @@ import {
 } from '@features/preferences/font-cache';
 
 interface FormatSectionProps {
-  settings: {
-    fontFamily: string;
-    fontId?: string;
-    fontSize: number;
-    lineHeight: number;
-    documentWidth: number;
-  };
+  settings: FormatConfig;
   updateSettings: (updates: {
-    format?: Partial<{
-      fontFamily: string;
-      fontId?: string;
-      fontSize: number;
-      lineHeight: number;
-      documentWidth: number;
-    }>;
+    format?: Partial<FormatConfig>;
   }) => Promise<void>;
 }
 
@@ -204,10 +193,10 @@ export function FormatSection({ settings, updateSettings }: FormatSectionProps) 
             lineHeight: settings.lineHeight,
           }}
         >
-          <p className="m-0">
+          <p className="m-0" style={{ textIndent: `${settings.firstLineIndent}em` }}>
             The quick brown fox jumps over the lazy dog.
           </p>
-          <p className="m-0 mt-2">
+          <p className="m-0 mt-2" style={{ textIndent: `${settings.firstLineIndent}em` }}>
             {t('preferences.format.previewText')}
           </p>
         </div>
@@ -318,6 +307,27 @@ export function FormatSection({ settings, updateSettings }: FormatSectionProps) 
         />
       </FieldRow>
 
+      <FieldRow
+        title={t('preferences.format.firstLineIndent.title')}
+        description={t('preferences.format.firstLineIndent.description')}
+        controlId="preferences-format-first-line-indent"
+      >
+        <Select
+          value={String(settings.firstLineIndent)}
+          onValueChange={(value) => updateSettings({ format: { firstLineIndent: value === '2' ? 2 : 0 } })}
+        >
+          <SelectTrigger id="preferences-format-first-line-indent" className="w-64">
+            {t(settings.firstLineIndent === 2
+              ? 'preferences.format.firstLineIndent.twoCharacters'
+              : 'preferences.format.firstLineIndent.none')}
+          </SelectTrigger>
+          <SelectContent align="end" className="flowix-preferences-select-content w-64">
+            <SelectItem value="0">{t('preferences.format.firstLineIndent.none')}</SelectItem>
+            <SelectItem value="2">{t('preferences.format.firstLineIndent.twoCharacters')}</SelectItem>
+          </SelectContent>
+        </Select>
+      </FieldRow>
+
       {/* Reset */}
       <div className="flex justify-start">
         <Button
@@ -330,6 +340,7 @@ export function FormatSection({ settings, updateSettings }: FormatSectionProps) 
                 fontId: DEFAULT_USER_SETTINGS.format.fontId,
                 fontSize: DEFAULT_USER_SETTINGS.format.fontSize,
                 lineHeight: DEFAULT_USER_SETTINGS.format.lineHeight,
+                firstLineIndent: DEFAULT_USER_SETTINGS.format.firstLineIndent,
                 documentWidth: DEFAULT_USER_SETTINGS.format.documentWidth,
               },
             })
