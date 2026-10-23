@@ -296,22 +296,18 @@ const enUS: Record<keyof typeof zhCN, string> = {
 
     "preferences.format.title": "Editor layout",
     "preferences.format.preview": "Preview",
-    "preferences.format.previewText":
-      "The quick brown fox jumps over the lazy dog.",
     "preferences.format.font.title": "Font",
-    "preferences.format.font.description": "Choose the app-wide font family",
+    "preferences.format.font.description": "Choose the editor font",
     "preferences.format.documentWidth.title": "Document width",
-    "preferences.format.documentWidth.description":
-      "Adjust editor width; values above 1000px use the full available width",
+    "preferences.format.documentWidth.description": "Adjust the document editing width",
     "preferences.format.documentWidth.fullWidth": "100%",
     "preferences.format.fontSize.title": "Font size",
-    "preferences.format.fontSize.description": "Adjust body text size (px)",
+    "preferences.format.fontSize.description": "Adjust body text size",
     "preferences.format.lineHeight.title": "Line height",
-    "preferences.format.lineHeight.description": "Adjust body text line height",
+    "preferences.format.lineHeight.description": "Adjust spacing between text lines",
     "preferences.format.firstLineIndent.title": "First-line indent",
-    "preferences.format.firstLineIndent.description": "Indent the first line of body paragraphs without changing document content",
+    "preferences.format.firstLineIndent.description": "Indent the first line of body paragraphs",
     "preferences.format.firstLineIndent.none": "None",
-    "preferences.format.firstLineIndent.twoCharacters": "2 characters",
     "preferences.resetDefaults": "Reset defaults",
 
     "preferences.theme.title": "Theme style",

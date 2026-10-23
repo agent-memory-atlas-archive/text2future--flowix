@@ -679,12 +679,22 @@ html.flowix-drag-drop-active * {
 		animation: flowix-fade-in 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
 	}
 
+	.flowix-list-content-enter {
+		animation: flowix-fade-in 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+
 	.flowix-fade-before-enter {
 		opacity: 0;
 	}
 
 	.flowix-fade-leave {
 		animation: flowix-fade-out 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.flowix-list-content-enter {
+			animation: none;
+		}
 	}
 
 	.flowix-note-navigation-motion {

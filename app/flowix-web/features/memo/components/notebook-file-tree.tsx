@@ -143,6 +143,9 @@ interface NotebookFileTreeProps {
   activeFileRevealRatio?: number;
   tree: FolderTreeController;
   isActive?: boolean;
+  /** Skip only the first root read; retries and later reloads retain feedback. */
+  skipInitialLoading?: boolean;
+  contentClassName?: string;
   createFolderRequest?: NotebookFolderCreateRequest | null;
   onCreateFolder?: () => void;
   onNoteSelect: (filePath: string) => void;
@@ -272,6 +275,8 @@ export function NotebookFileTree({
   activeFileRevealRatio,
   tree,
   isActive = true,
+  skipInitialLoading = false,
+  contentClassName,
   createFolderRequest,
   onCreateFolder,
   onNoteSelect,
@@ -285,6 +290,10 @@ export function NotebookFileTree({
   onSetDefaultCreateFolder,
 }: NotebookFileTreeProps) {
   const { t } = useI18n();
+  const [initialLoadPending, setInitialLoadPending] = useState(tree.loading);
+  useEffect(() => {
+    if (!tree.loading) setInitialLoadPending(false);
+  }, [tree.loading]);
   const selectedFolderPath = useWorkColumnStore((state) => {
     const target = state.navigation.target;
     if ((target.kind === 'collection' || target.kind === 'table' || target.kind === 'media-library') && canonicalPath(target.filePath).endsWith('/.index.yaml')) {
@@ -1225,7 +1234,10 @@ export function NotebookFileTree({
               </div>
             )}
             <div
-              className="notebook-file-tree__virtual-items relative min-h-full"
+              className={cn(
+                'notebook-file-tree__virtual-items relative min-h-full',
+                hasVisibleItems && contentClassName,
+              )}
               data-notebook-tree-virtualized="true"
               style={{ height: virtualTreeSize }}
             >
@@ -1301,7 +1313,7 @@ export function NotebookFileTree({
             </ContextMenuContent>
           </ContextMenu>
         </OverlayScrollbar>
-        {!hasVisibleItems && tree.loading && (
+        {!hasVisibleItems && tree.loading && !(skipInitialLoading && initialLoadPending) && (
           <FileTreeLoadingSkeleton
             ariaLabel={t('memo.fileTree.loading')}
             className="absolute inset-0 z-[2] bg-[var(--list-bg)]"

@@ -46,6 +46,7 @@ export function NotebookFolderView({
   defaultCreateFolder,
   onSetDefaultCreateFolder,
   isActive = true,
+  skipInitialLoading = false,
 }: {
   notebook: Notebook;
   createFolderRequest?: NotebookFolderCreateRequest | null;
@@ -54,6 +55,7 @@ export function NotebookFolderView({
   defaultCreateFolder?: string | null;
   onSetDefaultCreateFolder?: (folderPath: string) => void;
   isActive?: boolean;
+  skipInitialLoading?: boolean;
 }) {
   const { t } = useI18n();
   const tree = useFolderTree(notebook.path, {
@@ -279,6 +281,8 @@ export function NotebookFolderView({
       activeFileRevealRatio={activeFileRevealRatio}
       tree={tree}
       isActive={isActive}
+      skipInitialLoading={skipInitialLoading}
+      contentClassName="flowix-list-content-enter"
       defaultCreateFolder={defaultCreateFolder}
       onSetDefaultCreateFolder={onSetDefaultCreateFolder}
       createFolderRequest={createFolderRequest}

@@ -194,10 +194,10 @@ export function FormatSection({ settings, updateSettings }: FormatSectionProps) 
           }}
         >
           <p className="m-0" style={{ textIndent: `${settings.firstLineIndent}em` }}>
-            The quick brown fox jumps over the lazy dog.
+            We are what we repeatedly do. Excellence, then, is not an act, but a habit.
           </p>
           <p className="m-0 mt-2" style={{ textIndent: `${settings.firstLineIndent}em` }}>
-            {t('preferences.format.previewText')}
+            我们成为我们反复做的事。
           </p>
         </div>
       </div>
@@ -317,13 +317,11 @@ export function FormatSection({ settings, updateSettings }: FormatSectionProps) 
           onValueChange={(value) => updateSettings({ format: { firstLineIndent: value === '2' ? 2 : 0 } })}
         >
           <SelectTrigger id="preferences-format-first-line-indent" className="w-64">
-            {t(settings.firstLineIndent === 2
-              ? 'preferences.format.firstLineIndent.twoCharacters'
-              : 'preferences.format.firstLineIndent.none')}
+            {settings.firstLineIndent === 2 ? '2 EM' : t('preferences.format.firstLineIndent.none')}
           </SelectTrigger>
           <SelectContent align="end" className="flowix-preferences-select-content w-64">
             <SelectItem value="0">{t('preferences.format.firstLineIndent.none')}</SelectItem>
-            <SelectItem value="2">{t('preferences.format.firstLineIndent.twoCharacters')}</SelectItem>
+            <SelectItem value="2">2 EM</SelectItem>
           </SelectContent>
         </Select>
       </FieldRow>

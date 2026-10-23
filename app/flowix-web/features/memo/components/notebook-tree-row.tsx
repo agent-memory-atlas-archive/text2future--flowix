@@ -496,14 +496,16 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
               }}
               onKeyDown={(event) => event.stopPropagation()}
               className={cn(
-              'relative h-[18px] w-[18px] shrink-0 rounded-md transition-colors group-hover:bg-[color-mix(in_oklch,var(--muted)_90%,var(--foreground)_10%)] group-focus-visible:bg-[color-mix(in_oklch,var(--muted)_90%,var(--foreground)_10%)] hover:bg-[color-mix(in_oklch,var(--muted)_90%,var(--foreground)_10%)] focus-visible:bg-[color-mix(in_oklch,var(--muted)_90%,var(--foreground)_10%)]',
+              'relative h-5 w-5 shrink-0 rounded-md transition-colors group-hover:bg-[color-mix(in_oklch,var(--muted)_90%,var(--foreground)_10%)] group-focus-visible:bg-[color-mix(in_oklch,var(--muted)_90%,var(--foreground)_10%)] hover:bg-[color-mix(in_oklch,var(--muted)_90%,var(--foreground)_10%)] focus-visible:bg-[color-mix(in_oklch,var(--muted)_90%,var(--foreground)_10%)]',
               'text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] [[data-theme="mist"]_&]:text-[var(--foreground)]',
             )}>
-              <span
-                className="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0"
-                dangerouslySetInnerHTML={{ __html: folderIcon }}
-              />
-              {isDefaultFolder && <DefaultFolderCheck />}
+              <span className="absolute left-1/2 top-1/2 h-[18px] w-[18px] -translate-x-1/2 -translate-y-1/2">
+                <span
+                  className="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0"
+                  dangerouslySetInnerHTML={{ __html: folderIcon }}
+                />
+                {isDefaultFolder && <DefaultFolderCheck />}
+              </span>
               <ChevronRight className={cn(
                 'absolute left-1/2 top-1/2 h-[15px] w-[15px] -translate-x-1/2 -translate-y-1/2 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 group-focus-visible:opacity-100',
                 expanded && 'rotate-90',

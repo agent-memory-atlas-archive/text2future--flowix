@@ -189,6 +189,61 @@ describe('NotebookFileTree pointer dragging', () => {
     return { root, refresh, tree };
   }
 
+  it.each([false, true])('restores retry feedback after initial loading (skip=%s)', async (skipInitialLoading) => {
+    const tree = {
+      rootChildren: [],
+      nodes: new Map(),
+      expanded: new Set(),
+      loading: true,
+      error: null,
+      toggle: vi.fn(),
+      expandTo: vi.fn(async () => {}),
+      collapseAll: vi.fn(),
+      refresh: vi.fn(async () => {}),
+      refreshDirectories: vi.fn(async () => {}),
+      reload: vi.fn(async () => {}),
+    } as unknown as FolderTreeController;
+    const root = createRoot(host);
+    const render = () => root.render(
+      <NotebookFileTree
+        notebookPath="/notes" notebookName="Notes" tree={{ ...tree }}
+        skipInitialLoading={skipInitialLoading} contentClassName="flowix-list-content-enter"
+        onNoteSelect={vi.fn()} onCreateNote={vi.fn()} onMoveNote={successfulMove}
+      />,
+    );
+    const skeleton = () => host.querySelector('[data-file-tree-loading-skeleton]');
+    try {
+      await act(async () => render());
+      expect(Boolean(skeleton())).toBe(!skipInitialLoading);
+
+      tree.loading = false;
+      tree.error = 'unreadable';
+      await act(async () => render());
+      expect(skeleton()).toBeNull();
+
+      tree.loading = true;
+      tree.error = null;
+      await act(async () => render());
+      expect(skeleton()).not.toBeNull();
+
+      const note = item('/notes/a.md', 'document');
+      tree.loading = false;
+      tree.rootChildren = [note];
+      tree.nodes = new Map([[note.fullPath, note]]);
+      await act(async () => render());
+      const content = host.querySelector('.notebook-file-tree__virtual-items');
+      expect(content?.classList.contains('flowix-list-content-enter')).toBe(true);
+
+      // Refreshing visible data keeps the same animation-bearing element.
+      tree.loading = true;
+      await act(async () => render());
+      expect(host.querySelector('.notebook-file-tree__virtual-items')).toBe(content);
+      expect(content?.classList.contains('flowix-list-content-enter')).toBe(true);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   async function mountNested(onMoveNote: TestMoveNote) {
     const folder = item('/notes/projects', 'folder');
     const childNote = item('/notes/projects/child.md', 'document');

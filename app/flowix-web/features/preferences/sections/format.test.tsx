@@ -45,16 +45,16 @@ afterEach(async () => {
 it('previews the chosen indent and clears it when resetting format preferences', async () => {
   await act(async () => root.render(<FormatPreferences />));
   const trigger = container.querySelector<HTMLButtonElement>('#preferences-format-first-line-indent');
-  expect(trigger?.textContent).toBe('不缩进');
+  expect(trigger?.textContent).toBe('无');
 
   await act(async () => trigger!.click());
   const indentOption = [...document.querySelectorAll<HTMLButtonElement>('[data-flowix-surface="select"] button')]
-    .find((button) => button.textContent === '2 字符');
+    .find((button) => button.textContent === '2 EM');
   expect(indentOption).toBeDefined();
   await act(async () => indentOption!.click());
 
   expect(updateSettings).toHaveBeenCalledWith({ format: { firstLineIndent: 2 } });
-  expect(trigger?.textContent).toBe('2 字符');
+  expect(trigger?.textContent).toBe('2 EM');
   expect([...container.querySelectorAll<HTMLParagraphElement>('p[style]')].map((paragraph) => paragraph.style.textIndent))
     .toEqual(['2em', '2em']);
 
@@ -64,7 +64,7 @@ it('previews the chosen indent and clears it when resetting format preferences',
   await act(async () => reset!.click());
 
   expect(updateSettings).toHaveBeenLastCalledWith({ format: DEFAULT_USER_SETTINGS.format });
-  expect(trigger?.textContent).toBe('不缩进');
+  expect(trigger?.textContent).toBe('无');
   expect([...container.querySelectorAll<HTMLParagraphElement>('p[style]')].map((paragraph) => paragraph.style.textIndent))
     .toEqual(['0em', '0em']);
 });
