@@ -452,7 +452,7 @@ export function AgentRepositoriesSection({
         </div>
       )}
       {!collapsed && viewMode === 'links' && (
-        <div className="space-y-0.5">
+        <div className="group/repository-list relative space-y-0.5">
           {repositories.length ? repositories.map((repository) => (
             <button key={repository.path} type="button" onClick={onOpenRepositoryList}
               className="flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-sm text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--brand)]"
@@ -465,6 +465,18 @@ export function AgentRepositoriesSection({
               style={{ marginLeft: TREE_EDGE_GUTTER, width: `calc(100% - ${TREE_EDGE_GUTTER * 2}px)` }}>
               {t('memo.fileTree.repositoriesEmpty')}
             </div>
+          )}
+          {repositories.length > 0 && onOpenRepositoryList && (
+            <button
+              type="button"
+              onClick={onOpenRepositoryList}
+              aria-label={t('memo.fileTree.openAllRepositories')}
+              title={t('memo.fileTree.openAllRepositories')}
+              className="absolute bottom-1 z-10 mr-1 inline-flex h-6 w-6 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--document-bg)] text-[var(--muted-foreground)] opacity-0 shadow-[0_1px_4px_rgb(0_0_0_/_4.5%)] transition-[color,opacity] group-hover/repository-list:opacity-100 group-focus-within/repository-list:opacity-100 hover:text-[var(--foreground)]"
+              style={{ right: TREE_EDGE_GUTTER }}
+            >
+              <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
           )}
         </div>
       )}

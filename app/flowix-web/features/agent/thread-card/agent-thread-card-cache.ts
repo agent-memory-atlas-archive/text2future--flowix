@@ -6,6 +6,7 @@ import {
   isLocalExternalThreadId,
   resolveExternalSessionId,
 } from '@features/agent/services/external-agent-runtime-service';
+import { isMissingAgentSessionError } from '@features/agent/services/history-error';
 
 export interface LoadAgentThreadCardCacheInput {
   threadId: string;
@@ -33,7 +34,17 @@ export function loadAgentThreadCardCache(
   const key = JSON.stringify([input.typeKey, input.threadId]);
   const existing = inFlightThreadLoads.get(key);
   if (existing) return existing;
-  const load = readThreadHistory(input).finally(() => {
+  const load = readThreadHistory(input).catch(async (error) => {
+    if (!isMissingAgentSessionError(error)) throw error;
+    const recovered = await useAgentSessionStore.getState()
+      .recoverThreadCardAfterMissingSession(input.threadId);
+    if (!recovered) throw error;
+    return {
+      resolvedSessionId: null,
+      loadedThreadId: recovered.threadId,
+      messages: [],
+    };
+  }).finally(() => {
     if (inFlightThreadLoads.get(key) === load) inFlightThreadLoads.delete(key);
   });
   inFlightThreadLoads.set(key, load);
@@ -63,6 +74,24 @@ async function readThreadHistory(input: LoadAgentThreadCardCacheInput): Promise<
       return { resolvedSessionId: null, loadedThreadId: sessionId, messages };
     }
 
+    // No provider session means this local thread is a known-empty
+    // conversation. Publish completion so the detail surface can leave its
+    // blocking history-loading state. Never replace live messages or runs.
+    const store = useAgentSessionStore.getState();
+    store.updateThreadHistory(threadId, (projection) => {
+      if (projection.messages.length || projection.runs.isLoading || projection.runs.activeRunId) {
+        return projection;
+      }
+      return {
+        ...projection,
+        pagination: {
+          ...projection.pagination,
+          initialStatus: 'ready',
+          initialError: null,
+          loadingInitial: false,
+        },
+      };
+    });
     return { resolvedSessionId: null, loadedThreadId: null, messages: [] };
   }
 

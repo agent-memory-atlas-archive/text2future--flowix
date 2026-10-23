@@ -2,7 +2,7 @@ use std::path::Path;
 
 use super::local_adapter::{
     cloud_conflict_copy_path, register_preserved_conflict_copy, safe_cloud_note_path,
-    safely_remove_conflict_file, ConflictFileOutcome,
+    safely_remove_conflict_file, ConflictFileOutcome, RemoteApplyError, RemoteConflict,
 };
 use flowix_core::memo_file::MemoFile;
 use flowix_sync::{v2_content_hash, v2_local_content_diverged, SyncManager};
@@ -14,7 +14,7 @@ pub(super) fn delete_cloud_note_locked(
     note_id: &str,
     relative_path: &str,
     before_delete: impl FnOnce(&Path),
-) -> Result<bool, String> {
+) -> Result<bool, RemoteApplyError> {
     let notebook = memo_file
         .get_notebook_config_by_id(notebook_id)
         .ok_or_else(|| "NOTEBOOK_NOT_FOUND".to_string())?;
@@ -24,10 +24,7 @@ pub(super) fn delete_cloud_note_locked(
         Ok(bytes) => Some(bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
-            return Err(format!(
-                "CLOUD_DELETE_READ_FAILED: {}: {error}",
-                path.display()
-            ))
+            return Err((format!("CLOUD_DELETE_READ_FAILED: {}: {error}", path.display())).into())
         }
     };
     let local_hash = local_bytes.as_ref().map(|bytes| v2_content_hash(bytes));
@@ -44,9 +41,9 @@ pub(super) fn delete_cloud_note_locked(
             .and_then(|state| state.content_hash.as_deref()),
         pending,
     ) {
-        return Err(format!(
-            "CLOUD_DELETE_CONFLICT: local changes preserved: {}",
-            path.display()
+        return Err(RemoteApplyError::conflict(
+            RemoteConflict::NoteDelete,
+            format!("local changes preserved: {}", path.display()),
         ));
     }
     before_delete(&path);
@@ -69,9 +66,9 @@ pub(super) fn delete_cloud_note_locked(
                         false,
                     )?;
                 }
-                return Err(format!(
-                    "CLOUD_DELETE_CONFLICT: local changes preserved: {}",
-                    path.display()
+                return Err(RemoteApplyError::conflict(
+                    RemoteConflict::NoteDelete,
+                    format!("local changes preserved: {}", path.display()),
                 ));
             }
         }
@@ -80,9 +77,9 @@ pub(super) fn delete_cloud_note_locked(
         .refresh_note_path(notebook_id, relative_path)
         .map_err(|error| format!("CLOUD_DELETE_INDEX_FAILED: {error}"))?;
     if path.exists() {
-        return Err(format!(
-            "CLOUD_DELETE_CONFLICT: path was recreated: {}",
-            path.display()
+        return Err(RemoteApplyError::conflict(
+            RemoteConflict::NoteDelete,
+            format!("path was recreated: {}", path.display()),
         ));
     }
     Ok(had_local_file)

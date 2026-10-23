@@ -3,14 +3,11 @@
 import { useEffect, useState } from 'react';
 import { Check, Cloud, Info, Loader2 } from 'lucide-react';
 
-import appleLogo from '@/assets/apple.svg';
 import googleLogo from '@/assets/google.svg';
 import { errorMessage } from '@/lib/error-message';
 import { useI18n } from '@/lib/i18n';
-import { isMac } from '@/lib/shortcuts/platform';
 import { toast } from '@/lib/toast';
 import { openUrl } from '@platform/tauri/opener';
-import { isTauriDesktopRuntime } from '@platform/tauri/runtime';
 import { cloudSyncErrorMessage } from '@platform/tauri/errors';
 import { subscribe } from '@platform/tauri/event-bus';
 import {
@@ -22,7 +19,6 @@ import {
 } from '@platform/tauri/client';
 import { Button } from '@shared/ui/button';
 import { Tooltip } from '@shared/ui/tooltip';
-import { Input } from '@shared/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/ui/popover';
 import { SectionHeader } from '@features/preferences/sections/primitives';
 import { cn } from '@/lib/utils';
@@ -57,10 +53,7 @@ function formatMembershipDate(value: number): string {
 export function CloudSyncSection() {
   const { t } = useI18n();
   const { state, loadError: stateLoadError, loading: loadingLoginState, applyState, membershipLoading, membershipError, refreshMembership } = useCloudAccountState();
-  const canSignInWithApple = isTauriDesktopRuntime() && isMac();
   const [products, setProducts] = useState<CloudProduct[]>([]);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [productsLoadError, setProductsLoadError] = useState<string | null>(null);
   const [productsLoading, setProductsLoading] = useState(true);
@@ -243,17 +236,11 @@ export function CloudSyncSection() {
     try {
       const next = await task();
       applyState(next);
-      setPassword('');
     } catch (error) {
       toast.error(cloudSyncErrorMessage(error, t));
     } finally {
       setBusy(false);
     }
-  };
-
-  const submitLegacyLogin = () => {
-    if (loadingLoginState || busy || state?.authenticated || !email.trim() || !password) return;
-    void run(() => cloud.login(email.trim(), password));
   };
 
   const startGoogleSignIn = async () => {
@@ -283,65 +270,15 @@ export function CloudSyncSection() {
       )}
 
       {!state?.authenticated ? (
-        <div className="space-y-4">
-          <div id="cloud-email-login" className="space-y-3">
-            <Input
-              type="email"
-              className="mx-auto h-10 w-[64%] rounded-lg bg-[var(--card)]"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder={t('preferences.cloud.email')}
-              autoComplete="username"
-            />
-            <Input
-              type="password"
-              className="mx-auto h-10 w-[64%] rounded-lg bg-[var(--card)]"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') submitLegacyLogin();
-              }}
-              placeholder={t('preferences.cloud.password')}
-              autoComplete="current-password"
-            />
-            <Button
-              className="mx-auto flex h-10 w-[64%] rounded-lg"
-              disabled={loadingLoginState || busy || !email.trim() || !password}
-              onClick={submitLegacyLogin}
-            >
-              {loadingLoginState
-                ? t('preferences.cloud.loading')
-                : busy
-                ? t('preferences.cloud.loggingIn')
-                : t('preferences.cloud.login')}
-            </Button>
-          </div>
-          <div className="flex items-center gap-3 text-xs text-[var(--muted-foreground)]">
-            <span className="h-px flex-1 bg-[var(--border)]" />
-            <span>{t('preferences.cloud.orContinueWith')}</span>
-            <span className="h-px flex-1 bg-[var(--border)]" />
-          </div>
-          <Button
-            variant="outline"
-            className="mx-auto flex h-10 w-[64%] gap-2 rounded-lg bg-[var(--card)]"
-            disabled={loadingLoginState || busy}
-            onClick={() => void startGoogleSignIn()}
-          >
-            <img src={googleLogo} alt="" aria-hidden="true" className="h-4 w-4 object-contain" />
-            {t('preferences.cloud.googleSignIn')}
-          </Button>
-          {canSignInWithApple && (
-            <Button
-              variant="outline"
-              className="mx-auto flex h-10 w-[64%] gap-2 rounded-lg bg-[var(--card)]"
-              disabled={loadingLoginState || busy}
-              onClick={() => void run(() => cloud.signInWithApple())}
-            >
-              <img src={appleLogo} alt="" aria-hidden="true" className="h-4 w-4 dark:invert" />
-              {t('preferences.cloud.appleSignIn')}
-            </Button>
-          )}
-        </div>
+        <Button
+          variant="outline"
+          className="mx-auto flex h-10 w-[64%] gap-2 rounded-lg bg-[var(--card)]"
+          disabled={loadingLoginState || busy}
+          onClick={() => void startGoogleSignIn()}
+        >
+          <img src={googleLogo} alt="" aria-hidden="true" className="h-4 w-4 object-contain" />
+          {t('preferences.cloud.googleSignIn')}
+        </Button>
       ) : (
         <>
           <div className="space-y-4 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">

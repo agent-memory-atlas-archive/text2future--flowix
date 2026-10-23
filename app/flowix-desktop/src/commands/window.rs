@@ -142,7 +142,7 @@ pub async fn apply_window_theme(
     state: tauri::State<'_, AppState>,
 ) -> Result<&'static str, String> {
     let theme = if theme == Theme::Mist {
-        let cloud = state.cloud_sync.state().map_err(|error| error.to_string())?;
+        let cloud = state.cloud_sync.account().state().map_err(|error| error.to_string())?;
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|error| error.to_string())?.as_millis() as i64;

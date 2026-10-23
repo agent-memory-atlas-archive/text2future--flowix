@@ -147,16 +147,18 @@ describe("ComposerFolderController", () => {
     editor.destroy();
   });
 
-  it("inserts a removable folder card and serializes it as an @ mention", () => {
+  it("inserts a removable folder card and serializes it as an absolute-path Markdown link", () => {
     const { input, editor, controller } = setup();
     type(editor, "请操作 @flow");
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
 
     const markdown = editor.getMarkdown();
     expect(markdown).toContain("flowix://folder/%2FUsers%2Frop%2FDesktop%2Fvibe%2Fflowix-main");
-    expect(composerFolderMarkdownToPrompt(markdown)).toBe("请操作 @flowix-main ");
-    expect(document.querySelector(".agent-composer__folder-token")?.textContent)
-      .toBe("@flowix-main");
+    expect(composerFolderMarkdownToPrompt(markdown)).toBe(
+      "请操作 [@flowix-main](file:///Users/rop/Desktop/vibe/flowix-main) ",
+    );
+    expect(document.querySelector(".agent-composer__folder-token-label")?.textContent)
+      .toBe("flowix-main");
 
     controller.dispose();
     editor.destroy();

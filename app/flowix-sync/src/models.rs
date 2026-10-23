@@ -131,6 +131,8 @@ impl CloudMembership {
             && self.starts_at.is_none_or(|starts_at| starts_at <= now_ms)
             && self.expires_at.is_some_and(|expires_at| expires_at > now_ms)
     }
+
+
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -279,6 +281,9 @@ pub struct CloudState {
     pub auth_error: Option<String>,
     pub account: Option<crate::v2::V2CloudAccount>,
     pub membership: Option<CloudMembership>,
+    pub membership_status: CloudEntitlementStatus,
+    pub membership_error: Option<String>,
+    pub sync_access: crate::account::CloudSyncAccess,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -287,6 +292,18 @@ pub enum CloudAuthStatus {
     SignedOut,
     Restoring,
     Authenticated,
+}
+
+/// Local verification state for the current account's server-owned entitlement.
+/// This is separate from authentication and from the entitlement payload itself.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CloudEntitlementStatus {
+    #[default]
+    Unknown,
+    Refreshing,
+    Verified,
+    Error,
 }
 
 pub trait RefreshTokenStore: Send + Sync {

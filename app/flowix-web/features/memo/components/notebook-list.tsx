@@ -14,6 +14,7 @@ import { loadNativeMenuIcons } from '@platform/tauri/native-menu-icons';
 import { NotebookIcon } from '@features/memo/components/notebook-icon';
 import { useNoteStore, type Notebook } from '@features/memo/store/note-store';
 import { useI18n } from '@/lib/i18n';
+import { getCloudSyncAccess } from '@/lib/cloud-account';
 import {
   cloud,
   listenToCloudStateChanges,
@@ -87,7 +88,7 @@ export function NotebookList({
     void Promise.all([cloud.getState(), cloud.listNotebookStates()])
       .then(([cloudState, links]) => {
         if (requestId !== cloudStateRequestRef.current) return;
-        setCloudSyncAvailable(cloudState.authenticated);
+        setCloudSyncAvailable(getCloudSyncAccess(cloudState).canRead);
         setCloudSyncedNotebookIds(
           new Set(links.filter((link) => link.enabled).map((link) => link.notebookId)),
         );
@@ -106,7 +107,7 @@ export function NotebookList({
   useEffect(() => {
     if (!experimental) return;
     return listenToCloudStateChanges((cloudState) => {
-      setCloudSyncAvailable(cloudState.authenticated);
+      setCloudSyncAvailable(getCloudSyncAccess(cloudState).canRead);
       refreshCloudSyncedNotebookIds();
     });
   }, [experimental, refreshCloudSyncedNotebookIds]);

@@ -74,7 +74,7 @@ fn remote_delete_preserves_edits_before_watcher_marks_dirty() {
         panic!("must not acknowledge a rejected deletion")
     })
     .unwrap_err();
-    assert!(error.starts_with("CLOUD_DELETE_CONFLICT:"));
+    assert!(error.to_string().starts_with("CLOUD_DELETE_CONFLICT:"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
     assert!(store
         .read_note_entry_by_path("work", &relative)
@@ -103,6 +103,7 @@ fn remote_delete_preserves_pending_changes_even_when_body_hash_matches() {
     assert!(
         delete_cloud_note_locked(&store, &sync, "work", &id, relative.as_str(), |_| {})
             .unwrap_err()
+            .to_string()
             .starts_with("CLOUD_DELETE_CONFLICT:")
     );
     assert_eq!(std::fs::read(&path).unwrap(), original);
@@ -159,7 +160,7 @@ fn remote_delete_preserves_external_save_during_delete() {
         },
     )
     .unwrap_err();
-    assert!(error.starts_with("CLOUD_DELETE_CONFLICT:"));
+    assert!(error.to_string().starts_with("CLOUD_DELETE_CONFLICT:"));
     assert_eq!(std::fs::read(&path).unwrap(), b"external save");
     assert!(store
         .read_note_entry_by_path("work", &relative)
@@ -176,23 +177,30 @@ fn remote_delete_does_not_treat_read_failure_as_a_missing_file() {
     assert!(
         delete_cloud_note_locked(&store, &sync, "work", &id, relative.as_str(), |_| {})
             .unwrap_err()
+            .to_string()
             .starts_with("CLOUD_DELETE_READ_FAILED:")
     );
     assert!(path.is_dir());
-    assert!(store
-        .read_note_entry_by_path("work", &relative)
-        .unwrap()
-        .is_some());
+    // A directory is deliberately unreadable as a note; the failed delete preserves it.
+    assert!(store.read_note_entry_by_path("work", &relative).is_err());
 }
 
 #[test]
 fn remote_delete_ignores_a_note_path_missing_in_the_target_notebook() {
     let (_directory, store, sync, id, path, relative) = fixture();
+    let other_path = _directory.path().join("other");
+    std::fs::create_dir_all(&other_path).unwrap();
+    let mut notebooks = store.read_notebook_configs().unwrap();
+    let mut other = notebooks[0].clone();
+    other.id = "other".into();
+    other.path = other_path.to_string_lossy().into_owned();
+    notebooks.push(other);
+    store.write_notebook_configs(&notebooks).unwrap();
     let _guard = store.acquire_cross_process_write_lock().unwrap();
     // Path-based lookup: the same relative path simply does not exist in the
     // other notebook, so the deletion is a no-op there.
     assert!(
-        delete_cloud_note_locked(&store, &sync, "other", &id, relative.as_str(), |_| {}).unwrap()
+        !delete_cloud_note_locked(&store, &sync, "other", &id, relative.as_str(), |_| {}).unwrap()
     );
     assert!(path.exists());
     assert!(store
@@ -212,6 +220,7 @@ fn remote_delete_preserves_a_local_file_without_an_acknowledged_hash() {
     assert!(
         delete_cloud_note_locked(&store, &sync, "work", &id, relative.as_str(), |_| {})
             .unwrap_err()
+            .to_string()
             .starts_with("CLOUD_DELETE_CONFLICT:")
     );
     assert_eq!(std::fs::read(&path).unwrap(), original);

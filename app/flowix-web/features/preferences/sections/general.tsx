@@ -146,18 +146,17 @@ export function GeneralSection({ language, productInfo, afterGeneral, updateSett
       </FieldRow>
 
       {updater.update && (
-        <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-3">
+        <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-3 py-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className={FIELD_TITLE_CLASS}>{t('appUpdates.available')}</div>
+              <div className={FIELD_TITLE_CLASS}>
+                {t('appUpdates.available', { version: updater.update.version.replace(/^v/i, '') })}
+              </div>
               {updater.update.body && (
                 <p className="mt-1 line-clamp-3 whitespace-pre-line text-sm leading-5 text-[var(--muted-foreground)]">
                   {updater.update.body}
                 </p>
               )}
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                {t('productUpdates.version', { version: updater.update.version })}
-              </p>
               {updatingProduct && updater.progress && (
                 <UpdateProgress
                   className="mt-3"
@@ -170,7 +169,13 @@ export function GeneralSection({ language, productInfo, afterGeneral, updateSett
                 />
               )}
             </div>
-            <Button variant="outline" size="sm" onClick={handleInstallUpdate} disabled={updatingProduct}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="rounded-lg"
+              onClick={handleInstallUpdate}
+              disabled={updatingProduct}
+            >
               {downloadingUpdate ? t('appUpdates.downloading') : installingUpdate ? t('appUpdates.installing') : t('appUpdates.install')}
             </Button>
           </div>

@@ -123,6 +123,18 @@ describe('external agent runtime service', () => {
     expect(agent.getClaudeSessionId).toHaveBeenCalledWith('claude-local-inst-1');
   });
 
+  it('waits for the same session resolution across concurrent callers', async () => {
+    const { agent } = await import('@platform/tauri/client');
+    const { resolveExternalSessionId } = await import('./external-agent-runtime-service');
+    let release!: (value: string) => void;
+    vi.mocked(agent.getCodexSessionId).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const first = resolveExternalSessionId('codex-local-concurrent', 'codex');
+    const second = resolveExternalSessionId('codex-local-concurrent', 'codex');
+    release('shared-session');
+    await expect(Promise.all([first, second])).resolves.toEqual(['shared-session', 'shared-session']);
+    expect(agent.getCodexSessionId).toHaveBeenCalledTimes(1);
+  });
+
   it('stops the active run for the current runtime thread id', async () => {
     const {
       beginExternalAgentThreadCardRun,

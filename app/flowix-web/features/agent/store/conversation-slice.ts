@@ -15,6 +15,7 @@ import {
 import type { AgentConversationInstance as BackendAgentConversationInstance } from "@platform/tauri/client";
 import { normalizeConversationWorkspaceState } from "@features/agent/runtime/conversation-workspace";
 import { normalizeWorkspacePath } from "@features/agent/runtime/workspace-path";
+import { createFreshExternalAgentThreadId } from "@features/agent/services/external-agent-runtime-adapters";
 
 type SessionSet = (
   updater: (state: ConversationContext) => Partial<ConversationContext> | ConversationContext,
@@ -203,11 +204,15 @@ export interface ConversationSlice {
     patch: Partial<Omit<AgentConversationInstance, "instanceId" | "createdAt">>,
   ): AgentConversationInstance;
   setRuntimeConfig(instanceId: string, patch: RuntimeConfigPatch): void;
+  persistInstanceAndWait(instanceId: string): Promise<void>;
   getInstance(instanceId: string | null | undefined): AgentConversationInstance | null;
   updateThread(
     instanceId: string,
-    patch: { threadId?: string | null; agentType?: AgentTypeKey },
-  ): void;
+    patch: { threadId?: string | null; agentType?: AgentTypeKey; title?: string },
+  ): AgentConversationInstance | null;
+  recoverThreadCardAfterMissingSession(
+    threadId: string,
+  ): Promise<AgentConversationInstance | null>;
   initializeThread(
     instanceId: string,
     patch: {
@@ -361,14 +366,20 @@ export function createConversationSlice(
       }));
       persistConversationInstance(nextInstance);
     },
+    persistInstanceAndWait: async (instanceId) => {
+      const instance = get().getInstance(instanceId);
+      if (!instance) return;
+      await persistConversationInstanceAndWait(instance);
+    },
     getInstance: (instanceId) =>
       instanceId ? get().conversationRegistry.instances[instanceId] ?? null : null,
     updateThread: (instanceId, patch) => {
       const existing = get().conversationRegistry.instances[instanceId];
-      if (!existing) return;
+      if (!existing) return null;
       const nextInstance: AgentConversationInstance = {
         ...existing,
         agentType: patch.agentType ?? existing.agentType,
+        title: patch.title !== undefined ? normalizeTitle(patch.title) : existing.title,
         threadId:
           patch.threadId !== undefined ? patch.threadId : existing.threadId,
         providerSessionId: patch.threadId !== undefined && patch.threadId !== existing.threadId
@@ -380,6 +391,29 @@ export function createConversationSlice(
         instances: { ...registry.instances, [instanceId]: nextInstance },
       }));
       persistConversationInstance(nextInstance);
+      return nextInstance;
+    },
+    recoverThreadCardAfterMissingSession: async (threadId) => {
+      const stale = get().findByThreadId(threadId);
+      if (!stale || stale.source.kind !== "thread-card" || stale.threadId !== threadId) {
+        return null;
+      }
+
+      // Keep the card's instance identity so any already-open detail surface
+      // follows the reset. External sessions need a fresh local product id;
+      // the default id is derived from instanceId and would resolve to the
+      // same deleted provider session after a reset.
+      const nextThreadId = createFreshExternalAgentThreadId(
+        stale.agentType,
+        stale.instanceId,
+      );
+      const updated = get().updateThread(stale.instanceId, {
+        threadId: nextThreadId,
+        title: "",
+      });
+      if (!updated) return null;
+      await get().persistInstanceAndWait(stale.instanceId);
+      return get().getInstance(stale.instanceId);
     },
     initializeThread: async (instanceId, patch) => {
       const existing = get().conversationRegistry.instances[instanceId];
@@ -406,6 +440,15 @@ export function createConversationSlice(
       }));
       try {
         const persisted = await persistConversationInstanceAndWait(nextInstance);
+        // Recovery persists a blank product row before the first send. The
+        // instance upsert uses INSERT OR IGNORE for thread titles, so seed
+        // that existing row explicitly once the first prompt is available.
+        if (!persisted.title && nextInstance.title && persisted.threadId) {
+          await agentClient.updateThreadTitle(
+            persisted.threadId, nextInstance.title, nextInstance.agentType,
+          );
+          persisted.title = nextInstance.title;
+        }
         set((state) => ({
           conversationRegistry: {
             instances: {

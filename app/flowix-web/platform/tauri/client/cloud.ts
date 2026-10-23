@@ -1,3 +1,4 @@
+import type { CloudSyncAccess } from '@/lib/cloud-account';
 import { invoke } from '@tauri-apps/api/core';
 import { subscribe, type SubscribeOptions } from '@platform/tauri/event-bus';
 import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -35,6 +36,9 @@ export interface CloudState {
     protocolEpoch: 2;
   } | null;
   membership?: CloudMembership | null;
+  membershipStatus?: 'unknown' | 'refreshing' | 'verified' | 'error';
+  membershipError?: string | null;
+  syncAccess?: CloudSyncAccess;
 }
 
 export interface CloudNotebookSyncState {

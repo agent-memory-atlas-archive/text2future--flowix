@@ -138,6 +138,7 @@ it('accepts a successful membership refresh from another window after verificati
   await act(async () => root.render(<Harness />));
   expect(current.membershipError).toBe('offline');
   await act(async () => mocks.receive!({ ...snapshot(2), authenticated: true, authStatus: 'authenticated',
+    membershipStatus: 'verified',
     membership: { active: true, expiresAt: Date.now() + 60_000 } } as CloudState));
   expect(current.membershipError).toBeNull();
 });
