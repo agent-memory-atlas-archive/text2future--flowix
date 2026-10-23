@@ -148,4 +148,4 @@ npm run tauri:dev -- --cloud-env=prod
 
 ## 许可协议
 
-Flowix 基于 MIT 协议开源。
+Flowix 基于 [GNU Affero 通用公共许可证第 3 版](LICENSE) 开源（AGPL-3.0-only）。
