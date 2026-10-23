@@ -4,6 +4,7 @@ version.workspace = true
 description = "Flowix - AI Note Taking App"
 authors = ["you"]
 edition.workspace = true
+license.workspace = true
 default-run = "flowix-desktop"
 
 [lib]

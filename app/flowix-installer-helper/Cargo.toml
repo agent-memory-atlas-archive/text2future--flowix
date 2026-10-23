@@ -2,6 +2,7 @@
 name = "flowix-installer-helper"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [lib]
 name = "flowix_installer_helper"

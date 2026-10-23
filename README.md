@@ -144,4 +144,4 @@ The development environment requires Node.js 20+, Rust 1.75+ and Tauri v2; the d
 
 ## License
 
-Flowix is open source under the MIT License.
+Flowix is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).

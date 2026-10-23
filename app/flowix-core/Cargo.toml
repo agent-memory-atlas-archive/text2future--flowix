@@ -4,6 +4,7 @@ version.workspace = true
 description = "Flowix business core: notebook / memo storage, search, threads. Zero Tauri dependency."
 authors = ["you"]
 edition.workspace = true
+license.workspace = true
 
 [lib]
 name = "flowix_core"
