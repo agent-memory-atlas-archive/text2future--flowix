@@ -1,4 +1,8 @@
 use super::*;
+mod outcome;
+mod policy;
+pub(crate) use outcome::{RemoteApplyError, RemoteApplyOutcome, RemoteConflict};
+pub(crate) use policy::apply_v2_report_preserving_local;
 
 pub(crate) fn safe_cloud_file_path(
     base: &Path,
@@ -38,7 +42,7 @@ pub(crate) fn safe_cloud_note_path(base: &Path, filename: &str) -> Result<PathBu
 pub(super) fn write_cloud_attachments(
     base: &Path,
     attachments: &[flowix_sync::V2RemoteAttachment],
-) -> Result<(), String> {
+) -> Result<(), RemoteApplyError> {
     for attachment in attachments {
         let filename = &attachment.metadata.filename;
         let relative = Path::new(filename);
@@ -48,10 +52,11 @@ pub(super) fn write_cloud_attachments(
                 .any(|c| matches!(c, std::path::Component::ParentDir))
             || relative.components().next() == Some(std::path::Component::CurDir)
             || attachment.metadata.size_bytes
-                != i64::try_from(attachment.content.len()).map_err(|_| "ATTACHMENT_TOO_LARGE")?
+                != i64::try_from(attachment.content.len())
+                    .map_err(|_| "ATTACHMENT_TOO_LARGE".to_string())?
             || v2_content_hash(&attachment.content) != attachment.metadata.content_hash
         {
-            return Err(format!("CLOUD_ATTACHMENT_INVALID: {filename}"));
+            return Err((format!("CLOUD_ATTACHMENT_INVALID: {filename}")).into());
         }
         let relative_name = match relative.strip_prefix("attachments") {
             Ok(path) => format!("attachments/{}", path.display()),
@@ -65,10 +70,13 @@ pub(super) fn write_cloud_attachments(
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 if std::fs::read(&path).map_err(sync_error)? != attachment.content {
-                    return Err(format!("CLOUD_ATTACHMENT_EDIT_CONFLICT: {filename}"));
+                    return Err(RemoteApplyError::conflict(
+                        RemoteConflict::AttachmentEdit,
+                        format!("{filename}"),
+                    ));
                 }
             }
-            Err(error) => return Err(sync_error(error)),
+            Err(error) => return Err((sync_error(error)).into()),
         }
     }
     Ok(())
@@ -79,7 +87,7 @@ fn apply_v2_note_changes(
     app: &AppHandle,
     notebook_id: &str,
     changes: &[&V2RemoteApply],
-) -> Result<(), String> {
+) -> Result<(), RemoteApplyError> {
     apply_v2_note_changes_locked(state, app, notebook_id, changes)?;
     let memo_file = read_lock(&state.memo_file, "memo_file");
     for relative_path in changes.iter().filter_map(|change| {
@@ -105,7 +113,7 @@ fn apply_v2_note_changes_locked(
     app: &AppHandle,
     notebook_id: &str,
     changes: &[&V2RemoteApply],
-) -> Result<(), String> {
+) -> Result<(), RemoteApplyError> {
     let memo_file = read_lock(&state.memo_file, "memo_file");
     let _write_guard = memo_file
         .operation_locks()
@@ -133,7 +141,7 @@ fn apply_v2_note_changes_locked(
             let local_bytes = match std::fs::read(&path) {
                 Ok(bytes) => Some(bytes),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => return Err(format!("CLOUD_ATTACHMENT_READ_FAILED: {error}")),
+                Err(error) => return Err((format!("CLOUD_ATTACHMENT_READ_FAILED: {error}")).into()),
             };
             let local_hash = local_bytes.as_ref().map(|bytes| v2_content_hash(bytes));
             let baseline_hash = state
@@ -151,7 +159,10 @@ fn apply_v2_note_changes_locked(
                     baseline_hash.as_deref(),
                     pending,
                 ) {
-                    return Err(format!("CLOUD_ATTACHMENT_DELETE_CONFLICT: {filename}"));
+                    return Err(RemoteApplyError::conflict(
+                        RemoteConflict::AttachmentDelete,
+                        format!("{filename}"),
+                    ));
                 }
                 if let Some(expected) = local_bytes.as_deref() {
                     crate::watcher::runtime::mark_self_write_for(app, &path);
@@ -172,7 +183,10 @@ fn apply_v2_note_changes_locked(
                                     true,
                                 )?;
                             }
-                            return Err(format!("CLOUD_ATTACHMENT_DELETE_CONFLICT: {filename}"));
+                            return Err(RemoteApplyError::conflict(
+                                RemoteConflict::AttachmentDelete,
+                                format!("{filename}"),
+                            ));
                         }
                     }
                 }
@@ -185,13 +199,16 @@ fn apply_v2_note_changes_locked(
                 .as_deref()
                 .ok_or_else(|| format!("CLOUD_ATTACHMENT_HASH_MISSING: {filename}"))?;
             if v2_content_hash(bytes) != expected_hash {
-                return Err(format!("CLOUD_ATTACHMENT_HASH_MISMATCH: {filename}"));
+                return Err((format!("CLOUD_ATTACHMENT_HASH_MISMATCH: {filename}")).into());
             }
             if local_hash.as_deref() == Some(expected_hash) {
                 continue;
             }
             if v2_local_content_diverged(local_hash.as_deref(), baseline_hash.as_deref(), pending) {
-                return Err(format!("CLOUD_ATTACHMENT_EDIT_CONFLICT: {filename}"));
+                return Err(RemoteApplyError::conflict(
+                    RemoteConflict::AttachmentEdit,
+                    format!("{filename}"),
+                ));
             }
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(sync_error)?;
@@ -214,7 +231,10 @@ fn apply_v2_note_changes_locked(
                             true,
                         )?;
                     }
-                    return Err(format!("CLOUD_ATTACHMENT_EDIT_CONFLICT: {filename}"));
+                    return Err(RemoteApplyError::conflict(
+                        RemoteConflict::AttachmentEdit,
+                        format!("{filename}"),
+                    ));
                 }
             }
             continue;
@@ -242,9 +262,9 @@ fn apply_v2_note_changes_locked(
                 .ok_or_else(|| format!("CLOUD_NOTE_HASH_MISSING: {note_id}"))?;
             let actual_hash = v2_content_hash(bytes);
             if actual_hash != expected_hash {
-                return Err(format!(
+                return Err((format!(
                         "CLOUD_NOTE_HASH_MISMATCH: note {note_id} expected {expected_hash} got {actual_hash}"
-                    ));
+                    )).into());
             }
             let markdown = std::str::from_utf8(bytes)
                 .map_err(|_| format!("CLOUD_NOTE_NOT_UTF8: {note_id}"))?;
@@ -261,7 +281,7 @@ fn apply_v2_note_changes_locked(
                         .map_err(sync_error)?
                         .is_some()
                 }
-                Err(error) => return Err(sync_error(error)),
+                Err(error) => return Err((sync_error(error)).into()),
             };
             let old_path = is_indexed.then(|| desired_path.clone());
             if desired_path.exists() && old_path.as_ref() != Some(&desired_path) {
@@ -274,8 +294,9 @@ fn apply_v2_note_changes_locked(
                 )
                 .emit(app);
                 if std::fs::read(&desired_path).map_err(sync_error)? != *bytes {
-                    return Err(format!(
-                        "CLOUD_PATH_COLLISION: local file preserved at {filename}"
+                    return Err(RemoteApplyError::conflict(
+                        RemoteConflict::PathCollision,
+                        format!("local file preserved at {filename}"),
                     ));
                 }
                 continue;
@@ -290,7 +311,7 @@ fn apply_v2_note_changes_locked(
             let disk_bytes = match std::fs::read(&desired_path) {
                 Ok(bytes) => Some(bytes),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => return Err(sync_error(error)),
+                Err(error) => return Err((sync_error(error)).into()),
             };
             let disk_hash = disk_bytes.as_ref().map(|bytes| v2_content_hash(bytes));
 
@@ -328,8 +349,9 @@ fn apply_v2_note_changes_locked(
                 has_pending_change,
             );
             if locally_edited {
-                return Err(format!(
-                    "CLOUD_LOCAL_EDIT_CONFLICT: local file preserved at {filename}"
+                return Err(RemoteApplyError::conflict(
+                    RemoteConflict::LocalEdit,
+                    format!("local file preserved at {filename}"),
                 ));
             }
             if let Some(path) = &old_path {
@@ -361,8 +383,9 @@ fn apply_v2_note_changes_locked(
                             false,
                         )?;
                     }
-                    return Err(format!(
-                        "CLOUD_LOCAL_EDIT_CONFLICT: local file preserved at {filename}"
+                    return Err(RemoteApplyError::conflict(
+                        RemoteConflict::LocalEdit,
+                        format!("local file preserved at {filename}"),
                     ));
                 }
             }
@@ -388,7 +411,7 @@ pub(crate) fn apply_v2_report(
     state: &AppState,
     app: &AppHandle,
     report: &V2AccountSyncReport,
-) -> Result<(), String> {
+) -> Result<(), RemoteApplyError> {
     let mut note_changes = HashMap::<String, Vec<&V2RemoteApply>>::new();
     let mut notebook_metadata =
         HashMap::<String, (Option<String>, Option<String>, Option<i64>, bool)>::new();
@@ -423,6 +446,42 @@ pub(crate) fn apply_v2_report(
     if !notebook_metadata.is_empty() {
         let memo_file = read_lock(&state.memo_file, "memo_file");
         let mut configs = memo_file.read_notebook_configs().map_err(sync_error)?;
+        if report.read_only {
+            let dirty: HashSet<_> = state
+                .cloud_sync
+                .store()
+                .v2_dirty_entities()
+                .map_err(sync_error)?
+                .into_iter()
+                .filter(|item| item.entity_type == flowix_sync::V2EntityType::Notebook)
+                .map(|item| item.entity_id)
+                .collect();
+            for config in &configs {
+                if !notebook_metadata.contains_key(&config.id) {
+                    continue;
+                }
+                let baseline = state
+                    .cloud_sync
+                    .store()
+                    .v2_notebook_state(&config.id)
+                    .map_err(sync_error)?;
+                let current_hash = flowix_sync::v2_notebook_metadata_hash(
+                    &config.name,
+                    config.icon.as_deref(),
+                    config.sort,
+                );
+                if dirty.contains(&config.id)
+                    || baseline
+                        .as_ref()
+                        .is_none_or(|value| value.deleted || value.metadata_hash != current_hash)
+                {
+                    return Err(RemoteApplyError::conflict(
+                        RemoteConflict::NotebookEdit,
+                        format!("{}", config.id),
+                    ));
+                }
+            }
+        }
         let mut changed = false;
         configs.retain(|config| {
             let deleted = notebook_metadata

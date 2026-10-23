@@ -4,6 +4,7 @@
 //! local Markdown adapter and secret persistence; this crate owns the Cloud
 //! HTTP contract, sync state database, revisions, cursors and conflict plans.
 
+pub mod account;
 mod client;
 mod environment;
 mod error;
@@ -15,13 +16,14 @@ mod v2;
 pub use client::CloudClient;
 pub use environment::{default_cloud_environment, CloudEnvironment};
 pub use error::SyncError;
-pub use manager::{PendingLogout, SyncManager};
+pub use account::{AccountService, PendingLogout};
+pub use manager::SyncManager;
 pub use models::{
     AppleAuthChallenge, AppleAuthorization, CloudAiCredential, CloudAiCreditBalance, CloudAiModel,
-    CloudAiProvider, CloudAuthStatus, CloudCheckout, CloudMembership, CloudNotebook, CloudOrder,
-    CloudOrderCheck, CloudPrice, CloudProduct, CloudState, CloudSubscription, CloudUser,
-    LocalChangeKind,
-    ProductDuration, ProductEntitlement, RefreshTokenStore,
+    CloudAiProvider, CloudAuthStatus, CloudCheckout, CloudEntitlementStatus, CloudMembership,
+    CloudNotebook, CloudOrder, CloudOrderCheck, CloudPrice, CloudProduct, CloudState,
+    CloudSubscription, CloudUser, LocalChangeKind, ProductDuration, ProductEntitlement,
+    RefreshTokenStore,
 };
 pub use store::SyncStore;
 pub use v2::{

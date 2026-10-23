@@ -595,6 +595,21 @@ describe("unified tool message rendering", () => {
     )).toBeNull();
   });
 
+  it("renders absolute-path folder links as compact cards in user messages", () => {
+    const path = "/Users/rop/Desktop/vibe/flowix-main";
+    const markdown = `[@flowix-main](file://${path})`;
+    const s = setup("user", markdown, true);
+    render(s, "user", markdown, { isCompleted: true });
+
+    const card = s.content.querySelector<HTMLElement>(
+      ".agent-thread-card__message-folder-reference",
+    );
+    expect(card?.querySelector(".agent-thread-card__message-folder-reference-label")?.textContent)
+      .toBe("flowix-main");
+    expect(card?.title).toBe(path);
+    expect(s.content.querySelector('a[href^="file:"]')).toBeNull();
+  });
+
   it("renders one attachment chip per user-message image below the bubble", () => {
     const result = createAgentThreadCardMessageElement({
       message: {

@@ -340,6 +340,10 @@ pub struct V2AccountSyncReport {
     pub remote: Vec<V2RemoteApply>,
     pub bootstrapped_notebooks: Vec<String>,
     pub bootstrap_next_page_token: Option<String>,
+    /// Whether this pass intentionally deferred storage-increasing operations.
+    pub read_only: bool,
+    /// Re-bootstrap these notebooks atomically with cursor advancement.
+    pub deferred_notebooks: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

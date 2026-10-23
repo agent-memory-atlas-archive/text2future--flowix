@@ -4,7 +4,7 @@ import { readHistoryWithTimeout } from './history-read-timeout';
 import { getExternalAgentRuntimeAdapter } from './external-agent-runtime-adapters';
 
 const localThreadIdsByHandle = new Map<string, string>();
-const resolvingSessionIds = new Set<string>();
+const resolvingSessionIds = new Map<string, Promise<string | null>>();
 let handleSeq = 0;
 
 export function createExternalAgentRuntimeHandle(): string {
@@ -74,14 +74,17 @@ export async function resolveExternalSessionId(
 ): Promise<string | null> {
   const adapter = getExternalAgentRuntimeAdapter(typeKey);
   if (!adapter?.isLocalThreadId(runtimeThreadId)) return runtimeThreadId;
-  if (resolvingSessionIds.has(runtimeThreadId)) return null;
-  resolvingSessionIds.add(runtimeThreadId);
-  try {
-    const sessionId = await readHistoryWithTimeout(() => adapter.resolveSessionId(runtimeThreadId));
-    return sessionId ?? null;
-  } finally {
-    resolvingSessionIds.delete(runtimeThreadId);
-  }
+  const existing = resolvingSessionIds.get(runtimeThreadId);
+  if (existing) return existing;
+  const resolution = readHistoryWithTimeout(() => adapter.resolveSessionId(runtimeThreadId))
+    .then((sessionId) => sessionId ?? null)
+    .finally(() => {
+      if (resolvingSessionIds.get(runtimeThreadId) === resolution) {
+        resolvingSessionIds.delete(runtimeThreadId);
+      }
+    });
+  resolvingSessionIds.set(runtimeThreadId, resolution);
+  return resolution;
 }
 
 export async function stopExternalAgentThreadCardRun(

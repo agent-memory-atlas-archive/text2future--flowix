@@ -8,6 +8,7 @@ import {
   Image as ImageIcon,
   LoaderCircle,
 } from "lucide-react";
+import folderOutlineSvg from "@/assets/folder-outline.svg?raw";
 import { translate, type AppLanguage } from "@/lib/i18n";
 import { createLogger } from "@/lib/logger";
 import { agent } from "@platform/tauri/client";
@@ -165,6 +166,41 @@ function createUserMessageAttachments(
   });
 
   return container;
+}
+
+/** Show absolute-path project links as the same compact folder cards as the composer. */
+function renderUserMessageFolderCards(content: HTMLElement): void {
+  content.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((link) => {
+    const labelText = link.textContent?.trim() ?? "";
+    const href = link.getAttribute("href") ?? "";
+    if (!labelText.startsWith("@") || !/^file:/i.test(href)) return;
+
+    let path = href;
+    try {
+      const url = new URL(href);
+      const decodedPath = decodeURIComponent(url.pathname);
+      path = url.hostname ? `//${url.hostname}${decodedPath}` : decodedPath;
+    } catch {
+      // Keep the encoded URL as a useful title if a malformed link slips in.
+    }
+
+    const card = document.createElement("span");
+    card.className = "agent-thread-card__message-folder-reference";
+    card.title = path;
+    const displayLabel = labelText.replace(/^@/, "");
+    card.setAttribute("aria-label", `${displayLabel}\n${path}`);
+
+    const iconTemplate = document.createElement("template");
+    iconTemplate.innerHTML = folderOutlineSvg;
+    const icon = iconTemplate.content.firstElementChild;
+    icon?.classList.add("agent-thread-card__message-folder-reference-icon");
+    const label = document.createElement("span");
+    label.className = "agent-thread-card__message-folder-reference-label";
+    label.textContent = displayLabel;
+    if (icon) card.append(icon);
+    card.append(label);
+    link.replaceWith(card);
+  });
 }
 
 export function attachMessageActions(
@@ -551,6 +587,7 @@ export function renderAgentThreadCardBudgetedMarkdown(options: {
     forceFinalize,
     translate(context.language, "editor.threadCard.copyLatex"),
   );
+  if (role === "user") renderUserMessageFolderCards(content);
   if (forceFinalize) {
     void highlightAgentThreadCardCodeBlocks(content);
   }

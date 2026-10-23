@@ -8,7 +8,7 @@ export type ExternalAgentTypeKey = Extract<
 
 export interface ExternalAgentRuntimeAdapter {
   readonly typeKey: ExternalAgentTypeKey;
-  createLocalThreadId(instanceId: string): string;
+  createLocalThreadId(instanceId: string, generation?: string): string;
   isLocalThreadId(threadId: string): boolean;
   resolveSessionId(threadId: string): Promise<string | null>;
 }
@@ -20,8 +20,8 @@ function createPrefixRuntimeAdapter(
 ): ExternalAgentRuntimeAdapter {
   return {
     typeKey,
-    createLocalThreadId(instanceId) {
-      return `${typeKey}-local-${instanceId}`;
+    createLocalThreadId(instanceId, generation) {
+      return `${typeKey}-local-${instanceId}${generation ? `-${generation}` : ""}`;
     },
     isLocalThreadId(threadId) {
       return [typeKey, ...legacyPrefixes].some((prefix) =>
@@ -45,6 +45,18 @@ const externalAgentRuntimeAdapters: Record<ExternalAgentTypeKey, ExternalAgentRu
     ['deepseek-harness'],
   ),
 };
+
+/** Create a fresh local id after the provider reports that an older session is gone. */
+export function createFreshExternalAgentThreadId(
+  typeKey: AgentTypeKey,
+  instanceId: string,
+): string | null {
+  const adapter = getExternalAgentRuntimeAdapter(typeKey);
+  if (!adapter) return null;
+  const generation = globalThis.crypto?.randomUUID?.() ??
+    `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return adapter.createLocalThreadId(instanceId, generation);
+}
 
 export function getExternalAgentRuntimeAdapter(
   typeKey: AgentTypeKey

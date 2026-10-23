@@ -134,11 +134,7 @@ fn send_sync_request(app: &AppHandle, request: SyncCoordinatorRequest) -> Result
 
 fn automatic_sync_available(app: &AppHandle, notebook_id: &str) -> bool {
     let state = app.state::<AppState>();
-    state
-        .cloud_sync
-        .state()
-        .map(|cloud| cloud.authenticated)
-        .unwrap_or(false)
+    state.cloud_sync.account().sync_access().can_read
         && state
             .cloud_sync
             .v2_notebook(notebook_id)
@@ -152,11 +148,7 @@ fn automatic_sync_target_available(app: &AppHandle, target: &SyncTarget) -> bool
         SyncTarget::Notebook(notebook_id) => automatic_sync_available(app, notebook_id),
         SyncTarget::FullAccount => {
             let state = app.state::<AppState>();
-            state
-                .cloud_sync
-                .state()
-                .map(|cloud| cloud.authenticated)
-                .unwrap_or(false)
+            state.cloud_sync.account().sync_access().can_read
                 && !state
                     .cloud_sync
                     .v2_enabled_notebooks()
@@ -242,7 +234,7 @@ async fn sync_v2_account_pass(
     enabled: &[V2SyncedNotebook],
     activity: &SyncActivity,
 ) -> Result<V2AccountSyncReport, String> {
-    let generation = state.cloud_sync.session_generation();
+    let generation = state.cloud_sync.account().session_generation();
     let notebook_scope = target.notebook_scope();
     let full_local_snapshot = should_run_full_local_snapshot(state, notebook_scope)?;
     let sync_lock = account_sync_lock();
@@ -349,7 +341,7 @@ async fn sync_v2_account_pass(
             other => break other,
         }
     };
-    let report = report_result.map_err(cloud_error)?;
+    let mut report = report_result.map_err(cloud_error)?;
     emit_activity_status(
         app,
         activity,
@@ -360,11 +352,11 @@ async fn sync_v2_account_pass(
     );
     state
         .cloud_sync
-        .complete_v2_sync_with_apply(&report, notebook_scope, || {
-            apply_v2_report(state, app, &report).map_err(SyncError::InvalidState)
+        .complete_v2_sync_with_prepare(&mut report, notebook_scope, |report| {
+            apply_v2_report_preserving_local(state, app, report).map_err(SyncError::InvalidState)
         })
         .map_err(sync_error)?;
-    if full_local_snapshot {
+    if full_local_snapshot && !report.read_only && report.deferred_notebooks.is_empty() {
         record_full_local_snapshot(notebook_scope);
     }
     Ok(report)
@@ -578,6 +570,15 @@ async fn run_sync_activity(
             return Ok(result);
         };
         let state = app.state::<AppState>();
+        if let Err(error) = state.cloud_sync.account().require_sync_access() {
+            return Err(fail_sync_activity(
+                app,
+                &activity,
+                &mut batch,
+                &target,
+                cloud_error(error),
+            ));
+        }
         let enabled = match enabled_notebooks_for_target(state.inner(), &target) {
             Ok(enabled) => enabled,
             Err(error) => {
@@ -618,7 +619,7 @@ async fn run_sync_activity(
                     Err("CLOUD_BOOTSTRAP_PAGE_LIMIT: bootstrap exceeded page limit".to_string())
                 } else {
                     async {
-                        let next = tokio::time::timeout(
+                        let mut next = tokio::time::timeout(
                             CLOUD_SYNC_PASS_TIMEOUT,
                             state
                                 .cloud_sync
@@ -631,10 +632,14 @@ async fn run_sync_activity(
                         .map_err(cloud_error)?;
                         state
                             .cloud_sync
-                            .complete_v2_sync_with_apply(&next, target.notebook_scope(), || {
-                                apply_v2_report(state.inner(), app, &next)
-                                    .map_err(SyncError::InvalidState)
-                            })
+                            .complete_v2_sync_with_prepare(
+                                &mut next,
+                                target.notebook_scope(),
+                                |report| {
+                                    apply_v2_report_preserving_local(state.inner(), app, report)
+                                        .map_err(SyncError::InvalidState)
+                                },
+                            )
                             .map_err(sync_error)?;
                         Ok::<_, String>(next)
                     }
@@ -795,18 +800,12 @@ pub(crate) fn start_cloud_sync_polling(app: AppHandle) {
             tokio::time::sleep(CLOUD_POLL_INTERVAL).await;
             let should_poll = {
                 let state = app.state::<AppState>();
-                let cloud_state = state.cloud_sync.state().ok();
-                matches!(
-                    cloud_state,
-                    Some(CloudState {
-                        authenticated: true,
-                        ..
-                    })
-                ) && !state
-                    .cloud_sync
-                    .v2_enabled_notebooks()
-                    .unwrap_or_default()
-                    .is_empty()
+                state.cloud_sync.account().sync_access().can_read
+                    && !state
+                        .cloud_sync
+                        .v2_enabled_notebooks()
+                        .unwrap_or_default()
+                        .is_empty()
             };
             if should_poll {
                 if let Err(error) = send_sync_request(&app, SyncCoordinatorRequest::Poll) {
@@ -821,6 +820,12 @@ pub(super) async fn sync_now(
     notebook_id: Option<String>,
     app: AppHandle,
 ) -> Result<CloudSyncResult, String> {
+    let state = app.state::<AppState>();
+    state
+        .cloud_sync
+        .account()
+        .require_sync_access()
+        .map_err(cloud_error)?;
     let target = match notebook_id {
         Some(notebook_id) => SyncTarget::Notebook(notebook_id),
         None => SyncTarget::FullAccount,

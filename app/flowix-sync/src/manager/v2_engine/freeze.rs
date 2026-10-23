@@ -8,6 +8,7 @@ impl SyncManager {
         notes: &[V2LocalNote],
         notebook_scope: Option<&str>,
         generation: u64,
+        access: crate::account::CloudSyncAccess,
     ) -> Result<(), SyncError> {
         let notebooks_by_id: HashMap<&str, &V2LocalNotebook> = notebooks
             .iter()
@@ -16,7 +17,13 @@ impl SyncManager {
         let notes_by_id: HashMap<&str, &V2LocalNote> =
             notes.iter().map(|item| (item.id.as_str(), item)).collect();
         for dirty in self.store.v2_dirty_entities()? {
-            drop(self.require_auth_generation(generation)?);
+            if !match dirty.operation_kind {
+                V2OperationKind::Put => access.can_upload,
+                V2OperationKind::Delete => access.can_delete,
+            } {
+                continue;
+            }
+            drop(self.account.require_auth_generation(generation)?);
             if let Some(scope) = notebook_scope {
                 let belongs_to_scope = match dirty.entity_type {
                     V2EntityType::Notebook => dirty.entity_id == scope,
@@ -96,7 +103,7 @@ impl SyncManager {
                             },
                         )
                         .await?;
-                    drop(self.require_auth_generation(generation)?);
+                    drop(self.account.require_auth_generation(generation)?);
                     self.client
                         .v2_upload_blob(
                             access_token,
@@ -110,7 +117,7 @@ impl SyncManager {
                         )
                         .await?;
                     for attachment in &note.attachments {
-                        drop(self.require_auth_generation(generation)?);
+                        drop(self.account.require_auth_generation(generation)?);
                         let reservation = self
                             .client
                             .v2_reserve_blob(
@@ -121,7 +128,7 @@ impl SyncManager {
                                 &attachment.metadata.mime_type,
                             )
                             .await?;
-                        drop(self.require_auth_generation(generation)?);
+                        drop(self.account.require_auth_generation(generation)?);
                         self.client
                             .v2_upload_blob(
                                 access_token,
@@ -164,7 +171,7 @@ impl SyncManager {
             let payload = serde_json::to_string(&operation).map_err(|error| {
                 SyncError::InvalidState(format!("serialize v2 operation: {error}"))
             })?;
-            let _generation = self.require_auth_generation(generation)?;
+            let _generation = self.account.require_auth_generation(generation)?;
             match self.store.freeze_v2_operation(V2FreezeOperation {
                 operation_id: &operation_id,
                 entity_type: dirty.entity_type,

@@ -34,7 +34,13 @@ export function useCloudAccountState() {
       if (!active) return;
       receivedState = true;
       const newer = applyState(next);
-      if (newer && next.membership) setMembershipError(null);
+      if (newer) {
+        if (next.membershipStatus === 'error') {
+          setMembershipError(next.membershipError ?? null);
+        } else if (next.membershipStatus === 'verified' || next.membershipStatus === 'refreshing') {
+          setMembershipError(null);
+        }
+      }
     };
     const refreshSnapshot = () => {
       if (!active) return;
@@ -103,7 +109,7 @@ export function useCloudAccountState() {
     state,
     loadError,
     membershipLoading,
-    membershipError,
+    membershipError: membershipError ?? state?.membershipError ?? null,
     refreshMembership,
     applyState,
     loading: (!state && !loadError) || state?.authStatus === 'restoring',

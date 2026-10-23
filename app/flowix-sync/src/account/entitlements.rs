@@ -1,0 +1,95 @@
+use super::*;
+
+impl AccountService {
+    pub async fn refresh_membership(&self) -> Result<CloudMembership, SyncError> {
+        let generation = self.auth_generation();
+        let mut refresh = match self.membership_refresh.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                let guard = self.membership_refresh.lock().await;
+                // Share a successful in-flight refresh only within its session.
+                let _generation = self.require_auth_generation(generation)?;
+                if *guard == Some(generation) {
+                    if let Some(membership) = self
+                        .account_entitlement
+                        .read()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .membership
+                        .clone()
+                    {
+                        return Ok(membership);
+                    }
+                }
+                guard
+            }
+        };
+        // Failure or cancellation must not let waiters reuse an older cache.
+        *refresh = None;
+        {
+            let _generation = self.require_auth_generation(generation)?;
+            let mut auth = self.auth.write().unwrap_or_else(|p| p.into_inner());
+            let mut entitlement = self
+                .account_entitlement
+                .write()
+                .unwrap_or_else(|p| p.into_inner());
+            entitlement.status = CloudEntitlementStatus::Refreshing;
+            entitlement.error = None;
+            auth.revision = auth.revision.saturating_add(1);
+            drop(entitlement);
+            drop(auth);
+            drop(_generation);
+            self.notify_state_change();
+        }
+        let entitlement_result = async {
+            let token = self.access_token(generation).await?;
+            let first = self.client.entitlements(&token).await;
+            if first.as_ref().is_err_and(SyncError::is_unauthorized) {
+                let refreshed = self.force_refresh_access_token(generation).await?;
+                self.client.entitlements(&refreshed).await
+            } else {
+                first
+            }
+        }
+        .await;
+        let entitlement = match entitlement_result {
+            Ok(entitlement) => entitlement,
+            Err(error) => {
+                // An unsuccessful verification invalidates access in every
+                // window. A later retry must not reuse the previous grant.
+                let _generation = self.require_auth_generation(generation)?;
+                let mut auth = self.auth.write().unwrap_or_else(|p| p.into_inner());
+                let mut account_entitlement = self
+                    .account_entitlement
+                    .write()
+                    .unwrap_or_else(|p| p.into_inner());
+                account_entitlement.membership = None;
+                account_entitlement.status = CloudEntitlementStatus::Error;
+                account_entitlement.error = Some(error.to_string());
+                auth.revision = auth.revision.saturating_add(1);
+                drop(account_entitlement);
+                drop(auth);
+                drop(_generation);
+                self.notify_state_change();
+                return Err(error);
+            }
+        };
+        let membership: CloudMembership = entitlement.into();
+        let _generation = self.require_auth_generation(generation)?;
+        let mut auth = self.auth.write().unwrap_or_else(|p| p.into_inner());
+        let mut account_entitlement = self
+            .account_entitlement
+            .write()
+            .unwrap_or_else(|p| p.into_inner());
+        account_entitlement.membership = Some(membership.clone());
+        account_entitlement.status = CloudEntitlementStatus::Verified;
+        account_entitlement.error = None;
+        auth.revision = auth.revision.saturating_add(1);
+        drop(account_entitlement);
+        drop(auth);
+        drop(_generation);
+        *refresh = Some(generation);
+        drop(refresh);
+        self.notify_state_change();
+        Ok(membership)
+    }
+}

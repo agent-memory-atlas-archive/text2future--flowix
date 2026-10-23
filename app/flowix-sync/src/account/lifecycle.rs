@@ -18,15 +18,31 @@ impl Default for SessionPolicy {
     }
 }
 
-impl SyncManager {
+impl AccountService {
     /// Run once for the lifetime of the desktop process. Dropping this future
     /// stops background recovery and credential retries.
     pub async fn run_session_service(&self) {
         let policy = SessionPolicy::default();
         tokio::join!(
             self.restore_saved_session(policy),
-            self.retry_credentials(policy)
+            self.retry_credentials(policy),
+            self.refresh_entitlements_periodically(),
         );
+    }
+
+    async fn refresh_entitlements_periodically(&self) {
+        let interval = Duration::from_secs(60);
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(interval) => {},
+                _ = self.entitlement_retry.notified() => {},
+            }
+            if self.state().is_ok_and(|state| state.authenticated) {
+                if let Err(error) = self.refresh_membership().await {
+                    tracing::debug!(%error, "periodic cloud entitlement refresh failed");
+                }
+            }
+        }
     }
 
     async fn restore_saved_session(&self, policy: SessionPolicy) {

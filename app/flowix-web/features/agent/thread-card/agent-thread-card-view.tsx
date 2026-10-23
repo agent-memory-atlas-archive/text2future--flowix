@@ -8,6 +8,7 @@ import type {
 import {
   type ThreadState,
 } from "@features/agent/store/thread-runtime-state";
+import type { AgentConversationInstance } from "@features/agent/store/agent-conversation-types";
 import { useAgentSessionStore } from "@features/agent/store/agent-session-store";
 import { canActOnQueuedMessage } from "@features/agent/store/follow-up-queue-slice";
 import { acquireThreadInterest } from "@features/agent/store/thread-interest";
@@ -29,6 +30,7 @@ import { buildInitialInstanceRuntimeConfig } from "@features/agent/store/initial
 import {
   stopExternalAgentThreadCardRun,
 } from "@features/agent/services/external-agent-runtime-service";
+import { createFreshExternalAgentThreadId } from "@features/agent/services/external-agent-runtime-adapters";
 import {
   ensureAgentThreadCardConversation,
 } from "@features/agent/thread-card/agent-thread-card-submit-controller";
@@ -212,6 +214,10 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
   private readonly submission = new ComposerSubmissionController();
   private interestedThreadId: string | null = null;
   private hydratingInstanceId: string | null = null;
+  private instanceBindingPromise: {
+    instanceId: string;
+    promise: Promise<AgentConversationInstance | null>;
+  } | null = null;
   private releaseThreadInterest: (() => void) | null = null;
   private isFullscreen = false;
   private isMessageScrollActive = false;
@@ -797,12 +803,11 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
     try {
       // Legacy cards may not have been bound to an instance yet. Bind before
       // opening so the Browser Column receives this card's conversation ID.
-      this.ensureInstanceBinding();
-      const instanceId = this.instanceId;
-      if (!instanceId) return;
+      const instance = await this.ensureInstanceBinding();
+      if (!instance || this.isDestroyed) return;
       await openWorkspaceSurface({
         host: "browser-column",
-        target: { kind: "agent-conversation", instanceId },
+        target: { kind: "agent-conversation", instanceId: instance.instanceId },
       });
     } catch (error) {
       logger.error("Failed to open conversation in browser column", { error });
@@ -811,11 +816,10 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
   }
 
   private get threadId(): string | null {
-    return (
-      this.instance?.threadId ||
-      (this.node.attrs.threadId as string | null) ||
-      null
-    );
+    const instance = this.instance;
+    return instance
+      ? instance.threadId
+      : (this.node.attrs.threadId as string | null) || null;
   }
 
   private syncThreadInterest(): void {
@@ -842,7 +846,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
     // currentThreadState -> renderThreadId ── 那条路径下 `this.runtime` 还是
     // undefined,安全地回退到 `node.attrs.threadId`,后续 runtime 初始化完会再
     // 被 1s 定时器 / hover 触发时用真实 id 刷一次。
-    return this.runtime?.renderThreadId ?? this.node.attrs.threadId ?? null;
+    return this.runtime?.renderThreadId ?? this.threadId;
   }
 
   private get title(): string {
@@ -903,47 +907,76 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
     return agentFileScopePathForRuntime(filePath, this.instance?.runtimeConfig);
   }
 
-  private ensureInstanceBinding(): void {
-    if (this.isDestroyed) return;
+  private syncInstanceBindingAttrs(instance: AgentConversationInstance): void {
+    const attrs: Record<string, unknown> = {};
+    const threadChanged = this.node.attrs.threadId !== instance.threadId;
+    if (threadChanged) attrs.threadId = instance.threadId;
+    const typeKey = normalizeAgentTypeKey(instance.agentType);
+    if (this.node.attrs.typeKey !== typeKey) attrs.typeKey = typeKey;
+    // A blank instance title is meaningful after recovery: clear the stale
+    // Markdown title only when the bound conversation itself has changed.
+    if (threadChanged && !instance.title && this.node.attrs.title) attrs.title = "";
+    if (Object.keys(attrs).length > 0) this.updateAttrs(attrs);
+  }
+
+  private ensureInstanceBinding(): Promise<AgentConversationInstance | null> {
+    if (this.isDestroyed) return Promise.resolve(null);
     const existingInstanceId = this.instanceId;
     if (existingInstanceId) {
       const boundInstance = this.instance;
       if (boundInstance) {
-        const attrs: Record<string, unknown> = {};
-        if (this.node.attrs.threadId !== boundInstance.threadId) {
-          attrs.threadId = boundInstance.threadId;
-        }
-        const typeKey = normalizeAgentTypeKey(boundInstance.agentType);
-        if (this.node.attrs.typeKey !== typeKey) {
-          attrs.typeKey = typeKey;
-        }
-        if (Object.keys(attrs).length > 0) this.updateAttrs(attrs);
+        this.syncInstanceBindingAttrs(boundInstance);
+        return Promise.resolve(boundInstance);
       } else if (this.hydratingInstanceId !== existingInstanceId) {
         this.hydratingInstanceId = existingInstanceId;
-        void useAgentSessionStore.getState().hydrateInstance(existingInstanceId).then(
-          (instance) => {
-            if (this.isDestroyed || this.instanceId !== existingInstanceId) return;
-            if (instance) {
-              const attrs: Record<string, unknown> = {};
-              if (this.node.attrs.threadId !== instance.threadId) {
-                attrs.threadId = instance.threadId;
-              }
-              const typeKey = normalizeAgentTypeKey(instance.agentType);
-              if (this.node.attrs.typeKey !== typeKey) {
-                attrs.typeKey = typeKey;
-              }
-              if (Object.keys(attrs).length > 0) this.updateAttrs(attrs);
-              this.refreshAttrs();
-            }
-          },
-        ).catch((error) => {
+        const typeKey = this.typeKey;
+        const threadId = createFreshExternalAgentThreadId(typeKey, existingInstanceId);
+        const promise = (async (): Promise<AgentConversationInstance | null> => {
+          const restored = await useAgentSessionStore.getState().hydrateInstance(existingInstanceId);
+          if (this.isDestroyed || this.instanceId !== existingInstanceId) return null;
+          if (restored) {
+            this.syncInstanceBindingAttrs(restored);
+            this.refreshAttrs();
+            return restored;
+          }
+
+          // The card points at an instance that no longer exists. Give it a
+          // new persisted identity and an empty local thread so opening the
+          // surface cannot resurrect the stale provider session.
+          const store = useAgentSessionStore.getState();
+          const replacement = store.upsertInstance(existingInstanceId, {
+            agentType: typeKey,
+            title: "",
+            threadId,
+            source: getCurrentThreadCardSource(),
+            runtimeConfig: buildInitialInstanceRuntimeConfig(typeKey),
+          });
+          await store.persistInstanceAndWait(existingInstanceId);
+          if (this.isDestroyed || this.instanceId !== existingInstanceId) return null;
+          this.updateAttrs({
+            threadId: replacement.threadId,
+            typeKey: replacement.agentType,
+            title: "",
+          });
+          this.refreshAttrs();
+          return replacement;
+        })().catch((error) => {
+          logger.error("Failed to hydrate conversation instance", { error });
+          return null;
+        }).finally(() => {
           if (this.hydratingInstanceId === existingInstanceId) {
             this.hydratingInstanceId = null;
           }
-          logger.error("Failed to hydrate conversation instance", { error });
+          if (this.instanceBindingPromise?.instanceId === existingInstanceId) {
+            this.instanceBindingPromise = null;
+          }
         });
+        this.instanceBindingPromise = { instanceId: existingInstanceId, promise };
+        return promise;
       }
-      return;
+      return this.instanceBindingPromise?.instanceId === existingInstanceId
+        ? this.instanceBindingPromise.promise
+        : Promise.resolve(null);
     }
     // Phase 5.3 修正 (2026-08-03): 改走 conv-store.createInstance, 让
     // setWithInstanceMirror 同时写两个 store. 旧路径走 session-store
@@ -972,6 +1005,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       threadId: existingThreadId,
       typeKey: instance.agentType,
     });
+    return Promise.resolve(instance);
   }
 
   private get collapsed(): boolean {
@@ -1136,6 +1170,8 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
   }
 
   private refreshAttrs(): void {
+    const instance = this.instance;
+    if (instance) this.syncInstanceBindingAttrs(instance);
     this.dom.dataset.threadId = this.threadId ?? "";
     this.dom.dataset.title = this.title;
     this.dom.dataset.instanceId = this.instanceId ?? "";

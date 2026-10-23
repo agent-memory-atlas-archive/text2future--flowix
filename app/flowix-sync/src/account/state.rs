@@ -1,6 +1,6 @@
 use super::*;
 
-impl SyncManager {
+impl AccountService {
     /// Creates an in-memory session without persistent credentials or notifications.
     pub fn new(api_base: &str, database_path: impl AsRef<Path>) -> Result<Self, SyncError> {
         Self::create(api_base, database_path, None, Arc::new(|_| {}))
@@ -48,13 +48,13 @@ impl SyncManager {
             client: CloudClient::new(api_base)?,
             store: sync_store,
             auth: Arc::new(RwLock::new(AuthState::default())),
-            membership: Arc::new(RwLock::new(None)),
+            account_entitlement: Arc::new(RwLock::new(AccountEntitlementState::default())),
             membership_refresh: Arc::new(tokio::sync::Mutex::new(None)),
             refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
             auth_generation: Arc::new(std::sync::Mutex::new(0)),
-            account_sync_lock: Arc::new(tokio::sync::Mutex::new(())),
             refresh_token_store: token_store,
             credential_retry,
+            entitlement_retry: Arc::new(tokio::sync::Notify::new()),
             state_notifier,
         };
         manager.initialize_storage()?;
@@ -75,13 +75,13 @@ impl SyncManager {
             client: CloudClient::new(api_base)?,
             store: SyncStore::new_uninitialized(database_path),
             auth: Arc::new(RwLock::new(auth)),
-            membership: Arc::new(RwLock::new(None)),
+            account_entitlement: Arc::new(RwLock::new(AccountEntitlementState::default())),
             membership_refresh: Arc::new(tokio::sync::Mutex::new(None)),
             refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
             auth_generation: Arc::new(std::sync::Mutex::new(0)),
-            account_sync_lock: Arc::new(tokio::sync::Mutex::new(())),
             refresh_token_store: token_store,
             credential_retry: Arc::new(tokio::sync::Notify::new()),
+            entitlement_retry: Arc::new(tokio::sync::Notify::new()),
             state_notifier,
         })
     }
@@ -134,12 +134,16 @@ impl SyncManager {
         Ok(())
     }
 
-    pub fn store(&self) -> &SyncStore {
+    pub(crate) fn store(&self) -> &SyncStore {
         &self.store
     }
 
     pub fn state(&self) -> Result<CloudState, SyncError> {
         let auth = self.auth.read().unwrap_or_else(|p| p.into_inner());
+        let entitlement = self
+            .account_entitlement
+            .read()
+            .unwrap_or_else(|p| p.into_inner());
         Ok(CloudState {
             revision: auth.revision,
             authenticated: auth.session.is_some(),
@@ -150,11 +154,45 @@ impl SyncManager {
             },
             auth_error: auth.error.clone().or_else(|| auth.credential_error.clone()),
             account: self.store.v2_account()?,
-            membership: self
-                .membership
-                .read()
-                .unwrap_or_else(|p| p.into_inner())
-                .clone(),
+            membership: entitlement.membership.clone(),
+            membership_status: entitlement.status,
+            membership_error: entitlement.error.clone(),
+            sync_access: CloudSyncAccess::resolve(
+                auth.session.is_some(),
+                entitlement.status,
+                entitlement.membership.as_ref(),
+                chrono::Utc::now().timestamp_millis(),
+            ),
+        })
+    }
+
+    pub fn sync_access(&self) -> CloudSyncAccess {
+        let auth = self.auth.read().unwrap_or_else(|p| p.into_inner());
+        let entitlement = self
+            .account_entitlement
+            .read()
+            .unwrap_or_else(|p| p.into_inner());
+        CloudSyncAccess::resolve(
+            auth.session.is_some(),
+            entitlement.status,
+            entitlement.membership.as_ref(),
+            chrono::Utc::now().timestamp_millis(),
+        )
+    }
+
+    pub fn require_sync_access(&self) -> Result<CloudSyncAccess, SyncError> {
+        let access = self.sync_access();
+        if access.can_read {
+            return Ok(access);
+        }
+        if access.restriction == Some(CloudSyncRestriction::SignedOut) {
+            return Err(SyncError::NotAuthenticated);
+        }
+        Err(SyncError::Api {
+            status: 403,
+            code: "MEMBERSHIP_REQUIRED".into(),
+            message: "An active membership with cloud sync access is required".into(),
+            details: Some(serde_json::json!({ "restriction": access.restriction })),
         })
     }
 }
@@ -162,6 +200,7 @@ impl SyncManager {
 #[cfg(test)]
 mod deferred_startup_tests {
     use super::*;
+    use crate::SyncManager;
     use std::sync::{mpsc, Mutex};
     use std::time::Duration;
 

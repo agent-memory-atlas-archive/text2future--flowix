@@ -98,7 +98,7 @@ fn emit_cloud_state(app: &AppHandle, state: &CloudState) {
 
 #[tauri::command]
 pub fn cloud_get_state(state: State<AppState>) -> Result<CloudState, String> {
-    state.cloud_sync.state().map_err(sync_error)
+    state.cloud_sync.account().state().map_err(sync_error)
 }
 
 #[tauri::command]
@@ -109,11 +109,11 @@ pub async fn cloud_register(
     state: State<'_, AppState>,
 ) -> Result<CloudState, String> {
     state
-        .cloud_sync
+        .cloud_sync.account()
         .register(email.trim(), &password, display_name.trim())
         .await
         .map_err(sync_error)?;
-    let next_state = state.cloud_sync.state().map_err(sync_error)?;
+    let next_state = state.cloud_sync.account().state().map_err(sync_error)?;
     Ok(next_state)
 }
 
@@ -124,11 +124,11 @@ pub async fn cloud_login(
     state: State<'_, AppState>,
 ) -> Result<CloudState, String> {
     state
-        .cloud_sync
+        .cloud_sync.account()
         .login(email.trim(), &password)
         .await
         .map_err(sync_error)?;
-    let next_state = state.cloud_sync.state().map_err(sync_error)?;
+    let next_state = state.cloud_sync.account().state().map_err(sync_error)?;
     Ok(next_state)
 }
 
@@ -138,17 +138,17 @@ pub async fn cloud_sign_in_with_apple(
     state: State<'_, AppState>,
 ) -> Result<CloudState, String> {
     let challenge = state
-        .cloud_sync
+        .cloud_sync.account()
         .apple_challenge()
         .await
         .map_err(sync_error)?;
     let authorization = crate::apple_sign_in::authorize(window, challenge).await?;
     state
-        .cloud_sync
+        .cloud_sync.account()
         .sign_in_with_apple(&authorization)
         .await
         .map_err(sync_error)?;
-    let next_state = state.cloud_sync.state().map_err(sync_error)?;
+    let next_state = state.cloud_sync.account().state().map_err(sync_error)?;
     Ok(next_state)
 }
 
@@ -161,7 +161,7 @@ pub async fn cloud_start_google_sign_in(app: AppHandle) -> Result<(), String> {
     use sha2::{Digest, Sha256};
 
     let app_state = app.state::<AppState>();
-    let generation = app_state.cloud_sync.begin_google_sign_in();
+    let generation = app_state.cloud_sync.account().begin_google_sign_in();
     let cloud_api_base = app_state.cloud_environment.api_base();
     let state = format!(
         "{}{}",
@@ -218,7 +218,7 @@ pub(crate) async fn complete_google_deep_link(
             };
             let app_state = app.state::<AppState>();
             app_state
-                .cloud_sync
+                .cloud_sync.account()
                 .sign_in_with_google_desktop(&code, &oauth_state, &code_verifier, generation)
                 .await
                 .map_err(sync_error)?;
@@ -260,13 +260,13 @@ pub async fn cloud_link_apple(
     state: State<'_, AppState>,
 ) -> Result<CloudState, String> {
     let challenge = state
-        .cloud_sync
+        .cloud_sync.account()
         .apple_challenge()
         .await
         .map_err(sync_error)?;
     let authorization = crate::apple_sign_in::authorize(window, challenge).await?;
     let next_state = state
-        .cloud_sync
+        .cloud_sync.account()
         .link_apple(&authorization)
         .await
         .map_err(sync_error)?;
@@ -280,9 +280,9 @@ pub async fn cloud_logout(
 ) -> Result<CloudState, String> {
     let pi = state.pi.clone();
     let api_base = state.cloud_environment.api_base().to_string();
-    let pending_logout = state.cloud_sync.begin_logout();
-    let logout_generation = state.cloud_sync.ai_credential_session_generation();
-    let next_state = state.cloud_sync.state().map_err(sync_error);
+    let pending_logout = state.cloud_sync.account().begin_logout();
+    let logout_generation = state.cloud_sync.account().ai_credential_session_generation();
+    let next_state = state.cloud_sync.account().state().map_err(sync_error);
     let pi_cleanup = async {
         match &next_state {
             Ok(next_state) if !next_state.authenticated => {
@@ -292,7 +292,7 @@ pub async fn cloud_logout(
             _ => Ok(()),
         }
     };
-    let logout = state.cloud_sync.finish_logout(pending_logout);
+    let logout = state.cloud_sync.account().finish_logout(pending_logout);
     let (pi_cleanup, logout_result) = tokio::join!(pi_cleanup, logout);
     let next_state = next_state?;
     pi_cleanup?;
@@ -341,6 +341,7 @@ pub async fn cloud_link_notebook(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<V2SyncedNotebook, String> {
+    state.cloud_sync.account().require_sync_access().map_err(cloud_error)?;
     if notebook_id != cloud_notebook_id {
         return Err("CLOUD_NOTEBOOK_ID_MISMATCH".to_string());
     }
@@ -357,7 +358,7 @@ pub async fn cloud_link_notebook(
         true,
     );
     let link = link_result.map_err(cloud_error)?;
-    if let Ok(next_state) = state.cloud_sync.state() {
+    if let Ok(next_state) = state.cloud_sync.account().state() {
         emit_cloud_state(&app, &next_state);
     }
     Ok(link)
@@ -370,6 +371,7 @@ pub async fn cloud_set_notebook_enabled(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<V2SyncedNotebook, String> {
+    if enabled { state.cloud_sync.account().require_sync_access().map_err(cloud_error)?; }
     let config = read_lock(&state.memo_file, "memo_file")
         .get_notebook_config_by_id(&notebook_id)
         .ok_or_else(|| "NOTEBOOK_NOT_FOUND".to_string())?;
@@ -383,7 +385,7 @@ pub async fn cloud_set_notebook_enabled(
         enabled,
     );
     let link = link_result.map_err(cloud_error)?;
-    if let Ok(next_state) = state.cloud_sync.state() {
+    if let Ok(next_state) = state.cloud_sync.account().state() {
         emit_cloud_state(&app, &next_state);
     }
     Ok(link)
@@ -393,7 +395,7 @@ pub async fn cloud_set_notebook_enabled(
 pub async fn cloud_refresh_membership(
     state: State<'_, AppState>,
 ) -> Result<CloudMembership, String> {
-    let membership_result = state.cloud_sync.refresh_membership().await;
+    let membership_result = state.cloud_sync.account().refresh_membership().await;
     membership_result.map_err(sync_error)
 }
 
@@ -402,7 +404,7 @@ pub async fn cloud_ai_credit_balance(
     state: State<'_, AppState>,
 ) -> Result<CloudAiCreditBalance, String> {
     state
-        .cloud_sync
+        .cloud_sync.account()
         .ai_credit_balance()
         .await
         .map_err(sync_error)
@@ -413,7 +415,7 @@ pub async fn cloud_pi_model_availability(
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
     state
-        .cloud_sync
+        .cloud_sync.account()
         .ai_model_availability()
         .await
         .map(|availability| availability.enabled)
@@ -452,14 +454,14 @@ pub async fn cloud_refresh_pi_model_provider(
 
 #[tauri::command]
 pub async fn cloud_list_products(state: State<'_, AppState>) -> Result<Vec<CloudProduct>, String> {
-    state.cloud_sync.products().await.map_err(sync_error)
+    state.cloud_sync.account().products().await.map_err(sync_error)
 }
 
 #[tauri::command]
 pub async fn cloud_list_billing_orders(
     state: State<'_, AppState>,
 ) -> Result<Vec<CloudOrder>, String> {
-    state.cloud_sync.billing_orders().await.map_err(sync_error)
+    state.cloud_sync.account().billing_orders().await.map_err(sync_error)
 }
 
 #[tauri::command]
@@ -468,7 +470,7 @@ pub async fn cloud_check_billing_order(
     state: State<'_, AppState>,
 ) -> Result<CloudOrderCheck, String> {
     state
-        .cloud_sync
+        .cloud_sync.account()
         .check_billing_order(&order_id)
         .await
         .map_err(sync_error)
@@ -478,7 +480,7 @@ pub async fn cloud_check_billing_order(
 pub async fn cloud_list_subscriptions(
     state: State<'_, AppState>,
 ) -> Result<Vec<CloudSubscription>, String> {
-    state.cloud_sync.subscriptions().await.map_err(sync_error)
+    state.cloud_sync.account().subscriptions().await.map_err(sync_error)
 }
 
 #[tauri::command]
@@ -487,7 +489,7 @@ pub async fn cloud_cancel_subscription(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     state
-        .cloud_sync
+        .cloud_sync.account()
         .cancel_subscription(&subscription_id)
         .await
         .map_err(sync_error)
@@ -500,7 +502,7 @@ pub async fn cloud_create_checkout(
 ) -> Result<CloudCheckout, String> {
     let idempotency_key = format!("desktop-{}", uuid::Uuid::new_v4());
     let checkout_result = state
-        .cloud_sync
+        .cloud_sync.account()
         .create_checkout(&product_id, &idempotency_key)
         .await;
     checkout_result.map_err(sync_error)
@@ -517,7 +519,7 @@ pub async fn cloud_submit_feedback(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     state
-        .cloud_sync
+        .cloud_sync.account()
         .submit_feedback(
             &device_id,
             &kind,

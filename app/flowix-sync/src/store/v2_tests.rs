@@ -454,3 +454,149 @@ fn clearing_account_removes_user_scoped_sync_state() {
     assert_eq!(store.v2_cursor().unwrap(), 0);
     assert!(store.v2_notebooks(false).unwrap().is_empty());
 }
+
+#[test]
+fn deferred_read_only_changes_survive_reopen_without_advancing_their_baseline() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("sync.db");
+    let store = SyncStore::new(&path).unwrap();
+    store.set_v2_notebook("nb_deferred", true).unwrap();
+    store
+        .commit_v2_sync_report(
+            &[V2RemoteApply::Notebook {
+                notebook_id: "nb_deferred".into(),
+                name: Some("Original".into()),
+                icon: None,
+                sort_order: Some(0),
+                revision: "rev_1".into(),
+                sync_seq: 1,
+                deleted: false,
+            }],
+            1,
+            &["nb_deferred".into()],
+            1,
+        )
+        .unwrap();
+    store
+        .mark_v2_dirty(
+            V2EntityType::Notebook,
+            "nb_deferred",
+            Some("nb_deferred"),
+            V2OperationKind::Put,
+            "local-rename",
+            2,
+        )
+        .unwrap();
+    let report = crate::v2::V2AccountSyncReport {
+        cursor: 8,
+        read_only: true,
+        bootstrapped_notebooks: vec!["nb_deferred".into()],
+        deferred_notebooks: vec!["nb_deferred".into()],
+        ..Default::default()
+    };
+    store
+        .commit_v2_prepared_report(&report, Some("nb_deferred"), 3)
+        .unwrap();
+    drop(store);
+    let reopened = SyncStore::new(&path).unwrap();
+    assert_eq!(reopened.v2_notebook_cursor("nb_deferred").unwrap(), 8);
+    assert!(reopened.v2_notebooks(true).unwrap()[0].bootstrap_required);
+    assert_eq!(
+        reopened
+            .v2_notebook_state("nb_deferred")
+            .unwrap()
+            .unwrap()
+            .revision,
+        "rev_1"
+    );
+    assert_eq!(
+        reopened.v2_dirty_entities().unwrap()[0].fingerprint,
+        "local-rename"
+    );
+    // A later successful bootstrap clears the durable retry marker.
+    reopened
+        .commit_v2_notebook_sync_report("nb_deferred", &[], 9, &["nb_deferred".into()], 4)
+        .unwrap();
+    assert!(!reopened.v2_notebooks(true).unwrap()[0].bootstrap_required);
+}
+
+#[test]
+fn acknowledged_delete_retires_older_uploads_but_preserves_newer_edits() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = SyncStore::new(temp.path().join("sync.db")).unwrap();
+    store
+        .commit_v2_sync_report(
+            &[V2RemoteApply::Note {
+                note_id: "note".into(),
+                notebook_id: "nb".into(),
+                filename: "note.md".into(),
+                content_hash: Some("original".into()),
+                content: None,
+                revision: "rev_1".into(),
+                sync_seq: 1,
+                deleted: false,
+                attachments: Vec::new(),
+            }],
+            1,
+            &[],
+            1,
+        )
+        .unwrap();
+    let mut generations = Vec::new();
+    for (operation_id, kind, fingerprint) in [
+        ("old_upload", V2OperationKind::Put, "old-edit"),
+        ("delete", V2OperationKind::Delete, "deleted"),
+        ("new_upload", V2OperationKind::Put, "new-edit"),
+    ] {
+        let dirty = store
+            .mark_v2_dirty(V2EntityType::Note, "note", Some("nb"), kind, fingerprint, 2)
+            .unwrap();
+        generations.push(dirty.generation);
+        store
+            .freeze_v2_operation(V2FreezeOperation {
+                operation_id,
+                entity_type: V2EntityType::Note,
+                entity_id: "note",
+                generation: dirty.generation,
+                operation_kind: kind,
+                base_revision: Some("rev_1"),
+                payload_json: "{}",
+            })
+            .unwrap();
+    }
+    let operation = V2PushOperation::NoteDelete {
+        operation_id: "delete".into(),
+        base_revision: Some("rev_1".into()),
+        note_id: "note".into(),
+    };
+    let data = V2OperationData {
+        entity_type: "note".into(),
+        entity_id: "note".into(),
+        revision: "rev_2".into(),
+        sync_seq: 2,
+        deleted: true,
+        resolution: "fast_forward".into(),
+        base_revision: Some("rev_1".into()),
+        replaced_revision: Some("rev_1".into()),
+        content_hash: None,
+        source_revision: None,
+        source_sync_seq: None,
+    };
+    store
+        .acknowledge_v2_operation(
+            "delete",
+            V2EntityType::Note,
+            "note",
+            generations[1],
+            &operation,
+            &data,
+        )
+        .unwrap();
+    let remaining = store.v2_inflight_due(0).unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].operation_id, "new_upload");
+    assert_eq!(
+        store.v2_dirty_entities().unwrap()[0].generation,
+        generations[2]
+    );
+}

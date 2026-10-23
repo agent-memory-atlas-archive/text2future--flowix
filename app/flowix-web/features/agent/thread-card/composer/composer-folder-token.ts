@@ -28,6 +28,25 @@ function escapeMarkdownLinkText(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
 }
 
+function encodePathSegments(value: string): string {
+  return value.split("/").map((segment) => encodeURIComponent(segment)).join("/");
+}
+
+/** Convert a repository path into a Markdown-safe absolute file URL. */
+function toAbsoluteFileUrl(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  if (normalized.startsWith("//")) {
+    const [host = "", ...segments] = normalized.slice(2).split("/");
+    return `file://${encodeURIComponent(host)}/${encodePathSegments(segments.join("/"))}`;
+  }
+  const windowsDrive = /^([a-z]):\/(.*)$/i.exec(normalized);
+  if (windowsDrive) {
+    return `file:///${windowsDrive[1].toUpperCase()}:/${encodePathSegments(windowsDrive[2])}`;
+  }
+  const absolutePath = normalized.startsWith("/") ? normalized : `/${normalized}`;
+  return `file://${encodePathSegments(absolutePath)}`;
+}
+
 function folderDisplayName(path: string, displayName?: string | null): string {
   const explicit = displayName?.trim();
   if (explicit) return explicit;
@@ -170,14 +189,14 @@ export function insertComposerFolderToken(
     .run();
 }
 
-/** Convert persisted folder cards to the compact mention syntax sent to the agent. */
+/** Convert persisted folder cards to absolute-path Markdown links for the agent. */
 export function composerFolderMarkdownToPrompt(markdown: string): string {
   return markdown.replace(
     FOLDER_TOKEN_GLOBAL_RE,
     (_match, displayName: string, encodedPath: string) => {
       const path = safeDecode(encodedPath);
       const label = folderDisplayName(path, displayName.replace(/^@/, ""));
-      return `@${label}`;
+      return `[${escapeMarkdownLinkText(`@${label}`)}](${toAbsoluteFileUrl(path)})`;
     },
   );
 }

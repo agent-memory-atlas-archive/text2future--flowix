@@ -108,13 +108,6 @@ export function PiCloudModelsSection({ authenticated }: { authenticated: boolean
     <div className="space-y-3">
       <div className="text-sm font-medium text-[var(--foreground)]">{t('preferences.pi.cloudTitle')}</div>
       <section className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--card)] p-4">
-        {!provider && <div className="flex justify-end">
-          <Button type="button" variant="outline" className="h-8" disabled={!authenticated || loading || busy} onClick={() => void connect()}>
-            {(loading || busy) && <Loader2 className="mr-2 size-3.5 flowix-spin" />}
-            {t('preferences.pi.cloudConnect')}
-          </Button>
-        </div>}
-
         {error && <p className="text-xs text-[var(--destructive)]">{error}</p>}
 
         {authenticated && <div className="flex flex-wrap items-center justify-between gap-2">
@@ -128,6 +121,13 @@ export function PiCloudModelsSection({ authenticated }: { authenticated: boolean
           <Button type="button" variant="ghost" className="h-8" disabled={balanceLoading || modelCatalogLoading} onClick={() => void refreshBalanceAndModels()}>
             {(balanceLoading || modelCatalogLoading) && <Loader2 className="mr-2 size-3.5 flowix-spin" />}
             {t('preferences.pi.cloudCreditsRefresh')}
+          </Button>
+        </div>}
+
+        {!provider && <div className="flex justify-end">
+          <Button type="button" variant="outline" className="h-8" disabled={!authenticated || loading || busy} onClick={() => void connect()}>
+            {(loading || busy) && <Loader2 className="mr-2 size-3.5 flowix-spin" />}
+            {t('preferences.pi.cloudConnect')}
           </Button>
         </div>}
       </section>

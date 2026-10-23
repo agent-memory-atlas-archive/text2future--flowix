@@ -13,7 +13,7 @@ impl SyncManager {
         // 本端自己的回声（单端 push 后 pull 用旧 cursor 又拉回自己刚推上去的内容）。
         let mut self_sync_seqs: HashSet<i64> = HashSet::new();
         for batch in due.chunks(100) {
-            drop(self.require_auth_generation(generation)?);
+            drop(self.account.require_auth_generation(generation)?);
             let operations = batch
                 .iter()
                 .map(|item| {
@@ -25,7 +25,7 @@ impl SyncManager {
             let result = match self.client.v2_push(access_token, &operations).await {
                 Ok(result) => result,
                 Err(error) => {
-                    let _generation = self.require_auth_generation(generation)?;
+                    let _generation = self.account.require_auth_generation(generation)?;
                     for item in batch {
                         self.store.defer_v2_operation(
                             &item.operation_id,
@@ -36,7 +36,7 @@ impl SyncManager {
                     return Err(error);
                 }
             };
-            let _generation = self.require_auth_generation(generation)?;
+            let _generation = self.account.require_auth_generation(generation)?;
             let by_id: HashMap<&str, &crate::v2::V2OperationResult> = result
                 .results
                 .iter()
