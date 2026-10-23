@@ -23,6 +23,9 @@ export type AppUpdateDownloadProgress =
 
 let checkPromise: Promise<AppUpdate | null> | null = null;
 let installPromise: Promise<void> | null = null;
+let installingVersion: string | null = null;
+let latestProgress: AppUpdateDownloadProgress | null = null;
+const progressListeners = new Set<(progress: AppUpdateDownloadProgress) => void>();
 
 function isTauriDesktopRuntime(): boolean {
   if (typeof window === 'undefined') return false;
@@ -68,12 +71,25 @@ export async function installAppUpdate(
   version: string,
   onProgress?: (progress: AppUpdateDownloadProgress) => void,
 ): Promise<void> {
-  if (installPromise) return installPromise;
+  if (installPromise) {
+    if (version !== installingVersion) throw new Error('A different application update is currently being installed.');
+    if (onProgress) {
+      progressListeners.add(onProgress);
+      if (latestProgress) onProgress(latestProgress);
+    }
+    try { await installPromise; }
+    finally { if (onProgress) progressListeners.delete(onProgress); }
+    return;
+  }
   if (checkPromise) throw new Error('An application update check is currently in progress.');
+  installingVersion = version;
+  latestProgress = null;
+  if (onProgress) progressListeners.add(onProgress);
 
   const pending = (async () => {
     const unlisten = await listen<AppUpdateDownloadProgress>('app-update-progress', (event) => {
-      onProgress?.(event.payload);
+      latestProgress = event.payload;
+      for (const listener of progressListeners) listener(event.payload);
     });
     try {
       await invoke('install_app_update', { version });
@@ -86,7 +102,12 @@ export async function installAppUpdate(
   try {
     await pending;
   } finally {
-    if (installPromise === pending) installPromise = null;
+    if (installPromise === pending) {
+      installPromise = null;
+      installingVersion = null;
+      latestProgress = null;
+      progressListeners.clear();
+    }
   }
 }
 

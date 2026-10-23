@@ -93,9 +93,12 @@ async fn remove_old_update_packages(directory: &std::path::Path, keep: &std::pat
 
 pub(super) async fn prepare_update_package(
     app: &AppHandle,
-    update: Update,
+    mut update: Update,
     report_progress: bool,
 ) -> Result<PreparedUpdate, String> {
+    // Package downloads need a larger budget than the manifest request, but
+    // must still release the check/install lock if the server stops responding.
+    update.timeout = Some(std::time::Duration::from_secs(10 * 60));
     let package_path = update_cache_location(app, &update)?;
     let directory = package_path
         .parent()

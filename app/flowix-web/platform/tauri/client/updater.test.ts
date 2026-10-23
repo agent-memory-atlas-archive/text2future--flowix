@@ -1,0 +1,35 @@
+﻿import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+const mocks=vi.hoisted(() => ({invoke:vi.fn(),listen:vi.fn(),relaunch:vi.fn()}));
+vi.mock('@tauri-apps/api/core', () => ({invoke:mocks.invoke}));
+vi.mock('@tauri-apps/api/event', () => ({listen:mocks.listen}));
+vi.mock('@tauri-apps/plugin-process', () => ({relaunch:mocks.relaunch}));
+import { installAppUpdate } from './updater';
+beforeEach(() => vi.resetAllMocks());
+afterEach(() => vi.unstubAllGlobals());
+it('replays progress to later callers and delivers subsequent events to both', async () => {
+  let complete!: () => void;
+  let emit!: (event:unknown) => void;
+  const unlisten=vi.fn();
+  mocks.invoke.mockReturnValue(new Promise<void>(resolve => {complete=resolve;}));
+  mocks.listen.mockImplementation(async (_name,callback) => {emit=callback;return unlisten;});
+  const first=vi.fn(), second=vi.fn();
+  const pending1=installAppUpdate('1.1.0',first);
+  await Promise.resolve();
+  emit({payload:{phase:'progress',downloadedBytes:10,contentLength:20}});
+  const pending2=installAppUpdate('1.1.0',second);
+  expect(second).toHaveBeenCalledWith({phase:'progress',downloadedBytes:10,contentLength:20});
+  emit({payload:{phase:'installing',downloadedBytes:20}});
+  expect(first).toHaveBeenCalledTimes(2);
+  expect(second).toHaveBeenCalledTimes(2);
+  await expect(installAppUpdate('1.2.0')).rejects.toThrow('different');
+  complete(); await Promise.all([pending1,pending2]);
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
+  expect(mocks.relaunch).toHaveBeenCalledTimes(1);
+  expect(unlisten).toHaveBeenCalledTimes(1);
+});
+it('allows retry after listener setup fails', async () => {
+  mocks.listen.mockRejectedValueOnce(new Error('listen failed')).mockResolvedValue(vi.fn());
+  await expect(installAppUpdate('1.1.0')).rejects.toThrow('listen failed');
+  await installAppUpdate('1.1.0');
+  expect(mocks.invoke).toHaveBeenCalledTimes(1);
+});

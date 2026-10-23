@@ -165,6 +165,7 @@ fn updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
     let endpoint = url::Url::parse(endpoint)
         .map_err(|error| format!("failed to parse updater endpoint: {error}"))?;
     app.updater_builder()
+        .timeout(std::time::Duration::from_secs(30))
         .endpoints(vec![endpoint])
         .map_err(|error| format!("failed to configure updater endpoint: {error}"))?
         .build()
