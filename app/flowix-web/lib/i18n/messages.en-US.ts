@@ -308,6 +308,10 @@ const enUS: Record<keyof typeof zhCN, string> = {
     "preferences.format.fontSize.description": "Adjust body text size (px)",
     "preferences.format.lineHeight.title": "Line height",
     "preferences.format.lineHeight.description": "Adjust body text line height",
+    "preferences.format.firstLineIndent.title": "First-line indent",
+    "preferences.format.firstLineIndent.description": "Indent the first line of body paragraphs without changing document content",
+    "preferences.format.firstLineIndent.none": "None",
+    "preferences.format.firstLineIndent.twoCharacters": "2 characters",
     "preferences.resetDefaults": "Reset defaults",
 
     "preferences.theme.title": "Theme style",

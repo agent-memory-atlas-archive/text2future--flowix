@@ -66,6 +66,8 @@ export interface FormatConfig {
   fontSize: number;
   /** 行间距 (unitless line-height) */
   lineHeight: number;
+  /** 正文段落首行缩进 (em)，只影响显示 */
+  firstLineIndent: 0 | 2;
   /** 文档编辑区宽度 (px)；大于 1000 表示全宽 */
   documentWidth: number;
 }
@@ -224,6 +226,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
     fontId: FONT_FAMILY_OPTIONS[0].id,
     fontSize: 16,
     lineHeight: 1.8,
+    firstLineIndent: 0,
     documentWidth: DOCUMENT_WIDTH_DEFAULT,
   },
   // 默认值收敛到 lib/theme/DEFAULT_THEME_ID — 改默认值改一处即可。

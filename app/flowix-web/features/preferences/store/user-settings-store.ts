@@ -172,6 +172,7 @@ function sanitizeSettings(settings: UserSettings): UserSettings {
       ),
       fontSize: settings.format.fontSize || DEFAULT_USER_SETTINGS.format.fontSize,
       lineHeight: settings.format.lineHeight || DEFAULT_USER_SETTINGS.format.lineHeight,
+      firstLineIndent: settings.format.firstLineIndent === 2 ? 2 : DEFAULT_USER_SETTINGS.format.firstLineIndent,
       documentWidth: settings.format.documentWidth || DEFAULT_USER_SETTINGS.format.documentWidth,
     },
     theme: settings.theme,

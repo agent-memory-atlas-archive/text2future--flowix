@@ -66,11 +66,22 @@ pub struct FormatConfig {
     pub font_size: f64,
     #[serde(default)]
     pub line_height: f64,
+    /// First-line indent in em; the editor offers 0 or 2.
+    #[serde(default, deserialize_with = "deserialize_first_line_indent")]
+    pub first_line_indent: u8,
     /// 文档编辑区最大�?�?(px) —应用�?Tiptap ProseMirror max-width�?
     /// 镜像前�? `FormatConfig.documentWidth`, �?preference.json 没�?字�?
     /// 时由 `#[serde(default)]` 兜底�?0, 前�? sanitizeSettings 会用默�?值�?盖�?
     #[serde(default)]
     pub document_width: f64,
+}
+
+fn deserialize_first_line_indent<'de, D>(deserializer: D) -> Result<u8, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(if value.as_f64() == Some(2.0) { 2 } else { 0 })
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1653,6 +1664,73 @@ mod tests {
             home,
             SecretStore::with_backend(Box::new(TestSecretBackend::new())),
         )
+    }
+
+    #[test]
+    fn first_line_indent_defaults_to_zero_for_legacy_preferences() {
+        let preference: PreferenceFile = serde_json::from_value(serde_json::json!({
+            "format": { "fontSize": 18, "lineHeight": 1.7 }
+        }))
+        .unwrap();
+
+        assert_eq!(preference.format.first_line_indent, 0);
+        assert_eq!(preference.format.font_size, 18.0);
+        assert_eq!(PreferenceFile::default().format.first_line_indent, 0);
+    }
+
+    #[test]
+    fn first_line_indent_invalid_values_preserve_other_preferences() {
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!(-2),
+            serde_json::json!(1),
+            serde_json::json!(4),
+            serde_json::json!("2"),
+            serde_json::json!(true),
+            serde_json::json!({}),
+        ] {
+            let preference: PreferenceFile = serde_json::from_value(serde_json::json!({
+                "format": { "firstLineIndent": value, "fontSize": 18 },
+                "theme": "dark"
+            }))
+            .unwrap();
+            assert_eq!(preference.format.first_line_indent, 0);
+            assert_eq!(preference.format.font_size, 18.0);
+            assert!(matches!(preference.theme, Theme::Dark));
+        }
+    }
+
+    #[test]
+    fn first_line_indent_survives_preference_updates_and_reload() {
+        let home = tempfile::tempdir().unwrap();
+        let store = test_user_config_store(home.path().to_path_buf());
+        store
+            .patch_preference(serde_json::json!({
+                "format": { "firstLineIndent": 2, "fontSize": 18 }
+            }))
+            .unwrap();
+        store
+            .patch_preference(serde_json::json!({ "language": "zh-CN" }))
+            .unwrap();
+        store
+            .set_preferred_font("system-ui".into(), "system-ui".into())
+            .unwrap();
+        drop(store);
+
+        let store = test_user_config_store(home.path().to_path_buf());
+        let preference = store.get_preference();
+        assert_eq!(preference.format.first_line_indent, 2);
+        assert_eq!(preference.format.font_size, 18.0);
+        assert_eq!(preference.format.font_id.as_deref(), Some("system-ui"));
+        assert_eq!(preference.language, "zh-CN");
+
+        store
+            .patch_preference(serde_json::json!({ "format": { "firstLineIndent": 0 } }))
+            .unwrap();
+        drop(store);
+
+        let store = test_user_config_store(home.path().to_path_buf());
+        assert_eq!(store.get_preference().format.first_line_indent, 0);
     }
 
     #[test]

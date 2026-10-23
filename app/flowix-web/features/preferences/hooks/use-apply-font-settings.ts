@@ -10,7 +10,7 @@ import {
 } from '@features/preferences/font-cache';
 
 /**
- * 将用户在「Preferences → Format」中选择的字体/字号/行间距/文档宽度写入 :root
+ * 将用户在「Preferences → Format」中选择的字体/字号/行间距/首行缩进/文档宽度写入 :root
  * 的 CSS 变量。
  *
  * 变量写入 :root 是为了 hook 点稳定, 但消费方 (css/editor.css 的
@@ -22,6 +22,7 @@ import {
  *   --editor-font-family
  *   --editor-font-size
  *   --editor-line-height
+ *   --editor-first-line-indent
  *   --editor-document-width
  *
  * 调用方: app.tsx (主窗口 + 偏好设置窗口都会挂载, 因此跨窗口都会立即响应)。
@@ -51,11 +52,12 @@ export function useApplyFontSettings(format: FormatConfig | undefined) {
     if (typeof format.lineHeight === 'number' && !Number.isNaN(format.lineHeight)) {
       root.style.setProperty('--editor-line-height', String(format.lineHeight));
     }
+    root.style.setProperty('--editor-first-line-indent', format.firstLineIndent === 2 ? '2em' : '0em');
     if (typeof format.documentWidth === 'number' && !Number.isNaN(format.documentWidth)) {
       root.style.setProperty(
         '--editor-document-width',
         format.documentWidth > DOCUMENT_WIDTH_FULL_THRESHOLD ? 'none' : `${format.documentWidth}px`,
       );
     }
-  }, [format?.fontFamily, format?.fontSize, format?.lineHeight, format?.documentWidth]);
+  }, [format?.fontFamily, format?.fontSize, format?.lineHeight, format?.firstLineIndent, format?.documentWidth]);
 }

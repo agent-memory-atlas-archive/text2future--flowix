@@ -541,6 +541,7 @@ html.flowix-drag-drop-active * {
 		--editor-font-family: var(--font-sans);
 		--editor-font-size: 16px;
 		--editor-line-height: 1.8;
+		--editor-first-line-indent: 0em;
 		--editor-document-width: 700px;
 
 		/* Shared code typography for rendered code blocks and CodeMirror. */

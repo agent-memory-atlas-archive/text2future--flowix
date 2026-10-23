@@ -302,6 +302,10 @@ const zhCN = {
     "preferences.format.fontSize.description": "拖动调节正文字号 (px)",
     "preferences.format.lineHeight.title": "行间距",
     "preferences.format.lineHeight.description": "拖动调节正文行高 (倍数)",
+    "preferences.format.firstLineIndent.title": "首行缩进",
+    "preferences.format.firstLineIndent.description": "仅缩进正文段落首行，不改变文档内容",
+    "preferences.format.firstLineIndent.none": "不缩进",
+    "preferences.format.firstLineIndent.twoCharacters": "2 字符",
     "preferences.resetDefaults": "恢复默认",
 
     "preferences.theme.title": "主题风格",
