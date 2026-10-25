@@ -1,5 +1,5 @@
 import { sanitizePropertiesConfig } from '@features/properties/property-preset-store';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferences } from '@platform/tauri/client';
 
 // 把 Tauri client 的 preferences IPC 拦截掉, 避免触发真实 IPC。
@@ -77,6 +77,7 @@ describe('user-settings-store · region loadInitial', () => {
           fontId: 'serif',
           fontSize: 15,
           lineHeight: 1.6,
+          firstLineIndent: 0,
           documentWidth: 800,
         },
         theme: 'system',
@@ -112,6 +113,7 @@ describe('user-settings-store · legacy quickPhrases migration', () => {
           fontId: 'serif',
           fontSize: 15,
           lineHeight: 1.6,
+          firstLineIndent: 0,
           documentWidth: 800,
         },
         theme: 'system',
@@ -191,5 +193,66 @@ describe('shutdown preference flush', () => {
       finish(); await flushing;
       expect(settled).toBe(true);
     } finally { vi.useRealTimers(); }
+  });
+});
+
+describe('paragraph first-line indentation preferences', () => {
+  beforeEach(async () => {
+    await useUserSettingsStore.getState().flushPending();
+    mockedPreferences.patch.mockReset().mockResolvedValue(undefined);
+    useUserSettingsStore.setState({ settings: DEFAULT_USER_SETTINGS, isLoading: false });
+  });
+
+  afterEach(async () => {
+    await useUserSettingsStore.getState().flushPending();
+  });
+
+  it('loads older format preferences without changing paragraph indentation', async () => {
+    const { firstLineIndent: _firstLineIndent, ...legacyFormat } = DEFAULT_USER_SETTINGS.format;
+    mockedPreferences.get.mockResolvedValueOnce({
+      ...DEFAULT_USER_SETTINGS,
+      format: legacyFormat,
+    } as UserSettings);
+
+    await useUserSettingsStore.getState().loadInitial();
+
+    expect(useUserSettingsStore.getState().settings.format.firstLineIndent).toBe(0);
+  });
+
+  it('persists the choice and restores it after reloading preferences', async () => {
+    let saved = structuredClone(DEFAULT_USER_SETTINGS);
+    mockedPreferences.patch.mockImplementationOnce(async (patch) => {
+      saved = { ...saved, format: { ...saved.format, ...(patch.format as object) } };
+    });
+
+    await useUserSettingsStore.getState().updateSettings({ format: { firstLineIndent: 2 } });
+    await useUserSettingsStore.getState().flushPending();
+
+    expect(mockedPreferences.patch).toHaveBeenCalledWith({ format: { firstLineIndent: 2 } });
+    useUserSettingsStore.setState({ settings: DEFAULT_USER_SETTINGS });
+    mockedPreferences.get.mockResolvedValueOnce(saved);
+    await useUserSettingsStore.getState().loadInitial();
+
+    expect(useUserSettingsStore.getState().settings.format).toEqual({
+      ...DEFAULT_USER_SETTINGS.format,
+      firstLineIndent: 2,
+    });
+
+    await useUserSettingsStore.getState().updateSettings({ format: { fontSize: 18 } });
+    expect(useUserSettingsStore.getState().settings.format.firstLineIndent).toBe(2);
+
+    await useUserSettingsStore.getState().updateSettings({ format: { firstLineIndent: 0 } });
+    expect(useUserSettingsStore.getState().settings.format.firstLineIndent).toBe(0);
+  });
+
+  it.each([null, -2, 1, 4, '2'])('falls back to no indent for unsupported saved value %s', async (value) => {
+    mockedPreferences.get.mockResolvedValueOnce({
+      ...DEFAULT_USER_SETTINGS,
+      format: { ...DEFAULT_USER_SETTINGS.format, firstLineIndent: value },
+    } as unknown as UserSettings);
+
+    await useUserSettingsStore.getState().loadInitial();
+
+    expect(useUserSettingsStore.getState().settings.format.firstLineIndent).toBe(0);
   });
 });

@@ -208,6 +208,27 @@ export function MemoList({
   const memoListQueryKey = useNoteStore((s) => s.memoListQueryKey);
   const memoListRefreshTrigger = useNoteStore((s) => s.memoListRefreshTrigger);
   const selectedNotebookId = selectedNotebook?.id;
+  const [notebookLoadContext, setNotebookLoadContext] = useState({
+    notebookId: selectedNotebookId,
+    skipInitialLoading: false,
+    notesSettled: false,
+  });
+  const isCurrentNotebookEntry = notebookLoadContext.notebookId === selectedNotebookId;
+  const skipInitialNotebookLoading = isCurrentNotebookEntry
+    ? notebookLoadContext.skipInitialLoading
+    : Boolean(notebookLoadContext.notebookId);
+  const skipMemoListLoading = skipInitialNotebookLoading
+    && (!isCurrentNotebookEntry || !notebookLoadContext.notesSettled);
+  useEffect(() => {
+    if (!selectedNotebookId) return;
+    setNotebookLoadContext((previous) => previous.notebookId === selectedNotebookId
+      ? previous
+      : {
+        notebookId: selectedNotebookId,
+        skipInitialLoading: Boolean(previous.notebookId),
+        notesSettled: false,
+      });
+  }, [selectedNotebookId]);
   const handleCreateTypeMenuOpenChange = useCallback((open: boolean) => {
     setCreateTypeMenuOpen(open);
     if (!open) setCreateMoreMenuOpen(false);
@@ -529,6 +550,16 @@ export function MemoList({
   const backgroundIndex = useNotebookBackgroundStore((state) => selectedNotebookId ? state.statuses[selectedNotebookId] : undefined);
   const indexPreparing = backgroundIndex?.state === 'queued' || backgroundIndex?.state === 'running';
   const indexFailed = backgroundIndex?.state === 'failed';
+  // Only the first list attempt after navigation skips its placeholder.
+  // Success and failure both restore normal feedback for filters and retries.
+  useEffect(() => {
+    if (!hasCurrentMemoListData && !currentMemoListError && !indexFailed) return;
+    setNotebookLoadContext((previous) => (
+      previous.notebookId === selectedNotebookId && !previous.notesSettled
+        ? { ...previous, notesSettled: true }
+        : previous
+    ));
+  }, [selectedNotebookId, hasCurrentMemoListData, currentMemoListError, indexFailed]);
   useEffect(() => {
     if (backgroundIndex?.state === 'ready') setMemoListError(null);
   }, [backgroundIndex?.state, backgroundIndex?.revision, selectedNotebookId]);
@@ -1292,6 +1323,7 @@ export function MemoList({
             <NotebookFolderView
               key={selectedNotebook.id}
               notebook={selectedNotebook}
+              skipInitialLoading={skipInitialNotebookLoading}
               createFolderRequest={createFolderRequest}
               onCreateFolder={handleCreateFolder}
               defaultCreateFolder={defaultCreateFolder}
@@ -1301,7 +1333,7 @@ export function MemoList({
             />
           </div>
         )}
-        {foldersMounted && selectedNotebook && showFolderView && !defaultCreateFolderReady && (
+        {foldersMounted && selectedNotebook && showFolderView && !defaultCreateFolderReady && !skipInitialNotebookLoading && (
           <NotebookLoadingState
             ariaLabel={t('memo.list.loadingNotebook')}
             className="absolute inset-0 z-10 bg-[var(--card)]/80"
@@ -1326,16 +1358,20 @@ export function MemoList({
                 <Button size="sm" className="rounded-lg" onClick={retryIndexOrList}>{t('error.retry')}</Button>
               </div>
             ) : !hasCurrentMemoListData && showMemoListLoading ? (
-              <ListSurfaceLoadingState ariaLabel={t('memo.list.loadingLibrary')} />
+              skipMemoListLoading
+                ? null
+                : <ListSurfaceLoadingState ariaLabel={t('memo.list.loadingLibrary')} />
             ) : listItems.length > 0 ? (
-              <MemoListRows
-                items={listItems}
-                scrollElement={listScrollElement}
-                queryKey={currentMemoListQueryKey}
-                revealKey={createdCardRevealKey}
-                onRevealed={handleCreatedCardRevealed}
-                renderRow={renderMemoRow}
-              />
+              <div key={currentMemoListQueryKey} className="flowix-list-content-enter">
+                <MemoListRows
+                  items={listItems}
+                  scrollElement={listScrollElement}
+                  queryKey={currentMemoListQueryKey}
+                  revealKey={createdCardRevealKey}
+                  onRevealed={handleCreatedCardRevealed}
+                  renderRow={renderMemoRow}
+                />
+              </div>
             ) : (
               <EmptyState hasNotebooks={notebooks.length > 0} />
             )}

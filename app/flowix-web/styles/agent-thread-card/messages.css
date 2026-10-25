@@ -45,6 +45,42 @@
   background: var(--muted);
 }
 
+/* @project links in user messages use the same compact folder-card treatment
+ * as composer references while keeping their absolute path available on hover. */
+.agent-conversation-surface .agent-thread-card__message-folder-reference {
+  display: inline-flex;
+  box-sizing: border-box;
+  height: 1lh;
+  max-width: min(16rem, 100%);
+  min-width: 0;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  color: var(--foreground);
+  font-size: inherit;
+  line-height: inherit;
+  vertical-align: baseline;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.agent-conversation-surface .agent-thread-card__message-folder-reference-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+
+.agent-conversation-surface .agent-thread-card__message-folder-reference-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: inherit;
+  white-space: nowrap;
+}
+
 /* The user bubble adds its own 8px/12px inset around Markdown. Let fenced
  * blocks use the same outer spacing as assistant pre blocks while retaining
  * the bubble inset for surrounding prose. */

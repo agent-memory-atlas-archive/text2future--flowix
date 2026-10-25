@@ -74,7 +74,7 @@ export function NoteSettingsSection() {
         listClassName="flex gap-6 border-b border-[var(--divider)]"
         tabClassName="relative -mb-px min-w-0 border-b-2 px-0.5 py-2.5 text-base font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]"
         activeTabClassName="border-[var(--primary)] text-[var(--primary)]"
-        inactiveTabClassName="border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+        inactiveTabClassName="border-transparent text-[color-mix(in_oklch,var(--muted-foreground)_60%,transparent)]"
       >
         <div className={activeTab === 'properties' ? undefined : 'pt-2'}>
           <SectionErrorBoundary

@@ -205,6 +205,7 @@ class StableCaretView {
   private readonly layer: HTMLSpanElement | null;
   private resizeObserver: ResizeObserver | null = null;
   private mutationObserver: MutationObserver | null = null;
+  private typographyObserver: MutationObserver | null = null;
   private destroyed = false;
   private readonly observedElements = new Set<Element>();
   private lastGeometry: { left: number; top: number; height: number } | null = null;
@@ -255,6 +256,14 @@ class StableCaretView {
         subtree: true, childList: true, characterData: true,
         attributes: true, attributeOldValue: true, attributeFilter: ['class', 'style', 'src'],
       });
+      if (scope === 'document') {
+        // Format preferences live on :root. Changing text-indent can move the
+        // insertion point without resizing any element or mutating the editor.
+        this.typographyObserver = new MutationObserver(this.schedule);
+        this.typographyObserver.observe(document.documentElement, {
+          attributes: true, attributeFilter: ['style'],
+        });
+      }
       document.fonts?.addEventListener('loadingdone', this.schedule);
       view.dom.addEventListener('load', this.schedule, true);
     }
@@ -278,6 +287,7 @@ class StableCaretView {
     this.resizeObserver?.disconnect();
     this.observedElements.clear();
     this.mutationObserver?.disconnect();
+    this.typographyObserver?.disconnect();
     document.fonts?.removeEventListener('loadingdone', this.schedule);
     this.view.dom.removeEventListener('load', this.schedule, true);
     if (this.frame !== null) cancelAnimationFrame(this.frame);

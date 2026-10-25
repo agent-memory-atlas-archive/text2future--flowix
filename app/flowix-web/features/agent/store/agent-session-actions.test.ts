@@ -241,6 +241,45 @@ describe("chat-store Agent Thread Card streaming flow", () => {
     }
   });
 
+  it("initializes a recovered conversation on first send without reusing its deleted provider thread", async () => {
+    const { agent } = await import("@platform/tauri/client");
+    const { useAgentSessionStore } = await import("@features/agent/store/agent-session-store");
+    const { ensureAgentConversationDetailThread, needsAgentConversationInitialization } = await import("@features/agent/components/agent-conversation-detail-submit");
+    const persist = vi.mocked(agent.upsertConversationInstance);
+    const original = persist.getMockImplementation();
+    const titles = new Map<string, string>();
+    persist.mockImplementation(async (instance) => {
+      if (instance.threadId && !titles.has(instance.threadId)) titles.set(instance.threadId, instance.initialTitle);
+      return { ...instance, threadTitle: instance.threadId ? titles.get(instance.threadId) ?? "" : "" };
+    });
+    const store = useAgentSessionStore.getState();
+    const instance = store.createInstance({
+      agentType: "codex", title: "Old conversation", threadId: "codex-local-deleted",
+      source: { kind: "thread-card" }, runtimeConfig: { cwd: "/tmp/recovered-conversation" },
+    });
+    try {
+      await store.persistInstanceAndWait(instance.instanceId);
+      const recovered = await store.recoverThreadCardAfterMissingSession(instance.threadId!);
+      expect(recovered).not.toBeNull();
+      expect(recovered!.threadId).not.toBe(instance.threadId);
+      expect(needsAgentConversationInitialization(recovered!)).toBe(true);
+      const result = await ensureAgentConversationDetailThread({
+        instanceId: instance.instanceId, typeKey: "codex", prompt: "Start a fresh conversation",
+        runtimeHandleId: `recovered:${instance.instanceId}`,
+      });
+      expect(result.threadId).toBe(recovered!.threadId);
+      expect(result.title).toBe("Start a fresh conversation");
+      expect(agent.updateThreadTitle).toHaveBeenCalledWith(result.threadId, result.title, "codex");
+      expect(useAgentSessionStore.getState().getInstance(instance.instanceId)?.title).toBe(result.title);
+      store.bindProviderSessionId(result.threadId, "new-provider-session", "codex");
+      expect(needsAgentConversationInitialization(useAgentSessionStore.getState().getInstance(instance.instanceId)!)).toBe(false);
+    } finally {
+      await store.persistInstanceAndWait(instance.instanceId);
+      if (original) persist.mockImplementation(original);
+      else persist.mockReset();
+    }
+  });
+
   it("serializes persistence writes for the same conversation instance", async () => {
     const { agent } = await import("@platform/tauri/client");
     const { useAgentSessionStore } = await import(

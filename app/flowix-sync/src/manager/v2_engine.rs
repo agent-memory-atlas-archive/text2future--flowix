@@ -112,7 +112,7 @@ impl SyncManager {
             .into_iter()
             .filter(|item| notebook_scope.is_none_or(|scope| scope == item.notebook_id))
         {
-            drop(self.require_auth_generation(generation)?);
+            drop(self.account.require_auth_generation(generation)?);
             let result = self
                 .client
                 .v2_push(
@@ -158,7 +158,7 @@ impl SyncManager {
             let data = response
                 .data
                 .ok_or_else(|| SyncError::InvalidState("move data omitted".into()))?;
-            drop(self.require_auth_generation(generation)?);
+            drop(self.account.require_auth_generation(generation)?);
             self.store.acknowledge_v2_move(&movement, &data)?;
             self_sync_seqs.insert(data.sync_seq);
             if let Some(source_seq) = data.source_sync_seq {
@@ -174,8 +174,9 @@ impl SyncManager {
         note_id: &str,
         operation_id: &str,
     ) -> Result<crate::v2::V2ConflictMaterial, SyncError> {
-        let generation = self.auth_generation();
-        let mut token = self.access_token(generation).await?;
+        self.account.require_sync_access()?;
+        let generation = self.account.auth_generation();
+        let mut token = self.account.access_token(generation).await?;
         let baseline = self.store.v2_note_state(note_id)?;
         let mut page = self.client.v2_bootstrap_page(&token, None).await?;
         let snapshot_cursor = page.cursor;
@@ -208,7 +209,7 @@ impl SyncManager {
                 .v2_bootstrap_page(&token, Some(&page_token))
                 .await;
             page = if first.as_ref().is_err_and(SyncError::is_unauthorized) {
-                token = self.force_refresh_access_token(generation).await?;
+                token = self.account.force_refresh_access_token(generation).await?;
                 self.client
                     .v2_bootstrap_page(&token, Some(&page_token))
                     .await?
@@ -253,7 +254,7 @@ impl SyncManager {
             ),
             None => None,
         };
-        drop(self.require_auth_generation(generation)?);
+        drop(self.account.require_auth_generation(generation)?);
         Ok(crate::v2::V2ConflictMaterial {
             notebook_id: notebook_id.to_string(),
             note_id: note_id.to_string(),
@@ -302,10 +303,11 @@ impl SyncManager {
     }
 
     pub async fn v2_history(&self, note_id: &str) -> Result<crate::v2::V2History, SyncError> {
-        let generation = self.auth_generation();
-        let token = self.access_token(generation).await?;
+        self.account.require_sync_access()?;
+        let generation = self.account.auth_generation();
+        let token = self.account.access_token(generation).await?;
         let history = self.client.v2_history(&token, note_id).await?;
-        let _guard = self.require_auth_generation(generation)?;
+        let _guard = self.account.require_auth_generation(generation)?;
         Ok(history)
     }
 
@@ -314,8 +316,9 @@ impl SyncManager {
         note_id: &str,
         revision: &str,
     ) -> Result<(crate::v2::V2History, Vec<u8>), SyncError> {
-        let generation = self.auth_generation();
-        let token = self.access_token(generation).await?;
+        self.account.require_sync_access()?;
+        let generation = self.account.auth_generation();
+        let token = self.account.access_token(generation).await?;
         let history = self.client.v2_history(&token, note_id).await?;
         let entry = history
             .revisions
@@ -329,7 +332,7 @@ impl SyncManager {
         let bytes = self
             .download_verified_v2_blob(&token, note_id, hash)
             .await?;
-        let _guard = self.require_auth_generation(generation)?;
+        let _guard = self.account.require_auth_generation(generation)?;
         Ok((history, bytes))
     }
 
@@ -370,11 +373,12 @@ impl SyncManager {
     pub async fn v2_remote_notebooks(
         &self,
     ) -> Result<Vec<crate::models::CloudNotebook>, SyncError> {
-        let generation = self.auth_generation();
-        let mut token = self.access_token(generation).await?;
+        self.account.require_sync_access()?;
+        let generation = self.account.auth_generation();
+        let mut token = self.account.access_token(generation).await?;
         let first = self.client.v2_bootstrap_page(&token, None).await;
         let mut bootstrap = if first.as_ref().is_err_and(SyncError::is_unauthorized) {
-            token = self.force_refresh_access_token(generation).await?;
+            token = self.account.force_refresh_access_token(generation).await?;
             self.client.v2_bootstrap_page(&token, None).await?
         } else {
             first?
@@ -408,7 +412,7 @@ impl SyncManager {
                 .v2_bootstrap_page(&token, Some(&page_token))
                 .await;
             bootstrap = if first.as_ref().is_err_and(SyncError::is_unauthorized) {
-                token = self.force_refresh_access_token(generation).await?;
+                token = self.account.force_refresh_access_token(generation).await?;
                 self.client
                     .v2_bootstrap_page(&token, Some(&page_token))
                     .await?
@@ -421,7 +425,7 @@ impl SyncManager {
                 ));
             }
         }
-        let _generation = self.require_auth_generation(generation)?;
+        let _generation = self.account.require_auth_generation(generation)?;
         let enabled: HashSet<String> = self
             .store
             .v2_notebooks(true)?
@@ -577,7 +581,7 @@ impl SyncManager {
         notebooks: Vec<V2LocalNotebook>,
         notes: Vec<V2LocalNote>,
     ) -> Result<V2AccountSyncReport, SyncError> {
-        self.sync_v2_snapshot_at_generation(None, notebooks, notes, self.auth_generation())
+        self.sync_v2_snapshot_at_generation(None, notebooks, notes, self.account.auth_generation())
             .await
     }
 
@@ -596,7 +600,7 @@ impl SyncManager {
             Some(notebook_id),
             notebooks,
             notes,
-            self.auth_generation(),
+            self.account.auth_generation(),
         )
         .await
     }
@@ -609,21 +613,31 @@ impl SyncManager {
         generation: u64,
     ) -> Result<V2AccountSyncReport, SyncError> {
         let _guard = self.account_sync_lock.lock().await;
+        self.account.require_sync_access()?;
         self.store
             .v2_account()?
             .ok_or(SyncError::NotAuthenticated)?;
-        let first_token = self.access_token(generation).await?;
+        let first_token = self.account.access_token(generation).await?;
         let first = self
             .sync_v2_account_once(&first_token, &notebooks, &notes, notebook_scope, generation)
             .await;
         let result = if first.as_ref().is_err_and(SyncError::is_unauthorized) {
-            let refreshed = self.force_refresh_access_token(generation).await?;
+            let refreshed = self.account.force_refresh_access_token(generation).await?;
             self.sync_v2_account_once(&refreshed, &notebooks, &notes, notebook_scope, generation)
                 .await
         } else {
             first
         };
-        let _generation = self.require_auth_generation(generation)?;
+        if matches!(
+            &result,
+            Err(SyncError::Api { code, .. })
+                if matches!(code.as_str(), "MEMBERSHIP_REQUIRED" | "STORAGE_QUOTA_EXCEEDED" | "STORAGE_PLAN_REQUIRED")
+        ) {
+            if let Err(error) = self.account.refresh_membership().await {
+                tracing::debug!(%error, "cloud entitlement refresh is pending after a sync denial");
+            }
+        }
+        let _generation = self.account.require_auth_generation(generation)?;
         result
     }
 
@@ -646,23 +660,26 @@ impl SyncManager {
         apply: impl FnOnce() -> Result<(), SyncError>,
     ) -> Result<(), SyncError> {
         let _generation = self
+            .account
             .require_auth_generation(report.auth_generation.ok_or(SyncError::NotAuthenticated)?)?;
         apply()?;
-        match notebook_id {
-            Some(notebook_id) => self.store.commit_v2_notebook_sync_report(
-                notebook_id,
-                &report.remote,
-                report.cursor,
-                &report.bootstrapped_notebooks,
-                Utc::now().timestamp_millis(),
-            ),
-            None => self.store.commit_v2_sync_report(
-                &report.remote,
-                report.cursor,
-                &report.bootstrapped_notebooks,
-                Utc::now().timestamp_millis(),
-            ),
-        }
+        self.store
+            .commit_v2_prepared_report(report, notebook_id, Utc::now().timestamp_millis())
+    }
+
+    /// Prepare remote changes under the same session guard as their atomic commit.
+    pub fn complete_v2_sync_with_prepare(
+        &self,
+        report: &mut V2AccountSyncReport,
+        notebook_id: Option<&str>,
+        prepare: impl FnOnce(&mut V2AccountSyncReport) -> Result<(), SyncError>,
+    ) -> Result<(), SyncError> {
+        let _generation = self
+            .account
+            .require_auth_generation(report.auth_generation.ok_or(SyncError::NotAuthenticated)?)?;
+        prepare(report)?;
+        self.store
+            .commit_v2_prepared_report(report, notebook_id, Utc::now().timestamp_millis())
     }
 
     pub async fn v2_continue_bootstrap(
@@ -677,13 +694,13 @@ impl SyncManager {
         let generation = previous
             .auth_generation
             .ok_or(SyncError::NotAuthenticated)?;
-        let mut access_token = self.access_token(generation).await?;
+        let mut access_token = self.account.access_token(generation).await?;
         let first = self
             .client
             .v2_bootstrap_page(&access_token, Some(token))
             .await;
         let page = if first.as_ref().is_err_and(SyncError::is_unauthorized) {
-            access_token = self.force_refresh_access_token(generation).await?;
+            access_token = self.account.force_refresh_access_token(generation).await?;
             self.client
                 .v2_bootstrap_page(&access_token, Some(token))
                 .await?
@@ -709,7 +726,7 @@ impl SyncManager {
             .remote_from_bootstrap(&access_token, &enabled_ids, &page)
             .await?;
         let complete = page.next_page_token.is_none();
-        let _generation = self.require_auth_generation(generation)?;
+        let _generation = self.account.require_auth_generation(generation)?;
         Ok(V2AccountSyncReport {
             auth_generation: Some(generation),
             started_at: previous.started_at,
@@ -731,6 +748,8 @@ impl SyncManager {
                 Vec::new()
             },
             bootstrap_next_page_token: page.next_page_token,
+            read_only: previous.read_only,
+            deferred_notebooks: previous.deferred_notebooks.clone(),
         })
     }
 }

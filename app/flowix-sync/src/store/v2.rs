@@ -840,6 +840,18 @@ impl SyncStore {
                 ));
             }
         }
+        if matches!(
+            operation,
+            crate::v2::V2PushOperation::NoteDelete { .. }
+                | crate::v2::V2PushOperation::NotebookDelete { .. }
+        ) {
+            // A confirmed deletion supersedes older frozen uploads, including
+            // uploads held back while the account had no free storage.
+            transaction.execute(
+                "DELETE FROM v2_inflight_operations WHERE entity_type = ?1 AND entity_id = ?2 AND generation < ?3",
+                params![entity_type.as_str(), entity_id, generation],
+            )?;
+        }
         transaction.execute(
             "DELETE FROM v2_inflight_operations WHERE operation_id = ?1",
             [operation_id],
@@ -1046,7 +1058,14 @@ impl SyncStore {
         bootstrapped_notebooks: &[String],
         applied_at: i64,
     ) -> Result<(), SyncError> {
-        self.commit_v2_sync_report_scoped(remote, cursor, bootstrapped_notebooks, applied_at, None)
+        self.commit_v2_sync_report_scoped(
+            remote,
+            cursor,
+            bootstrapped_notebooks,
+            applied_at,
+            None,
+            &[],
+        )
     }
 
     pub fn commit_v2_notebook_sync_report(
@@ -1063,6 +1082,23 @@ impl SyncStore {
             bootstrapped_notebooks,
             applied_at,
             Some(notebook_id),
+            &[],
+        )
+    }
+
+    pub fn commit_v2_prepared_report(
+        &self,
+        report: &crate::v2::V2AccountSyncReport,
+        notebook_scope: Option<&str>,
+        applied_at: i64,
+    ) -> Result<(), SyncError> {
+        self.commit_v2_sync_report_scoped(
+            &report.remote,
+            report.cursor,
+            &report.bootstrapped_notebooks,
+            applied_at,
+            notebook_scope,
+            &report.deferred_notebooks,
         )
     }
 
@@ -1073,6 +1109,7 @@ impl SyncStore {
         bootstrapped_notebooks: &[String],
         applied_at: i64,
         notebook_scope: Option<&str>,
+        deferred_notebooks: &[String],
     ) -> Result<(), SyncError> {
         let mut connection = self.open()?;
         let transaction = connection.transaction()?;
@@ -1166,6 +1203,12 @@ impl SyncStore {
         for notebook_id in bootstrapped_notebooks {
             transaction.execute(
                 "UPDATE v2_synced_notebooks SET bootstrap_required = 0, updated_at = ?2 WHERE notebook_id = ?1",
+                params![notebook_id, applied_at],
+            )?;
+        }
+        for notebook_id in deferred_notebooks {
+            transaction.execute(
+                "UPDATE v2_synced_notebooks SET bootstrap_required = 1, updated_at = ?2 WHERE notebook_id = ?1",
                 params![notebook_id, applied_at],
             )?;
         }

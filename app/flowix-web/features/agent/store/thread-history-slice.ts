@@ -1,6 +1,7 @@
 import type { ChatMessage } from "@/types";
 import type { AgentTypeKey } from "@/types/agent";
 import type { AgentConversationMessageState } from "@features/agent/store/agent-conversation-types";
+import type { ConversationSlice } from "@features/agent/store/conversation-slice";
 import type { ProjectionSlice } from "@features/agent/store/projection-slice";
 import type { AgentSessionMeta } from "@features/agent/store/session-state";
 import { emptyProjection } from "@features/agent/store/session-reducer";
@@ -9,6 +10,7 @@ import type { ThreadHistoryPage } from "@features/agent/store/agent-history-adap
 import { createLogger } from "@/lib/logger";
 import { isKnownProductThreadId, resolveStoreThreadId } from "@features/agent/store/external-session";
 import { readHistoryWithTimeout } from "@features/agent/services/history-read-timeout";
+import { isMissingAgentSessionError } from "@features/agent/services/history-error";
 import { paginationAfterSnapshot, samePagination } from "./history-pagination";
 import { createHistoryRequestCoordinator } from "@features/agent/store/history-request-coordinator";
 import {
@@ -33,7 +35,9 @@ function loadHistorySync(): Promise<HistorySyncModule> {
   return historySyncModulePromise;
 }
 
-type HistoryContext = ThreadHistorySlice & ProjectionSlice & { sessionMeta: AgentSessionMeta };
+type HistoryContext = ThreadHistorySlice & ProjectionSlice &
+  Partial<Pick<ConversationSlice, "recoverThreadCardAfterMissingSession">> &
+  { sessionMeta: AgentSessionMeta };
 type SessionGet = () => HistoryContext;
 
 // Codex history is normally available immediately after turn completion. Keep
@@ -212,6 +216,17 @@ export function createThreadHistorySlice(
         logger.error("Failed to load messages", { error: String(error) });
         if (!requests.isCurrent(historyReadVersion)) {
           return "stale";
+        }
+        if (isMissingAgentSessionError(error)) {
+          try {
+            const recovered = await get().recoverThreadCardAfterMissingSession?.(threadId);
+            if (recovered) return "ready";
+          } catch (recoveryError) {
+            logger.error("Failed to reset missing Thread Card session", {
+              threadId,
+              error: String(recoveryError),
+            });
+          }
         }
         if (isInitialLoad) {
           get().updateThreadHistory(threadId, (projection) => ({

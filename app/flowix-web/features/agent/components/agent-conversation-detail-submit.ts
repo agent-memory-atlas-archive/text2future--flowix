@@ -1,6 +1,8 @@
 import { ensureAgentWorkspaceReady } from "@features/agent/store/agent-workspace-store";
 import type { AgentTypeKey, RuntimeConfig } from "@/types/agent";
 import { useAgentSessionStore } from "@features/agent/store/agent-session-store";
+import type { AgentConversationInstance } from "@features/agent/store/agent-conversation-types";
+import { isLocalExternalThreadId } from "@features/agent/services/external-agent-runtime-service";
 import { buildInitialInstanceRuntimeConfig } from "@features/agent/store/initial-runtime-config";
 import {
   ensureConversationWorkspaceSnapshot,
@@ -18,9 +20,23 @@ export interface EnsureAgentConversationDetailThreadResult {
   runtimeConfig: RuntimeConfig;
 }
 
+/** A recovered local id reserves identity without starting a provider session. */
+export function needsAgentConversationInitialization(instance: AgentConversationInstance): boolean {
+  const threadId = instance.threadId;
+  if (!threadId) return true;
+  const store = useAgentSessionStore.getState();
+  const projection = store.threadProjections[threadId];
+  return isLocalExternalThreadId(threadId, instance.agentType)
+    && !instance.providerSessionId
+    && !store.sessionMeta.externalSessionResolutions[threadId]
+    && !projection?.messages.length
+    && !projection?.runs.isLoading
+    && !projection?.runs.activeRunId;
+}
+
 /**
- * Bind an empty independent conversation (threadId === null) to a product
- * thread on its first send, then freeze the workspace snapshot.
+ * Initialize an empty conversation on its first send, reusing a recovered
+ * local product id when present, then freeze the workspace snapshot.
  *
  * Mirrors the note-embedded thread card's first-send path, but reads the
  * conversation's own source instead of ProseMirror node attrs:
@@ -37,7 +53,11 @@ export async function ensureAgentConversationDetailThread(input: {
   const instance = session.getInstance(input.instanceId);
   if (!instance) throw new Error("Agent session instance was not found");
 
-  const ensured = await ensureAgentThreadCardThread({
+  const ensured = instance.threadId ? {
+    threadId: instance.threadId,
+    title: instance.title || deriveThreadTitleFromPrompt(input.prompt, defaultThreadTitle(input.typeKey)),
+    typeKey: input.typeKey,
+  } : await ensureAgentThreadCardThread({
     prompt: input.prompt,
     fallbackTitle: defaultThreadTitle(input.typeKey),
     typeKey: input.typeKey,

@@ -1,6 +1,8 @@
 ﻿import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { HistoryLoadResult } from "@features/agent/store/thread-history-slice";
+import { emptyProjection, type ThreadProjection } from "@features/agent/store/session-reducer";
+import { isInitialConversationHistoryLoading } from "@features/agent/components/agent-conversation-history-loading";
 
 const agentConversationStoreMock = vi.hoisted(() => ({
   // 测试内部消息 fixture 数据载体 (历史命名); 生产代码已不读 conv-store.
@@ -11,6 +13,7 @@ const agentConversationStoreMock = vi.hoisted(() => ({
 // 真实环境会话 store 的历史投影更新行为.
 const sessionStoreMock = vi.hoisted(() => ({
   bindProviderSessionId: vi.fn(),
+  updateThreadHistory: vi.fn<(threadId: string, updater: (projection: ThreadProjection) => Pick<ThreadProjection, 'messages' | 'pagination'>) => void>(),
   loadMessages: vi.fn(
     async (_typeKey: string, _threadId: string): Promise<HistoryLoadResult> => "ready",
   ),
@@ -67,6 +70,11 @@ describe("agent thread card cache helper", () => {
     vi.clearAllMocks();
     agentConversationStoreMock.messageStates = {};
     sessionStoreMock.threadProjections = {};
+    sessionStoreMock.updateThreadHistory.mockImplementation((threadId, updater) => {
+      const current = sessionStoreMock.threadProjections[threadId] as ThreadProjection | undefined;
+      const projection = current ?? emptyProjection();
+      sessionStoreMock.threadProjections[threadId] = { ...projection, ...updater(projection) };
+    });
     // 模拟 loadMessages 路径: sessionStoreMock.loadMessages 被
     // mock 时, 同步把 messageStates 投影到 sessionStoreMock.threadProjections,
     // 模拟真实环境会话 store 的历史投影更新.
@@ -115,6 +123,28 @@ describe("agent thread card cache helper", () => {
       loadedThreadId: "flowix-thread",
       messages: [],
     });
+  });
+
+  it("finishes detail history loading for a recovered local thread without a provider session", async () => {
+    const { loadAgentThreadCardCache } = await import("./agent-thread-card-cache");
+    const threadId = "codex-local-recovered-empty";
+    await loadAgentThreadCardCache({ threadId, typeKey: "codex" });
+    const projection = sessionStoreMock.threadProjections[threadId] as ThreadProjection;
+    expect(projection.pagination).toMatchObject({ initialStatus: "ready", loadingInitial: false });
+    expect(isInitialConversationHistoryLoading(threadId, projection.messages.length, projection.pagination.initialStatus)).toBe(false);
+    expect(sessionStoreMock.loadMessages).not.toHaveBeenCalled();
+  });
+
+  it("preserves a live run while resolving an unbound local thread", async () => {
+    const { loadAgentThreadCardCache } = await import("./agent-thread-card-cache");
+    const threadId = "codex-local-live";
+    const projection = emptyProjection();
+    projection.runs.isLoading = true;
+    projection.runs.activeRunId = "live-run";
+    sessionStoreMock.threadProjections[threadId] = projection;
+    await loadAgentThreadCardCache({ threadId, typeKey: "codex" });
+    expect(sessionStoreMock.threadProjections[threadId].runs).toEqual(projection.runs);
+    expect(sessionStoreMock.threadProjections[threadId].pagination).toEqual(projection.pagination);
   });
 
   it("binds a resolved Codex session before loading history under the product id", async () => {

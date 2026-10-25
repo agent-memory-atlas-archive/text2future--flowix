@@ -3,6 +3,7 @@ name = "flowix-sync"
 version.workspace = true
 description = "Flowix Cloud authentication and notebook synchronization engine"
 edition.workspace = true
+license.workspace = true
 build = "build.rs"
 
 [lib]

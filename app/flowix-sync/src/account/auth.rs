@@ -1,6 +1,6 @@
 use super::*;
 
-impl SyncManager {
+impl AccountService {
     pub async fn register(
         &self,
         email: &str,
@@ -100,7 +100,7 @@ impl SyncManager {
         self.auth_generation()
     }
 
-    pub(super) async fn restore_at_generation(
+    pub(crate) async fn restore_at_generation(
         &self,
         refresh_token: &str,
         generation: u64,
@@ -158,7 +158,7 @@ impl SyncManager {
         self.state()
     }
 
-    pub(super) fn install_authenticated_session(
+    pub(crate) fn install_authenticated_session(
         &self,
         generation: u64,
         account: V2CloudAccount,
@@ -170,7 +170,10 @@ impl SyncManager {
         self.persist_auth_token(&mut auth, &runtime.refresh_token);
         auth.error = None;
         auth.session = Some(runtime);
-        *self.membership.write().unwrap_or_else(|p| p.into_inner()) = None;
+        *self
+            .account_entitlement
+            .write()
+            .unwrap_or_else(|p| p.into_inner()) = AccountEntitlementState::default();
         auth.status = CloudAuthStatus::Authenticated;
         auth.revision = auth.revision.saturating_add(1);
         *current_generation = current_generation.saturating_add(1);
@@ -178,6 +181,7 @@ impl SyncManager {
         drop(auth);
         drop(current_generation);
         self.notify_state_change();
+        self.entitlement_retry.notify_one();
         Ok(next_generation)
     }
 
@@ -244,7 +248,10 @@ impl SyncManager {
         *generation = generation.saturating_add(1);
         let mut auth = self.auth.write().unwrap_or_else(|p| p.into_inner());
         let token = auth.session.take().map(|session| session.refresh_token);
-        *self.membership.write().unwrap_or_else(|p| p.into_inner()) = None;
+        *self
+            .account_entitlement
+            .write()
+            .unwrap_or_else(|p| p.into_inner()) = AccountEntitlementState::default();
         auth.pending_credential = None;
         auth.status = CloudAuthStatus::SignedOut;
         auth.revision = auth.revision.saturating_add(1);
@@ -284,14 +291,14 @@ impl SyncManager {
         next
     }
 
-    pub(super) fn auth_generation(&self) -> u64 {
+    pub(crate) fn auth_generation(&self) -> u64 {
         *self
             .auth_generation
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    pub(super) fn require_auth_generation(
+    pub(crate) fn require_auth_generation(
         &self,
         expected: u64,
     ) -> Result<std::sync::MutexGuard<'_, u64>, SyncError> {
@@ -340,7 +347,7 @@ impl SyncManager {
             .ok_or(SyncError::NotAuthenticated)
     }
 
-    pub(super) async fn access_token(&self, generation: u64) -> Result<String, SyncError> {
+    pub(crate) async fn access_token(&self, generation: u64) -> Result<String, SyncError> {
         let current = self.session_for_generation(generation)?;
         let now = chrono::Utc::now().timestamp_millis();
         if current.access_token_expires_at > now + 30_000 {
@@ -358,7 +365,7 @@ impl SyncManager {
             .await
     }
 
-    pub(super) async fn force_refresh_access_token(
+    pub(crate) async fn force_refresh_access_token(
         &self,
         generation: u64,
     ) -> Result<String, SyncError> {
@@ -406,6 +413,7 @@ impl SyncManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{SyncManager, V2AccountSyncReport};
     use std::future::Future;
 
     struct NoopWake;
@@ -423,8 +431,9 @@ mod tests {
     }
 
     fn sign_in(manager: &SyncManager, token: &str) -> u64 {
-        let generation = manager.begin_auth_attempt();
+        let generation = manager.account().begin_auth_attempt();
         manager
+            .account()
             .install_authenticated_session(
                 generation,
                 V2CloudAccount {
@@ -449,12 +458,15 @@ mod tests {
         )
         .unwrap();
         let first = sign_in(&manager, "first");
-        assert_eq!(ready(manager.access_token(first)).unwrap(), "access-first");
-        let second = sign_in(&manager, "second");
-        assert!(ready(manager.access_token(first)).is_err());
-        assert!(ready(manager.force_refresh_access_token(first)).is_err());
         assert_eq!(
-            ready(manager.access_token(second)).unwrap(),
+            ready(manager.account().access_token(first)).unwrap(),
+            "access-first"
+        );
+        let second = sign_in(&manager, "second");
+        assert!(ready(manager.account().access_token(first)).is_err());
+        assert!(ready(manager.account().force_refresh_access_token(first)).is_err());
+        assert_eq!(
+            ready(manager.account().access_token(second)).unwrap(),
             "access-second"
         );
     }
@@ -469,10 +481,16 @@ mod tests {
         .unwrap();
         let generation = sign_in(&manager, "first");
         manager
+            .account()
             .install_refreshed_session(generation, "first", runtime("rotated"))
             .unwrap();
         assert_eq!(
-            ready(manager.refresh_access_token("access-first", generation)).unwrap(),
+            ready(
+                manager
+                    .account()
+                    .refresh_access_token("access-first", generation)
+            )
+            .unwrap(),
             "access-rotated"
         );
     }
@@ -485,10 +503,10 @@ mod tests {
             directory.path().join("sync.db"),
         )
         .unwrap();
-        let during_attempt = manager.auth_generation() + 1;
+        let during_attempt = manager.account().auth_generation() + 1;
         let installed = sign_in(&manager, "account");
         assert!(installed > during_attempt);
-        assert!(ready(manager.access_token(during_attempt)).is_err());
+        assert!(ready(manager.account().access_token(during_attempt)).is_err());
     }
 
     #[test]
@@ -500,8 +518,12 @@ mod tests {
         )
         .unwrap();
         let first = sign_in(&manager, "first");
-        let guard = manager.refresh_lock.try_lock().unwrap();
-        let mut request = Box::pin(manager.refresh_access_token("access-first", first));
+        let guard = manager.account().refresh_lock.try_lock().unwrap();
+        let mut request = Box::pin(
+            manager
+                .account()
+                .refresh_access_token("access-first", first),
+        );
         let waker = std::task::Waker::from(std::sync::Arc::new(NoopWake));
         assert!(request
             .as_mut()
@@ -526,7 +548,7 @@ mod tests {
         report.cursor = 100;
         sign_in(&manager, "second");
         let applied = std::cell::Cell::new(false);
-        let cursor = manager.store.v2_cursor().unwrap();
+        let cursor = manager.store().v2_cursor().unwrap();
         assert!(manager
             .complete_v2_sync_with_apply(&report, None, || {
                 applied.set(true);
@@ -534,17 +556,17 @@ mod tests {
             })
             .is_err());
         assert!(!applied.get());
-        assert_eq!(manager.store.v2_cursor().unwrap(), cursor);
+        assert_eq!(manager.store().v2_cursor().unwrap(), cursor);
         assert!(manager
             .complete_v2_account_sync(&V2AccountSyncReport::default())
             .is_err());
-        report.auth_generation = Some(manager.auth_generation());
+        report.auth_generation = Some(manager.account().auth_generation());
         assert!(manager
             .complete_v2_sync_with_apply(&report, None, || Err(SyncError::InvalidState(
                 "apply failed".into()
             )))
             .is_err());
-        assert_eq!(manager.store.v2_cursor().unwrap(), cursor);
+        assert_eq!(manager.store().v2_cursor().unwrap(), cursor);
     }
 
     fn runtime(token: &str) -> RuntimeSession {
@@ -582,16 +604,21 @@ mod tests {
             directory.path().join("sync.db"),
         )
         .unwrap();
-        let generation = manager.begin_auth_attempt();
-        manager.auth.write().unwrap().session = Some(runtime("first"));
+        let generation = manager.account().begin_auth_attempt();
+        manager.account().auth.write().unwrap().session = Some(runtime("first"));
         assert_eq!(
-            manager.clear_auth_with_cleanup(|| Ok(())).0.as_deref(),
+            manager
+                .account()
+                .clear_auth_with_cleanup(|| Ok(()))
+                .0
+                .as_deref(),
             Some("first")
         );
         assert!(manager
+            .account()
             .install_refreshed_session(generation, "first", runtime("late"))
             .is_err());
-        assert!(manager.auth.read().unwrap().session.is_none());
+        assert!(manager.account().auth.read().unwrap().session.is_none());
         assert!(!manager.state().unwrap().authenticated);
     }
 
@@ -603,21 +630,24 @@ mod tests {
             directory.path().join("sync.db"),
         )
         .unwrap();
-        let first = manager.begin_auth_attempt();
-        let second = manager.begin_auth_attempt();
-        assert!(manager.require_auth_generation(first).is_err());
-        manager.auth.write().unwrap().session = Some(runtime("current"));
+        let first = manager.account().begin_auth_attempt();
+        let second = manager.account().begin_auth_attempt();
+        assert!(manager.account().require_auth_generation(first).is_err());
+        manager.account().auth.write().unwrap().session = Some(runtime("current"));
         assert!(manager
+            .account()
             .install_refreshed_session(second, "wrong", runtime("bad"))
             .is_err());
         assert_eq!(
             manager
+                .account()
                 .install_refreshed_session(second, "current", runtime("next"))
                 .unwrap(),
             "access-next"
         );
         assert_eq!(
             manager
+                .account()
                 .auth
                 .read()
                 .unwrap()
@@ -636,12 +666,12 @@ mod tests {
             directory.path().join("sync.db"),
         )
         .unwrap();
-        manager.auth.write().unwrap().session = Some(runtime("current"));
-        let (_, cleanup) = manager.clear_auth_with_cleanup(|| {
+        manager.account().auth.write().unwrap().session = Some(runtime("current"));
+        let (_, cleanup) = manager.account().clear_auth_with_cleanup(|| {
             Err(SyncError::InvalidState("secret store unavailable".into()))
         });
         assert!(cleanup.is_err());
-        assert!(manager.auth.read().unwrap().session.is_none());
+        assert!(manager.account().auth.read().unwrap().session.is_none());
         assert!(!manager.state().unwrap().authenticated);
     }
     #[test]
@@ -685,11 +715,14 @@ mod tests {
         entered_rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .unwrap();
-        assert!(manager.auth_generation.try_lock().is_err());
+        assert!(manager.account().auth_generation.try_lock().is_err());
         let logout_manager = manager.clone();
         let logout = std::thread::spawn(move || {
             logout_manager
-                .clear_auth_with_cleanup(|| logout_manager.delete_persisted_refresh_token())
+                .account()
+                .clear_auth_with_cleanup(|| {
+                    logout_manager.account().delete_persisted_refresh_token()
+                })
                 .1
         });
         release_tx.send(()).unwrap();
@@ -740,11 +773,11 @@ mod tests {
         assert!(state.auth_error.is_some());
         let second = sign_in(&manager, "second");
         store.fail.store(false, std::sync::atomic::Ordering::SeqCst);
-        assert!(manager.session_for_generation(first).is_err());
+        assert!(manager.account().session_for_generation(first).is_err());
         assert!(store.token.lock().unwrap().is_none());
-        manager.flush_pending_credentials();
+        manager.account().flush_pending_credentials();
         assert_eq!(
-            ready(manager.access_token(second)).unwrap(),
+            ready(manager.account().access_token(second)).unwrap(),
             "access-second"
         );
         assert_eq!(store.token.lock().unwrap().as_deref(), Some("second"));
@@ -825,8 +858,9 @@ mod tests {
         )
         .unwrap();
         sign_in(&manager, "current");
-        let (_, cleanup) =
-            manager.clear_auth_with_cleanup(|| manager.delete_persisted_refresh_token());
+        let (_, cleanup) = manager
+            .account()
+            .clear_auth_with_cleanup(|| manager.account().delete_persisted_refresh_token());
         assert!(cleanup.is_err());
         assert!(!manager.state().unwrap().authenticated);
         let service_manager = manager.clone();
@@ -862,7 +896,8 @@ mod tests {
         .unwrap();
         sign_in(&manager, "old");
         manager
-            .clear_auth_with_cleanup(|| manager.delete_persisted_refresh_token())
+            .account()
+            .clear_auth_with_cleanup(|| manager.account().delete_persisted_refresh_token())
             .1
             .unwrap_err();
         let service_manager = manager.clone();
@@ -895,15 +930,15 @@ mod tests {
             Err(SyncError::NotAuthenticated)
         ));
         let second = manager.begin_google_sign_in();
-        manager.clear_auth_with_cleanup(|| Ok(()));
+        let _ = manager.account().clear_auth_with_cleanup(|| Ok(()));
         assert!(matches!(
             ready(manager.sign_in_with_google_desktop("code", "state", "verifier", second)),
             Err(SyncError::NotAuthenticated)
         ));
         let third = manager.begin_google_sign_in();
         let fourth = manager.begin_google_sign_in();
-        assert!(manager.require_auth_generation(third).is_err());
-        assert!(manager.require_auth_generation(fourth).is_ok());
+        assert!(manager.account().require_auth_generation(third).is_err());
+        assert!(manager.account().require_auth_generation(fourth).is_ok());
     }
 
     #[test]
@@ -915,16 +950,22 @@ mod tests {
         )
         .unwrap();
         {
-            let mut auth = manager.auth.write().unwrap();
+            let mut auth = manager.account().auth.write().unwrap();
             auth.error = Some("database cleanup failed".into());
             auth.credential_error = Some("token delete failed".into());
             auth.pending_credential = Some(CredentialWrite::Delete);
         }
-        assert!(manager.flush_pending_credentials());
+        assert!(manager.account().flush_pending_credentials());
         assert_eq!(
             manager.state().unwrap().auth_error.as_deref(),
             Some("database cleanup failed")
         );
-        assert!(manager.auth.read().unwrap().credential_error.is_none());
+        assert!(manager
+            .account()
+            .auth
+            .read()
+            .unwrap()
+            .credential_error
+            .is_none());
     }
 }

@@ -111,7 +111,7 @@ function NotebookCloudSyncToggle({
           className="h-8 shrink-0 rounded-lg"
           onClick={onUnavailableClick}
         >
-          {t('preferences.cloud.login')}
+          {t('preferences.cloud.accountSettings')}
         </Button>
       ) : (
         <button

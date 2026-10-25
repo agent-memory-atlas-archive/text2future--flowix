@@ -17,6 +17,7 @@ import {
 import { useAgentRuntimeStore } from '@features/agent/store/agent-runtime-store';
 import { normalizeAgentRuntimeStatus } from '@features/agent/runtime/agent-runtime-status';
 import { useI18n } from '@/lib/i18n';
+import { getCloudSyncAccess } from '@/lib/cloud-account';
 import { useDocumentMetricsStore } from '@features/document/store/document-metrics-store';
 import { useNoteStore } from '@features/memo/store/note-store';
 import { CloudStatusIcon } from '@shared/icons/cloud-status-icon';
@@ -117,7 +118,7 @@ export function StatusBar({
       void Promise.all([cloud.getState(), cloud.listNotebookStates()])
         .then(([cloudState, links]) => {
           if (requestId !== cloudStateRequestRef.current) return;
-          setCloudSyncAvailable(cloudState.authenticated);
+          setCloudSyncAvailable(getCloudSyncAccess(cloudState).canRead);
           setCloudSyncedNotebookIds(
             new Set(links.filter((link) => link.enabled).map((link) => link.notebookId)),
           );
@@ -130,7 +131,7 @@ export function StatusBar({
     };
     refreshCloudSyncedNotebookIds();
     return listenToCloudStateChanges((cloudState) => {
-      setCloudSyncAvailable(cloudState.authenticated);
+      setCloudSyncAvailable(getCloudSyncAccess(cloudState).canRead);
       refreshCloudSyncedNotebookIds();
     });
   }, []);

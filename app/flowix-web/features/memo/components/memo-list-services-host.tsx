@@ -4,6 +4,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, Loader2 } from 'lucide-react';
 import { useShortcutScope, pushHandler } from '@features/shortcuts';
 import { useI18n, type I18nParams } from '@/lib/i18n';
+import { getCloudSyncAccess } from '@/lib/cloud-account';
 import { useShallow } from 'zustand/react/shallow';
 import {
   cloud,
@@ -480,7 +481,7 @@ export function MemoListServicesHost({
       .then(([cloudState, link]) => {
         if (cancelled) return;
         const enabled = Boolean(link?.enabled);
-        setCloudSyncAvailable(cloudState.authenticated);
+        setCloudSyncAvailable(getCloudSyncAccess(cloudState).canRead);
         setEditCloudSync(enabled);
         setOriginalEditCloudSync(enabled);
       })
@@ -493,7 +494,7 @@ export function MemoListServicesHost({
   }, [editOpen, editingNotebook]);
 
   useEffect(() => listenToCloudStateChanges((state) => {
-    setCloudSyncAvailable(state.authenticated);
+    setCloudSyncAvailable(getCloudSyncAccess(state).canRead);
   }), []);
 
   useEffect(() => {
@@ -631,9 +632,14 @@ export function MemoListServicesHost({
   const openRemoteNotebooks = useCallback(async () => {
     try {
       const state = await cloud.getState();
-      setCloudSyncAvailable(state.authenticated);
+      const syncAvailable = getCloudSyncAccess(state).canRead;
+      setCloudSyncAvailable(syncAvailable);
       if (!state.authenticated) {
         resetCreateState();
+        await tauriWindows.openPreferences('cloudSync');
+        return;
+      }
+      if (!syncAvailable) {
         await tauriWindows.openPreferences('cloudSync');
         return;
       }

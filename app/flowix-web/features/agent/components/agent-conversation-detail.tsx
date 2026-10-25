@@ -23,6 +23,8 @@ import {
   AgentThreadCardMessagesController,
   createThreadCacheSkeleton,
 } from '@features/agent/thread-card/messages';
+import { loadAgentThreadCardCache } from '@features/agent/thread-card/agent-thread-card-cache';
+import { isMissingAgentSessionError } from '@features/agent/services/history-error';
 import {
   ComposerController,
   ComposerSubmissionController,
@@ -41,7 +43,7 @@ import { ExternalAgentSettingsController } from '@features/agent/thread-card/set
 import { NotebookAgentSettingsDialogController } from '@features/agent/thread-card/settings/notebook-agent-settings-dialog';
 import { AgentConversationSurfaceController } from '@features/agent/thread-card/surface/agent-conversation-surface-controller';
 import { createExternalAgentRuntimeHandle } from '@features/agent/services/external-agent-runtime-service';
-import { ensureAgentConversationDetailThread } from '@features/agent/components/agent-conversation-detail-submit';
+import { ensureAgentConversationDetailThread, needsAgentConversationInitialization } from '@features/agent/components/agent-conversation-detail-submit';
 import { ensureConversationWorkspaceSnapshot, markConversationWorkspaceStarted } from '@features/agent/runtime/workspace-snapshot';
 import { AgentBackgroundTerminals } from '@features/agent/components/agent-background-terminals';
 import { CodexApprovalQueue } from '@features/agent/components/codex-approval-queue';
@@ -82,11 +84,6 @@ const INPUT_DRAFT_MAX_CHARS = 500;
 const EMPTY_MESSAGES: ThreadState['messages'] = [];
 const EMPTY_PENDING_CODEX_MESSAGES: readonly [] = [];
 
-function isMissingHistorySession(error: string | null | undefined): boolean {
-  if (!error) return false;
-  return Boolean(error.match(/session\s+["'][^"']+["']\s+not found/i)
-    ?? error.match(/session\s+not found:\s*["']?[\w.-]+["']?/i));
-}
 const DETAIL_DRAFT_KEY_PREFIX = 'flowix:agent-conversation-draft:';
 const logger = createLogger('agent-conversation-detail');
 
@@ -200,7 +197,7 @@ function AgentConversationDetailContent({
       ? state.pendingSteeringMessages[threadId] ?? EMPTY_PENDING_CODEX_MESSAGES
       : EMPTY_PENDING_CODEX_MESSAGES,
   );
-  const missingSession = isMissingHistorySession(initialHistoryError);
+  const missingSession = isMissingAgentSessionError(initialHistoryError);
   const isInitialHistoryLoading = isInitialConversationHistoryLoading(
     threadId,
     messages.length,
@@ -316,7 +313,7 @@ function AgentConversationDetailContent({
     const currentInstance = instanceRef.current;
     if (!currentInstance) throw new Error('Agent session instance was not found');
     const currentThreadId = threadIdRef.current;
-    if (!currentThreadId) {
+    if (!currentThreadId || needsAgentConversationInitialization(currentInstance)) {
       if (!runtimeHandleRef.current) {
         runtimeHandleRef.current = createExternalAgentRuntimeHandle();
       }
@@ -344,7 +341,7 @@ function AgentConversationDetailContent({
     const currentInstance = instanceRef.current;
     if (!currentInstance) throw new Error('Agent session instance was not found');
     let currentThreadId = threadIdRef.current;
-    if (!currentThreadId) {
+    if (!currentThreadId || needsAgentConversationInitialization(currentInstance)) {
       if (!runtimeHandleRef.current) {
         runtimeHandleRef.current = createExternalAgentRuntimeHandle();
       }
@@ -383,7 +380,7 @@ function AgentConversationDetailContent({
       composer, images, getRuntime: composerRuntimeState, isDisposed,
       bind: async (snapshot, kind): Promise<ComposerConversationBinding> => {
         const targetThreadId = threadIdRef.current;
-        if (targetThreadId) return {
+        if (targetThreadId && !needsAgentConversationInitialization(currentInstance)) return {
           instanceId: currentInstance.instanceId,
           threadId: targetThreadId,
           typeKey: currentInstance.agentType,
@@ -441,7 +438,9 @@ function AgentConversationDetailContent({
     if (!threadId) return;
     const store = useAgentSessionStore.getState();
     const release = acquireThreadInterest(threadId);
-    void store.loadMessages(instance.agentType, threadId);
+    void loadAgentThreadCardCache({ threadId, typeKey: instance.agentType }).catch((error) => {
+      logger.warn('Failed to load conversation history', { threadId, error: String(error) });
+    });
     if (instance.agentType === "codex") void store.hydrateCodexFollowUps(threadId);
     return release;
   }, [instance.agentType, threadId]);

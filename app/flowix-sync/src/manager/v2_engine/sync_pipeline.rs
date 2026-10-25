@@ -39,6 +39,8 @@ impl SyncManager {
             remote,
             bootstrapped_notebooks,
             bootstrap_next_page_token: bootstrap.next_page_token,
+            read_only: false,
+            deferred_notebooks: Vec::new(),
         })
     }
 
@@ -51,6 +53,8 @@ impl SyncManager {
         generation: u64,
     ) -> Result<V2AccountSyncReport, SyncError> {
         let started_at = Utc::now().timestamp_millis();
+        let access = self.account.require_sync_access()?;
+        let allow_writes = access.can_upload;
         let enabled_notebooks: Vec<_> = self
             .store
             .v2_notebooks(true)?
@@ -68,26 +72,43 @@ impl SyncManager {
             .iter()
             .map(|notebook| notebook.notebook_id.as_str())
             .collect();
-        let mut self_sync_seqs = self
-            .push_v2_pending_moves(access_token, notebook_scope, generation)
-            .await?;
+        let mut self_sync_seqs = if allow_writes {
+            self.push_v2_pending_moves(access_token, notebook_scope, generation)
+                .await?
+        } else {
+            HashSet::new()
+        };
+        // Observe local changes before any pull, including passes without upload capacity.
         {
-            let _generation = self.require_auth_generation(generation)?;
+            let _generation = self.account.require_auth_generation(generation)?;
             self.reconcile_v2_snapshot(&enabled_ids, notebooks, notes)?;
         }
-        self.freeze_new_v2_operations(access_token, notebooks, notes, notebook_scope, generation)
-            .await?;
-
-        let due = match notebook_scope {
+        self.freeze_new_v2_operations(
+            access_token,
+            notebooks,
+            notes,
+            notebook_scope,
+            generation,
+            access,
+        )
+        .await?;
+        let mut due = match notebook_scope {
             Some(scope) => self
                 .store
                 .v2_inflight_due_for_notebook(Utc::now().timestamp_millis(), scope)?,
             None => self.store.v2_inflight_due(Utc::now().timestamp_millis())?,
         };
+        due.retain(|operation| match operation.operation_kind {
+            V2OperationKind::Put => access.can_upload,
+            V2OperationKind::Delete => access.can_delete,
+        });
         let (uploaded, deleted, pushed_seqs) = self
             .push_v2_inflight(access_token, &due, generation)
             .await?;
         self_sync_seqs.extend(pushed_seqs);
+        if deleted > 0 && !allow_writes {
+            self.account.request_entitlement_refresh();
+        }
 
         let bootstrap_required = enabled_notebooks
             .iter()
@@ -96,7 +117,7 @@ impl SyncManager {
             Some(scope) => self.store.v2_notebook_cursor(scope)?,
             None => self.store.v2_cursor()?,
         };
-        let report = if bootstrap_required {
+        let mut report = if bootstrap_required {
             self.bootstrap_v2_snapshot(
                 access_token,
                 &enabled_notebooks,
@@ -128,6 +149,8 @@ impl SyncManager {
                     remote,
                     bootstrapped_notebooks: Vec::new(),
                     bootstrap_next_page_token: None,
+                    read_only: false,
+                    deferred_notebooks: Vec::new(),
                 },
                 Err(SyncError::Api {
                     status: 410, code, ..
@@ -147,7 +170,8 @@ impl SyncManager {
             }
         };
 
-        let _generation = self.require_auth_generation(generation)?;
+        report.read_only = !allow_writes;
+        let _generation = self.account.require_auth_generation(generation)?;
         Ok(report)
     }
 }

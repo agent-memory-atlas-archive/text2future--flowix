@@ -29,7 +29,9 @@ pub(super) use local_snapshot::{
     record_full_local_snapshot, scan_cloud_attachments, should_run_full_local_snapshot,
     v2_account_snapshot,
 };
-pub(super) use remote_apply::{apply_v2_report, safe_cloud_file_path, safe_cloud_note_path};
+pub(super) use remote_apply::{RemoteApplyError, RemoteConflict,
+    apply_v2_report_preserving_local, safe_cloud_file_path, safe_cloud_note_path,
+};
 
 #[cfg(test)]
 mod conflict_file_tests {

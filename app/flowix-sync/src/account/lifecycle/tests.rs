@@ -1,4 +1,5 @@
 use super::*;
+use crate::{SyncManager, V2EntityType, V2FreezeOperation, V2OperationKind, V2RemoteApply};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -97,7 +98,7 @@ fn session(id: &str) -> Value {
 }
 fn seed_account(manager: &SyncManager, id: &str) {
     manager
-        .store
+        .store()
         .save_v2_account(&V2CloudAccount {
             user: serde_json::from_value(user(id)).unwrap(),
             protocol_epoch: crate::v2::PROTOCOL_EPOCH,
@@ -154,7 +155,7 @@ async fn recovery_timeout_opens_login_and_manual_login_supersedes_late_refresh()
     seed_account(&manager, "old");
     let recovering = manager.clone();
     let recovery = tokio::spawn(async move {
-        recovering.restore_saved_session(policy()).await;
+        recovering.account().restore_saved_session(policy()).await;
     });
     wait_for(|| manager.state().unwrap().auth_status == CloudAuthStatus::SignedOut).await;
     assert!(manager.state().unwrap().auth_error.is_some());
@@ -193,7 +194,7 @@ async fn transient_failure_retries_and_persisted_rotation_survives_restart() {
     let manager =
         SyncManager::new_with_token_store(&server.url, &database, tokens.clone()).unwrap();
     seed_account(&manager, "account");
-    manager.restore_saved_session(policy()).await;
+    manager.account().restore_saved_session(policy()).await;
     assert!(manager.state().unwrap().authenticated);
     assert_eq!(requests.load(Ordering::SeqCst), 2);
     assert_eq!(tokens.load().unwrap().as_deref(), Some("rotated"));
@@ -203,7 +204,7 @@ async fn transient_failure_retries_and_persisted_rotation_survives_restart() {
         restarted.state().unwrap().auth_status,
         CloudAuthStatus::Restoring
     );
-    restarted.restore_saved_session(policy()).await;
+    restarted.account().restore_saved_session(policy()).await;
     assert!(restarted.state().unwrap().authenticated);
     assert_eq!(
         restarted.state().unwrap().account.unwrap().user.id,
@@ -228,7 +229,7 @@ async fn invalid_refresh_clears_local_credentials_and_stops_recovery() {
     )
     .unwrap();
     seed_account(&manager, "account");
-    manager.restore_saved_session(policy()).await;
+    manager.account().restore_saved_session(policy()).await;
     assert_eq!(
         manager.state().unwrap().auth_status,
         CloudAuthStatus::SignedOut
@@ -250,15 +251,23 @@ async fn failed_membership_refresh_invalidates_shared_access_until_a_successful_
     let fail = Arc::new(AtomicBool::new(false));
     let server_fail = fail.clone();
     let server = Server::new(move |path| match path {
-        "/v1/auth/login" => (200, json!({ "data": { "session": session("first"), "user": user("first") } })),
-        "/v2/entitlements/current" if server_fail.load(Ordering::SeqCst) =>
-            (503, json!({ "error": { "code": "UNAVAILABLE", "message": "offline" } })),
+        "/v1/auth/login" => (
+            200,
+            json!({ "data": { "session": session("first"), "user": user("first") } }),
+        ),
+        "/v2/entitlements/current" if server_fail.load(Ordering::SeqCst) => (
+            503,
+            json!({ "error": { "code": "UNAVAILABLE", "message": "offline" } }),
+        ),
         "/v2/entitlements/current" => (200, entitlement()),
         _ => panic!("unexpected request {path}"),
     });
     let directory = tempfile::tempdir().unwrap();
     let manager = SyncManager::new(&server.url, directory.path().join("sync.db")).unwrap();
-    manager.login("first@example.test", "password").await.unwrap();
+    manager
+        .login("first@example.test", "password")
+        .await
+        .unwrap();
     manager.refresh_membership().await.unwrap();
     let verified_revision = manager.state().unwrap().revision;
     assert!(manager.state().unwrap().membership.is_some());
@@ -440,10 +449,14 @@ async fn restoration_without_account_cache_preserves_rotation_when_metadata_fail
         tokens.clone(),
     )
     .unwrap();
-    assert!(manager.restore_at_generation("original", 0).await.is_err());
+    assert!(manager
+        .account()
+        .restore_at_generation("original", 0)
+        .await
+        .is_err());
     assert_eq!(tokens.load().unwrap().as_deref(), Some("rotated"));
     assert!(!manager.state().unwrap().authenticated);
-    manager.restore_saved_session(policy()).await;
+    manager.account().restore_saved_session(policy()).await;
     let state = manager.state().unwrap();
     assert!(state.authenticated);
     assert_eq!(state.account.unwrap().user.id, "restored");
@@ -550,18 +563,18 @@ async fn failed_logout_cleanup_cannot_restore_after_restart_and_explicit_login_u
         CloudAuthStatus::SignedOut
     );
     let before = requests.load(Ordering::SeqCst);
-    restarted.restore_saved_session(policy()).await;
+    restarted.account().restore_saved_session(policy()).await;
     assert_eq!(requests.load(Ordering::SeqCst), before);
     assert!(!restarted.state().unwrap().authenticated);
     tokens.fail_delete.store(false, Ordering::SeqCst);
-    assert!(restarted.flush_pending_credentials());
+    assert!(restarted.account().flush_pending_credentials());
     assert!(tokens.load().unwrap().is_none());
     restarted
         .login("test@example.test", "password")
         .await
         .unwrap();
-    assert!(!restarted.store.session_restore_blocked().unwrap());
-    assert!(restarted.flush_pending_credentials());
+    assert!(!restarted.store().session_restore_blocked().unwrap());
+    assert!(restarted.account().flush_pending_credentials());
     assert_eq!(tokens.load().unwrap().as_deref(), Some("account"));
     assert!(restarted.state().unwrap().authenticated);
 }
@@ -580,7 +593,11 @@ async fn cached_account_write_failure_does_not_discard_rotated_token() {
     seed_account(&manager, "account");
     let connection = rusqlite::Connection::open(&database).unwrap();
     connection.execute_batch("CREATE TRIGGER fail_account_update BEFORE UPDATE ON v2_cloud_account BEGIN SELECT RAISE(ABORT, 'database write failed'); END;").unwrap();
-    assert!(manager.restore_at_generation("original", 0).await.is_err());
+    assert!(manager
+        .account()
+        .restore_at_generation("original", 0)
+        .await
+        .is_err());
     assert_eq!(tokens.load().unwrap().as_deref(), Some("rotated"));
     assert!(!manager.state().unwrap().authenticated);
     connection
@@ -588,6 +605,159 @@ async fn cached_account_write_failure_does_not_discard_rotated_token() {
         .unwrap();
     drop(manager);
     let restarted = SyncManager::new_with_token_store(&server.url, &database, tokens).unwrap();
-    restarted.restore_saved_session(policy()).await;
+    restarted.account().restore_saved_session(policy()).await;
     assert!(restarted.state().unwrap().authenticated);
+}
+
+#[tokio::test]
+async fn full_storage_still_pushes_deletes_and_preserves_pending_puts() {
+    let pushes = Arc::new(AtomicUsize::new(0));
+    let counted = pushes.clone();
+    let server = Server::new(move |path| match path {
+        "/v1/auth/login" => (
+            200,
+            json!({"data": {"session": session("full"), "user": user("full")}}),
+        ),
+        "/v2/entitlements/current" => (
+            200,
+            json!({"data": {
+                "membership": {"active": true, "expiresAt": 4_102_444_800_000_i64, "features": {"cloudSync": true}},
+                "usage": {"usedBytes": 100, "quotaBytes": 100, "availableBytes": 0, "noteCount": 1, "readOnly": false}
+            }}),
+        ),
+        "/v2/sync/push" => {
+            counted.fetch_add(1, Ordering::SeqCst);
+            (
+                200,
+                json!({"data": {"protocolEpoch": 2, "headCursor": 2, "results": [{
+                    "operationId": "op_delete_full", "ok": true, "status": 200,
+                    "data": {"entityType": "note", "entityId": "note_delete", "revision": "rev_2",
+                        "syncSeq": 2, "deleted": true, "resolution": "fast_forward"}
+                }]}}),
+            )
+        }
+        path if path.starts_with("/v2/sync/changes?") => (
+            200,
+            json!({"data": {
+                "protocolEpoch": 2, "cursor": 2, "headCursor": 2, "hasMore": false, "changes": []
+            }}),
+        ),
+        _ => panic!("unexpected request (uploads must be deferred): {path}"),
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let manager = SyncManager::new(&server.url, directory.path().join("sync.db")).unwrap();
+    manager
+        .login("full@example.test", "password")
+        .await
+        .unwrap();
+    manager.refresh_membership().await.unwrap();
+    manager.store().set_v2_notebook("nb_full", true).unwrap();
+    manager
+        .store()
+        .commit_v2_sync_report(
+            &[V2RemoteApply::Note {
+                note_id: "note_delete".into(),
+                notebook_id: "nb_full".into(),
+                filename: "delete.md".into(),
+                content_hash: Some("old-hash".into()),
+                content: None,
+                revision: "rev_1".into(),
+                sync_seq: 1,
+                deleted: false,
+                attachments: Vec::new(),
+            }],
+            1,
+            &["nb_full".into()],
+            1,
+        )
+        .unwrap();
+    let deletion = manager
+        .store()
+        .mark_v2_dirty(
+            V2EntityType::Note,
+            "note_delete",
+            Some("nb_full"),
+            V2OperationKind::Delete,
+            "deleted",
+            1,
+        )
+        .unwrap();
+    manager.store().freeze_v2_operation(V2FreezeOperation {
+        operation_id: "op_delete_full", entity_type: V2EntityType::Note, entity_id: "note_delete",
+        generation: deletion.generation, operation_kind: V2OperationKind::Delete,
+        base_revision: None,
+        payload_json: r#"{"type":"note.delete","operationId":"op_delete_full","baseRevision":null,"noteId":"note_delete"}"#,
+    }).unwrap();
+    manager
+        .store()
+        .mark_v2_dirty(
+            V2EntityType::Note,
+            "note_pending",
+            Some("nb_full"),
+            V2OperationKind::Put,
+            "local-edit",
+            1,
+        )
+        .unwrap();
+    let report = manager
+        .sync_v2_account(Vec::new(), Vec::new())
+        .await
+        .unwrap();
+    assert!(report.read_only);
+    assert_eq!(report.deleted, 1);
+    assert_eq!(pushes.load(Ordering::SeqCst), 1);
+    let pending = manager.store().v2_dirty_entities().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].entity_id, "note_pending");
+}
+
+#[tokio::test]
+async fn signing_in_returns_before_background_entitlement_verification() {
+    let server = Server::new(|path| match path {
+        "/v1/auth/login" => (
+            200,
+            json!({"data": {"session": session("fast"), "user": user("fast")}}),
+        ),
+        _ => panic!("login must not wait for entitlement transport: {path}"),
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let manager = AccountService::new(&server.url, directory.path().join("sync.db")).unwrap();
+    let state = manager
+        .login("fast@example.test", "password")
+        .await
+        .unwrap();
+    assert!(state.authenticated);
+    assert_eq!(state.membership_status, CloudEntitlementStatus::Unknown);
+    assert!(!manager.sync_access().can_read);
+    // The process-owned service, rather than the login caller, consumes this wakeup.
+    tokio::time::timeout(
+        Duration::from_millis(100),
+        manager.entitlement_retry.notified(),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn account_service_verifies_entitlement_immediately_after_login() {
+    let server = Server::new(|path| match path {
+        "/v1/auth/login" => (
+            200,
+            json!({"data": {"session": session("service"), "user": user("service")}}),
+        ),
+        "/v2/entitlements/current" => (200, entitlement()),
+        _ => panic!("unexpected request {path}"),
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let manager = AccountService::new(&server.url, directory.path().join("sync.db")).unwrap();
+    let worker = manager.clone();
+    let service = tokio::spawn(async move { worker.run_session_service().await });
+    manager
+        .login("service@example.test", "password")
+        .await
+        .unwrap();
+    wait_for(|| manager.state().unwrap().membership_status == CloudEntitlementStatus::Verified)
+        .await;
+    service.abort();
+    let _ = service.await;
 }

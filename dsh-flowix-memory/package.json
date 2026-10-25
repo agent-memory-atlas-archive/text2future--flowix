@@ -2,7 +2,7 @@
   "name": "dsh-flowix-memory",
   "version": "0.1.0",
   "description": "DeepSeek Harness bundle: expose Flowix memos and artifact tools through the local flowix-cli MCP server",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "files": [
     "cordis.patch.yml",

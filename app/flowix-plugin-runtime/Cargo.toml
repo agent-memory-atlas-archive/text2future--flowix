@@ -4,6 +4,7 @@ version.workspace = true
 description = "Flowix plugin artifact contracts and non-agent execution runtime"
 authors = ["Flowix Contributors"]
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 flowix-core = { workspace = true }

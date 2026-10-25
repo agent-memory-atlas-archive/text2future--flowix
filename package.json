@@ -2,6 +2,7 @@
   "name": "flowix",
   "private": true,
   "version": "1.5.11",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "packageManager": "npm@10.8.2",
   "scripts": {
@@ -12,6 +13,7 @@
     "test:rust": "cargo test --manifest-path app/Cargo.toml --workspace --lib",
     "check:layers": "node scripts/check-layer-boundaries.mjs",
     "check:editor-tag-layout": "node scripts/check-editor-tag-layout.mjs",
+    "check:editor-indent-layout": "node scripts/check-editor-indent-layout.mjs",
     "check:note-rename-boundaries": "node scripts/check-note-rename-boundaries.mjs",
     "test:note-rename-boundaries": "node --test scripts/check-note-rename-boundaries.test.mjs",
     "check:package-manager": "node scripts/check-package-manager.mjs",

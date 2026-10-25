@@ -522,6 +522,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   margin: 0;
   padding-bottom: calc(var(--editor-font-size, 16px) * var(--editor-line-height, 1.8) * 0.25);
   white-space: pre-wrap;
+  text-indent: var(--editor-first-line-indent, 0em);
 }
 
 .markdown-editor .tiptap:not(.agent-composer__input-content) > p:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):empty,
