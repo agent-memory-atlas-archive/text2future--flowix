@@ -65,7 +65,7 @@ export function prewarmNotebookCache(): Promise<void> {
       return list;
     }).catch((err) => {
       // 鎷夊彇澶辫触璁╀笅娆?prewarm/match 鍐嶈瘯
-      // eslint-disable-next-line no-console
+
       console.warn('[note-reference] prewarmNotebookCache failed:', err);
       cachePromise = null;
       return [];

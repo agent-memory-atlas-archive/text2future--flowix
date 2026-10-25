@@ -65,6 +65,38 @@ describe('block gap cursor', () => {
     expect(editor.state.doc.childCount).toBe(2);
   });
 
+  it('opens gaps around a code block so a card below it stays reachable', () => {
+    const editor = createEditor();
+    editor.commands.setContent({
+      type: 'doc',
+      content: [
+        { type: 'codeBlock', content: [{ type: 'text', text: 'const a = 1;' }] },
+        { type: 'card' },
+      ],
+    });
+    const between = editor.state.doc.child(0).nodeSize;
+    // A code block holds inline content, so without `createGapCursor` on its
+    // schema both of its sides are "open" and no gap — hence no insertion line —
+    // could exist between it and the card.
+    expect(isValidBlockGap(editor.state.doc.resolve(between))).toBe(true);
+    expect(isValidBlockGap(editor.state.doc.resolve(0))).toBe(true);
+    expect(editor.view.dom.querySelectorAll('.editor-block-gap')).toHaveLength(3);
+  });
+
+  it('keeps ordinary text blocks free of gaps', () => {
+    const editor = createEditor();
+    editor.commands.setContent({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'a' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'b' }] },
+      ],
+    });
+    const between = editor.state.doc.child(0).nodeSize;
+    expect(isValidBlockGap(editor.state.doc.resolve(between))).toBe(false);
+    expect(editor.view.dom.querySelectorAll('.editor-block-gap')).toHaveLength(0);
+  });
+
   it('clicks a boundary without changing the document', () => {
     const editor = createEditor();
     const before = editor.state.doc;

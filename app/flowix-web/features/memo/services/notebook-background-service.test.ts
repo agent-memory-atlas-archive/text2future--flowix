@@ -1,14 +1,21 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { NotebookBackgroundStatus } from '@platform/tauri/client/memos';
-const mocks = vi.hoisted(() => ({ snapshot: vi.fn(), subscribe: vi.fn(), invalidate: vi.fn(), setNotes: vi.fn(), stop: vi.fn() }));
-vi.mock('@platform/tauri/client/memos', () => ({ notebooks: { getBackgroundStatus: mocks.snapshot } }));
+const mocks = vi.hoisted(() => ({ snapshot: vi.fn(), mediaStatus: vi.fn(), subscribe: vi.fn(), invalidate: vi.fn(), setNotes: vi.fn(), stop: vi.fn() }));
+// 服务同时拉取媒体维护状态（getMediaMaintenanceStatus）；缺这个桩会在挂载时抛
+// "is not a function"，让三个用例一起红。
+vi.mock('@platform/tauri/client/memos', () => ({
+  notebooks: {
+    getBackgroundStatus: mocks.snapshot,
+    getMediaMaintenanceStatus: mocks.mediaStatus,
+  },
+}));
 vi.mock('@platform/tauri/event-bus', () => ({ subscribe: mocks.subscribe }));
 vi.mock('@platform/tauri/notebook-change-events', () => ({ publishNotebookQueryInvalidated: mocks.invalidate }));
 vi.mock('../store/note-store', () => ({ useNoteStore: { setState: mocks.setNotes } }));
 import { useNotebookBackgroundStore } from '../store/notebook-background-store';
 import { mountNotebookBackgroundUpdates } from './notebook-background-service';
 beforeEach(() => {
-  vi.resetAllMocks(); mocks.snapshot.mockResolvedValue([]); mocks.subscribe.mockReturnValue(mocks.stop);
+  vi.resetAllMocks(); mocks.snapshot.mockResolvedValue([]); mocks.mediaStatus.mockResolvedValue([]); mocks.subscribe.mockReturnValue(mocks.stop);
   useNotebookBackgroundStore.setState({ statuses: {} });
 });
 it('does not let an old snapshot overwrite a newer completion event', async () => {
@@ -38,5 +45,6 @@ it('ignores a snapshot that arrives after the workbench unmounts', async () => {
   finish([{ notebookId: 'a', revision: 1, state: 'ready', memoCount: 2, message: null }]);
   await Promise.resolve();
   expect(mocks.setNotes).not.toHaveBeenCalled(); expect(mocks.invalidate).not.toHaveBeenCalled();
-  expect(mocks.stop).toHaveBeenCalledOnce();
+  // 服务现在订阅两条通道（笔记本后台状态 + 媒体维护状态），卸载时都要退订。
+  expect(mocks.stop).toHaveBeenCalledTimes(2);
 });

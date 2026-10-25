@@ -68,7 +68,6 @@ export function CodeSurfaceFileBrowser({ surface }: { surface: CodeSurface }) {
         void openWorkspaceSurface({
           host: 'browser-column',
           target: { ...context, kind: 'file-browser', activeFilePath: path, folderPath: null },
-          options: { browserDisposition: 'open-in-column' },
         });
       },
       onContextChange: updateView,

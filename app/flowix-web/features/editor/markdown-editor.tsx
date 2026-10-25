@@ -37,6 +37,7 @@ interface MarkdownEditorProps {
   getAttachmentOwnerPath?: () => string | undefined;
   getAttachmentNotebookId?: () => string | undefined;
   propertyTargetId?: string;
+  onPropertyAreaHoverChange?: (hovered: boolean) => void;
   onViewSourceMode?: () => void;
   transitionId?: number | null;
   content: string;
@@ -241,6 +242,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
   getAttachmentOwnerPath,
   getAttachmentNotebookId,
   propertyTargetId,
+  onPropertyAreaHoverChange,
   onViewSourceMode,
   transitionId = null,
   content,
@@ -700,6 +702,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         getOwnerPath: getCurrentAttachmentOwnerPath,
         getAttachmentNotebookId: getCurrentAttachmentNotebookId,
         propertyTargetId,
+        onPropertyAreaHoverChange,
         onViewSourceMode,
         transitionId,
         workspaceHost,

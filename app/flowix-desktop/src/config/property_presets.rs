@@ -138,29 +138,18 @@ pub struct PropertyPresetStore {
     path: PathBuf,
 }
 
-impl PropertyPresetStore {
-    pub fn new(path: impl AsRef<Path>) -> Self {
-        Self {
-            path: path.as_ref().to_path_buf(),
-        }
-    }
+const SYSTEM_PRESET_TYPES: [(&str, &str); 8] = [
+    ("name", "Text"),
+    ("description", "Text"),
+    ("tags", "Tag"),
+    ("flowix_colors", "Color"),
+    ("flowix_icon", "Icon"),
+    ("flowix_favorited", "Boolean"),
+    ("status", "Select"),
+    ("calendar_date", "Date"),
+];
 
-    fn open(&self) -> Result<Connection, String> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        let connection = Connection::open(&self.path).map_err(|error| error.to_string())?;
-        connection
-            .busy_timeout(Duration::from_secs(10))
-            .map_err(|error| error.to_string())?;
-        connection
-            .execute_batch(
-                "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
-            )
-            .map_err(|error| error.to_string())?;
-        let migration_connection = connection;
-        migration_connection.execute_batch(
-            "CREATE TABLE IF NOT EXISTS property_presets (
+const PROPERTY_PRESET_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS property_presets (
                 scope TEXT NOT NULL CHECK(scope IN ('system', 'user', 'deleted_user')),
                 id TEXT NOT NULL,
                 property_key TEXT NOT NULL,
@@ -186,8 +175,32 @@ impl PropertyPresetStore {
              CREATE TABLE IF NOT EXISTS local_migrations (
                 migration_key TEXT PRIMARY KEY,
                 completed_at INTEGER NOT NULL
-             );",
-        ).map_err(|error| error.to_string())?;
+             );";
+
+impl PropertyPresetStore {
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+        }
+    }
+
+    fn open(&self) -> Result<Connection, String> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        let connection = Connection::open(&self.path).map_err(|error| error.to_string())?;
+        connection
+            .busy_timeout(Duration::from_secs(10))
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute_batch(
+                "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
+            )
+            .map_err(|error| error.to_string())?;
+        let migration_connection = connection;
+        migration_connection
+            .execute_batch(PROPERTY_PRESET_SCHEMA)
+            .map_err(|error| error.to_string())?;
         Ok(migration_connection)
     }
 
@@ -209,9 +222,101 @@ impl PropertyPresetStore {
         flowix_core::memo_file::initialize_local_migration_table(&mut connection)
             .map_err(|error| error.to_string())?;
         migrate_legacy_schema(&mut connection)?;
+        let has_position: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('property_presets') WHERE name='position')",
+            [], |row| row.get(0),
+        ).map_err(|error| error.to_string())?;
+        if !has_position && connection.prepare("SELECT scope,id,property_key,display_name,property_type,revision,multiple,updated_at FROM property_presets LIMIT 0").is_ok() {
+            connection.execute_batch("ALTER TABLE property_presets ADD COLUMN position INTEGER NOT NULL DEFAULT 0;")
+                .map_err(|error| error.to_string())?;
+        }
         drop(connection);
         let _ = self.open()?;
         Ok(())
+    }
+
+    pub fn runtime_defaults() -> PropertyPresetRegistry {
+        PropertyPresetRegistry {
+            system_fields: SYSTEM_PRESET_TYPES
+                .into_iter()
+                .enumerate()
+                .map(|(position, (key, kind))| default_system_field(position, key, kind))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// Repair only this module's tables. Access errors and failures in shared
+    /// tables never grant permission to replace local.db or the notebook rows.
+    pub fn initialize_runtime_storage(&self) -> Result<(), String> {
+        let initialize = || {
+            self.initialize_legacy_schema()?;
+            self.initialize_system_presets()
+        };
+        if let Err(error) = initialize() {
+            if !self.repair_property_tables()? {
+                return Err(error);
+            }
+            initialize()?;
+        }
+        Ok(())
+    }
+
+    fn repair_property_tables(&self) -> Result<bool, String> {
+        if flowix_core::memo_file::database_file_is_corrupt(&self.path)
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(false);
+        }
+        let mut connection = Connection::open(&self.path).map_err(|error| error.to_string())?;
+        connection
+            .busy_timeout(Duration::from_millis(100))
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute_batch("PRAGMA foreign_keys=ON;")
+            .map_err(|error| error.to_string())?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let incompatible = |sql: &str| -> Result<bool, String> {
+            match transaction.prepare(sql) {
+                Ok(_) => Ok(false),
+                Err(error) if flowix_core::memo_file::is_rebuildable_storage_error(&error) => {
+                    Ok(true)
+                }
+                Err(error) => Err(error.to_string()),
+            }
+        };
+        let broken_presets = incompatible("SELECT scope,id,property_key,display_name,property_type,revision,multiple,updated_at,position FROM property_presets LIMIT 0")?;
+        let broken_options = incompatible(
+            "SELECT scope,preset_id,option_id,label,position FROM property_preset_options LIMIT 0",
+        )?;
+        if !broken_presets && !broken_options {
+            return Ok(false);
+        }
+        if broken_presets || broken_options {
+            transaction
+                .execute_batch("DROP TABLE IF EXISTS property_preset_options;")
+                .map_err(|error| error.to_string())?;
+        }
+        if broken_presets {
+            transaction
+                .execute_batch("DROP TABLE IF EXISTS property_presets;")
+                .map_err(|error| error.to_string())?;
+        }
+        transaction
+            .execute_batch(PROPERTY_PRESET_SCHEMA)
+            .map_err(|error| error.to_string())?;
+        if broken_presets {
+            transaction
+                .execute(
+                    "DELETE FROM local_migrations WHERE migration_key='property_presets_v1'",
+                    [],
+                )
+                .map_err(|error| error.to_string())?;
+        }
+        transaction.commit().map_err(|error| error.to_string())?;
+        Ok(true)
     }
 
     pub fn get(&self) -> Result<PropertyPresetRegistry, String> {
@@ -517,17 +622,7 @@ impl PropertyPresetStore {
              WHERE property_type IN ('List', 'Tags', 'noteTag')",
             )
             .map_err(|error| error.to_string())?;
-        for (position, (key, kind)) in [
-            ("name", "Text"),
-            ("description", "Text"),
-            ("tags", "Tag"),
-            ("flowix_colors", "Color"),
-            ("flowix_icon", "Icon"),
-            ("flowix_favorited", "Boolean"),
-            ("status", "Select"),
-            ("calendar_date", "Date"),
-        ]
-        .into_iter()
+        for (position, (key, kind)) in SYSTEM_PRESET_TYPES        .into_iter()
         .enumerate()
         {
             if existing.system_fields.iter().any(|field| field.key == key) {
@@ -544,29 +639,7 @@ impl PropertyPresetStore {
                     .map_err(|error| error.to_string())?;
                 legacy.clone()
             } else {
-                let options = if key == "status" {
-                    vec!["未开始".into(), "进行中".into(), "完成".into()]
-                } else {
-                    vec![]
-                };
-                PropertyFieldConfig {
-                    id: Some(legacy_property_id(&format!("system:{key}"))),
-                    key: key.into(),
-                    r#type: kind.into(),
-                    revision: 1,
-                    position: position as u32,
-                    option_ids: options
-                        .iter()
-                        .map(|label| {
-                            format!(
-                                "opt_{}",
-                                &legacy_property_id(&format!("system:{key}:{label}"))[4..]
-                            )
-                        })
-                        .collect(),
-                    options,
-                    ..Default::default()
-                }
+                default_system_field(position, key, kind)
             };
             insert_registry(
                 &transaction,
@@ -577,6 +650,32 @@ impl PropertyPresetStore {
             )?;
         }
         transaction.commit().map_err(|error| error.to_string())
+    }
+}
+
+fn default_system_field(position: usize, key: &str, kind: &str) -> PropertyFieldConfig {
+    let options = if key == "status" {
+        vec!["未开始".into(), "进行中".into(), "完成".into()]
+    } else {
+        vec![]
+    };
+    PropertyFieldConfig {
+        id: Some(legacy_property_id(&format!("system:{key}"))),
+        key: key.into(),
+        r#type: kind.into(),
+        revision: 1,
+        position: position as u32,
+        option_ids: options
+            .iter()
+            .map(|label| {
+                format!(
+                    "opt_{}",
+                    &legacy_property_id(&format!("system:{key}:{label}"))[4..]
+                )
+            })
+            .collect(),
+        options,
+        ..Default::default()
     }
 }
 
@@ -812,6 +911,76 @@ fn legacy_property_id(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_defaults_match_fresh_system_presets() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = PropertyPresetStore::new(directory.path().join("local.db"));
+        store.initialize_runtime_storage().unwrap();
+        assert_eq!(serde_json::to_value(store.get().unwrap()).unwrap(), serde_json::to_value(PropertyPresetStore::runtime_defaults()).unwrap());
+    }
+
+    #[test]
+    fn repairing_options_preserves_healthy_preset_definitions() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("local.db");
+        let store = PropertyPresetStore::new(&path);
+        let field = PropertyFieldConfig {
+            id: Some("fld_0123456789abcdef0123456789abcdef".into()),
+            key: "custom".into(),
+            name: Some("Keep this definition".into()),
+            r#type: "Text".into(),
+            revision: 7,
+            ..Default::default()
+        };
+        store
+            .replace(&PropertyPresetRegistry {
+                fields: vec![field],
+                ..Default::default()
+            })
+            .unwrap();
+        let before = serde_json::to_value(store.get().unwrap().fields).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("DROP TABLE property_preset_options; CREATE TABLE property_preset_options(bad TEXT);").unwrap();
+        store.initialize_runtime_storage().unwrap();
+        assert_eq!(
+            serde_json::to_value(store.get().unwrap().fields).unwrap(),
+            before
+        );
+        assert!(!directory.path().join("rebuild-backups").exists());
+    }
+
+    #[test]
+    fn property_repair_failure_rolls_back_table_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("local.db");
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("CREATE TABLE property_presets(bad TEXT); INSERT INTO property_presets VALUES ('retained'); CREATE TABLE local_migrations(bad TEXT);").unwrap();
+        let store = PropertyPresetStore::new(&path);
+        assert!(store.repair_property_tables().is_err());
+        assert_eq!(
+            connection
+                .query_row("SELECT bad FROM property_presets", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            "retained"
+        );
+    }
+
+    #[test]
+    fn property_write_lock_does_not_reset_existing_definitions() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("local.db");
+        let store = PropertyPresetStore::new(&path);
+        store.initialize_runtime_storage().unwrap();
+        let before = serde_json::to_value(store.get().unwrap()).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        assert!(store.initialize_runtime_storage().is_err());
+        connection.execute_batch("ROLLBACK;").unwrap();
+        assert_eq!(serde_json::to_value(store.get().unwrap()).unwrap(), before);
+        assert!(!directory.path().join("rebuild-backups").exists());
+    }
 
     #[test]
     fn per_id_changes_preserve_other_fields_and_reject_stale_writes_atomically() {
@@ -1091,6 +1260,7 @@ mod tests {
         drop(connection);
 
         let store = PropertyPresetStore::new(&path);
+        store.initialize_legacy_schema().unwrap();
         let registry = store.get().unwrap();
         assert_eq!(registry.fields[0].id.as_deref(), Some("fld_user"));
         assert_eq!(registry.fields[0].name.as_deref(), Some("Topics"));

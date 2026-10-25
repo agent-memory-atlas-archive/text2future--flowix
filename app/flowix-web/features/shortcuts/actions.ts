@@ -3,6 +3,8 @@ import { invokeHandler } from '@/lib/shortcuts/handler-registry';
 import { windows } from '@platform/tauri/client';
 import { useSettingsStore } from '@/lib/store/settings-store';
 import { getThemePreference, setThemePreference } from '@features/preferences/public/runtime-api';
+import { navigateBrowserColumnHistory } from '@features/workspace/public/browser-column-api';
+import { useWorkspaceFocusStore } from '@features/workspace/store/workspace-focus-store';
 import { navigateDocumentHistory } from '@features/document/use-cases/document-navigation';
 import { resolveSystemTheme, type ResolvedThemeId, type ThemeId } from '@features/theme';
 
@@ -425,7 +427,7 @@ defineAction({
     linux: 'Alt+ArrowLeft',
   },
   run: () => {
-    void navigateDocumentHistory('back');
+    void (useWorkspaceFocusStore.getState().focusedHostId === 'browser-column' ? navigateBrowserColumnHistory('back') : navigateDocumentHistory('back'));
   },
 });
 
@@ -441,7 +443,7 @@ defineAction({
     linux: 'Alt+ArrowRight',
   },
   run: () => {
-    void navigateDocumentHistory('forward');
+    void (useWorkspaceFocusStore.getState().focusedHostId === 'browser-column' ? navigateBrowserColumnHistory('forward') : navigateDocumentHistory('forward'));
   },
 });
 

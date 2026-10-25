@@ -39,17 +39,29 @@ impl SyncManager {
             let fingerprint = v2_note_fingerprint(note)?;
             let content_hash = crate::v2::v2_content_hash(&note.content);
             let current = self.store.v2_note_state(&note.id)?;
+            let mut local_attachments: Vec<_> = note
+                .attachments
+                .iter()
+                .map(|item| {
+                    let mut metadata = item.metadata.clone();
+                    metadata.blob_id = None;
+                    metadata
+                })
+                .collect();
+            local_attachments.sort();
             if current.as_ref().is_none_or(|state| {
                 state.deleted
                     || state.notebook_id != note.notebook_id
                     || state.filename != note.filename
                     || state.content_hash.as_deref() != Some(content_hash.as_str())
-                    || state.attachments
-                        != note
-                            .attachments
-                            .iter()
-                            .map(|item| item.metadata.clone())
-                            .collect::<Vec<_>>()
+                    || {
+                        let mut remote_attachments = state.attachments.clone();
+                        for attachment in &mut remote_attachments {
+                            attachment.blob_id = None;
+                        }
+                        remote_attachments.sort();
+                        remote_attachments != local_attachments
+                    }
             }) {
                 self.store.mark_v2_dirty(
                     V2EntityType::Note,

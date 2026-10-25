@@ -11,6 +11,10 @@ vi.mock('@shared/ui/tooltip', () => ({
 
 vi.mock('@/lib/i18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
+  // 树里还有 import { translate, DEFAULT_APP_LANGUAGE } 的模块（如错误边界），
+  // 只 mock useI18n 会让这些模块在加载期就失败。
+  translate: (_language: string, key: string) => key,
+  DEFAULT_APP_LANGUAGE: 'zh-CN',
 }));
 
 describe('MemoListViewTabs', () => {

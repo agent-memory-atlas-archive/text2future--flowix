@@ -18,9 +18,11 @@ import {
 import { getFallbackAgentModelOptions } from "@features/agent/config/agent-model-options";
 import { normalizeAgentId } from "@/lib/agent-types";
 import { isFlowixCloudModel } from "@features/agent/config/agent-model-source";
+import { AGENT_PERSISTENCE_STATUS_EVENT } from '@features/agent/public/persistence-status';
 
 const logger = createLogger("agent-data-store");
-const PERSISTENCE_STATUS_EVENT = "flowix-agent-data-persistence-status";
+// 单一真源：应用根通过公开契约订阅同一个事件名。
+const PERSISTENCE_STATUS_EVENT = AGENT_PERSISTENCE_STATUS_EVENT;
 let lastPersistenceError: string | null = null;
 
 function updatePersistenceError(error: string | null): void {
@@ -467,9 +469,28 @@ function mergeAgentSnapshots(
   return merged;
 }
 
-function mergePersistedAgentSlices(left: Record<string, any>, right: Record<string, any>): Record<string, any> {
-  const leftRevisions = left.userPreferenceRevisions as AgentDataStoreState["userPreferenceRevisions"] | undefined;
-  const rightRevisions = right.userPreferenceRevisions as AgentDataStoreState["userPreferenceRevisions"] | undefined;
+/**
+ * zustand persist 的中转形状：字段语义由 store 自己保证，这里只做浅层合并。
+ * 用显式字段 + 索引签名代替 `Record<string, any>`，让合并逻辑保持结构灵活但不丢类型检查。
+ */
+type PersistedAgentSnapshot = {
+  agents?: Partial<Record<AgentTypeKey, AgentDataRecord>>;
+  legacyPreferencesMigrated?: boolean;
+  userPreferenceRevisions?: AgentDataStoreState['userPreferenceRevisions'];
+  [key: string]: unknown;
+};
+
+/** 合并后的形状：revisions 一定存在（mergeRevisionMaps 总是返回对象）。 */
+type MergedAgentSnapshot = PersistedAgentSnapshot & {
+  userPreferenceRevisions: AgentDataStoreState['userPreferenceRevisions'];
+};
+
+function mergePersistedAgentSlices(
+  left: PersistedAgentSnapshot,
+  right: PersistedAgentSnapshot,
+): MergedAgentSnapshot {
+  const leftRevisions = left.userPreferenceRevisions;
+  const rightRevisions = right.userPreferenceRevisions;
   const revisions = mergeRevisionMaps(leftRevisions, rightRevisions);
   return {
     ...left,
@@ -483,13 +504,13 @@ function mergePersistedAgentSlices(left: Record<string, any>, right: Record<stri
 function mergeSerializedAgentData(existing: string | null, incoming: string): string {
   if (!existing) return incoming;
   try {
-    const existingEnvelope = JSON.parse(existing) as { state?: Record<string, any>; version?: number };
-    const incomingEnvelope = JSON.parse(incoming) as { state?: Record<string, any>; version?: number };
+    const existingEnvelope = JSON.parse(existing) as { state?: PersistedAgentSnapshot; version?: number };
+    const incomingEnvelope = JSON.parse(incoming) as { state?: PersistedAgentSnapshot; version?: number };
     if (!existingEnvelope.state || !incomingEnvelope.state) return incoming;
     const mergedState = mergePersistedAgentSlices(existingEnvelope.state, incomingEnvelope.state);
     return JSON.stringify({
       ...incomingEnvelope,
-      state: persistedAgentDataState(mergedState as AgentDataStoreState),
+      state: persistedAgentDataState(mergedState as unknown as AgentDataStoreState),
     });
   } catch {
     return incoming;
@@ -527,7 +548,7 @@ function persistedAgentDataState(state: AgentDataStoreState): Record<string, unk
   };
 }
 
-function stripPersistedPiCloudModels(persisted: Record<string, any>): Record<string, any> {
+function stripPersistedPiCloudModels(persisted: PersistedAgentSnapshot): PersistedAgentSnapshot {
   const agents = canonicalAgentMap<AgentDataRecord>(persisted.agents);
   const pi = agents.pi;
   if (!pi?.catalog?.models) return persisted;
@@ -870,13 +891,13 @@ export const useAgentDataStore = create<AgentDataStoreState>()(
       partialize: persistedAgentDataState,
       migrate: (persisted) => mergePersistedAgentSlices(
         {},
-        stripPersistedPiCloudModels(persisted as Record<string, any>),
+        stripPersistedPiCloudModels(persisted as PersistedAgentSnapshot),
       ),
       merge: (persisted, current) => {
         const stored = persisted as Partial<AgentDataStoreState>;
         const merged = mergePersistedAgentSlices(
-          current as unknown as Record<string, any>,
-          stripPersistedPiCloudModels(stored as Record<string, any>),
+          current as unknown as PersistedAgentSnapshot,
+          stripPersistedPiCloudModels(stored as PersistedAgentSnapshot),
         );
         const agents = merged.agents as Record<AgentTypeKey, AgentDataRecord>;
         // Storage contains the local projection only. Rehydration must never

@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { createLogger } from '@/lib/logger';
 import { joinNotebookMemoPath } from '@/lib/path';
 import { noteRepository } from '@features/memo/services/note-repository';
 import { registerMemoEventHandler } from '@/lib/memo-dispatcher';
 import type { DocTreeItem, NoteEntry } from '@platform/tauri/client';
-import { subscribeNotebookChanges } from '@platform/tauri/notebook-change-events';
+import { mergeNoteMetadata, noteMetadata, subscribeNotebookMetadata } from '../services/note-metadata-service';
 
 const logger = createLogger('notebook-pinned-notes');
+const EMPTY_PINNED_ITEMS: DocTreeItem[] = [];
 const PINNED_NOTES_PAGE_SIZE = 100;
 
 interface PinnedNotePage {
@@ -31,6 +32,9 @@ export function useNotebookPinnedNotes({
 }: UseNotebookPinnedNotesOptions) {
   const [pages, setPages] = useState<PinnedNotePage[]>([]);
   const [pageIndex, setPageIndex] = useState(0);
+  const pageIndexRef = useRef(pageIndex);
+  pageIndexRef.current = pageIndex;
+  const metadataRevision = useSyncExternalStore(noteMetadata.subscribeAll, noteMetadata.checkpoint, noteMetadata.checkpoint);
   const [loadingInitial, setLoadingInitial] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const requestSequence = useRef(0);
@@ -38,10 +42,12 @@ export function useNotebookPinnedNotes({
   const loadedScope = useRef<{ notebookId: string; notebookPath: string } | null>(null);
   const [changeRevision, setChangeRevision] = useState(0);
 
-  const toPinnedItems = useCallback((notes: NoteEntry[], path: string): DocTreeItem[] => notes.flatMap((note) => {
+  const toPinnedItems = useCallback((notes: NoteEntry[], path: string, checkpoint: number): DocTreeItem[] => notes.flatMap((note) => {
     const relativePath = note.relativePath.replace(/\\/g, '/');
     const fullPath = joinNotebookMemoPath(path, relativePath);
     if (!fullPath) return [];
+    const metadata = mergeNoteMetadata(fullPath, note, checkpoint);
+    if (!metadata?.favorited) return [];
     return [{
       id: `pinned:${relativePath}`,
       fullPath,
@@ -54,20 +60,24 @@ export function useNotebookPinnedNotes({
       createdMs: note.createdAt,
       memoCreatedMs: note.createdAt,
       resourceKind: 'note' as const,
-      memoMeta: {
-        icon: note.icon,
-        colors: note.colors,
-        favorited: true,
-      },
+      memoMeta: metadata,
     }];
   }), []);
 
-  useEffect(() => subscribeNotebookChanges((change) => {
-    if (change.notebookId === notebookId
-      && (change.kind !== 'resource-created' || change.source === 'external_tool')) {
-      setChangeRevision((revision) => revision + 1);
-    }
-  }), [notebookId]);
+  useEffect(() => {
+    if (!notebookId) return;
+    return subscribeNotebookMetadata({ notebookId, notebookPath }, ({ change, favoriteChanged }) => {
+      if (change?.kind === 'resource-updated') {
+        // Cache coverage is unrelated to membership. New senders supply the
+        // previous pin state; legacy events use the shared projection baseline.
+        if (favoriteChanged === true || (favoriteChanged === null && change.entry.favorited)) {
+          setChangeRevision((revision) => revision + 1);
+        }
+      } else if (!change || change.kind !== 'resource-created' || change.source === 'external_tool') {
+        setChangeRevision((revision) => revision + 1);
+      }
+    });
+  }, [notebookId, notebookPath]);
 
   useEffect(() => registerMemoEventHandler((event) => {
     if (event.notebookId !== notebookId || event.kind === 'tags_renamed' || event.kind === 'tags_deleted') return;
@@ -85,7 +95,9 @@ export function useNotebookPinnedNotes({
       setLoadingInitial(false);
       return;
     }
-    if (loadedScope.current?.notebookId !== notebookId || loadedScope.current.notebookPath !== notebookPath) {
+    const sameScope = loadedScope.current?.notebookId === notebookId && loadedScope.current.notebookPath === notebookPath;
+    const targetPage = sameScope ? pageIndexRef.current : 0;
+    if (!sameScope) {
       setPages([]);
       setPageIndex(0);
     }
@@ -96,21 +108,24 @@ export function useNotebookPinnedNotes({
     setLoadingInitial(true);
 
     void (async () => {
-      const page = await noteRepository.listByPath({
-        notebookId,
-        filter: 'favorited',
-        sort: 'updatedAt',
-        limit: PINNED_NOTES_PAGE_SIZE,
-      });
-
-      if (cancelled || sequence !== requestSequence.current) return;
-      const cursor = page.nextCursor ?? undefined;
-      setPages([{
-        nextCursor: cursor,
-        hasMore: page.hasMore && Boolean(cursor),
-        items: toPinnedItems(page.notes, notebookPath),
-      }]);
-      setPageIndex(0);
+      const nextPages: PinnedNotePage[] = [];
+      let cursor: string | undefined;
+      // Recovery and uncertain legacy events reconcile the existing page window
+      // instead of silently moving the user back to the first page.
+      for (let index = 0; index <= targetPage; index++) {
+        const checkpoint = noteMetadata.checkpoint();
+        const page = await noteRepository.listByPath({
+          notebookId, filter: 'favorited', sort: 'updatedAt',
+          limit: PINNED_NOTES_PAGE_SIZE, ...(cursor ? { cursor } : {}),
+        });
+        if (cancelled || sequence !== requestSequence.current) return;
+        cursor = page.nextCursor ?? undefined;
+        nextPages.push({ nextCursor: cursor, hasMore: page.hasMore && Boolean(cursor),
+          items: toPinnedItems(page.notes, notebookPath, checkpoint) });
+        if (!page.hasMore || !cursor) break;
+      }
+      setPages(nextPages);
+      setPageIndex(Math.min(targetPage, nextPages.length - 1));
       setLoadingInitial(false);
       loadedScope.current = { notebookId, notebookPath };
     })().catch((error) => {
@@ -139,6 +154,7 @@ export function useNotebookPinnedNotes({
     const sequence = requestSequence.current;
     loadingMoreRef.current = true;
     setLoadingMore(true);
+    const checkpoint = noteMetadata.checkpoint();
     try {
       const page = await noteRepository.listByPath({
         notebookId,
@@ -150,10 +166,11 @@ export function useNotebookPinnedNotes({
       if (sequence !== requestSequence.current) return;
       const cursor = page.nextCursor ?? undefined;
       const nextIndex = pageIndex + 1;
+      const items = toPinnedItems(page.notes, notebookPath, checkpoint);
       setPages((current) => [...current.slice(0, nextIndex), {
         nextCursor: cursor,
         hasMore: page.hasMore && Boolean(cursor),
-        items: toPinnedItems(page.notes, notebookPath),
+        items,
       }]);
       setPageIndex(nextIndex);
     } catch (error) {
@@ -179,8 +196,14 @@ export function useNotebookPinnedNotes({
     })));
   }, []);
 
+  const pinnedItems = useMemo(() => (currentPage?.items ?? EMPTY_PINNED_ITEMS).flatMap((item) => {
+    const snapshot = noteMetadata.get(item.fullPath);
+    if (snapshot.status === 'deleted' || snapshot.value?.favorited === false) return [];
+    return [snapshot.value ? { ...item, memoMeta: snapshot.value } : item];
+  }), [currentPage?.items, metadataRevision]);
+
   return {
-    pinnedItems: currentPage?.items ?? [],
+    pinnedItems,
     hasPrevious,
     hasMore,
     loadingInitial,

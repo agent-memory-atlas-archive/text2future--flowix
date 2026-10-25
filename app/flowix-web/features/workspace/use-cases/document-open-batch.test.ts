@@ -35,7 +35,7 @@ it('resolves notebook ownership per file and uses the normal type-aware surface 
   const result = await executeDocumentOpenBatch(createDocumentOpenBatch({ filePaths: ['/notes/a.md', '/outside/b.pdf'] }));
   expect(result.remaining).toEqual([]);
   expect(mocks.open.mock.calls[0][0]).toMatchObject({ host: 'main-third', target: { path: '/notes/a.md', scopePath: '/notes' }, options: { notebookId: 'notes' } });
-  expect(mocks.open.mock.calls[1][0]).toMatchObject({ host: 'browser-column', target: { path: '/outside/b.pdf', scopePath: null }, options: { notebookId: null, browserDisposition: 'open-in-column' } });
+  expect(mocks.open.mock.calls[1][0]).toMatchObject({ host: 'browser-column', target: { path: '/outside/b.pdf', scopePath: null }, options: { notebookId: null } });
   expect(mocks.importFile).not.toHaveBeenCalled();
 });
 

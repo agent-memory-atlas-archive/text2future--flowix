@@ -6,7 +6,7 @@ interface LazyGlobalSearchCommandProps {
 }
 
 const GlobalSearchCommand = lazy(() =>
-  import('@features/shell').then((module) => ({
+  import('@features/shell/public/search-api').then((module) => ({
     default: module.GlobalSearchCommand,
   })),
 );

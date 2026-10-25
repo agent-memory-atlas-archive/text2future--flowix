@@ -108,7 +108,7 @@ export function useMediaLibraryActions({
           setDocument(removeRecord(latest));
         }
       }
-      toast.success(t('media.fileTree.deleted', { name: item.name }));
+      toast.success(t('status.deleteCompleted'));
       return true;
     } catch (reason) {
       reportSaveFailure?.();

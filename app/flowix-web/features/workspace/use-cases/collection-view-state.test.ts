@@ -38,10 +38,10 @@ it('changes views without a navigation transaction and retains the latest view f
 
 it('updates the browser view in place without replacing its tab or display', () => {
   const display = ensureCollectionDisplay({ ...identity, viewId: 'a' });
-  useBrowserColumnStore.setState({ tabs: [{ id: 'tab', title: 'Table', icon: 'table', target: { kind: 'file-browser', activeFilePath: '/book/table.yaml', folderPath: null, scopePath: '/book', notebookId: 'book', fileTreeVisible: false, fileTreeWidth: 220, collectionDisplay: display, collectionType: 'table' } }], activeTabId: 'tab' });
-  expect(setCollectionActiveView({ host: 'browser-column', tabId: 'tab' }, identity, 'b')).toBe(true);
-  expect(useBrowserColumnStore.getState().tabs).toHaveLength(1);
-  expect(useBrowserColumnStore.getState().tabs[0]).toMatchObject({ id: 'tab', target: { activeFilePath: '/book/table.yaml', collectionDisplay: { ...display, viewId: 'b' } } });
+  useBrowserColumnStore.setState({ current: { id: 'tab', title: 'Table', icon: 'table', target: { kind: 'file-browser', activeFilePath: '/book/table.yaml', folderPath: null, scopePath: '/book', notebookId: 'book', fileTreeVisible: false, fileTreeWidth: 220, collectionDisplay: display, collectionType: 'table' } }, });
+  expect(setCollectionActiveView({ host: 'browser-column', surfaceId: 'tab' }, identity, 'b')).toBe(true);
+  expect(useBrowserColumnStore.getState().current).not.toBeNull();
+  expect(useBrowserColumnStore.getState().current).toMatchObject({ id: 'tab', target: { activeFilePath: '/book/table.yaml', collectionDisplay: { ...display, viewId: 'b' } } });
   expect(useDocumentHistoryStore.getState().backStack).toEqual([]);
 });
 
@@ -53,7 +53,7 @@ it('preserves collection-level failures when another view is requested', () => {
   expect(setCollectionActiveView({ host: 'main-third' }, identity, 'b')).toBe(false);
   expect(useWorkColumnStore.getState().navigation.target).toEqual(target);
   const browserTarget = { kind: 'file-browser' as const, activeFilePath: '/book/table.yaml', folderPath: null, scopePath: '/book', notebookId: 'book', fileTreeVisible: false, fileTreeWidth: 220, collectionDisplay: display, collectionUnavailableReason: target.unavailableReason };
-  useBrowserColumnStore.setState({ tabs: [{ id: 'tab', title: 'Table', icon: null, target: browserTarget }] });
-  expect(setCollectionActiveView({ host: 'browser-column', tabId: 'tab' }, identity, 'b')).toBe(false);
-  expect(useBrowserColumnStore.getState().tabs[0].target).toEqual(browserTarget);
+  useBrowserColumnStore.setState({ current: { id: 'tab', title: 'Table', icon: null, target: browserTarget } });
+  expect(setCollectionActiveView({ host: 'browser-column', surfaceId: 'tab' }, identity, 'b')).toBe(false);
+  expect(useBrowserColumnStore.getState().current!.target).toEqual(browserTarget);
 });

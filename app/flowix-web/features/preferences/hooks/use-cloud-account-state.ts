@@ -4,8 +4,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { errorMessage } from '@/lib/error-message';
 import { cloud, listenToCloudStateChanges, type CloudState } from '@platform/tauri/client';
 
-const MEMBERSHIP_FOCUS_REFRESH_INTERVAL_MS = 30_000;
-
 type MembershipRefreshResult = 'refreshed' | 'failed' | 'stale' | 'skipped';
 
 export function useCloudAccountState() {
@@ -15,7 +13,6 @@ export function useCloudAccountState() {
   const [membershipError, setMembershipError] = useState<string | null>(null);
   const membershipRequest = useRef(0);
   const membershipInFlight = useRef<{ userId: string; promise: Promise<MembershipRefreshResult> } | null>(null);
-  const lastMembershipRefresh = useRef<{ userId: string; at: number } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const applyState = useCallback((next: CloudState) => {
@@ -55,14 +52,10 @@ export function useCloudAccountState() {
     return () => { active = false; unlisten(); };
   }, [applyState]);
 
-  const refreshMembership = useCallback(async (force = true): Promise<MembershipRefreshResult> => {
+  const refreshMembership = useCallback(async (): Promise<MembershipRefreshResult> => {
     if (!state?.authenticated) return 'skipped';
     const userId = state.account?.user.id ?? '';
     if (membershipInFlight.current?.userId === userId) return membershipInFlight.current.promise;
-    const now = Date.now();
-    if (!force && lastMembershipRefresh.current?.userId === userId &&
-      now - lastMembershipRefresh.current.at < MEMBERSHIP_FOCUS_REFRESH_INTERVAL_MS) return 'skipped';
-    lastMembershipRefresh.current = { userId, at: now };
     const request = ++membershipRequest.current;
     setMembershipLoading(true);
     const promise = (async (): Promise<MembershipRefreshResult> => {
@@ -87,23 +80,15 @@ export function useCloudAccountState() {
   }, [state?.authenticated, state?.account?.user.id]);
 
   useEffect(() => {
+    ++membershipRequest.current;
     setMembershipError(null);
     setMembershipLoading(false);
-    if (!state?.authenticated) {
-      lastMembershipRefresh.current = null;
-      membershipInFlight.current = null;
-      return;
-    }
-    void refreshMembership(false);
-    const refresh = () => { void refreshMembership(false); };
-    window.addEventListener('focus', refresh);
-    const timer = window.setInterval(refresh, 60_000);
+    membershipInFlight.current = null;
     return () => {
       ++membershipRequest.current;
-      window.removeEventListener('focus', refresh);
-      window.clearInterval(timer);
+      membershipInFlight.current = null;
     };
-  }, [refreshMembership]);
+  }, [state?.authenticated, state?.account?.user.id]);
 
   return {
     state,

@@ -391,7 +391,7 @@ class NoteReferenceView implements ProseMirrorNodeView {
       }
     } catch (err) {
       this.applyAttrs({ stale: true });
-      // eslint-disable-next-line no-console
+
       console.warn('[note-reference] open failed:', err);
       toast.error(err instanceof Error ? err.message : String(err));
     }
@@ -537,7 +537,7 @@ class NoteReferenceView implements ProseMirrorNodeView {
           this.applyAttrs(patch);
         }
       } catch (err) {
-        // eslint-disable-next-line no-console
+
         console.warn('[note-reference] refresh failed:', err);
       } finally {
         this.refreshPromise = null;

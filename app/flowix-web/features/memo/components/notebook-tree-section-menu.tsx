@@ -206,7 +206,7 @@ export function NotebookTreeSectionMenu({
                 )}
                 {onCreateWorkDocuments && (
                   <DropdownMenuItem onClick={onCreateWorkDocuments} className={itemClassName}>
-                    <WorkDocumentsIcon className="h-3.5 w-3.5" />
+                    <WorkDocumentsIcon className="h-3.5 w-3.5 opacity-100" />
                     <span>{t('memo.create.workDocuments')}</span>
                     <span className="ml-auto text-xs text-[var(--muted-foreground)] opacity-50 group-hover:text-[var(--primary-foreground)] group-focus-visible:text-[var(--primary-foreground)]">
                       {t('memo.create.workDocumentsTypes')}

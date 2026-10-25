@@ -1,3 +1,5 @@
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('shortcuts');
 /**
  * 按 actionId 注册的"实例级"handler 栈。
  *
@@ -97,7 +99,7 @@ export function invokeHandler(actionId: string): boolean {
         break;
       }
     } catch (err) {
-      console.error(`[shortcuts] active check for "${actionId}" threw:`, err);
+      logger.error(`active check for "${actionId}" threw`, { error: err });
     }
   }
   if (!top) return false;
@@ -105,7 +107,7 @@ export function invokeHandler(actionId: string): boolean {
   try {
     result = top.handler();
   } catch (err) {
-    console.error(`[shortcuts] handler for "${actionId}" threw:`, err);
+    logger.error(`handler for "${actionId}" threw`, { error: err });
     return false;
   }
   return result !== false;

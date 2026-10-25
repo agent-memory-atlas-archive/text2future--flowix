@@ -1,11 +1,13 @@
 import {
   hasWorkspaceAgentConversation,
   hydrateWorkspaceAgentConversation,
-} from '@features/agent/public/workspace-api';
+} from '@features/agent/public/workspace-session-api';
 import { useWorkspaceRestoreStore } from '@features/workspace/store/workspace-restore-store';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
 import { clearWorkspaceDocument, closeAgentTarget, openAgentTarget } from './workspace-navigation';
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('workspace/use-cases/agent-conversation-navigation');
 export async function selectAndOpenAgentConversation(
   instanceId: string,
   options?: { history?: 'push' | 'skip'; destination?: 'main-third'; blankIfMissing?: true; restoreRequestId?: number },
@@ -13,7 +15,7 @@ export async function selectAndOpenAgentConversation(
   const normalized = instanceId.trim();
   if (!normalized || !isRestoreRequestCurrent(options?.restoreRequestId)) return;
 
-  if (options?.blankIfMissing && !hasWorkspaceAgentConversation(normalized)) {
+  if (options?.blankIfMissing && !(await hasWorkspaceAgentConversation(normalized))) {
     const requestId = useWorkColumnStore.getState().navigation.requestId;
     try {
       const restored = await hydrateWorkspaceAgentConversation(normalized);
@@ -76,7 +78,7 @@ export async function restoreAgentConversationWorkspace(
     restored = await hydrateWorkspaceAgentConversation(instanceId);
   } catch (error) {
     restoreFailed = true;
-    console.error('Failed to restore agent conversation:', error);
+    logger.error('Failed to restore agent conversation', { error });
   }
 
   const currentTarget = useWorkspaceRestoreStore.getState().desiredTarget;
@@ -98,7 +100,7 @@ export async function restoreAgentConversationWorkspace(
       useWorkspaceRestoreStore.getState().clearAgentConversation();
       return;
     } catch (error) {
-      console.error('Failed to clear missing empty conversation target:', error);
+      logger.error('Failed to clear missing empty conversation target', { error });
     }
   }
 

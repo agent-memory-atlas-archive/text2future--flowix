@@ -210,6 +210,8 @@ pub struct AgentConversationInstance {
     /// conversation-instance row. `None` means the card has not started a
     /// conversation yet.
     pub thread_title: Option<String>,
+    /// Durable message existence, including conversations without a title.
+    pub has_messages: bool,
     pub thread_id: Option<String>,
     /// Provider-owned session id, when the conversation has been bound to one.
     /// This is read from the provider branch table together with the instance

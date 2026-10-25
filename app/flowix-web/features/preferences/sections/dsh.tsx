@@ -1,5 +1,7 @@
 'use client';
 
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
+
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import {
   Check,
@@ -16,10 +18,9 @@ import { Input } from '@shared/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@shared/ui/select';
 import { SectionHeader } from '@features/preferences/sections/primitives';
 import { useI18n, type I18nKey } from '@/lib/i18n';
-import { errorMessage } from '@/lib/error-message';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import { AgentIcon } from '@features/agent/components/agent-icon';
+import { AgentIcon } from '@features/agent/public/icon-api';
 import { DEEPSEEK_HARNESS_MODE_OPTIONS } from '@features/agent/runtime/agent-runtime-spec';
 import { deepseekHarness } from '@platform/tauri/client';
 import type { DeepSeekHarnessPlugin, DeepSeekHarnessPluginCatalog } from '@platform/tauri/client';
@@ -70,7 +71,7 @@ export function DshSettingsSection() {
     try {
       setStatus(await dshIntegration.status());
     } catch (value) {
-      setStatusError(value instanceof Error ? value.message : String(value));
+      setStatusError(friendlyErrorMessage(value, t, 'errors.friendly.dshLoad'));
     }
   }, []);
 
@@ -180,7 +181,7 @@ function DshSetupPage({
       onStatusChanged(await dshIntegration.installAppServerProfile());
       toast.success(t('preferences.dsh.appServer.installSuccess'));
     } catch (value) {
-      setError(errorMessage(value));
+      setError(friendlyErrorMessage(value, t, 'errors.friendly.dshInstall'));
     } finally {
       setBusy(false);
     }
@@ -191,7 +192,7 @@ function DshSetupPage({
     try {
       await openUrl('https://github.com/deepseek-ai/deepseek-harness');
     } catch (value) {
-      setError(errorMessage(value));
+      setError(friendlyErrorMessage(value, t, 'errors.friendly.linkOpen'));
     }
   };
 
@@ -204,7 +205,7 @@ function DshSetupPage({
       onStatusChanged(await dshIntegration.setCliPath(path));
       toast.success(t('preferences.agents.external.pathSaved'));
     } catch (value) {
-      setError(errorMessage(value));
+      setError(friendlyErrorMessage(value, t, 'errors.friendly.pathSave'));
     } finally {
       setSelectingPath(false);
     }
@@ -222,7 +223,7 @@ function DshSetupPage({
         toast.error(t('preferences.agents.external.checkNotFound'));
       }
     } catch (value) {
-      setError(errorMessage(value));
+      setError(friendlyErrorMessage(value, t, 'errors.friendly.dshLoad'));
     } finally {
       setCheckingPath(false);
     }
@@ -381,7 +382,7 @@ function PluginsTab() {
         setLoadError(null);
       }
     }).catch((error: unknown) => {
-      if (!cancelled) setLoadError(error instanceof Error ? error.message : String(error));
+      if (!cancelled) setLoadError(friendlyErrorMessage(error, t, 'errors.friendly.pluginLoad'));
     });
     return () => { cancelled = true; };
   }, []);
@@ -399,7 +400,7 @@ function PluginsTab() {
       loadCatalog();
       toast.success(t('preferences.dsh.plugins.manageSuccess'));
     } catch (error) {
-      toast.error(errorMessage(error));
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.pluginInstall'));
     } finally {
       setManagingPlugin(null);
     }
@@ -411,7 +412,7 @@ function PluginsTab() {
     try {
       setCatalog(await deepseekHarness.setPluginEnabled(plugin.key, !plugin.enabled));
     } catch (error) {
-      toast.error(errorMessage(error));
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.pluginRemove'));
     } finally {
       setTogglingKey(null);
     }
@@ -462,7 +463,7 @@ function PluginsTab() {
       </div>
       {/* WKWebView 下外层滚动容器吃不到底部间距, 在列表自身留 pb-10 兜底 */}
       <div className="space-y-2 pb-10">
-        {loadError && <p className="rounded-lg border border-[color-mix(in_oklch,var(--destructive)_30%,transparent)] bg-[color-mix(in_oklch,var(--destructive)_5%,transparent)] px-3.5 py-3 text-xs text-[var(--destructive)]">{t('preferences.dsh.plugins.loadError')}: {loadError}</p>}
+        {loadError && <p className="rounded-lg border border-[color-mix(in_oklch,var(--destructive)_30%,transparent)] bg-[color-mix(in_oklch,var(--destructive)_5%,transparent)] px-3.5 py-3 text-xs text-[var(--destructive)]">{loadError}</p>}
         {catalog === null && loadError === null && (
           <div className="flex h-[100px] items-center justify-center text-center text-xs text-[var(--muted-foreground)]">
             {t('preferences.dsh.plugins.loading')}

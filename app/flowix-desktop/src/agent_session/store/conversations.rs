@@ -10,6 +10,32 @@ use rusqlite::{params, OptionalExtension};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+// Keep visibility and metadata identical across list, count, favorites and hydration.
+// Only events that materialize history count; session/status events are placeholders.
+const CONVERSATION_HAS_MESSAGES_SQL: &str = "(
+    EXISTS(SELECT 1 FROM thread_messages m WHERE m.thread_id = ti.id)
+    OR EXISTS(
+        SELECT 1 FROM agent_external_events e
+        WHERE e.runtime = i.agent
+          AND e.thread_id IN (
+              ti.id,
+              (SELECT external_session_id FROM thread_external_sessions
+               WHERE thread_id = ti.id AND runtime = i.agent),
+              CASE i.agent
+                  WHEN 'codex' THEN (SELECT external_id FROM threads_codex WHERE thread_id = ti.id)
+                  WHEN 'dsh' THEN (SELECT external_id FROM threads_dsh WHERE thread_id = ti.id)
+                  WHEN 'opencode' THEN (SELECT external_id FROM threads_opencode WHERE thread_id = ti.id)
+                  WHEN 'hermes' THEN (SELECT external_id FROM threads_hermes WHERE thread_id = ti.id)
+                  WHEN 'claudecode' THEN (SELECT external_id FROM threads_claude WHERE thread_id = ti.id)
+                  WHEN 'pi' THEN (SELECT external_id FROM threads_pi WHERE thread_id = ti.id)
+              END
+          )
+          AND COALESCE(e.event_kind,
+              CASE WHEN json_valid(e.normalized_json) THEN json_extract(e.normalized_json, '$.kind') END
+          ) IN ('user_message', 'text', 'reasoning', 'tool_call', 'tool_result', 'error')
+    )
+)";
+
 fn sanitize_frontend_runtime_config(raw: Option<String>) -> Option<String> {
     let raw = raw?;
     let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw) else {
@@ -124,7 +150,7 @@ impl ThreadManager {
     ) -> Result<Vec<AgentConversationInstance>, ThreadError> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
-            "SELECT
+            &format!("SELECT
                 i.id, i.agent, ti.title, ti.id, i.config_json,
                 legacy.frozen_cwd, i.source, i.document_path,
                 i.created_at, i.updated_at, i.notebook_id,
@@ -139,11 +165,14 @@ impl ThreadManager {
                     END,
                     (SELECT external_session_id FROM thread_external_sessions
                      WHERE thread_id = ti.id AND runtime = i.agent)
-                ), i.relative_path
+                ), i.relative_path,
+                {has_messages}
              FROM agent_instances i
              LEFT JOIN threads_index ti ON ti.instance_id = i.id
              LEFT JOIN agent_conversation_instances legacy ON legacy.instance_id = i.id
              WHERE (?1 IS NULL OR i.notebook_id = ?1)
+               AND (TRIM(COALESCE(ti.title, '')) <> ''
+                    OR {has_messages})
                AND (?2 IS NULL OR i.agent = ?2)
                AND (
                    ?3 IS NULL
@@ -157,7 +186,7 @@ impl ThreadManager {
                  AND legacy.instance_id IS NULL
              )
              ORDER BY i.updated_at DESC, i.id DESC
-             LIMIT ?5",
+             LIMIT ?5", has_messages = CONVERSATION_HAS_MESSAGES_SQL),
         )?;
         let rows = stmt.query_map(
             params![
@@ -179,18 +208,20 @@ impl ThreadManager {
         self.run_blocking(move |tm| {
             let conn = tm.lock_conn();
             let mut stmt = conn.prepare(
-                "SELECT i.agent, COUNT(*)
+                &format!("SELECT i.agent, COUNT(*)
                  FROM agent_instances i
                  LEFT JOIN threads_index ti ON ti.instance_id = i.id
                  LEFT JOIN agent_conversation_instances legacy ON legacy.instance_id = i.id
                  WHERE (?1 IS NULL OR i.notebook_id = ?1)
+                   AND (TRIM(COALESCE(ti.title, '')) <> ''
+                        OR {has_messages})
                    AND NOT (
                        i.agent = 'opencode'
                        AND ti.id GLOB 'ses_*'
                        AND i.id = 'legacy-' || ti.id
                        AND legacy.instance_id IS NULL
                    )
-                 GROUP BY i.agent",
+                 GROUP BY i.agent", has_messages = CONVERSATION_HAS_MESSAGES_SQL),
             )?;
             let rows = stmt.query_map(params![notebook_id], |row| {
                 Ok(AgentConversationTypeCount {
@@ -208,7 +239,7 @@ impl ThreadManager {
     ) -> Result<Vec<AgentConversationInstance>, ThreadError> {
         let conn = self.lock_conn();
         let mut stmt = conn.prepare(
-            "SELECT
+            &format!("SELECT
                 i.id, i.agent, ti.title, ti.id, i.config_json,
                 legacy.frozen_cwd, i.source, i.document_path,
                 i.created_at, i.updated_at, i.notebook_id,
@@ -223,7 +254,8 @@ impl ThreadManager {
                     END,
                     (SELECT external_session_id FROM thread_external_sessions
                      WHERE thread_id = ti.id AND runtime = i.agent)
-                ), i.relative_path
+                ), i.relative_path,
+                {has_messages}
              FROM agent_instances i
              LEFT JOIN threads_index ti ON ti.instance_id = i.id
              LEFT JOIN agent_conversation_instances legacy ON legacy.instance_id = i.id
@@ -233,7 +265,7 @@ impl ThreadManager {
                  AND i.id = 'legacy-' || ti.id
                  AND legacy.instance_id IS NULL
              )
-             ORDER BY i.updated_at DESC",
+             ORDER BY i.updated_at DESC", has_messages = CONVERSATION_HAS_MESSAGES_SQL),
         )?;
         let rows = stmt.query_map([], Self::row_to_agent_conversation_instance)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -259,17 +291,19 @@ impl ThreadManager {
     ) -> Result<usize, ThreadError> {
         let conn = self.lock_conn();
         let count = conn.query_row(
-            "SELECT COUNT(*)
+            &format!("SELECT COUNT(*)
              FROM agent_instances i
              LEFT JOIN threads_index ti ON ti.instance_id = i.id
              LEFT JOIN agent_conversation_instances legacy ON legacy.instance_id = i.id
              WHERE (?1 IS NULL OR i.notebook_id = ?1)
+               AND (TRIM(COALESCE(ti.title, '')) <> ''
+                    OR {has_messages})
                AND NOT (
                    i.agent = 'opencode'
                    AND ti.id GLOB 'ses_*'
                    AND i.id = 'legacy-' || ti.id
                    AND legacy.instance_id IS NULL
-               )",
+               )", has_messages = CONVERSATION_HAS_MESSAGES_SQL),
             params![notebook_id],
             |row| row.get::<_, i64>(0),
         )?;
@@ -302,11 +336,12 @@ impl ThreadManager {
                     END,
                     (SELECT external_session_id FROM thread_external_sessions
                      WHERE thread_id = ti.id AND runtime = i.agent)
-                ), i.relative_path
+                ), i.relative_path,
+                {has_messages}
              FROM agent_instances i
              LEFT JOIN threads_index ti ON ti.instance_id = i.id
              LEFT JOIN agent_conversation_instances legacy ON legacy.instance_id = i.id
-             WHERE i.notebook_id = ?1 AND i.id IN ({placeholders})");
+             WHERE i.notebook_id = ?1 AND i.id IN ({placeholders})", has_messages = CONVERSATION_HAS_MESSAGES_SQL);
                 let mut stmt = conn.prepare(&sql)?;
                 let parameters = std::iter::once(notebook_id.as_str())
                     .chain(ids.iter().map(String::as_str));
@@ -336,7 +371,7 @@ impl ThreadManager {
     ) -> Result<Option<AgentConversationInstance>, ThreadError> {
         let conn = self.lock_conn();
         conn.query_row(
-            "SELECT
+            &format!("SELECT
                 i.id, i.agent, ti.title, ti.id, i.config_json,
                 legacy.frozen_cwd, i.source, i.document_path,
                 i.created_at, i.updated_at, i.notebook_id,
@@ -351,11 +386,12 @@ impl ThreadManager {
                     END,
                     (SELECT external_session_id FROM thread_external_sessions
                      WHERE thread_id = ti.id AND runtime = i.agent)
-                ), i.relative_path
+                ), i.relative_path,
+                {has_messages}
              FROM agent_instances i
              LEFT JOIN threads_index ti ON ti.instance_id = i.id
              LEFT JOIN agent_conversation_instances legacy ON legacy.instance_id = i.id
-             WHERE i.id = ?1",
+             WHERE i.id = ?1", has_messages = CONVERSATION_HAS_MESSAGES_SQL),
             [instance_id],
             Self::row_to_agent_conversation_instance,
         )
@@ -378,7 +414,7 @@ impl ThreadManager {
     ) -> Result<Option<AgentConversationInstance>, ThreadError> {
         let conn = self.lock_conn();
         conn.query_row(
-            "SELECT
+            &format!("SELECT
                 i.id, i.agent, ti.title, ti.id, i.config_json,
                 legacy.frozen_cwd, i.source, i.document_path,
                 i.created_at, i.updated_at, i.notebook_id,
@@ -393,13 +429,14 @@ impl ThreadManager {
                     END,
                     (SELECT external_session_id FROM thread_external_sessions
                      WHERE thread_id = ti.id AND runtime = i.agent)
-                ), i.relative_path
+                ), i.relative_path,
+                {has_messages}
              FROM agent_instances i
              JOIN threads_index ti ON ti.instance_id = i.id
              LEFT JOIN agent_conversation_instances legacy ON legacy.instance_id = i.id
              WHERE ti.id = ?1
              ORDER BY i.updated_at DESC
-             LIMIT 1",
+             LIMIT 1", has_messages = CONVERSATION_HAS_MESSAGES_SQL),
             [thread_id],
             Self::row_to_agent_conversation_instance,
         )
@@ -585,7 +622,7 @@ impl ThreadManager {
         }
         let instance = tx
             .query_row(
-                "SELECT
+                &format!("SELECT
                     i.id, i.agent, ti.title, ti.id, i.config_json,
                     legacy.frozen_cwd, i.source, i.document_path,
                     i.created_at, i.updated_at, i.notebook_id,
@@ -600,11 +637,12 @@ impl ThreadManager {
                         END,
                         (SELECT external_session_id FROM thread_external_sessions
                          WHERE thread_id = ti.id AND runtime = i.agent)
-                    ), i.relative_path
+                    ), i.relative_path,
+                    {has_messages}
                  FROM agent_instances i
                  LEFT JOIN threads_index ti ON ti.instance_id = i.id
                  LEFT JOIN agent_conversation_instances legacy ON legacy.instance_id = i.id
-                 WHERE i.id = ?1",
+                 WHERE i.id = ?1", has_messages = CONVERSATION_HAS_MESSAGES_SQL),
                 [instance_id.as_str()],
                 Self::row_to_agent_conversation_instance,
             )
@@ -970,6 +1008,7 @@ impl ThreadManager {
             instance_id: row.get(0)?,
             agent_type: row.get(1)?,
             thread_title: row.get(2)?,
+            has_messages: row.get(13)?,
             thread_id: row.get(3)?,
             session_id: row.get(11)?,
             runtime_config: row.get(4)?,

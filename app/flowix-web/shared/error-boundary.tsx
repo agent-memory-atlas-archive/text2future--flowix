@@ -1,5 +1,8 @@
-import { Component, ErrorInfo, ReactNode } from "react";
+import { Component, Fragment, ErrorInfo, ReactNode } from "react";
 import { translate, type AppLanguage, DEFAULT_APP_LANGUAGE } from "@/lib/i18n";
+import { createLogger } from "@/lib/logger";
+
+const logger = createLogger("error-boundary");
 
 function isWindowsPlatform(): boolean {
 	return /Windows/i.test(navigator.userAgent) || /Win/i.test(navigator.platform);
@@ -19,11 +22,15 @@ interface ErrorBoundaryProps {
 	fallback?: ReactNode;
 	language?: AppLanguage;
 	onError?: (error: Error, errorInfo: ErrorInfo) => void;
+	/** 这些值变化时自动重试，避免"换了文档仍停在错误页"。 */
+	resetKeys?: readonly unknown[];
 }
 
 interface ErrorBoundaryState {
 	hasError: boolean;
 	error?: Error;
+	/** 每次重试自增，作为 children 的 key 强制重新挂载子树。 */
+	epoch: number;
 }
 
 /**
@@ -32,22 +39,37 @@ interface ErrorBoundaryState {
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
 	constructor(props: ErrorBoundaryProps) {
 		super(props);
-		this.state = { hasError: false };
+		this.state = { hasError: false, epoch: 0 };
 	}
 
-	static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+	static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
 		return { hasError: true, error };
 	}
 
 	componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
 		document.getElementById("app-loading")?.remove();
-		console.error("[ErrorBoundary] Caught error:", error, errorInfo);
-		console.error("[ErrorBoundary] Error stack:", error.stack ?? "<no stack>");
+		// 走统一日志通道，避免绕过 createLogger 的 console 直调（债务门禁会拦）。
+		logger.error("caught render error", {
+			message: error.message,
+			stack: error.stack ?? "<no stack>",
+			componentStack: errorInfo.componentStack,
+		});
 		this.props.onError?.(error, errorInfo);
 	}
 
+	componentDidUpdate(previous: ErrorBoundaryProps): void {
+		if (!this.state.hasError) return;
+		const before = previous.resetKeys ?? [];
+		const after = this.props.resetKeys ?? [];
+		if (before.length !== after.length || before.some((key, index) => key !== after[index])) {
+			this.handleRetry();
+		}
+	}
+
 	handleRetry = (): void => {
-		this.setState({ hasError: false, error: undefined });
+		// 只清 error 会让确定性错误立即再次抛出（用户看到永远无效的"重试"）。
+		// 同时递增 epoch，用 key 重新挂载子树，给上层一次真正的重建机会。
+		this.setState((state) => ({ hasError: false, error: undefined, epoch: state.epoch + 1 }));
 	};
 
 	render(): ReactNode {
@@ -103,6 +125,6 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 			);
 		}
 
-		return this.props.children;
+		return <Fragment key={this.state.epoch}>{this.props.children}</Fragment>;
 	}
 }

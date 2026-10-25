@@ -1,0 +1,93 @@
+/* Created document cards reveal their native scrollbar only while scrolling. */
+.created-document-notice-scroll:not([data-scrolling="true"]) {
+	scrollbar-color: transparent transparent;
+}
+
+.created-document-notice-scroll[data-scrolling="true"] {
+	scrollbar-color: color-mix(in oklch, var(--muted-foreground) 38%, transparent) transparent;
+}
+
+.created-document-notice-scroll:not([data-scrolling="true"])::-webkit-scrollbar-thumb {
+	background: transparent;
+}
+
+.created-document-notice-scroll[data-scrolling="true"]::-webkit-scrollbar-thumb {
+	background: color-mix(in oklch, var(--muted-foreground) 38%, transparent);
+}
+
+/* Match Sonner's transform/opacity timing while keeping document cards persistent. */
+.created-document-notice-stack {
+  position: relative;
+  transition: height var(--floating-motion-standard) ease;
+}
+
+.created-document-notice-card {
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  transform: translateY(calc(-1 * var(--notice-offset))) scale(var(--notice-scale));
+  transform-origin: bottom center;
+  transition: transform var(--floating-motion-standard) ease, opacity var(--floating-motion-standard) ease, box-shadow var(--floating-motion-fast) ease;
+  animation: created-document-notice-enter var(--floating-motion-standard) ease both;
+}
+
+.created-document-notice-card[aria-hidden="true"] {
+  pointer-events: none;
+}
+
+.created-document-notice-card[aria-hidden="true"] > * {
+  visibility: hidden;
+}
+
+.created-document-notice-toolbar {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(6px);
+  transition: grid-template-rows var(--floating-motion-standard) ease, opacity var(--floating-motion-fast) ease, transform var(--floating-motion-standard) ease, visibility var(--floating-motion-standard);
+}
+
+.created-document-notice-toolbar-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.created-document-notice-host[data-expanded="true"] .created-document-notice-toolbar {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+@keyframes created-document-notice-enter {
+  from { opacity: 0; translate: 0 16px; }
+  to { translate: 0 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .created-document-notice-stack,
+  .created-document-notice-card,
+  .created-document-notice-toolbar {
+    transition: none;
+    animation: none;
+  }
+}
+
+/* Start at the newest (bottom) card; negative scrollTop exposes older cards.
+   Flex reversal preserves the bottom anchor during the stack height transition. */
+.created-document-notice-scroll {
+  isolation: isolate;
+  display: flex;
+  flex-direction: column-reverse;
+}
+
+.created-document-notice-stack,
+.created-document-notice-more {
+  flex-shrink: 0;
+}
+
+.created-document-notice-card {
+  /* Same toast shadow geometry, with half the opacity. */
+  box-shadow: var(--floating-shadow-document);
+}

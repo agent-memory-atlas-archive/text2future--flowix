@@ -41,7 +41,6 @@ function PhotoWallItem({ item, height, notebookId, notebookPath }: { item: Prepa
     if (filePath) void openWorkspaceSurface({
       host: 'browser-column',
       target: { kind: 'media', filePath, notebookId, notebookPath, resourceKind: resource.kind },
-      options: { browserDisposition: 'focus-existing' },
     }).catch((reason) => toast.error(reason instanceof Error ? reason.message : '无法打开媒体资源'));
   }} style={{ flexGrow: ratio, flexBasis: 0, height }} className="group relative min-w-0 overflow-hidden rounded-md bg-[var(--card)] text-left">
     <img src={!failed && preview ? preview : resource.kind === 'video' ? videoPlaceholder : imagePlaceholder} alt="" onError={() => setFailed(true)} className="absolute inset-0 h-full w-full object-contain" />

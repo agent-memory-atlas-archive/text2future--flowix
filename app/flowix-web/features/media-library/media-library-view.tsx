@@ -1,5 +1,7 @@
 'use client';
 
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
+
 import { createSaveBarrier } from '@/lib/save-barrier';
 import type { SurfaceLifecycle, SurfacePresentationUpdate } from '@features/workspace/public/surface-api';
 
@@ -56,7 +58,7 @@ export function MediaLibraryView({ onSurfaceLifecycleReady, reportPresentation, 
     try {
       await notebookClient.retryMediaMaintenance(resolvedNotebookId);
     } catch (reason) {
-      toast.error(reason instanceof Error ? reason.message : t('mediaLibrary.maintenanceRetryFailed'));
+      toast.error(friendlyErrorMessage(reason, t, 'errors.friendly.mediaMaintenance'));
     } finally {
       setRetryingMaintenance(false);
     }
@@ -135,7 +137,7 @@ export function MediaLibraryView({ onSurfaceLifecycleReady, reportPresentation, 
       sourceContentRef.current = currentSource;
       setDocument(parsed);
     }).catch((reason) => {
-      if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+      if (!cancelled) setError(friendlyErrorMessage(reason, t, 'errors.friendly.mediaLoad'));
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
@@ -222,7 +224,7 @@ export function MediaLibraryView({ onSurfaceLifecycleReady, reportPresentation, 
       return false;
     } catch (reason) {
       reportSaveFailure();
-      toast.error(reason instanceof Error ? reason.message : '保存媒体库配置失败');
+      toast.error(friendlyErrorMessage(reason, t, 'errors.friendly.tableViewSave'));
       return false;
     } finally {
       if (!lockAlreadyHeld) {
@@ -272,10 +274,10 @@ export function MediaLibraryView({ onSurfaceLifecycleReady, reportPresentation, 
       });
       if (!acceptContent(result.content)) { reportSaveFailure(); return; }
       setRenamedFilePath(result.filePath);
-      if (result.errorCode) toast.error(`集合已更新，后续操作待恢复：${result.errorCode}`);
+      if (result.errorCode) { console.warn('Collection follow-up failed', result.errorCode); toast.error(t('errors.friendly.collectionPartial')); };
     } catch (reason) {
       reportSaveFailure();
-      toast.error(reason instanceof Error ? reason.message : '重命名媒体库失败');
+      toast.error(friendlyErrorMessage(reason, t, 'errors.friendly.mediaRename'));
     } finally {
       saveInFlightRef.current = false;
       setSaving(false);
@@ -300,7 +302,7 @@ export function MediaLibraryView({ onSurfaceLifecycleReady, reportPresentation, 
     } else if (error) {
       reportPresentation({ title: libraryDisplayName, state: {
         status: 'error',
-        message: { key: 'error.unexpected', fallbackText: error },
+        message: { key: 'errors.friendly.mediaLoad' },
         actions: [{ id: 'retry', label: { key: 'error.retry' }, enabled: true, run: retryLoad }],
       } });
     } else if (document) {
@@ -364,7 +366,7 @@ export function MediaLibraryView({ onSurfaceLifecycleReady, reportPresentation, 
   return <div className="relative h-full min-h-0">
     {saving && <span className="pointer-events-none absolute right-5 top-4 z-10 text-[11px] text-[var(--muted-foreground)]">保存中…</span>}
     {refreshError && <div role="alert" className="mx-4 mt-3 flex items-center justify-between gap-3 rounded-lg border border-[var(--destructive)]/30 bg-[var(--destructive)]/5 px-3 py-2 text-xs text-[var(--foreground)]">
-      <span className="min-w-0 truncate">{t('mediaLibrary.refreshFailed')}: {refreshError}</span>
+      <span className="min-w-0 truncate">{t('errors.friendly.mediaRefresh')}</span>
       <button type="button" onClick={retryRefresh} className="shrink-0 rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs hover:bg-[var(--hover-bg)]">
         {t('error.retry')}
       </button>

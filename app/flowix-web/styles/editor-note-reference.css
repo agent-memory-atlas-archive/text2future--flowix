@@ -13,13 +13,15 @@
  * 整卡片透明度并追加状态文字。
  *
  * 本样式表只服务正文编辑器。Agent composer 使用独立的扩展注册和
- * Agent Conversation composer 样式，不依赖这里的笔记链接展示规则。 */
+ * Agent Conversation composer 样式，不依赖这里的笔记链接展示规则。
+ * 按引用节点自身的 presentation class 排除 composer，避免嵌套输入框
+ * 通过外层正文 .tiptap 祖先匹配到这些规则（全屏卡片仍留在正文 DOM 内）。 */
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .editor-note-reference {
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference):where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: inline;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .note-reference__card {
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference) .note-reference__card:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   /* inline 而非 inline-flex: 行盒允许在子节点之间换行,
    * 长标题换行后, 图标不会孤立. icon 与 __name 之间的
    * 间距由 __icon 的 margin-right 替代原 gap: 4px. */
@@ -37,12 +39,12 @@
 /* hover 时整组切到手型 cursor, 跟 __card 自身的 cursor: pointer 一致。
  * 默认态 __name 仍是 default (避免光标在文字上从箭头变 I 形后再变 pointer 的
  * 三态闪烁), 仅在用户主动 hover 卡片时统一发出"可点"的视觉信号。 */
-.markdown-editor .tiptap:not(.agent-composer__input-content) .note-reference__card:hover,
-.markdown-editor .tiptap:not(.agent-composer__input-content) .note-reference__card:hover * {
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference) .note-reference__card:hover:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference) .note-reference__card:hover *:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   cursor: pointer;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .note-reference__icon {
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference) .note-reference__icon:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: inline-flex;
   align-items: center;
   vertical-align: middle;
@@ -52,16 +54,16 @@
   transition: color 0.15s ease;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .editor-note-reference,
-.markdown-editor .tiptap:not(.agent-composer__input-content) .note-reference__card,
-.markdown-editor .tiptap:not(.agent-composer__input-content) .note-reference__card * {
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference):where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference) .note-reference__card:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference) .note-reference__card *:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   -webkit-user-drag: none;
   -moz-user-drag: none;
   -ms-user-drag: none;
   user-drag: none;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .note-reference__name {
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference) .note-reference__name:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   /* 名称文字颜色与 file-attachment 同源: --document-link token
    * hover 派生公式一致 → 鼠标悬停时和文件附件卡片同步提亮
    * 内部 __title 由自己的 className 覆写, 这里给兜底色 */
@@ -76,7 +78,7 @@
   transition: color 0.15s ease;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .note-reference__title {
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference) .note-reference__title:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   /* 笔记标题沿用 file-attachment 的 __name 配色 */
   color: var(--document-link);
   font-weight: 500;
@@ -84,8 +86,8 @@
 
 /* hover 时标题和图标同步提亮
  * color-mix(--document-link, white 20%) 与 file-attachment 同源 */
-.markdown-editor .tiptap:not(.agent-composer__input-content) .note-reference__card:hover .note-reference__title,
-.markdown-editor .tiptap:not(.agent-composer__input-content) .note-reference__card:hover .note-reference__icon {
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference) .note-reference__card:hover .note-reference__title:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference) .note-reference__card:hover .note-reference__icon:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   color: color-mix(in oklch, var(--document-link), white 20%);
 }
 
@@ -93,7 +95,7 @@
  * 走 color-mix(--document-link × transparent) 派生公式, 跨主题自动适配。
  * 浓度 10% 与 .editor-file-attachment.is-selected 对齐, 选中态统一为"轻量"——
  * inline 卡片在文本行内不应铺大色块喧宾夺主, 视觉权重对齐 hover 反馈。 */
-.markdown-editor .tiptap:not(.agent-composer__input-content) .editor-note-reference.is-selected .note-reference__card {
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference).is-selected .note-reference__card:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   background-color: color-mix(in oklch, var(--document-link) 10%, transparent);
 }
 
@@ -102,14 +104,14 @@
  * 视觉上: 整卡片 50% 透明度 + 末尾 "（已失效）" 标签, 跨主题一致.
  * 失效只表达视觉状态, 交互与正常卡片保持一致。 */
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .note-reference__card[data-stale="true"] {
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference) .note-reference__card[data-stale="true"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   /* 整卡片半透明形成"明显已失效但仍占位"的视觉信号;
    * 透明度而非 color-mix 灰化是为了保留 --document-link 颜色信号,
    * 跨主题行为一致. */
   opacity: 0.5;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .note-reference__stale-mark {
+.markdown-editor .editor-note-reference:not(.agent-composer__note-reference) .note-reference__stale-mark:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   /* 失效标签: 跟 __name 同色同源 (--document-link), 不加粗;
    * 跟名称字段保持间距, 作为状态注解显示. */
   color: var(--document-link);

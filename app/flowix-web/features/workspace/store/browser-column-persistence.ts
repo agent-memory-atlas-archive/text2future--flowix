@@ -3,7 +3,7 @@ import type { CollectionDisplayDescriptor } from '@/lib/collection-display-regis
 import { STORAGE_KEYS } from '@/lib/constants';
 import { canonicalUrl } from '../model/surface-identity';
 import { browserColumnTargetKey, type BrowserColumnTarget } from '../model/browser-column-target';
-import type { BrowserColumnTab, BrowserColumnSessionState } from '../model/browser-column-tab';
+import type { BrowserColumnEntry, BrowserColumnSessionState } from '../model/browser-column-session';
 import { BROWSER_COLUMN_DEFAULT_SPLIT_RATIO, BROWSER_COLUMN_FILE_TREE_DEFAULT_WIDTH, clampFileTreeWidth, clampSplitRatio } from '../model/browser-column-layout';
 
 const LEGACY_SPLIT_RATIO_STORAGE_KEY = 'flowix.workspace.fourth-column.split-ratio';
@@ -103,7 +103,7 @@ function parseBrowserColumnTarget(value: unknown): BrowserColumnTarget | null {
   }
 }
 
-function parseBrowserColumnTab(value: unknown): BrowserColumnTab | null {
+function parseBrowserColumnEntry(value: unknown): BrowserColumnEntry | null {
   if (!isRecord(value) || !nonEmptyString(value.id) || typeof value.title !== 'string') {
     return null;
   }
@@ -118,14 +118,14 @@ function parseBrowserColumnTab(value: unknown): BrowserColumnTab | null {
   };
 }
 
-function normalizePersistedTabs(value: unknown, activeTabId: unknown): BrowserColumnTab[] {
+function normalizePersistedTabs(value: unknown, activeTabId: unknown): BrowserColumnEntry[] {
   if (!Array.isArray(value)) return [];
 
-  const tabs: BrowserColumnTab[] = [];
+  const tabs: BrowserColumnEntry[] = [];
   const seenKeys = new Set<string>();
   const seenIds = new Set<string>();
   for (const candidate of value) {
-    const tab = parseBrowserColumnTab(candidate);
+    const tab = parseBrowserColumnEntry(candidate);
     if (!tab || seenIds.has(tab.id)) continue;
     const filePath = tab.target.kind === 'file-browser' ? tab.target.activeFilePath : null;
     // Keep agent configuration out of automatic session restoration.
@@ -145,6 +145,14 @@ function normalizePersistedTabs(value: unknown, activeTabId: unknown): BrowserCo
     tabs.push(tab);
   }
   return tabs;
+}
+
+function normalizeHistory(value: unknown): BrowserColumnEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const tab = parseBrowserColumnEntry(item);
+    return tab && !(tab.target.kind === 'file-browser' && tab.target.activeFilePath?.split(/[\\/]/).pop() === 'AGENTS.md') ? [tab] : [];
+  }).slice(-100);
 }
 
 function readLegacySplitRatio(): number | null {
@@ -183,8 +191,9 @@ const browserColumnStorage: PersistStorage<BrowserColumnSessionState> = {
   setItem: (name, value) => {
     const previous = lastStoredSnapshot;
     if (previous && previous.version === value.version
-      && previous.state.tabs === value.state.tabs
-      && previous.state.activeTabId === value.state.activeTabId
+      && previous.state.backStack === value.state.backStack
+      && previous.state.forwardStack === value.state.forwardStack
+      && previous.state.current === value.state.current
       && previous.state.visible === value.state.visible
       && previous.state.splitRatio === value.state.splitRatio) return;
     const result = browserColumnJsonStorage?.setItem(name, value);
@@ -208,24 +217,22 @@ export function restoreBrowserColumnSession<T extends BrowserColumnSessionState>
       : { ...current, splitRatio: legacySplitRatio };
   }
 
-  const tabs = normalizePersistedTabs(persisted.tabs, persisted.activeTabId);
-  const requestedActiveTabId = typeof persisted.activeTabId === 'string'
-    ? persisted.activeTabId
-    : null;
-  const activeTabId = tabs.some((tab) => tab.id === requestedActiveTabId)
-    ? requestedActiveTabId
-    : tabs[0]?.id ?? null;
+  // v5/v6 stored tab arrays; only their selected surface becomes current.
+  const legacy = normalizePersistedTabs(persisted.tabs, persisted.activeTabId);
+  const selected = legacy.find((entry) => entry.id === persisted.activeTabId) ?? legacy[0] ?? null;
+  const currentEntry = 'current' in persisted ? normalizeHistory([persisted.current])[0] ?? null : selected;
 
   return {
     ...current,
-    visible: tabs.length > 0 && persisted.visible !== false,
+    visible: currentEntry !== null && persisted.visible !== false,
     splitRatio: clampSplitRatio(
       typeof persisted.splitRatio === 'number'
         ? persisted.splitRatio
         : readLegacySplitRatio() ?? BROWSER_COLUMN_DEFAULT_SPLIT_RATIO,
     ),
-    tabs,
-    activeTabId,
+    current: currentEntry,
+    backStack: normalizeHistory(persisted.backStack),
+    forwardStack: normalizeHistory(persisted.forwardStack),
   };
 }
 
@@ -233,20 +240,20 @@ function migrateBrowserColumnSessionState(
   persisted: unknown,
   _version: number,
 ): BrowserColumnSessionState {
-  // Older tree visibility values are ignored by code surfaces now; preserve
-  // the rest of the user's open tabs and directory browser preferences.
+  // Validation and legacy selection migration happen in restoreBrowserColumnSession.
   return persisted as BrowserColumnSessionState;
 }
 
 export const browserColumnPersistence = {
   name: STORAGE_KEYS.BROWSER_COLUMN,
-  version: 5,
+  version: 7,
   migrate: migrateBrowserColumnSessionState,
   storage: browserColumnStorage,
   partialize: (state: BrowserColumnSessionState): BrowserColumnSessionState => ({
     visible: state.visible,
     splitRatio: state.splitRatio,
-    tabs: state.tabs,
-    activeTabId: state.activeTabId,
+    backStack: state.backStack,
+    forwardStack: state.forwardStack,
+    current: state.current,
   }),
 };

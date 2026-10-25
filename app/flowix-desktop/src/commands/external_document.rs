@@ -7,10 +7,28 @@ use tauri::{Manager, State};
 use crate::app::state::AppState;
 use crate::commands::external_document_watch::ExternalDocumentWatchState;
 use crate::commands::helpers::{
-    can_access_document_path, can_access_scoped_file, refresh_notebook_note_index,
+    can_access_document_path, can_access_scoped_file, notebook_note_address,
 };
+use crate::commands::path_change::NotebookPathUpdated;
 use crate::lock_utils::read_lock;
-use flowix_core::memo_file::{FileWriteOutcome, MergedFileWriteOutcome};
+use flowix_core::memo_file::{FileWriteOutcome, MemoFile, MergedFileWriteOutcome};
+
+/// Generic editor saves must publish the same indexed note metadata as note saves.
+fn refresh_saved_notebook_note(
+    memo_file: &MemoFile,
+    path: &Path,
+    window_label: &str,
+    previous_favorited: Option<bool>,
+) -> Result<Option<NotebookPathUpdated>, String> {
+    let Some((notebook_id, relative_path)) = notebook_note_address(memo_file, path)? else {
+        return Ok(None);
+    };
+    let entry = memo_file.read_note_entry_by_path(&notebook_id, &relative_path)
+        .map_err(|error| error.to_string())?;
+    Ok(entry.map(|entry| NotebookPathUpdated::from_window(
+        notebook_id, relative_path, entry, window_label.to_owned(), previous_favorited,
+    )))
+}
 
 #[tauri::command]
 pub async fn detect_external_document_text(
@@ -293,6 +311,11 @@ pub async fn write_external_document(
                     Ok(ids) => ids,
                     Err(error) => return ExternalDocumentWriteOutcome::Error { message: error.to_string() },
                 };
+                // Capture membership independently of which pages the UI has loaded.
+                let previous_favorited = notebook_note_address(&memo_file, &path).ok().flatten()
+                    .and_then(|(notebook_id, relative_path)| memo_file
+                        .read_indexed_note_entry_by_path(&notebook_id, &relative_path).ok().flatten())
+                    .map(|entry| entry.favorited);
                 watches.begin_window_write(&app, &path);
                 let outcome = if is_markdown_document_path(&path) {
                     match notebook_ids.as_slice() {
@@ -325,7 +348,11 @@ pub async fn write_external_document(
                 );
                 let (saved_content, merged) = match outcome {
                     Ok(MergedFileWriteOutcome::Saved { content, merged }) => {
-                        refresh_notebook_note_index(&memo_file, &path);
+                        match refresh_saved_notebook_note(&memo_file, &path, window.label(), previous_favorited) {
+                            Ok(Some(change)) => change.emit(&app),
+                            Ok(None) => {},
+                            Err(error) => tracing::warn!(path = %path.display(), "saved note metadata notification failed: {error}"),
+                        }
                         crate::commands::document_list::refresh_view_document_path(&memo_file, &path);
                         if is_markdown_document_path(&path) {
                             if let Ok(notebooks) = memo_file.read_notebook_configs() {
@@ -393,6 +420,47 @@ pub async fn write_external_document(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_save_metadata_receipt_covers_root_and_deep_notes_and_clearing() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("book");
+        fs::create_dir_all(root.join("a/b")).unwrap();
+        let memo = MemoFile::new(temp.path().join("config"));
+        memo.initialize_current_registry_storage().unwrap();
+        memo.write_notebook_configs(&[flowix_core::memo_file::NotebookConfig {
+            id: "book".into(), name: "Book".into(), icon: None,
+            path: root.to_string_lossy().into_owned(), is_default: true,
+            sort: 0, created_at: 0, updated_at: 0,
+        }]).unwrap();
+        for relative in ["note.md", "a/b/note.md"] {
+            let path = root.join(relative);
+            fs::write(&path, "---\nflowix_icon: flashlight\nflowix_colors: [blue]\nflowix_favorited: true\n---\nBody\n").unwrap();
+            let change = refresh_saved_notebook_note(&memo, &path, "main", Some(false)).unwrap().unwrap();
+            let payload = serde_json::to_value(&change).unwrap();
+            assert_eq!(payload["notebookId"], "book");
+            assert_eq!(payload["relativePath"], relative);
+            assert_eq!(payload["entry"]["icon"], "flashlight");
+            assert_eq!(payload["entry"]["colors"], serde_json::json!(["blue"]));
+            assert_eq!(payload["entry"]["favorited"], true);
+            assert_eq!(payload["originWindowLabel"], "main");
+            assert_eq!(payload["previousFavorited"], false);
+            assert!(!change.change_id.is_empty());
+
+            fs::write(&path, "Body\n").unwrap();
+            let cleared = refresh_saved_notebook_note(&memo, &path, "main", Some(false)).unwrap().unwrap();
+            assert!(cleared.entry.icon.is_none());
+            assert!(cleared.entry.colors.is_empty());
+            assert!(!cleared.entry.favorited);
+            assert_ne!(change.change_id, cleared.change_id);
+        }
+        let outside = temp.path().join("outside.md");
+        fs::write(&outside, "Body\n").unwrap();
+        assert!(refresh_saved_notebook_note(&memo, &outside, "main", None).unwrap().is_none());
+        let text = root.join("note.txt");
+        fs::write(&text, "Body\n").unwrap();
+        assert!(refresh_saved_notebook_note(&memo, &text, "main", None).unwrap().is_none());
+    }
 
     #[test]
     fn read_permission_errors_have_a_platform_independent_code() {

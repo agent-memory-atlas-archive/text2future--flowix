@@ -10,7 +10,7 @@ import {
 import type { WorkColumnTarget } from '@features/workspace/store/work-column-target';
 import { useWorkspaceFocusStore } from '@features/workspace/store/workspace-focus-store';
 import { getWorkColumnContentState } from '@features/workspace/store/work-column-content-state';
-import { activateBrowserColumnTab } from './browser-column-coordinator';
+import { activateBrowserColumnEntry } from './browser-column-coordinator';
 
 import type { WorkspaceContentLocation } from '../model/surface-opening';
 export type { WorkspaceContentLocation } from '../model/surface-opening';
@@ -51,7 +51,7 @@ function currentCollectionView(location: WorkspaceContentLocation): string | nul
     if (target.status === 'empty' || target.status === 'transitioning') return null;
     return target.target.kind === 'collection' ? target.target.viewId : null;
   }
-  const tab = useBrowserColumnStore.getState().tabs.find((candidate) => candidate.id === location.tabId);
+  const tab = (useBrowserColumnStore.getState().current?.id === location.surfaceId ? useBrowserColumnStore.getState().current : null);
   return tab?.target.kind === 'file-browser' ? tab.target.collectionDisplay?.viewId ?? null : null;
 }
 
@@ -80,7 +80,7 @@ export function activateExistingWorkspaceContent(
   if (location.host === 'main-third') {
     useWorkspaceFocusStore.getState().focusHost('main-third');
   } else {
-    useBrowserColumnStore.getState().commitTab(location.tabId);
+    useBrowserColumnStore.getState().focusContent(location.surfaceId);
   }
   return location;
 }
@@ -110,7 +110,7 @@ export async function activateExistingWorkspaceContentAsync(
     return location;
   }
 
-  const activated = await activateBrowserColumnTab(location.tabId);
+  const activated = await activateBrowserColumnEntry(location.surfaceId);
   if (activated === null) {
     throw new Error('BrowserColumn navigation cancelled because saving did not complete');
   }
@@ -141,16 +141,13 @@ export function findWorkspaceContentLocations(
   const activeMatch = workIdentity && contentIdentityKey(workIdentity) === key;
 
   const browserColumn = useBrowserColumnStore.getState();
-  const matchingTabs = browserColumn.tabs.filter(
-    (tab) => contentIdentityKey(browserColumnTargetIdentity(tab.target)) === key,
-  );
-  const tab = matchingTabs.find((candidate) => candidate.id === browserColumn.activeTabId)
-    ?? matchingTabs[0];
+  const tab = browserColumn.current && contentIdentityKey(browserColumnTargetIdentity(browserColumn.current.target)) === key
+    ? browserColumn.current : null;
   return {
     workColumn: pendingMatch
       ? { host: 'main-third', state: 'pending' }
       : activeMatch ? { host: 'main-third', state: 'active' } : null,
-    browserColumn: tab ? { host: 'browser-column', tabId: tab.id } : null,
+    browserColumn: tab ? { host: 'browser-column', surfaceId: tab.id } : null,
   };
 }
 

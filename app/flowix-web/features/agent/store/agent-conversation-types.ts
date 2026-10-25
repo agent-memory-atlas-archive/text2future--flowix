@@ -16,6 +16,8 @@ export interface AgentConversationInstance {
   instanceId: string;
   agentType: AgentTypeKey;
   title: string;
+  /** Backend-derived evidence that an untitled conversation has started. */
+  readonly hasMessages?: boolean;
   threadId: string | null;
   /** Derived native session identity; never persisted with the UI instance. */
   providerSessionId?: string | null;

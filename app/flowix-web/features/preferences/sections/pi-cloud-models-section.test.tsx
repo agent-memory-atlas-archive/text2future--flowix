@@ -24,7 +24,10 @@ vi.mock('@platform/tauri/client', () => ({
 vi.mock('@features/agent/services/agent-catalog-service', () => ({
   refreshAgentModelCatalog: mocks.refreshAgentModelCatalog,
 }));
-vi.mock('@/lib/i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }));
+vi.mock('@/lib/i18n', () => {
+  const t = (key: string) => key;
+  return { useI18n: () => ({ t }) };
+});
 vi.mock('@/lib/toast', () => ({
   toast: { error: mocks.toastError, success: mocks.toastSuccess },
 }));

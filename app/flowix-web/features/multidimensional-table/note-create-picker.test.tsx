@@ -28,7 +28,8 @@ function render(value = '', allowSelect = true) {
 describe('shared note creation and selection', () => {
   it('uses the same placeholder for creation-only and searchable entry points', () => {
     const view = render('', false);
-    expect(view.textarea.placeholder).toBe('输入名称搜索 或 新建');
+    // 占位文案改成了「笔记名称」（创建/搜索两个入口共用同一个）。
+    expect(view.textarea.placeholder).toBe('笔记名称');
     expect(view.container.querySelector('[role="listbox"]')).toBeNull();
   });
 

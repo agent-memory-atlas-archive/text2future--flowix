@@ -99,7 +99,7 @@ function AgentRepositoryItem({
         }
       }
       await tree.refresh(parentDirectoryPath(deleting.fullPath, repository.path));
-      toast.success(t('memo.fileTree.deleted', { name: deleting.name }));
+      toast.success(t('status.deleteCompleted'));
       setDeleting(null);
     } catch (error) {
       await tree.refresh(parentDirectoryPath(deleting.fullPath, repository.path)).catch(() => {});

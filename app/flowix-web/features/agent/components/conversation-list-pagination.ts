@@ -97,7 +97,11 @@ export function mergeConversationPage(
   for (const instance of incoming) {
     const identity = getConversationIdentity(instance);
     const previous = itemsByIdentity[identity];
-    const selected = previous ? preferConversationInstance(previous, instance) : instance;
+    const preferred = previous ? preferConversationInstance(previous, instance) : instance;
+    // A live snapshot can predate hydration of the durable message flag.
+    const selected = previous?.hasMessages || instance.hasMessages
+      ? (preferred.hasMessages ? preferred : { ...preferred, hasMessages: true })
+      : preferred;
     itemsByIdentity[identity] = selected;
     orderedIdentities = insertIdentityInOrder(orderedIdentities, itemsByIdentity, identity);
   }

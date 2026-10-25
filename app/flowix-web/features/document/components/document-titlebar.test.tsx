@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({ hideBrowser: vi.fn(), transfer: vi.fn() }));
 vi.mock('@features/workspace/public/shell-api', () => ({
   useWorkColumnTransferViewModel: () => ({ canOpenInBrowserColumn: true, openInBrowserColumn: mocks.transfer }),
 }));
-vi.mock('@features/workspace/public/browser-column-api', () => ({ hideBrowserColumn: mocks.hideBrowser }));
+vi.mock('@features/workspace/public/browser-column-api', () => ({ hideBrowserColumn: mocks.hideBrowser, toggleBrowserColumn: mocks.hideBrowser, useBrowserColumnVisible: () => true }));
 vi.mock('@/lib/i18n', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/i18n')>(),
   useI18n: () => ({ t: (key: string) => key, language: 'zh-CN' }),
@@ -61,6 +61,28 @@ for (const [platform, Titlebar] of [['mac', DocumentTitlebarMac], ['windows', Do
       };
       await act(async () => root.render(<Titlebar {...props} />));
       expect(container.querySelector('[aria-label="document.titlebar.moreTooltip"]')).not.toBeNull();
+    });
+
+    it.each([
+      ['a.md', 'document.action.richTextMode'],
+      ['index.html', 'htmlResource.previewMode'],
+    ])('switches %s modes through the existing More menu', async (filename, richLabel) => {
+      props.document.target!.fileIdentity = { path: `/book/${filename}`, displayId: filename };
+      props.showEditorModeToggle = true;
+      props.editorMode = 'source';
+      props.onSetEditorMode = vi.fn();
+      await act(async () => root.render(<Titlebar {...props} />));
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="document.titlebar.moreTooltip"]')!.click());
+      const toggle = [...document.querySelectorAll<HTMLElement>('button')]
+        .find((item) => item.textContent?.includes(richLabel));
+      expect(toggle).toBeDefined();
+      await act(async () => toggle!.click());
+      expect(props.onSetEditorMode).toHaveBeenCalledWith('rich');
+      props.editorMode = 'rich';
+      await act(async () => root.render(<Titlebar {...props} />));
+      await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="document.titlebar.moreTooltip"]')!.click());
+      expect([...document.querySelectorAll<HTMLElement>('button')]
+        .some((item) => item.textContent?.includes('document.action.sourceMode'))).toBe(true);
     });
 
     it('hides document controls during Agent fullscreen and restores them on exit', async () => {

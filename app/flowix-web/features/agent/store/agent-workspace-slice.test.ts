@@ -154,7 +154,7 @@ describe("local.db workspace projection", () => {
     expect(useAgentWorkspaceStore.getState().workspace).toBe(current);
   });
   it.each(['attach-first','detach-first'])("serializes opposite path operations: %s", async order => {
-    let data = snapshot();
+    const data = snapshot();
     backend.attachDirectory.mockImplementation(async (id,path) => {
       data.notebookConfigs[id].addDirs = [{ id:'saved', path, label:'Shared', enabled:true }];
       return structuredClone(data);

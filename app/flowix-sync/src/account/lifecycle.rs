@@ -26,20 +26,16 @@ impl AccountService {
         tokio::join!(
             self.restore_saved_session(policy),
             self.retry_credentials(policy),
-            self.refresh_entitlements_periodically(),
+            self.refresh_entitlements_when_requested(),
         );
     }
 
-    async fn refresh_entitlements_periodically(&self) {
-        let interval = Duration::from_secs(60);
+    async fn refresh_entitlements_when_requested(&self) {
         loop {
-            tokio::select! {
-                _ = tokio::time::sleep(interval) => {},
-                _ = self.entitlement_retry.notified() => {},
-            }
+            self.entitlement_retry.notified().await;
             if self.state().is_ok_and(|state| state.authenticated) {
                 if let Err(error) = self.refresh_membership().await {
-                    tracing::debug!(%error, "periodic cloud entitlement refresh failed");
+                    tracing::debug!(%error, "requested cloud entitlement refresh failed");
                 }
             }
         }

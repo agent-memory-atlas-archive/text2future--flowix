@@ -1,5 +1,7 @@
 'use client';
 
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
+
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, FolderOpen, Power, RefreshCw, ShieldCheck, ShieldQuestion, Trash2 } from 'lucide-react';
 import { dialogs, plugins, type PluginDescriptor, type PluginDiagnostic } from '@platform/tauri/client';
@@ -23,11 +25,11 @@ export function PluginsSection() {
       setDiagnostics(snapshot.diagnostics);
       setError(null);
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : String(loadError));
+      setError(friendlyErrorMessage(loadError, t, 'errors.friendly.pluginLoad'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -48,7 +50,7 @@ export function PluginsSection() {
       await plugins.install(source);
       await load();
     } catch (installError) {
-      setError(installError instanceof Error ? installError.message : String(installError));
+      setError(friendlyErrorMessage(installError, t, 'errors.friendly.pluginInstall'));
     } finally {
       setBusy(false);
     }
@@ -61,7 +63,7 @@ export function PluginsSection() {
       await plugins.setEnabled(plugin.manifest.id, !plugin.enabled);
       await load();
     } catch (toggleError) {
-      setError(toggleError instanceof Error ? toggleError.message : String(toggleError));
+      setError(friendlyErrorMessage(toggleError, t, plugin.enabled ? 'errors.friendly.pluginDisable' : 'errors.friendly.pluginEnable'));
     } finally {
       setBusy(false);
     }
@@ -75,7 +77,7 @@ export function PluginsSection() {
       await plugins.uninstall(plugin.manifest.id);
       await load();
     } catch (uninstallError) {
-      setError(uninstallError instanceof Error ? uninstallError.message : String(uninstallError));
+      setError(friendlyErrorMessage(uninstallError, t, 'errors.friendly.pluginRemove'));
     } finally {
       setBusy(false);
     }

@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ensureFileDisplayIdentity, rebaseFileDisplayPath } from '@/lib/file-display-registry';
 import { useNotebookTreeInteraction } from './use-notebook-tree-interaction';
+import { useNotebookTreeSelectionStore } from '../store/notebook-tree-selection-store';
 import { TREE_ROW_HEIGHT, TREE_ROW_SIZE } from './notebook-tree-layout';
 
 describe('file tree selection through a rename', () => {
@@ -13,9 +14,16 @@ describe('file tree selection through a rename', () => {
   const tree = { expanded: new Set<string>(), toggle: vi.fn() };
   const onNoteSelect = vi.fn();
 
-  function Harness({ path, paths }: { path: string; paths: Set<string> }) {
+  function Harness({ path, paths, visiblePaths = [], pinnedPaths = [] }: {
+    path: string; paths: Set<string>; visiblePaths?: string[]; pinnedPaths?: string[];
+  }) {
     interaction = useNotebookTreeInteraction({
-      activeFilePath: path, treeItemPaths: paths, visibleTreeItems: [], tree,
+      activeFilePath: path, treeItemPaths: paths,
+      pinnedDocumentPaths: pinnedPaths,
+      visibleTreeItems: visiblePaths.map(fullPath => ({ depth: 0, item: {
+        id: fullPath, fullPath, name: fullPath.split('/').pop()!, type: 'document',
+        parentId: null, children: null, sizeBytes: 0, modifiedMs: null, createdMs: null, memoCreatedMs: null,
+      } })), tree,
       treeRootRef: { current: null }, treeScrollerRef: { current: null },
       renderRowIndexByPath: new Map(), treeContentOffset: 0, onNoteSelect,
     });
@@ -29,6 +37,77 @@ describe('file tree selection through a rename', () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     environment.IS_REACT_ACT_ENVIRONMENT = false;
+  });
+
+  it('projects multi-selection count and clears it on navigation and unmount', async () => {
+    const first = '/selection/first.md';
+    const second = '/selection/second.md';
+    const third = '/selection/third.md';
+    const paths = new Set([first, second, third]);
+    await act(async () => root.render(createElement(Harness, { path: first, paths })));
+    await act(async () => interaction.selectNote(first));
+    await act(async () => interaction.selectNote(second, { ctrlKey: true }));
+    expect(useNotebookTreeSelectionStore.getState().count).toBe(2);
+    expect(useNotebookTreeSelectionStore.getState().paths).toEqual([first, second]);
+    expect(onNoteSelect).toHaveBeenCalledTimes(1);
+    await act(async () => interaction.selectNote(second, { metaKey: true }));
+    expect(useNotebookTreeSelectionStore.getState().count).toBe(1);
+    await act(async () => interaction.updateSelection([first, second], first));
+    await act(async () => root.render(createElement(Harness, { path: third, paths })));
+    expect(useNotebookTreeSelectionStore.getState().count).toBe(0);
+    expect(useNotebookTreeSelectionStore.getState().paths).toEqual([]);
+    await act(async () => interaction.updateSelection([first, second], first));
+    await act(async () => root.render(null));
+    expect(useNotebookTreeSelectionStore.getState().count).toBe(0);
+  });
+
+  it.each([{ ctrlKey: true }, { metaKey: true }])('opens the remaining document after removing the active one (%o)', async (modifiers) => {
+    const first = '/singleton/first.md';
+    const second = '/singleton/second.md';
+    const paths = new Set([first, second]);
+    await act(async () => root.render(createElement(Harness, { path: first, paths })));
+    await act(async () => interaction.selectNote(first));
+    onNoteSelect.mockClear();
+    await act(async () => interaction.selectNote(second, modifiers));
+    expect(onNoteSelect).not.toHaveBeenCalled();
+    await act(async () => interaction.selectNote(first, modifiers));
+    expect(interaction.selectedFilePaths).toEqual([second]);
+    expect(onNoteSelect).toHaveBeenCalledExactlyOnceWith(second);
+    await act(async () => root.render(createElement(Harness, { path: second, paths })));
+    expect(interaction.selectedFilePaths).toEqual([second]);
+  });
+
+  it('retains newer modifier selections when a local open commits, but clears on external navigation', async () => {
+    const previous = '/async/previous.md';
+    const first = '/async/first.md';
+    const second = '/async/second.md';
+    const external = '/async/external.md';
+    const paths = new Set([previous, first, second, external]);
+    await act(async () => root.render(createElement(Harness, { path: previous, paths })));
+    await act(async () => interaction.selectNote(first));
+    await act(async () => interaction.selectNote(second, { ctrlKey: true }));
+    await act(async () => root.render(createElement(Harness, { path: first, paths })));
+    expect(interaction.selectedFilePaths).toEqual([first, second]);
+    expect(useNotebookTreeSelectionStore.getState().paths).toEqual([first, second]);
+    await act(async () => root.render(createElement(Harness, { path: external, paths })));
+    expect(interaction.selectedFilePaths).toEqual([]);
+  });
+
+  it('resets the selection source and anchor when switching from pinned to tree', async () => {
+    const pinned = '/source/pinned.md';
+    const first = '/source/first.index.yaml';
+    const middle = '/source/middle.md';
+    const last = '/source/last.md';
+    const paths = new Set([pinned, first, middle, last]);
+    const props = { path: pinned, paths, pinnedPaths: [pinned], visiblePaths: [first, middle, last] };
+    await act(async () => root.render(createElement(Harness, props)));
+    await act(async () => interaction.selectNote(pinned, undefined, 'pinned'));
+    await act(async () => interaction.selectNote(first));
+    await act(async () => interaction.selectNote(last, { shiftKey: true }));
+    expect(interaction.selectedFilePaths).toEqual([first, middle, last]);
+    expect(interaction.getSelectionAnchorPath()).toBe(first);
+    await act(async () => root.render(createElement(Harness, { ...props, path: first })));
+    expect(interaction.selectedFilePaths).toEqual([first, middle, last]);
   });
 
   it('starts one smooth scroll to 40% without an intermediate nearest-row scroll', async () => {

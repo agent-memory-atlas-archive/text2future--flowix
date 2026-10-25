@@ -16,7 +16,7 @@ import {
 import { isKnownProductThreadId, resolveProductThreadId } from "@features/agent/store/external-session";
 import { useDocumentStore } from "@features/document/store/document-store";
 import { useWorkspaceRestoreStore } from "@features/workspace/store/workspace-restore-store";
-import { closeAgentTarget } from "@features/workspace/use-cases/workspace-navigation";
+import { closeAgentTarget } from "@features/workspace/public/main-window-api";
 import { createLogger } from "@/lib/logger";
 
 const logger = createLogger("agent-thread-lifecycle");

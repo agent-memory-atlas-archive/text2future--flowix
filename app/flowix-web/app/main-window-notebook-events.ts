@@ -5,9 +5,9 @@ import {
 } from '@features/memo/public/app-api';
 import { invalidateMentionNotes } from '@features/editor/extensions/note-mention/note-mention-data';
 import { invalidateMentionTags } from '@features/editor/extensions/tag-mention/tag-mention-data';
-import { useUserSettingsStore } from '@features/preferences/store/user-settings-store';
+import { notifyCreatedDocument, removeCreatedDocumentNotices, moveCreatedDocumentNotices } from './created-document-notices';
 import { rebaseStoredRecoveryDraftPaths } from '@features/document/public/workspace-api';
-import { removeBrowserColumnTabsByPath, applyNotebookPathMove, openExternallyCreatedNote } from '@features/workspace/public/app-api';
+import { removeBrowserColumnContentByPath, applyNotebookPathMove } from '@features/workspace/public/app-api';
 import { clearWorkspaceTargetForDeletedFile } from '@features/workspace/public/shell-api';
 import { createLogger } from '@/lib/logger';
 import { joinNotebookMemoPath } from '@/lib/path';
@@ -26,16 +26,15 @@ export function mountMainWindowNotebookEvents(): () => void {
 
     if (change.kind === 'resource-created'
       && change.source === 'external_tool'
-      && change.relativePath.split('/').pop() !== 'AGENTS.md'
-      && useUserSettingsStore.getState().settings.autoOpenCreatedNotesInBrowser) {
+      && change.relativePath.split('/').pop() !== 'AGENTS.md') {
       const { relativePath } = change;
       pathChangeChain = pathChangeChain.then(async () => {
         if (disposed) return;
         const notebookPath = await getAppNotebookPath(notebookId);
         const path = notebookPath && joinNotebookMemoPath(notebookPath, relativePath);
         if (disposed || !path || !notebookPath) return;
-        await openExternallyCreatedNote(path, notebookPath, notebookId);
-      }).catch((error) => logger.warn('open externally created note failed', { error, notebookId, relativePath }));
+        notifyCreatedDocument(path, notebookPath, notebookId);
+      }).catch((error) => logger.warn('queue created document notification failed', { error, notebookId, relativePath }));
     }
 
     if (change.kind === 'path-moved') {
@@ -47,7 +46,10 @@ export function mountMainWindowNotebookEvents(): () => void {
           applyNotebookPathMove({ notebookId, notebookPath, previousRelativePath, relativePath, directory });
           const previous = joinNotebookMemoPath(notebookPath, previousRelativePath);
           const next = joinNotebookMemoPath(notebookPath, relativePath);
-          if (previous && next) await rebaseStoredRecoveryDraftPaths(previous, next, directory);
+          if (previous && next) {
+            moveCreatedDocumentNotices(previous, next, directory);
+            await rebaseStoredRecoveryDraftPaths(previous, next, directory);
+          }
         }
       }).catch((error) => logger.warn('rebase moved note path failed', { error, notebookId, relativePath }));
     }
@@ -60,7 +62,8 @@ export function mountMainWindowNotebookEvents(): () => void {
         if (disposed) return;
         const path = notebookPath && joinNotebookMemoPath(notebookPath, relativePath);
         if (path) {
-          removeBrowserColumnTabsByPath(path);
+          removeCreatedDocumentNotices(path);
+          removeBrowserColumnContentByPath(path);
           await clearWorkspaceTargetForDeletedFile(path);
         }
       }).catch((error) => logger.warn('resolve deleted note path failed', { error, notebookId, relativePath }));

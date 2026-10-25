@@ -18,7 +18,7 @@ vi.mock('@features/document/public/workspace-api', () => ({
   getWorkspaceDocumentState: () => ({ activeExternalSession: null, activeAgentConversationId: null, clearDocument: mocks.clear }),
   recordWorkspaceDocumentNavigation: vi.fn(),
 }));
-import { openCollectionTarget, openTableTarget, openFolderCollection, resetCurrentCollectionView } from './workspace-navigation';
+import { openCollectionTarget, openContentleTarget, openFolderCollection, resetCurrentCollectionView } from './workspace-navigation';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -102,7 +102,7 @@ it('opens a malformed calendar without withdrawing selection, then repairs it ev
   mocks.read.mockResolvedValue(damaged);
   mocks.resolve.mockRejectedValue(new Error('COLLECTION_NOT_FOUND'));
   mocks.write.mockResolvedValue({ status: 'saved' });
-  await openTableTarget(path, '/book/11测试', null);
+  await openContentleTarget(path, '/book/11测试', null);
   const navigation = useWorkColumnStore.getState().navigation;
   expect(navigation.phase).toBe('committed');
   expect(workColumnTargetFilePath(navigation.target)).toBe(path);

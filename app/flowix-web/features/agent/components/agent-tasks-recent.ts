@@ -1,4 +1,5 @@
-import { isSyntheticOpenCodeHistoryInstance } from './conversation-list-model';
+import { isSyntheticOpenCodeHistoryInstance, isStartedConversation } from './conversation-list-model';
+import { EMPTY_CONVERSATION_PAGE_STATE, mergeConversationPage } from './conversation-list-pagination';
 export { isSyntheticOpenCodeHistoryInstance } from './conversation-list-model';
 import type {
   AgentConversationInstance as BackendConversationInstance,
@@ -28,7 +29,7 @@ export async function loadFavoriteAgentConversations(
   if (favoriteIds.size === 0) return [];
   const instances = await getConversations(notebookId, [...favoriteIds]);
   return instances.map(normalizeBackendInstance).filter((instance) => (
-    instance.source.notebookId === notebookId && !isSyntheticOpenCodeHistoryInstance(instance)
+    instance.source.notebookId === notebookId && isStartedConversation(instance) && !isSyntheticOpenCodeHistoryInstance(instance)
   ));
 }
 
@@ -39,7 +40,8 @@ export async function loadRecentAgentConversations(
   isActive: () => boolean = () => true,
   onHasMoreChange?: (hasMore: boolean) => void,
 ): Promise<AgentConversationInstance[]> {
-  const recent: AgentConversationInstance[] = [];
+  let snapshot = EMPTY_CONVERSATION_PAGE_STATE;
+  let recent: AgentConversationInstance[] = [];
   let cursor: AgentConversationCursor | null = null;
 
   while (isActive()) {
@@ -53,9 +55,10 @@ export async function loadRecentAgentConversations(
 
     for (const raw of page.items) {
       const instance = normalizeBackendInstance(raw);
-      if (instance.source.notebookId !== notebookId || isSyntheticOpenCodeHistoryInstance(instance)) continue;
+      if (instance.source.notebookId !== notebookId || !isStartedConversation(instance) || isSyntheticOpenCodeHistoryInstance(instance)) continue;
 
-      recent.push(instance);
+      snapshot = mergeConversationPage(snapshot, [instance]);
+      recent = snapshot.orderedIdentities.map((id) => snapshot.itemsByIdentity[id]);
       if (recent.length > RECENT_CONVERSATIONS_LIMIT) {
         onHasMoreChange?.(true);
         return recent.slice(0, RECENT_CONVERSATIONS_LIMIT);

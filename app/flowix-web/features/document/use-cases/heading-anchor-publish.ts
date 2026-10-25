@@ -7,8 +7,8 @@ import { publishAgentLocationRequest } from './agent-location-navigation';
  * The public surface-open result is normalized to WorkspaceContentLocation
  * before it reaches this helper.
  */
-export function locationViewId(opened: { host: string; tabId?: string }): string {
-  return opened.host === 'browser-column' ? (opened.tabId ?? opened.host) : opened.host;
+export function locationViewId(opened: { host: string; surfaceId?: string }): string {
+  return opened.host === 'browser-column' ? (opened.surfaceId ?? opened.host) : opened.host;
 }
 
 /**

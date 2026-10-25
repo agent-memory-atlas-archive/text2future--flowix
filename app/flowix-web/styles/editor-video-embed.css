@@ -100,7 +100,7 @@
   pointer-events: none;
 }
 
-.markdown-editor .tiptap .editor-video-embed a.editor-video-embed__source,
+.markdown-editor .tiptap .editor-video-embed a.editor-video-embed__source:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
 .editor-video-embed .editor-video-embed__source,
 .editor-video-embed__reload {
   display: inline-flex;

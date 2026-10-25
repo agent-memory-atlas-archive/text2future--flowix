@@ -2,6 +2,8 @@ import type { ActionDefinition, ShortcutOverrides, ResolvedBinding } from './typ
 import { tryParseChord } from './parser';
 import { getPlatform } from './platform';
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('shortcuts');
 /**
  * 全局动作注册表。
  *
@@ -23,7 +25,7 @@ const registry = new Map<string, ActionDefinition>();
 export function defineAction(def: ActionDefinition): ActionDefinition {
   if (registry.has(def.id) && registry.get(def.id) !== def) {
     // 同对象二次注册 (HMR / StrictMode 双 mount) 不警告; 真正的 id 冲突才 warn。
-    console.warn(`[shortcuts] action "${def.id}" redefined`);
+    logger.warn(`action "${def.id}" redefined`);
   }
   registry.set(def.id, def);
   return def;
@@ -66,7 +68,7 @@ export function resolveBinding(
     if (parsed) {
       return { chord: parsed, chordString: raw, isDefault: false };
     }
-    console.warn(
+    logger.warn(
       `[shortcuts] override for "${actionId}" is invalid ("${raw}"), falling back to default`,
     );
   }

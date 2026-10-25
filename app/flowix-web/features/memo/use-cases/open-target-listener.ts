@@ -5,6 +5,9 @@ import { subscribe, type UnlistenFn } from '@platform/tauri/event-bus';
 import { openNotebookById, openNoteByDeepLink } from './open-by-target';
 import { toast } from '@/lib/toast';
 import { subscribePendingOpenTargets } from '@platform/open-target/pending-requests';
+import { createLogger } from '@/lib/logger';
+
+const logger = createLogger('openByTarget');
 
 let currentNotebookUnlisten: UnlistenFn | null = null;
 let currentPathUnlisten: UnlistenFn | null = null;
@@ -25,14 +28,14 @@ export function mountOpenTargetListener(whenReady: Promise<void> = Promise.resol
     await whenReady;
     try { await openNoteByDeepLink(target.path); }
     catch (error) {
-      console.warn('[openByTarget] path open failed:', error);
+      logger.warn('path open failed', { error });
       toast.error(error instanceof Error ? error.message : String(error));
     }
   });
   currentNotebookUnlisten?.();
   currentNotebookUnlisten = subscribe<string>('flowix:open-notebook', (notebookId) => {
     if (isMainWindow()) void openNotebookById(notebookId).catch((error) => {
-      console.warn('[openByTarget] notebook open failed:', error);
+      logger.warn('notebook open failed:', error);
     });
   });
 }

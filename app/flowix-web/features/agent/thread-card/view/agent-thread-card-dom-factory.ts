@@ -55,6 +55,7 @@ export interface AgentThreadCardDomParts {
   codexSettingsPopover: HTMLDivElement;
   composerRolePopover: HTMLDivElement;
   sendButtonMount: HTMLSpanElement;
+  scrollToLatestButton: HTMLButtonElement;
 }
 
 export function createAgentThreadCardDom(
@@ -229,6 +230,7 @@ export function createAgentThreadCardDom(
     codexSettingsPopover,
     composerRolePopover,
     sendButtonMount,
+    scrollToLatestButton,
   } = composerParts;
   codexSettingsPopover.addEventListener("mousedown", (event) =>
     event.stopPropagation(),
@@ -290,5 +292,6 @@ export function createAgentThreadCardDom(
     codexSettingsPopover,
     composerRolePopover,
     sendButtonMount,
+    scrollToLatestButton,
   };
 }

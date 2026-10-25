@@ -3,6 +3,8 @@ import { agent } from '@platform/tauri/client';
 import { subscribe } from '@platform/tauri/event-bus';
 import type { AgentRuntimeSnapshot, AgentTypeKey } from '@/types/agent';
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('agent-runtime-store');
 const RUNTIME_STATUS_TTL_MS = 120_000;
 
 type RuntimeStatusByType = Partial<Record<AgentTypeKey, AgentRuntimeSnapshot>>;
@@ -117,7 +119,7 @@ export const useAgentRuntimeStore = create<AgentRuntimeState>((set, get) => ({
       })();
 
       const handledRefreshTask = refreshTask.catch((err) => {
-        console.warn('[agent-runtime-store] Failed to refresh runtime status:', err);
+        logger.warn('Failed to refresh runtime status:', err);
         set({ isChecking: false });
       });
       inFlightRefresh = handledRefreshTask;

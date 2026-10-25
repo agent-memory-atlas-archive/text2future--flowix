@@ -1,3 +1,5 @@
+import { useI18n } from '@/lib/i18n';
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
 import { createSaveBarrier } from '@/lib/save-barrier';
 import { hydrateTablePresets } from './table-preset-bindings';
 import { subscribePropertyPresets } from '@features/properties/public-api';
@@ -35,6 +37,7 @@ function normalizeTableSessionDocument(document: MultidimensionalTableDocument):
 }
 
 export function useTableSession({ filePath, fileIdentity, notebookPath: rawNotebookPath, notebookId, expectedCollectionId }: TableSessionOptions) {
+  const { t } = useI18n();
   const notebookPath = rawNotebookPath ? canonicalDirectoryPath(rawNotebookPath) : null;
   const displayId = fileIdentity?.displayId;
   const sessionKey = collectionSessionKey({ filePath, fileIdentity, notebookPath, notebookId, expectedCollectionId });
@@ -148,7 +151,7 @@ export function useTableSession({ filePath, fileIdentity, notebookPath: rawNoteb
         try {
           resolvedId = (await notesClient.resolveLocation(getCurrentFilePath())).notebookId;
         } catch (error) {
-          noteLoadError = error instanceof Error ? error.message : String(error);
+          noteLoadError = friendlyErrorMessage(error, t, 'errors.friendly.notesLoad');
         }
       }
       if (!isCurrentSession(sequence, key)) return;
@@ -158,10 +161,10 @@ export function useTableSession({ filePath, fileIdentity, notebookPath: rawNoteb
         try {
           entries = await notesClient.list(resolvedId);
         } catch (error) {
-          noteLoadError = error instanceof Error ? error.message : String(error);
+          noteLoadError = friendlyErrorMessage(error, t, 'errors.friendly.notesLoad');
         }
       } else if (!noteLoadError) {
-        noteLoadError = '无法确定此多维表格所属的笔记本。';
+        noteLoadError = t('errors.friendly.notesLoad');
       }
       if (!isCurrentSession(sequence, key)) return;
 
@@ -177,9 +180,9 @@ export function useTableSession({ filePath, fileIdentity, notebookPath: rawNoteb
       setResolvedNotebookId(resolvedId);
       setNotesLoadError(noteLoadError);
     } catch (error) {
-      if (isCurrentSession(sequence, key)) setLoadError(error instanceof Error ? error.message : String(error));
+      if (isCurrentSession(sequence, key)) setLoadError(friendlyErrorMessage(error, t, 'errors.friendly.tableLoad'));
     }
-  }, [getCurrentFilePath, isCurrentSession, notebookId, notebookPath, sessionKey, setSaveFailed, setSaving]);
+  }, [getCurrentFilePath, isCurrentSession, notebookId, notebookPath, sessionKey, setSaveFailed, setSaving, t]);
 
   // A rename changes the path prop, not the live table session. Read the latest
   // loader when the file identity or notebook scope changes, while keeping the
@@ -297,9 +300,9 @@ export function useTableSession({ filePath, fileIdentity, notebookPath: rawNoteb
       } : next);
       pendingTableSyncRef.current = false;
     } catch (error) {
-      if (isCurrent()) setNotesLoadError(error instanceof Error ? error.message : String(error));
+      if (isCurrent()) setNotesLoadError(friendlyErrorMessage(error, t, 'errors.friendly.notesLoad'));
     }
-  }, [getCurrentFilePath, isCurrentSession, notebookPath, resolvedNotebookId, sessionKey]);
+  }, [getCurrentFilePath, isCurrentSession, notebookPath, resolvedNotebookId, sessionKey, t]);
 
   useEffect(() => {
     if (!saving && !savingRef.current && pendingTableSyncRef.current && resolvedNotebookId) {
@@ -363,7 +366,7 @@ export function useTableSession({ filePath, fileIdentity, notebookPath: rawNoteb
     } catch (error) {
       if (!isCurrentSession(sequence, key)) return false;
       setSaveFailed(true);
-      toast.error(error instanceof Error ? error.message : '保存表格失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableSave'));
       pendingTableSyncRef.current = true;
       return false;
     } finally {
@@ -411,7 +414,7 @@ export function useTableSession({ filePath, fileIdentity, notebookPath: rawNoteb
       return;
     }
     refreshCollection(path);
-  }), [collectionId, notebookPath, refreshCollection, resolvedNotebookId, sessionKey]);
+  }), [collectionId, notebookPath, refreshCollection, resolvedNotebookId, sessionKey, t]);
   useEffect(() => {
     if (saving) return;
     const pending = pendingCollectionRefreshRef.current;

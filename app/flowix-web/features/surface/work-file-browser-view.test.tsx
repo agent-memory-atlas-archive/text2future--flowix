@@ -40,6 +40,6 @@ describe('Work file tree open destination', () => {
   it('opens Browser when explicitly requested', async () => {
     const button = [...host.querySelectorAll('button')].find((item) => item.textContent === 'browser')!;
     await act(async () => button.click());
-    expect(openWorkspaceSurface).toHaveBeenCalledWith(expect.objectContaining({ host: 'browser-column', options: { browserDisposition: 'open-in-column' } }));
+    expect(openWorkspaceSurface).toHaveBeenCalledWith(expect.objectContaining({ host: 'browser-column' }));
   });
 });

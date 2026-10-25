@@ -1,8 +1,10 @@
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
 import type { I18nKey, I18nParams } from '@/lib/i18n';
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('platform/tauri/errors');
 const FLOWIX_MEMBERSHIP_ERROR =
   /^\s*(?:Error:\s*)?cloud API error\s+403\s+MEMBERSHIP_REQUIRED\b/i;
-const FLOWIX_REQUEST_ID = /\(request id:\s*([a-z\d_-]+)\s*\)/i;
 
 /**
  * Tauri IPC 错误格式化。
@@ -76,8 +78,10 @@ function cloudErrorDetails(message: string): Record<string, unknown> {
   }
 }
 
-export function cloudSyncErrorMessage(error: unknown, t: Translate): string {
+export function cloudSyncErrorMessage(error: unknown, t: Translate, fallback: I18nKey = 'errors.friendly.service'): string {
   const message = tauriErrorMessage(error);
+  if (hasTauriErrorCode(error, 'INVALID_CREDENTIALS')) return t('errors.friendly.loginFailed');
+  if (isInvalidRefreshTokenError(error) || /cloud API error\s+401\b/i.test(message)) return t('errors.friendly.session');
   if (hasTauriErrorCode(error, 'MEMBERSHIP_ALREADY_ACTIVE')) {
     return t('preferences.cloud.member.alreadyActive');
   }
@@ -104,25 +108,20 @@ export function cloudSyncErrorMessage(error: unknown, t: Translate): string {
       requested: formatBytes(details.requestedDeltaBytes),
     });
   }
-  return message;
+  return friendlyErrorMessage(error, t, fallback);
 }
 
-export function cloudModelAccessErrorMessage(error: unknown, t: Translate): string {
+export function cloudModelAccessErrorMessage(error: unknown, t: Translate, fallback: I18nKey = 'errors.friendly.cloudConnect'): string {
   const message = tauriErrorMessage(error);
   if (message.includes('INSUFFICIENT_CREDITS')) return t('agent.error.insufficientCredits');
   if (message.includes('CLOUD_MODELS_DISABLED')) return t('agent.error.cloudModelsDisabled');
   if (message.includes('MODEL_NOT_FOUND')) return t('agent.error.cloudModelUnavailable');
   if (message.includes('MODEL_PRICING_NOT_CONFIGURED')) return t('agent.error.cloudPricingUnavailable');
-  if (!FLOWIX_MEMBERSHIP_ERROR.test(message)) return message;
+  if (isInvalidRefreshTokenError(error) || /cloud API error\s+401\b/i.test(message)) return t('errors.friendly.session');
+  if (!FLOWIX_MEMBERSHIP_ERROR.test(message)) return friendlyErrorMessage(error, t, fallback);
 
-  const userMessage = t('agent.error.membershipRequired');
-  const requestId = message.match(FLOWIX_REQUEST_ID)?.[1];
-  if (!requestId) return userMessage;
-
-  return [
-    userMessage,
-    t('agent.error.diagnostic.reference', { value: requestId }),
-  ].join('\n\n');
+  logger.warn('cloudModelAccessError', { error });
+  return t('agent.error.membershipRequired');
 }
 
 export function notebookCreateErrorMessage(error: unknown, t: Translate): string {

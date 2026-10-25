@@ -44,13 +44,6 @@ impl GlobalInitializationJob {
         }
     }
 
-    fn is_optional(self) -> bool {
-        matches!(
-            self,
-            Self::AgentWorkspace | Self::AgentLayout | Self::WatcherSettings | Self::Templates
-        )
-    }
-
     fn run(
         self,
         memo_file: &MemoFile,
@@ -86,9 +79,8 @@ const RETIRED_INITIALIZATION_JOB_IDS: [&str; 6] = [
 
 /// Copy missing global database targets before any store opens a connection.
 pub fn prepare_database_paths(config_dir: &Path) -> io::Result<PathBuf> {
-    let database_dir =
-        flowix_core::memo_file::prepare_database_directory(config_dir, &["local.db"])?;
-    for name in ["sync.db", "thread.db", "default.db"] {
+    let database_dir = config_dir.join("db");
+    for name in ["local.db", "sync.db", "thread.db", "default.db"] {
         if let Err(error) = flowix_core::memo_file::prepare_database_directory(config_dir, &[name])
         {
             tracing::warn!(database = name, %error, "legacy database migration deferred; source retained");
@@ -127,7 +119,7 @@ pub fn initialize_legacy_storage(
     .map(|_| ())
 }
 
-/// Returns false when optional work remains pending. The shell can start, but
+/// Returns false when migration work remains pending. The shell can start, but
 /// must keep the version incomplete so the next launch retries unfinished jobs.
 pub fn initialize_legacy_storage_with_progress(
     device_registry: &DeviceRegistry,
@@ -137,10 +129,11 @@ pub fn initialize_legacy_storage_with_progress(
     _app_data_dir: &Path,
     mut report: impl FnMut(usize, usize, &str),
 ) -> Result<bool, String> {
-    let notebooks = memo_file
-        .read_notebook_configs()
-        .map_err(|error| error.to_string())?;
-    // Four global jobs, six retired markers, and the per-notebook jobs.
+    let notebooks = memo_file.read_notebook_configs().unwrap_or_else(|error| {
+        tracing::warn!(%error, "notebook migration source unavailable; skipping notebook jobs");
+        Vec::new()
+    });
+    // Global jobs, retired markers, and the per-notebook jobs.
     // Offline notebook jobs resolve as deferred units instead of stalling progress.
     let total = GlobalInitializationJob::ALL.len()
         + RETIRED_INITIALIZATION_JOB_IDS.len()
@@ -157,11 +150,8 @@ pub fn initialize_legacy_storage_with_progress(
             total,
         );
         if let Err(error) = result {
-            if !job.is_optional() {
-                return Err(error);
-            }
             all_completed = false;
-            tracing::warn!(job_id = job.key(), %error, "optional initialization job deferred");
+            tracing::warn!(job_id = job.key(), %error, "initialization job skipped");
         }
     }
     let reset_version = device_registry.notebook_storage_reset_version();
@@ -169,9 +159,10 @@ pub fn initialize_legacy_storage_with_progress(
     // Retire old cleanup job markers without deleting their legacy inputs.
     for key in RETIRED_INITIALIZATION_JOB_IDS {
         report(completed, total, key);
-        memo_file
-            .mark_local_migration_completed(key)
-            .map_err(|error| error.to_string())?;
+        if let Err(error) = memo_file.mark_local_migration_completed(key) {
+            tracing::warn!(%error, %key, "retired migration marker skipped");
+            all_completed = false;
+        }
         completed += 1;
         report(completed, total, key);
     }
@@ -182,9 +173,18 @@ pub fn initialize_legacy_storage_with_progress(
         &mut report,
         &mut completed,
         total,
-    )?;
+    )
+    .unwrap_or_else(|error| {
+        tracing::warn!(%error, "notebook migration skipped");
+        false
+    });
     if all_completed && reset_version < NOTEBOOK_STORAGE_RESET_VERSION {
-        device_registry.complete_notebook_storage_reset_version(NOTEBOOK_STORAGE_RESET_VERSION)?;
+        if let Err(error) =
+            device_registry.complete_notebook_storage_reset_version(NOTEBOOK_STORAGE_RESET_VERSION)
+        {
+            tracing::warn!(%error, "notebook migration completion marker skipped");
+            all_completed = false;
+        }
     }
     tracing::info!(
         all_completed,

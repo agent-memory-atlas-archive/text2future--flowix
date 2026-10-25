@@ -42,7 +42,9 @@ describe('notebook templates', () => {
     ).toBe(true);
     const firstTemplatePaths = getNotebookTemplateFiles(firstTemplateId)
       .map((file) => file.path);
-    expect(firstTemplatePaths).toContain('进度视图.csv');
+    // 默认模板是「自媒体运营」，它的表格源文件叫 `内容视图.csv`；
+    // 旧断言还停在上一版模板的 `进度视图.csv`。
+    expect(firstTemplatePaths).toContain('内容视图.csv');
     expect(NOTEBOOK_TEMPLATES.find((template) => template.id === firstTemplateId)?.name).toBe('自媒体运营');
   });
 });

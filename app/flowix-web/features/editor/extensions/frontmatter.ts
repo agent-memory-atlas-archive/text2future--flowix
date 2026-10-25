@@ -3,18 +3,12 @@ import type { Editor } from '@tiptap/core';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { AllSelection, Plugin, PluginKey, Selection, TextSelection } from '@tiptap/pm/state';
 import { GapCursor } from '@tiptap/pm/gapcursor';
-import { Decoration, DecorationSet } from '@tiptap/pm/view';
-import { useSettingsStore } from '@/lib/store/settings-store';
-import { getCurrentAppLanguage, subscribeAppLanguage } from '@features/preferences/public/runtime-api';
 import { isValidBlockGap } from './block-gap-cursor';
 import { FrontmatterPropertyNodeView } from '@features/editor/extensions/frontmatter-node-view';
 import { updateVisibleFrontmatterProperty } from '@features/document/properties/frontmatter-model';
 import { resolvePropertyPreset } from '@features/document/properties/presets';
 import { getPropertyPresets } from '@features/properties/public-api';
 import { frontmatterMarkdownSpec } from './frontmatter-markdown';
-import { createEmptyPropertiesPanel, getEmptyPropertiesPanel } from './frontmatter-empty-properties-panel';
-import { commitFrontmatterDraft } from './frontmatter-draft-property';
-import { translate } from '@/lib/i18n';
 
 const Frontmatter = Node.create({
   name: 'frontmatter',
@@ -28,6 +22,7 @@ const Frontmatter = Node.create({
   addOptions() {
     return {
       propertyTargetId: undefined as string | undefined,
+      onPropertyAreaHoverChange: undefined as ((hovered: boolean) => void) | undefined,
       onViewSourceMode: undefined as (() => void) | undefined,
       getAttachmentNotebookId: undefined as (() => string | undefined) | undefined,
     };
@@ -50,6 +45,7 @@ const Frontmatter = Node.create({
       this.options.propertyTargetId,
       this.options.onViewSourceMode,
       this.options.getAttachmentNotebookId,
+      this.options.onPropertyAreaHoverChange,
     );
   },
 
@@ -60,79 +56,7 @@ const Frontmatter = Node.create({
   },
 
   addProseMirrorPlugins() {
-    const emptyPropertiesKey = new PluginKey('frontmatter-empty-properties');
     return [
-      new Plugin({
-        key: emptyPropertiesKey,
-        props: {
-          decorations: (state) => {
-            if (!this.options.propertyTargetId
-              || state.doc.firstChild?.type.name === this.name) return null;
-            return DecorationSet.create(state.doc, [Decoration.widget(0, (view) => {
-              const language = getCurrentAppLanguage();
-              return createEmptyPropertiesPanel({
-                getAttachmentNotebookId: this.options.getAttachmentNotebookId,
-                propertyTargetId: this.options.propertyTargetId,
-                isEditable: () => view.editable,
-                visible: useSettingsStore.getState().propertiesVisible,
-                pickerLabel: translate(language, 'document.properties.picker.triggerLabel'),
-                addLabel: translate(language, 'document.properties.add'),
-                commit: (key, value, kind, storageKind) => {
-                  if (view.state.doc.firstChild?.type.name === this.name) return false;
-                  return commitFrontmatterDraft({
-                    yamlContent: '',
-                    key,
-                    value,
-                    kind,
-                    storageKind,
-                    apply: (yamlContent) => view.dispatch(
-                      view.state.tr.insert(0, view.state.schema.nodes.frontmatter.create({ yamlContent })),
-                    ),
-                  });
-                },
-              }).root;
-            }, { side: -1, stopEvent: () => true,
-              key: `empty-properties:${getCurrentAppLanguage()}`,
-              destroy: (dom) => getEmptyPropertiesPanel(dom as HTMLElement)?.dispose(),
-            })]);
-          },
-        },
-        view: (view) => {
-          const refresh = () => view.dispatch(view.state.tr.setMeta(emptyPropertiesKey, true));
-          const panel = () => {
-            const root = view.dom.querySelector<HTMLElement>('[data-empty-properties]');
-            return root ? getEmptyPropertiesPanel(root) : undefined;
-          };
-          const syncVisibility = () => {
-            panel()?.setVisible(useSettingsStore.getState().propertiesVisible);
-          };
-          const handleEditabilityChange = () => {
-            panel()?.setEditable(view.editable);
-            refresh();
-          };
-          const handlePopupState = (event: Event) => {
-            const detail = (event as CustomEvent<{ propertyTargetId?: string; open?: boolean }>).detail;
-            if (detail?.propertyTargetId !== this.options.propertyTargetId) return;
-            panel()?.setPopupOpen(Boolean(detail.open));
-          };
-          const handleFlush = () => panel()?.flush();
-          const unsubscribeSettings = useSettingsStore.subscribe((state, previous) => {
-            if (state.propertiesVisible !== previous.propertiesVisible) syncVisibility();
-          });
-          const unsubscribeLanguage = subscribeAppLanguage(refresh);
-          const ownerWindow = view.dom.ownerDocument.defaultView;
-          view.dom.addEventListener('flowix:editor-editability-change', handleEditabilityChange);
-          view.dom.addEventListener('flowix:editor-flush-drafts', handleFlush);
-          ownerWindow?.addEventListener('flowix:property-actions-popup-state', handlePopupState);
-          return { update: syncVisibility, destroy: () => {
-            unsubscribeSettings();
-            unsubscribeLanguage();
-            view.dom.removeEventListener('flowix:editor-editability-change', handleEditabilityChange);
-            view.dom.removeEventListener('flowix:editor-flush-drafts', handleFlush);
-            ownerWindow?.removeEventListener('flowix:property-actions-popup-state', handlePopupState);
-          } };
-        },
-      }),
       new Plugin({
         key: new PluginKey('frontmatter-add-first-property'),
         view: (view) => {
@@ -140,18 +64,10 @@ const Frontmatter = Node.create({
             const detail = (event as CustomEvent<{ propertyTargetId?: string; presetKey?: string }>).detail;
             if (!this.options.propertyTargetId || detail?.propertyTargetId !== this.options.propertyTargetId || !view.editable) return;
             if (view.state.doc.firstChild?.type.name === this.name) return;
-            // When a preset is requested, seed the frontmatter with that preset's
-            // key/kind so the first row matches the user's pick.
-            const preset = detail?.presetKey
-              ? resolvePropertyPreset(detail.presetKey, getPropertyPresets())
-              : null;
-            const yamlContent = updateVisibleFrontmatterProperty(
-              '',
-              null,
-              preset?.key ?? 'key1',
-              '',
-              preset?.kind ?? 'Text',
-            );
+            if (!detail?.presetKey) return;
+            const preset = resolvePropertyPreset(detail.presetKey, getPropertyPresets());
+            if (!preset) return;
+            const yamlContent = updateVisibleFrontmatterProperty('', null, preset.key, '', preset.kind);
             view.dispatch(view.state.tr.insert(0, view.state.schema.nodes.frontmatter.create({ yamlContent })));
           };
           window.addEventListener('flowix:add-property', handleAddProperty);

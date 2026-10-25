@@ -1,5 +1,5 @@
+import { createLogger } from '@/lib/logger';
 import { canOpenBrowserColumnTargetInWorkColumn, useBrowserColumnStore, type BrowserColumnTarget } from '../store/browser-column-store';
-import type { BrowserSurfaceOpenDisposition } from '../model/surface-opening';
 import type {
   OpenWorkspaceSurfaceRequest, WorkWorkspaceSurfaceRequest, BrowserWorkspaceSurfaceRequest,
   WorkWorkspaceOpenResult, BrowserWorkspaceOpenResult, WorkspaceContentLocation, WorkspaceSurfaceOpenResult,
@@ -29,7 +29,7 @@ import {
   openMediaLibraryTarget,
   openMediaTarget,
   openPluginWorkbench,
-  openTableTarget,
+  openContentleTarget,
   openWebTarget,
   prepareActiveWorkColumnDocumentLeave,
 } from './workspace-navigation';
@@ -37,6 +37,9 @@ import { selectAndOpenAgentConversation } from './agent-conversation-navigation'
 import { browserColumnTargetIdentity, workColumnTargetIdentity, findWorkspaceContentForNavigation } from './workspace-content-activation';
 import { flushBrowserViewBeforeOpeningWork } from './prepare-browser-document-for-work';
 import { NavigationCancelledError } from '@/lib/navigation-cancelled-error';
+
+const navigationLogger = createLogger('workspace-navigation');
+let navigationSequence = 0;
 
 function fileKind(path: string): WorkspaceSurfaceKind {
   return workspaceFileSurfaceKind(resolveWorkspaceFileSurfaceKind(path));
@@ -138,7 +141,6 @@ function browserTargetFromOpenTarget(
 
 async function openCollectionReferenceInBrowser(
   target: CollectionReferenceSurfaceTarget,
-  disposition?: BrowserSurfaceOpenDisposition,
 ): Promise<BrowserWorkspaceOpenResult> {
   const notebook = (await notebooks.getAll()).find((candidate) => candidate.id === target.notebookId);
   if (!notebook) throw new Error('集合所属笔记本不存在');
@@ -164,7 +166,7 @@ async function openCollectionReferenceInBrowser(
     notebookId: target.notebookId,
     collectionDisplay: descriptor,
     collectionType,
-  }, disposition);
+  });
 }
 
 function activeWorkLocation(): Extract<WorkspaceContentLocation, { host: 'main-third' }> {
@@ -179,7 +181,6 @@ function assertHostSupport(kind: WorkspaceSurfaceKind, host: WorkspaceSurfaceHos
 
 async function openBrowserTarget(
   target: BrowserColumnTarget,
-  disposition?: BrowserSurfaceOpenDisposition,
 ): Promise<BrowserWorkspaceOpenResult> {
   assertHostSupport(browserTargetSurfaceKind(target), 'browser-column');
   if (target.kind !== 'agent_conversation') {
@@ -189,9 +190,9 @@ async function openBrowserTarget(
       await prepareActiveWorkColumnDocumentLeave();
     }
   }
-  const result = await openBrowserColumnTarget(target, disposition);
+  const result = await openBrowserColumnTarget(target);
   return result
-    ? { status: result.alreadyOpen ? 'activated' : 'opened', host: 'browser-column', location: { host: 'browser-column', tabId: result.tabId } }
+    ? { status: result.alreadyOpen ? 'activated' : 'opened', host: 'browser-column', location: { host: 'browser-column', surfaceId: result.surfaceId } }
     : { status: 'cancelled', host: 'browser-column', reason: 'navigation-cancelled' };
 }
 
@@ -202,30 +203,52 @@ export function openWorkspaceSurface(request: OpenWorkspaceSurfaceRequest): Prom
 export async function openWorkspaceSurface(
   request: OpenWorkspaceSurfaceRequest,
 ): Promise<BrowserWorkspaceOpenResult | WorkWorkspaceOpenResult> {
+  const navigationId = ++navigationSequence;
+  const workRequestId = request.host === 'main-third'
+    ? useWorkColumnStore.getState().reserveNavigationIntent() : undefined;
+  const context = { navigationId, source: request.source ?? 'unspecified', requestedHost: request.host, targetKind: request.target.kind };
+  navigationLogger.debug('Navigation requested', context);
   try {
-    return await performWorkspaceSurfaceOpen(request);
+    const result = await performWorkspaceSurfaceOpen(request, navigationId, workRequestId);
+    navigationLogger.debug('Navigation finished', {
+      ...context, actualHost: result.host, status: result.status,
+      ...(result.status === 'cancelled' ? { reason: result.reason } : {}),
+    });
+    return result;
   } catch (error) {
     if (error instanceof NavigationCancelledError) {
-      return { status: 'cancelled', host: request.host ?? 'main-third', reason: 'navigation-cancelled' };
+      navigationLogger.debug('Navigation cancelled', { ...context, reason: 'navigation-cancelled' });
+      return { status: 'cancelled', host: request.host, reason: 'navigation-cancelled' };
     }
+    // Avoid logging document paths, URLs, content, or backend error messages.
+    navigationLogger.debug('Navigation failed', context);
     throw error;
   }
 }
 
 async function performWorkspaceSurfaceOpen(
   request: OpenWorkspaceSurfaceRequest,
+  navigationId: number,
+  workRequestId: number | undefined,
 ): Promise<BrowserWorkspaceOpenResult | WorkWorkspaceOpenResult> {
   if (request.host === 'browser-column') {
     const target = request.target;
     if (target.kind === 'collection-reference') {
       assertHostSupport(target.collectionKind === 'media_library' ? 'file-media-library'
         : target.collectionKind === 'work_documents' ? 'file-work-documents' : 'file-table', 'browser-column');
-      return openCollectionReferenceInBrowser(target, request.options?.browserDisposition);
+      return openCollectionReferenceInBrowser(target);
     }
     const resolvedTarget = browserTargetFromOpenTarget(target, request.options?.notebookId);
-    return openBrowserTarget(resolvedTarget, request.options?.browserDisposition);
+    return openBrowserTarget(resolvedTarget);
   }
 
+  const cancelWork = (reason: 'superseded' | 'save-refused' | 'target-not-active'): WorkWorkspaceOpenResult => {
+    navigationLogger.debug('Work navigation cancelled', {
+      navigationId, source: request.source ?? 'unspecified', requestedHost: request.host,
+      targetKind: request.target.kind, reason,
+    });
+    return { status: 'cancelled', host: 'main-third', reason: 'navigation-cancelled' };
+  };
   const target = request.target;
   const kind = workTargetSurfaceKind(target);
   assertHostSupport(kind, 'main-third');
@@ -235,9 +258,10 @@ async function performWorkspaceSurfaceOpen(
   if (target.kind !== 'external' && !(previousLocation?.host === 'main-third' && previousLocation.state === 'active') && identity
     && identity.kind !== 'media' && identity.kind !== 'web' && identity.kind !== 'agent-conversation') {
     if (!await flushBrowserViewBeforeOpeningWork(identity)) {
-      return { status: 'cancelled', host: 'main-third', reason: 'navigation-cancelled' };
+      return cancelWork('save-refused');
     }
   }
+  if (useWorkColumnStore.getState().navigation.requestId !== workRequestId) return cancelWork('superseded');
   const previousWorkTarget = useWorkColumnStore.getState().navigation.target;
   const pluginWasOpen = target.kind === 'plugin-workbench'
     && previousWorkTarget.kind === 'plugin-workbench'
@@ -251,19 +275,23 @@ async function performWorkspaceSurfaceOpen(
       ? findWorkspaceContentForNavigation(identity, 'main-third')
       : pluginMatches ? activeWorkLocation() : null;
     if (!location || location.host !== 'main-third' || location.state === 'pending') {
-      return { status: 'cancelled', host: 'main-third', reason: 'navigation-cancelled' };
+      return cancelWork('target-not-active');
     }
     return { status: previousLocation || pluginWasOpen ? 'activated' : 'opened', host: 'main-third', location };
   };
   switch (target.kind) {
     case 'folder-collection':
-      await openFolderCollectionChooserTarget(target);
+      await openFolderCollectionChooserTarget(target, workRequestId);
       return finishWorkOpen();
     case 'external': {
       if (!await flushBrowserViewBeforeOpeningWork({ kind: 'external', path: target.path })) {
-        return { status: 'cancelled', host: 'main-third', reason: 'navigation-cancelled' };
+        return cancelWork('save-refused');
       }
+      // A later click can finish its save barrier before this request does.
+      // Do not let the older request begin a new lower-level transaction.
+      if (useWorkColumnStore.getState().navigation.requestId !== workRequestId) return cancelWork('superseded');
       await openExternalTarget(target.path, {
+        restoreRequestId: workRequestId,
         browserDocumentPrepared: true,
         scopePath: target.scopePath,
         fileBrowser: target.fileBrowser,
@@ -277,24 +305,25 @@ async function performWorkspaceSurfaceOpen(
       return finishWorkOpen();
     }
     case 'table':
-      await openTableTarget(target.filePath, target.notebookPath, target.notebookId, { history: options?.history, destination: 'main-third' });
+      await openContentleTarget(target.filePath, target.notebookPath, target.notebookId, { history: options?.history, destination: 'main-third', restoreRequestId: workRequestId });
       return finishWorkOpen();
     case 'media-library':
-      await openMediaLibraryTarget(target.filePath, target.notebookPath, target.notebookId, { history: options?.history, destination: 'main-third' });
+      await openMediaLibraryTarget(target.filePath, target.notebookPath, target.notebookId, { history: options?.history, destination: 'main-third', restoreRequestId: workRequestId });
       return finishWorkOpen();
     case 'collection':
-      await openCollectionTarget(target, { history: options?.history, destination: 'main-third', refresh: options?.refresh });
+      await openCollectionTarget(target, { history: options?.history, destination: 'main-third', restoreRequestId: workRequestId, refresh: options?.refresh });
       return finishWorkOpen();
     case 'collection-reference':
-      await openCollectionTarget(target, { history: options?.history, destination: 'main-third', refresh: options?.refresh });
+      await openCollectionTarget(target, { history: options?.history, destination: 'main-third', restoreRequestId: workRequestId, refresh: options?.refresh });
       return finishWorkOpen();
     case 'media':
-      await openMediaTarget({ ...target, history: options?.history, destination: 'main-third' });
+      await openMediaTarget({ ...target, history: options?.history, destination: 'main-third', restoreRequestId: workRequestId });
       return finishWorkOpen();
     case 'agent-conversation': {
       await selectAndOpenAgentConversation(target.instanceId, {
         history: options?.history,
         destination: 'main-third',
+        restoreRequestId: workRequestId,
         ...(target.blankIfMissing ? { blankIfMissing: true as const } : {}),
       });
       return finishWorkOpen();
@@ -308,38 +337,38 @@ async function performWorkspaceSurfaceOpen(
   }
 }
 
-/** Open a Browser tab as an additional Work view through the shared protocol. */
-export async function openBrowserColumnTabInWorkColumn(
-  tabId: string,
+/** Open Browser content as an additional Work view through the shared protocol. */
+export async function openBrowserColumnContentInWorkColumn(
+  surfaceId: string,
 ): Promise<WorkspaceSurfaceOpenResult> {
-  const tab = useBrowserColumnStore.getState().tabs.find((candidate) => candidate.id === tabId);
-  if (!tab || !canOpenBrowserColumnTargetInWorkColumn(tab.target)) {
+  const entry = (useBrowserColumnStore.getState().current?.id === surfaceId ? useBrowserColumnStore.getState().current : null);
+  if (!entry || !canOpenBrowserColumnTargetInWorkColumn(entry.target)) {
     return { status: 'cancelled', host: 'main-third', reason: 'navigation-cancelled' };
   }
   const target: WorkWorkspaceSurfaceTarget | null = (() => {
-    switch (tab.target.kind) {
-      case 'folder-collection': return tab.target;
+    switch (entry.target.kind) {
+      case 'folder-collection': return entry.target;
       case 'file-browser':
-        if (tab.target.collectionDisplay) return {
+        if (entry.target.collectionDisplay) return {
           kind: 'collection-reference',
-          notebookId: tab.target.collectionDisplay.notebookId,
-          collectionId: tab.target.collectionDisplay.collectionId,
-          viewId: tab.target.collectionDisplay.viewId,
-          displayId: tab.target.collectionDisplay.displayId,
-          filePath: tab.target.activeFilePath ?? undefined,
+          notebookId: entry.target.collectionDisplay.notebookId,
+          collectionId: entry.target.collectionDisplay.collectionId,
+          viewId: entry.target.collectionDisplay.viewId,
+          displayId: entry.target.collectionDisplay.displayId,
+          filePath: entry.target.activeFilePath ?? undefined,
         };
-        if (!tab.target.activeFilePath) return null;
+        if (!entry.target.activeFilePath) return null;
         return {
-          kind: 'external', path: tab.target.activeFilePath,
-          scopePath: tab.target.scopePath, fileBrowser: tab.target,
+          kind: 'external', path: entry.target.activeFilePath,
+          scopePath: entry.target.scopePath, fileBrowser: entry.target,
         };
       case 'media':
         return {
-          kind: 'media', filePath: tab.target.filePath, notebookId: tab.target.notebookId,
-          notebookPath: tab.target.notebookPath, resourceKind: tab.target.resourceKind,
+          kind: 'media', filePath: entry.target.filePath, notebookId: entry.target.notebookId,
+          notebookPath: entry.target.notebookPath, resourceKind: entry.target.resourceKind,
         };
-      case 'web': return { kind: 'web', url: tab.target.url };
-      case 'agent_conversation': return { kind: 'agent-conversation', instanceId: tab.target.instanceId };
+      case 'web': return { kind: 'web', url: entry.target.url };
+      case 'agent_conversation': return { kind: 'agent-conversation', instanceId: entry.target.instanceId };
     }
   })();
   if (!target) return { status: 'cancelled', host: 'main-third', reason: 'navigation-cancelled' };

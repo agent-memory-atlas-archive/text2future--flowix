@@ -14,7 +14,7 @@ import { getAgentType } from '@/lib/agent-types';
 import type { AgentTypeKey } from '@/types/agent';
 import { useI18n } from '@/lib/i18n';
 import { formatTimeAgo } from '@/lib/format-time-ago';
-import { AgentIcon } from '@features/agent/components/agent-icon';
+import { AgentIcon } from '@features/agent/public/icon-api';
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -27,7 +27,7 @@ import { TagIcon } from '@shared/ui/tag-icon';
 import { joinNotebookMemoPath } from '@/lib/path';
 import { ensureFileDisplayIdentity } from '@/lib/file-display-registry';
 import { renameMarkdownTitle } from '@features/document/public/file-operations-api';
-import { replaceExternalDocumentPath } from '@features/workspace/use-cases/workspace-navigation';
+import { replaceExternalDocumentPath } from '@features/workspace/public/note-navigation-api';
 import { toast } from '@/lib/toast';
 import { Button } from '@shared/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@shared/ui/dialog';

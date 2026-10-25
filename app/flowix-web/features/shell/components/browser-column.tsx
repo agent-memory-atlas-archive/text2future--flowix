@@ -1,15 +1,9 @@
 import { ColumnResizeHandle } from './column-resize-handle';
 import { focusWorkspaceHostFromEvent } from '@features/workspace/public/host-api';
-import { useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import {
-  closeAllBrowserColumnTabs,
-  closeBrowserColumnTab,
-  closeBrowserColumnTabsToRight,
-  closeOtherBrowserColumnTabs,
   hideBrowserColumn,
-  openBrowserColumnTabInWorkColumn,
-  reorderBrowserColumnTab,
-  selectBrowserColumnTab,
+  openBrowserColumnContentInWorkColumn,
   useBrowserColumnFocusViewModel,
   useBrowserColumnViewModel,
 } from '@features/workspace/public/browser-column-api';
@@ -17,8 +11,8 @@ import { openWorkspaceSurface } from '@features/workspace/public/open-surface-ap
 import { BrowserColumnHeader } from './browser-column-header';
 import { useI18n } from '@/lib/i18n';
 import { toast } from '@/lib/toast';
-import { createShellNote, useShellSelectedNotebook } from '@features/memo/public/shell-api';
-import { createBrowserColumnAgentConversation } from '@features/agent/public/shell-api';
+import { createShellNote, createShellNoteFromTemplate, useShellSelectedNotebook } from '@features/memo/public/shell-api';
+import { createBrowserColumnAgentConversation, discardUnopenedBrowserColumnAgentConversation } from '@features/agent/public/shell-api';
 import type { AgentTypeKey } from '@/types/agent';
 import { workspaceSurfaceAppearance } from '@features/workspace/public/surface-api';
 import {
@@ -44,110 +38,53 @@ export interface BrowserColumnProps {
   onToolbarCollapsedChange: (collapsed: boolean) => void;
 }
 
-/**
- * Give React's optimistic tab-header update one real paint before mounting the
- * next surface. A large Markdown document can otherwise monopolize the same
- * frame and keep the new tab background invisible until parsing is finished.
- */
-function waitForTabHeaderPaint(): Promise<void> {
-  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') {
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(fallback);
-      resolve();
-    };
-    const fallback = window.setTimeout(finish, 50);
-    window.requestAnimationFrame(() => {
-      // The optimistic header is painted between these two frame callbacks.
-      window.requestAnimationFrame(finish);
-    });
-  });
-}
-
-export function BrowserColumn({
+export const BrowserColumn = memo(function BrowserColumn({
   width,
   onResize,
   toolbarCollapsed,
   onToolbarCollapsedChange,
 }: BrowserColumnProps) {
   const { t } = useI18n();
-  const [isTabMenuOpen, setIsTabMenuOpen] = useState(false);
-  const [contextMenuTabId, setContextMenuTabId] = useState<string | null>(null);
-  const {
-    tabs,
-    activeTabId,
-    activeTab,
-    activeWebRuntime,
-    activePathHasDuplicateTab,
-  } = useBrowserColumnViewModel();
+  const { current, webRuntime } = useBrowserColumnViewModel();
   const { isFocused } = useBrowserColumnFocusViewModel();
   const selectedNotebook = useShellSelectedNotebook();
-  const handleCreateNote = useCallback(async () => {
+  const handleCreateNote = useCallback(async (templateId?: string) => {
     if (!selectedNotebook) return;
     try {
-      const created = await createShellNote(selectedNotebook.id);
-      await openWorkspaceSurface({
+      const created = templateId
+        ? await createShellNoteFromTemplate(templateId, selectedNotebook.id)
+        : await createShellNote(selectedNotebook.id);
+      const result = await openWorkspaceSurface({
         host: 'browser-column',
         target: { kind: 'external', path: created.path, scopePath: selectedNotebook.path, transitionId: null },
         options: { notebookId: selectedNotebook.id },
       });
+      if (result.status === 'cancelled') toast.error(t('tabWindow.switchFailed'));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : t('tabWindow.createNote.failed'));
+      toast.error(error instanceof Error ? error.message : t(templateId ? 'memo.create.templateFailed' : 'tabWindow.createNote.failed'));
     }
   }, [selectedNotebook, t]);
   const handleCreateAgentConversation = useCallback(async (typeKey: AgentTypeKey) => {
     if (!selectedNotebook) return;
-    const instanceId = createBrowserColumnAgentConversation(typeKey, selectedNotebook.id);
+    let instanceId: string | null = null;
     try {
-      await openWorkspaceSurface({ host: 'browser-column', target: { kind: 'agent-conversation', instanceId } });
+      instanceId = createBrowserColumnAgentConversation(typeKey, selectedNotebook.id);
+      const result = await openWorkspaceSurface({ host: 'browser-column', target: { kind: 'agent-conversation', instanceId } });
+      if (result.status === 'cancelled') {
+        discardUnopenedBrowserColumnAgentConversation(instanceId);
+        toast.error(t('tabWindow.switchFailed'));
+      }
     } catch (error) {
+      if (instanceId) discardUnopenedBrowserColumnAgentConversation(instanceId);
       toast.error(error instanceof Error ? error.message : t('tabWindow.createConversation.failed'));
     }
   }, [selectedNotebook, t]);
-  const handleSelectTab = useCallback(async (tabId: string) => {
-    await waitForTabHeaderPaint();
-    return await selectBrowserColumnTab(tabId) === true;
-  }, []);
-  const closeWithDiscardFallback = useCallback(async (
-    close: (discardChanges: boolean) => Promise<boolean | null>,
-  ) => {
-    const closed = await close(false);
-    if (closed !== null) return;
-    if (!window.confirm(t('tabWindow.confirmDiscardChanges'))) return;
-    await close(true);
-  }, [t]);
-  const handleCloseTab = useCallback((tabId: string) => (
-    closeWithDiscardFallback((discardChanges) => (
-      closeBrowserColumnTab(tabId, { discardChanges })
-    ))
-  ), [closeWithDiscardFallback]);
-  const handleCloseOtherTabs = useCallback((tabId: string) => (
-    closeWithDiscardFallback((discardChanges) => (
-      closeOtherBrowserColumnTabs(tabId, { discardChanges })
-    ))
-  ), [closeWithDiscardFallback]);
-  const handleCloseTabsToRight = useCallback((tabId: string) => (
-    closeWithDiscardFallback((discardChanges) => (
-      closeBrowserColumnTabsToRight(tabId, { discardChanges })
-    ))
-  ), [closeWithDiscardFallback]);
-  const handleCloseAllTabs = useCallback(() => (
-    closeWithDiscardFallback((discardChanges) => (
-      closeAllBrowserColumnTabs({ discardChanges })
-    ))
-  ), [closeWithDiscardFallback]);
-  const handleToggleMemoEditorMode = useCallback((tabId: string) => {
-    const tab = tabs.find((candidate) => candidate.id === tabId);
-    if (tab?.target.kind !== 'file-browser' || !tab.target.activeFilePath) return;
+  const handleToggleMemoEditorMode = useCallback((surfaceId: string) => {
+    const entry = current?.id === surfaceId ? current : null;
+    if (entry?.target.kind !== 'file-browser' || !entry.target.activeFilePath) return;
 
     const identity = documentIdentityFromFile(
-      requireFileDisplayIdentity(tab.target.activeFilePath),
+      requireFileDisplayIdentity(entry.target.activeFilePath),
     );
     // Publish the latest CodeMirror / rich-text content before replacing the
     // editor subtree. The browser-column host keeps this isolated from a
@@ -159,30 +96,24 @@ export function BrowserColumn({
       identity,
       currentMode === 'source' ? 'rich' : 'source',
     );
-  }, [tabs]);
-  const handleContextMenuOpenChange = useCallback((tabId: string, open: boolean) => {
-    setContextMenuTabId((current) => {
-      if (open) return tabId;
-      return current === tabId ? null : current;
-    });
-  }, []);
-  useEffect(() => {
-    if (contextMenuTabId && !tabs.some((tab) => tab.id === contextMenuTabId)) {
-      setContextMenuTabId(null);
-    }
-  }, [contextMenuTabId, tabs]);
-  const activeSurface = activeTab
-    ? resolveBrowserColumnSurface(activeTab, {
+  }, [current]);
+  const activeSurface = useMemo(() => current
+    ? resolveBrowserColumnSurface(current, {
         // Cross-column editing ownership is controlled by DocumentContainer.
-        readOnly: activePathHasDuplicateTab,
-        webRuntime: activeWebRuntime,
+        readOnly: false,
+        webRuntime,
         toolbarCollapsed,
         onToolbarCollapsedChange,
       })
-    : null;
-  const activeSurfaceRuntime = useWorkspaceSurfacePresentation(activeSurface?.tabId ?? '');
+    : null, [current, webRuntime, toolbarCollapsed, onToolbarCollapsedChange]);
+  const activeSurfaceRuntime = useWorkspaceSurfacePresentation(activeSurface?.surfaceId ?? '');
+  const activeSurfaceDefinition = activeSurface ? getBrowserColumnSurfaceDefinition(activeSurface) : null;
   const activeSurfaceChrome = activeSurfaceRuntime.appearance?.headerStyle
-    ?? (activeSurface ? getBrowserColumnSurfaceDefinition(activeSurface).chrome : 'document');
+    ?? activeSurfaceDefinition?.chrome
+    ?? 'document';
+  const activeSurfaceCapabilities = activeSurfaceRuntime.capabilities
+    ?? activeSurfaceDefinition?.capabilities
+    ?? [];
   return (
     <section
       data-workspace-host="browser-column"
@@ -195,21 +126,12 @@ export function BrowserColumn({
     >
       <ColumnResizeHandle label="调整浏览器列宽度" width={width} direction={-1} onResize={onResize} />
       <BrowserColumnHeader
-        tabs={tabs}
-        activeTabId={activeTabId}
+        current={current}
         activeSurfaceChrome={activeSurfaceChrome}
-        onSelectTab={handleSelectTab}
-        onCloseTab={handleCloseTab}
-        onCloseOtherTabs={handleCloseOtherTabs}
-        onCloseTabsToRight={handleCloseTabsToRight}
-        onCloseAllTabs={handleCloseAllTabs}
+        surfaceCapabilities={activeSurfaceCapabilities}
         onToggleMemoEditorMode={handleToggleMemoEditorMode}
-        onOpenTabInWorkColumn={(tabId) => { void openBrowserColumnTabInWorkColumn(tabId); }}
-        onReorderTab={reorderBrowserColumnTab}
-        isTabMenuOpen={isTabMenuOpen}
-        onTabMenuOpenChange={setIsTabMenuOpen}
+        onOpenInWorkColumn={(surfaceId) => { void openBrowserColumnContentInWorkColumn(surfaceId); }}
         onCloseColumn={hideBrowserColumn}
-        onContextMenuOpenChange={handleContextMenuOpenChange}
         isFocused={isFocused}
         canCreate={Boolean(selectedNotebook)}
         onCreateNote={() => { void handleCreateNote(); }}
@@ -226,10 +148,10 @@ export function BrowserColumn({
           <WorkspaceSurfaceStateView
             appearance={{ ...workspaceSurfaceAppearance('file-markdown'), emptyDecoration: 'none' }}
             state={{ status: 'empty', reason: 'no-target', message: { key: 'document.file.loading' } }}
-            messageOverride="选择一个 tab 打开内容"
+            messageOverride="选择内容以打开"
           />
         )}
       </div>
     </section>
   );
-}
+});

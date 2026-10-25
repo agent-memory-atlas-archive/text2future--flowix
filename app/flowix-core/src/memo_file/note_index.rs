@@ -65,7 +65,7 @@ fn note_entry_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteEntry> {
 
 const SCHEMA_VERSION: i64 = 4;
 // Version 10 stores derived tags, todos, and agents on each notes row.
-const PARSER_VERSION: i64 = 10;
+const PARSER_VERSION: i64 = 11;
 const NOTE_SEARCH_FTS_VERSION: i64 = 2;
 const NOTE_INDEX_REFRESH_PENDING: &str = "note-index-refresh-pending";
 const NOTE_INDEX_REFRESH_PENDING_DIR: &str = "note-index-refresh-pending.d";
@@ -2339,6 +2339,23 @@ mod tests {
         assert_eq!(memo.read_note_entries("background").unwrap().len(), 1);
         memo.reconcile_note_index_background("background", &|| true).unwrap();
         assert_eq!(memo.read_note_entries("background").unwrap().len(), 2);
+    }
+
+    #[test]
+    fn parser_upgrade_refreshes_preview_without_html_comments() {
+        let (_temp, memo, root) = background_fixture();
+        let content = "<!-- hidden metadata -->\nVisible text";
+        fs::write(root.join("a.md"), content).unwrap();
+        memo.reconcile_note_index("background").unwrap();
+        let conn = memo.open_note_index_connection("background").unwrap();
+        conn.execute("UPDATE notes SET preview='<!-- hidden metadata -->'", []).unwrap();
+        conn.execute("UPDATE note_index_meta SET value='10' WHERE key='parser_version'", []).unwrap();
+        drop(conn);
+
+        assert!(!memo.note_index_is_ready("background").unwrap());
+        assert_eq!(memo.reconcile_note_index("background").unwrap().updated, 1);
+        assert_eq!(memo.read_note_entries("background").unwrap()[0].preview, "Visible text");
+        assert_eq!(fs::read_to_string(root.join("a.md")).unwrap(), content);
     }
 
     #[test]

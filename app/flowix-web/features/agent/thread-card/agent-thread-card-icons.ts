@@ -12,6 +12,7 @@ const ICON_CHEVRON_DOWN_PATH = "M6 9l6 6 6-6";
 const ICON_CHEVRON_RIGHT_PATH = "M9 6l6 6-6 6";
 const ICON_CHEVRON_LEFT_PATH = "M15 6l-6 6 6 6";
 const ICON_CHECK_PATH = "M20 6 9 17 4 12";
+const ICON_ARROW_DOWN_PATH = "M12 5v14m-7-7 7 7 7-7";
 // Phosphor ArrowBendDownRight, regular weight.
 const ICON_ARROW_BEND_DOWN_RIGHT_PATH =
   "M229.66,157.66l-48,48a8,8,0,0,1-11.32-11.32L204.69,160H128A104.11,104.11,0,0,1,24,56a8,8,0,0,1,16,0,88.1,88.1,0,0,0,88,88h76.69l-34.35-34.34a8,8,0,0,1,11.32-11.32l48,48A8,8,0,0,1,229.66,157.66Z";
@@ -80,6 +81,13 @@ export function createCheckIcon(): SVGSVGElement {
   return appendStrokePath(
     createSvg("0 0 24 24", "agent-thread-card__copy-icon"),
     ICON_CHECK_PATH,
+  );
+}
+
+export function createArrowDownIcon(): SVGSVGElement {
+  return appendStrokePath(
+    createSvg("0 0 24 24", "agent-composer__scroll-to-latest-icon"),
+    ICON_ARROW_DOWN_PATH,
   );
 }
 

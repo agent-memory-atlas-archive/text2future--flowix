@@ -10,7 +10,8 @@ import { getYOffset, HANDLE_SIZE } from '@features/editor/components/drag-contex
  * Geometry: where should the drag handle sit on screen for the editor's
  * current selection? Pure function of editor state + DOM rects.
  *
- * The X axis is fixed (18px from the proseMirror container's left edge).
+ * The X axis follows the document content edge with a 2px gap,
+ * using computed padding so responsive spacing stays owned by CSS.
  * For headings and paragraphs, the Y axis follows ProseMirror's first
  * text-line coordinate so block padding is included. Other blocks retain the
  * visible-block-top plus per-type offset fallback (see ./style.ts).
@@ -33,7 +34,7 @@ export interface HandleHidden {
 const BLOCK_SELECTOR =
   'p, h1, h2, h3, h4, h5, h6, ul, ol, table, .tableWrapper, blockquote, pre, .code-block-wrapper, .ProseMirror-node'
 
-const HANDLE_X_OFFSET = 18
+const HANDLE_CONTENT_GAP = 2
 
 /** Resolve the current handle position. Returns `{ visible: false }` when
  *  the editor has no usable focus / no resolvable block (callers typically
@@ -79,7 +80,13 @@ export function computeHandlePosition(
   // axes must be expressed in that scroll container's content coordinates.
   // In particular, subtracting ProseMirror's top loses the height of any
   // non-ProseMirror header (the memo title) and shifts every handle upward.
-  const x = nodeContentX(proseMirrorRect.left, contentRect.left, editorContent.scrollLeft)
+  const paddingLeft = Number.parseFloat(getComputedStyle(editorDom).paddingLeft) || 0
+  const x = nodeContentX(
+    proseMirrorRect.left,
+    contentRect.left,
+    editorContent.scrollLeft,
+    paddingLeft,
+  )
   const y = textBlockContentY(view, info, contentRect.top, editorContent.scrollTop) ??
     nodeContentY(
       nodeRect.top,
@@ -95,8 +102,9 @@ export function nodeContentX(
   proseMirrorLeft: number,
   scrollContainerLeft: number,
   scrollLeft: number,
+  paddingLeft: number,
 ): number {
-  return proseMirrorLeft - scrollContainerLeft + scrollLeft + HANDLE_X_OFFSET
+  return proseMirrorLeft - scrollContainerLeft + scrollLeft + paddingLeft - HANDLE_SIZE - HANDLE_CONTENT_GAP
 }
 
 export function nodeContentY(

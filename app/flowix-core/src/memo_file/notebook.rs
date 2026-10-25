@@ -267,6 +267,57 @@ impl MemoFile {
         Ok(())
     }
 
+    /// Attempt migration only when registry data already exists. Missing or
+    /// failed inputs are skipped; stage 2 owns cleanup and fresh-store creation.
+    pub fn migrate_existing_registry_storage(&self) -> bool {
+        let migration = (|| -> std::io::Result<bool> {
+            let current = self.registry.db_path();
+            let legacy = self.registry.config_dir.join("local.db");
+            let source = if current.try_exists()? {
+                current
+            } else if legacy.try_exists()? {
+                legacy
+            } else {
+                return Ok(false);
+            };
+            let connection = Connection::open_with_flags(
+                source,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .map_err(sqlite_to_io)?;
+            connection
+                .prepare("SELECT id FROM notebooks LIMIT 0")
+                .map_err(sqlite_to_io)?;
+            drop(connection);
+            self.initialize_registry_storage()?;
+            Ok(true)
+        })();
+        migration.unwrap_or_else(|error| {
+            tracing::warn!(%error, "registry migration skipped");
+            false
+        })
+    }
+
+    /// Stage 2 creates missing registry tables without replacing other data.
+    /// Only confirmed file corruption permits replacement of the entire store.
+    pub fn initialize_runtime_registry_storage(&self) -> std::io::Result<()> {
+        let initialize = || -> std::io::Result<()> {
+            let _connection = self.registry.open_for_runtime_initialization()?;
+            self.read_notebook_configs()?;
+            self.read_selected_notebook_id()?;
+            Ok(())
+        };
+        if let Err(error) = initialize() {
+            if !super::database_file_is_corrupt(&self.registry.db_path()).unwrap_or(false) {
+                return Err(error);
+            }
+            tracing::warn!(%error, "recreating corrupt notebook registry for runtime");
+            super::discard_database_for_runtime(&self.registry.db_path());
+            initialize()?;
+        }
+        Ok(())
+    }
+
     /// Prepare the current registry schema and migrate its database directory.
     pub fn initialize_registry_storage(&self) -> std::io::Result<()> {
         super::database_layout::prepare_database_directory(

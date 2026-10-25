@@ -248,7 +248,15 @@ export function parseCollectionDocumentV2(source: string, type?: CollectionType)
     return document;
   }
   if (value.schema_version === 2 && value.payload.schema_version === 2) {
-    const collection = validateCollectionMetadata(value.collection, type);
+    // v2 集合文件不存 name：后端 `CollectionMetadata.name` 是标注了
+    // "Deprecated compatibility field" 的 `skip_serializing` 字段，名字一律从
+    // 集合路径派生（见 collectionDisplayName）。
+    //
+    // 解析时必须丢掉它：序列化器本来就不写 name，如果解析保留、序列化丢弃，
+    // "解析 → 序列化 → 再解析"就会悄悄把它抹掉，往返不再稳定。
+    const v2Source = isRecord(value.collection) ? value.collection : {};
+    const { name: _legacyName, ...v2Metadata } = v2Source;
+    const collection = validateCollectionMetadata(v2Metadata, type);
     const document = { format: 'flowix.collection' as const, schema_version: 2 as const, collection,
       payload: value.payload as CollectionDocumentV2['payload'] };
     validateV2Envelope({ collection: { ...collection }, payload: value.payload });

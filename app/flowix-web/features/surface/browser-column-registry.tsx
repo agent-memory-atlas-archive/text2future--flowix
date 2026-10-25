@@ -1,13 +1,13 @@
 'use client';
 
-import { useCallback, useLayoutEffect, useMemo, type ReactNode } from 'react';
+import { memo, useCallback, useLayoutEffect, useMemo, type ReactNode } from 'react';
 import { type CollectionDisplayDescriptor } from '@/lib/collection-display-registry';
 import { requireFileDisplayIdentity, type FileDisplayIdentity } from '@/lib/file-display-registry';
 import { resolveFileBrowserContext } from '@features/workspace/use-cases/file-browser-context';
 import { selectBrowserColumnFile } from '@features/workspace/public/browser-column-api';
 import { openWorkspaceSurface } from '@features/workspace/public/open-surface-api';
 import { setCollectionActiveView } from '@features/workspace/use-cases/collection-view-state';
-import { useBrowserColumnStore, type BrowserColumnTab, type BrowserColumnWebRuntime } from '@features/workspace/store/browser-column-store';
+import { useBrowserColumnStore, type BrowserColumnEntry, type BrowserColumnWebRuntime } from '@features/workspace/store/browser-column-store';
 import { canonicalUrl } from '@features/workspace/store/workspace-content-identity';
 import type { WorkspaceSurfaceCapability, SurfaceAppearance, SurfaceHeaderStyle } from '@features/workspace/public/surface-api';
 import type { FileBrowserViewSurface } from './file-browser-view';
@@ -23,7 +23,7 @@ export type BrowserColumnSurfaceCapability = WorkspaceSurfaceCapability;
 
 interface SurfaceBase {
   instanceKey: string;
-  tabId: string;
+  surfaceId: string;
 }
 
 interface FileSurfaceBase extends SurfaceBase {
@@ -93,29 +93,29 @@ interface BrowserColumnSurfaceOptions {
 }
 
 export function resolveBrowserColumnSurface(
-  tab: BrowserColumnTab,
+  entry: BrowserColumnEntry,
   { readOnly = false, webRuntime = null, toolbarCollapsed = false, onToolbarCollapsedChange }: BrowserColumnSurfaceOptions = {},
 ): BrowserColumnSurface {
   const base = {
-    instanceKey: `tab:${tab.id}`,
-    tabId: tab.id,
+    instanceKey: `browser:${entry.id}`,
+    surfaceId: entry.id,
   };
-  switch (tab.target.kind) {
+  switch (entry.target.kind) {
     case 'folder-collection':
-      return { ...base, kind: 'collection', notebookId: tab.target.notebookId,
-        notebookPath: tab.target.notebookPath, folderPath: tab.target.folderPath, folderName: tab.target.folderName,
-        viewMode: tab.target.viewMode };
+      return { ...base, kind: 'collection', notebookId: entry.target.notebookId,
+        notebookPath: entry.target.notebookPath, folderPath: entry.target.folderPath, folderName: entry.target.folderName,
+        viewMode: entry.target.viewMode };
     case 'media':
       return {
         ...base,
-        fileIdentity: requireFileDisplayIdentity(tab.target.filePath),
+        fileIdentity: requireFileDisplayIdentity(entry.target.filePath),
         kind: 'media',
-        notebookId: tab.target.notebookId,
-        notebookPath: tab.target.notebookPath,
-        resourceKind: tab.target.resourceKind,
+        notebookId: entry.target.notebookId,
+        notebookPath: entry.target.notebookPath,
+        resourceKind: entry.target.resourceKind,
       };
     case 'file-browser': {
-      const target = { ...tab.target, ...resolveFileBrowserContext(tab.target.activeFilePath, tab.target) };
+      const target = { ...entry.target, ...resolveFileBrowserContext(entry.target.activeFilePath, entry.target) };
       const surface: SurfaceBase & FileBrowserViewSurface & Pick<BrowserFileBrowserSurface, 'documentProps'> = {
         ...base,
         ...target,
@@ -126,16 +126,15 @@ export function resolveBrowserColumnSurface(
           workspaceHost: 'browser-column',
           readOnly, toolbarCollapsed, onToolbarCollapsedChange,
         },
-        onSelectFile: (path) => { void selectBrowserColumnFile(tab.id, path); },
+        onSelectFile: (path) => { void selectBrowserColumnFile(entry.id, path); },
         onOpenFileInNewTab: (path) => { void openWorkspaceSurface({
           host: 'browser-column',
           target: { ...target, activeFilePath: path, collectionDisplay: undefined, folderPath: null },
-          options: { browserDisposition: 'open-in-column' },
         }); },
-        onContextChange: (patch) => useBrowserColumnStore.getState().updateFileBrowserContext(tab.id, patch),
-        onSelectFolder: (path) => { void selectBrowserColumnFile(tab.id, null, path); },
-        onTreeVisibleChange: (visible) => useBrowserColumnStore.getState().setFileBrowserTreeVisible(tab.id, visible),
-        onTreeWidthChange: (width) => useBrowserColumnStore.getState().setFileBrowserTreeWidth(tab.id, width),
+        onContextChange: (patch) => useBrowserColumnStore.getState().updateFileBrowserContext(entry.id, patch),
+        onSelectFolder: (path) => { void selectBrowserColumnFile(entry.id, null, path); },
+        onTreeVisibleChange: (visible) => useBrowserColumnStore.getState().setFileBrowserTreeVisible(entry.id, visible),
+        onTreeWidthChange: (width) => useBrowserColumnStore.getState().setFileBrowserTreeWidth(entry.id, width),
       };
       return target.activeFilePath
         ? {
@@ -151,12 +150,12 @@ export function resolveBrowserColumnSurface(
       return {
         ...base,
         kind: 'web',
-        url: tab.target.url,
-        title: tab.title,
+        url: entry.target.url,
+        title: entry.title,
         runtime: webRuntime ?? null,
       };
     case 'agent_conversation':
-      return { ...base, kind: 'agent-conversation', instanceId: tab.target.instanceId };
+      return { ...base, kind: 'agent-conversation', instanceId: entry.target.instanceId };
   }
 }
 
@@ -172,15 +171,18 @@ function browserSurfaceData(surface: BrowserColumnSurface): WorkspaceSurfaceRend
   }
 }
 
-function createBrowserWebNavigationPort(tabId: string): WorkspaceWebNavigationPort {
+function createBrowserWebNavigationPort(surfaceId: string): WorkspaceWebNavigationPort {
   return {
-    getRuntime: () => useBrowserColumnStore.getState().webRuntimes[tabId] ?? null,
-    setRuntime: (runtime) => useBrowserColumnStore.getState().setWebRuntime(tabId, runtime),
-    navigate: (url) => { useBrowserColumnStore.getState().navigateWebTab(tabId, url); },
-    back: () => { useBrowserColumnStore.getState().goBackWebTab(tabId); },
-    forward: () => { useBrowserColumnStore.getState().goForwardWebTab(tabId); },
-    reload: () => { useBrowserColumnStore.getState().reloadWebTab(tabId); },
-    updateMetadata: (metadata) => useBrowserColumnStore.getState().updateTabMetadata(tabId, metadata),
+    getRuntime: () => {
+      const state = useBrowserColumnStore.getState();
+      return state.current?.id === surfaceId ? state.webRuntime : null;
+    },
+    setRuntime: (runtime) => useBrowserColumnStore.getState().setWebRuntime(surfaceId, runtime),
+    navigate: (url) => { useBrowserColumnStore.getState().navigateWeb(surfaceId, url); },
+    back: () => { useBrowserColumnStore.getState().goBackWeb(surfaceId); },
+    forward: () => { useBrowserColumnStore.getState().goForwardWeb(surfaceId); },
+    reload: () => { useBrowserColumnStore.getState().reloadWeb(surfaceId); },
+    updateMetadata: (metadata) => useBrowserColumnStore.getState().updateContentMetadata(surfaceId, metadata),
   };
 }
 
@@ -194,42 +196,42 @@ function BrowserRegisteredSurfaceView({ surface, focused }: { surface: BrowserCo
       : surface.kind === 'web'
         ? canonicalUrl(surface.url) ?? surface.url
       : surface.instanceId;
-  const presentationOwner = useMemo(() => ({}), [surface.tabId, presentationIdentity]);
-  const webNavigation = useMemo(() => surface.kind === 'web' ? createBrowserWebNavigationPort(surface.tabId) : undefined,
-    [surface.kind, surface.tabId]);
+  const presentationOwner = useMemo(() => ({}), [surface.surfaceId, presentationIdentity]);
+  const webNavigation = useMemo(() => surface.kind === 'web' ? createBrowserWebNavigationPort(surface.surfaceId) : undefined,
+    [surface.kind, surface.surfaceId]);
   const onCollectionActiveViewChange = useCallback((viewId: string) => {
-    const tab = useBrowserColumnStore.getState().tabs.find((candidate) => candidate.id === surface.tabId);
-    if (tab?.target.kind !== 'file-browser' || !tab.target.collectionDisplay) return;
-    const { notebookId, collectionId } = tab.target.collectionDisplay;
-    setCollectionActiveView({ host: 'browser-column', tabId: surface.tabId }, { notebookId, collectionId }, viewId);
-  }, [surface.tabId]);
+    const entry = (useBrowserColumnStore.getState().current?.id === surface.surfaceId ? useBrowserColumnStore.getState().current : null);
+    if (entry?.target.kind !== 'file-browser' || !entry.target.collectionDisplay) return;
+    const { notebookId, collectionId } = entry.target.collectionDisplay;
+    setCollectionActiveView({ host: 'browser-column', surfaceId: surface.surfaceId }, { notebookId, collectionId }, viewId);
+  }, [surface.surfaceId]);
   const reportPresentation = useCallback((update: SurfacePresentationUpdate) => {
-    const accepted = reportWorkspaceSurfacePresentation(surface.tabId, update, presentationOwner);
+    const accepted = reportWorkspaceSurfacePresentation(surface.surfaceId, update, presentationOwner);
     if (!accepted) return;
     if (update.title !== undefined || update.icon !== undefined) {
       const metadata: { title?: string; icon?: string | null } = {};
       if (update.title !== undefined) metadata.title = update.title;
       if (update.icon !== undefined) metadata.icon = update.icon;
-      useBrowserColumnStore.getState().updateTabMetadata(surface.tabId, metadata);
+      useBrowserColumnStore.getState().updateContentMetadata(surface.surfaceId, metadata);
     }
-  }, [presentationOwner, surface.tabId]);
+  }, [presentationOwner, surface.surfaceId]);
   const retainInitialContent = workspaceSurfaceRetainsInitialContent(browserSurfaceData(surface));
   const registerLifecycle = useCallback((lifecycle: SurfaceLifecycle | null, owner?: object) => {
-    registerWorkspaceSurfaceLifecycle(surface.tabId, lifecycle, owner);
-  }, [surface.tabId]);
-  useLayoutEffect(() => registerWorkspaceSurfaceHostView('browser-column', surface.tabId), [surface.tabId]);
-  useLayoutEffect(() => registerWorkspaceSurfacePresentationOwner(surface.tabId, presentationOwner, {
+    registerWorkspaceSurfaceLifecycle(surface.surfaceId, lifecycle, owner);
+  }, [surface.surfaceId]);
+  useLayoutEffect(() => registerWorkspaceSurfaceHostView('browser-column', surface.surfaceId), [surface.surfaceId]);
+  useLayoutEffect(() => registerWorkspaceSurfacePresentationOwner(surface.surfaceId, presentationOwner, {
     state: { status: 'loading', loadingMode: 'blocking', retainContent: retainInitialContent },
   }),
-    [presentationOwner, retainInitialContent, surface.tabId]);
-  return <WorkspaceSurfaceRendererView
-    surface={browserSurfaceData(surface)}
-    context={{ host: 'browser-column', viewId: surface.tabId, focused,
+    [presentationOwner, retainInitialContent, surface.surfaceId]);
+  const data = useMemo(() => browserSurfaceData(surface), [surface]);
+  const context = useMemo(() => ({ host: 'browser-column' as const, viewId: surface.surfaceId, focused,
       initialFocus: surface.kind === 'file-browser' ? surface.documentProps.initialFocus : undefined,
       webNavigation, onCollectionActiveViewChange,
       readOnly: surface.kind === 'file-browser' && Boolean(surface.documentProps.readOnly),
-      reportPresentation, registerLifecycle }}
-  />;
+      reportPresentation, registerLifecycle }),
+    [surface, focused, webNavigation, onCollectionActiveViewChange, reportPresentation, registerLifecycle]);
+  return <WorkspaceSurfaceRendererView surface={data} context={context} />;
 }
 
 /** Browser provides view data and navigation ports; all kinds use the common registry. */
@@ -243,6 +245,6 @@ export function browserColumnSurfaceSupports(surface: BrowserColumnSurface, capa
   return getBrowserColumnSurfaceDefinition(surface).capabilities.includes(capability);
 }
 
-export function BrowserColumnSurfaceHost({ surface, focused = false }: { surface: BrowserColumnSurface; focused?: boolean }) {
+export const BrowserColumnSurfaceHost = memo(function BrowserColumnSurfaceHost({ surface, focused = false }: { surface: BrowserColumnSurface; focused?: boolean }) {
   return <BrowserRegisteredSurfaceView key={`${surface.kind}:${surface.instanceKey}`} surface={surface} focused={focused} />;
-}
+});

@@ -1,7 +1,15 @@
-/* Tiptap Editor — Markdown Styles */
+/* Tiptap Editor — Markdown Styles
+ * Editor-owned selectors exclude .agent-conversation-surface on the target
+ * element via :where(:not(...)). Excluding only the outer .tiptap is insufficient
+ * for nested Agent composers. Placement of the Agent NodeView belongs in
+ * agent-thread-card/editor-host.css; Agent internals own all other styling. */
 /* 代码块高亮由 shiki 内联样式负责（codeblock-shiki 扩展），无 .hljs 类消费，不再引入 highlight.js CSS 主题 */
 
 :root {
+  /* Top offset for the first block of a document. Single source: the Agent card
+   * offset in agent-thread-card/editor-host.css and the insertion-caret
+   * compensation below both read it. */
+  --editor-first-block-offset: 0.8rem;
   --document-tag-font-scale: 0.875;
   --document-tag-font-size: calc(100% * var(--document-tag-font-scale));
   --document-tag-line-height: 1.2;
@@ -23,7 +31,7 @@
 
 /* Editable text tags keep the Windows icon face. Property chips use the
  * original face because their surrounding font-size relationship differs. */
-html[data-os="windows"] .markdown-editor .tag-node-prefix-box > .tag-node-prefix {
+html[data-os="windows"] .markdown-editor .tag-node-prefix-box > .tag-node-prefix:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --document-tag-icon-font-family: 'Flowix Tag Icon Consolas';
 }
 
@@ -32,8 +40,9 @@ html[data-os="windows"] .markdown-editor .tag-node-prefix-box > .tag-node-prefix
   --flowix-text-pink: oklch(74% 0.18 350);
 }
 
-.markdown-editor {
+.markdown-editor:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   isolation: isolate;
+  container: document-editor / inline-size;
   --table-header-fill: color-mix(in srgb, var(--muted) 32%, var(--background));
   display: block;
   height: 100%;
@@ -47,22 +56,25 @@ html[data-os="windows"] .markdown-editor .tag-node-prefix-box > .tag-node-prefix
 /* The shared overlay scrollbar wrapper keeps the former editor scroller's
  * viewport size so ProseMirror, sticky
  * decorations, and the toolbar keep their existing layout contract. */
-.markdown-editor .editor-content-frame {
+.markdown-editor .editor-content-frame:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   height: 100%;
   min-height: 0;
 }
 
 /* Stop the editor thumb above the rounded bottom corner. */
-html[data-platform="mac"] .markdown-editor .editor-content-frame > .overlay-scrollbar-track {
+html[data-platform="mac"] .markdown-editor .editor-content-frame > .overlay-scrollbar-track:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   bottom: 12px;
 }
 
-.markdown-editor .editor-content {
+.markdown-editor .editor-content:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
+  --editor-document-padding-inline: 3rem;
   position: relative;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
   height: 100%;
+  /* Wide content must wrap or scroll inside its own block. */
+  overflow-x: hidden;
   overflow-y: auto;
   /* Prevent frontmatter height changes from shifting the editor viewport. */
   overflow-anchor: none;
@@ -70,14 +82,21 @@ html[data-platform="mac"] .markdown-editor .editor-content-frame > .overlay-scro
   scrollbar-gutter: stable;
 }
 
-html[data-platform="mac"] .markdown-editor .editor-content {
+/* Use the editor pane width so split panes and sidebars affect the spacing. */
+@container document-editor (width > 860px) {
+  .markdown-editor .editor-content:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
+    --editor-document-padding-inline: 6rem;
+  }
+}
+
+html[data-platform="mac"] .markdown-editor .editor-content:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   scrollbar-gutter: auto;
 }
 
 /* Keep the blank document surface clickable all the way to the bottom of the
  * shared scroller. The body is a flex item so the title/property header keeps
  * its natural height while the editor fills the remaining viewport. */
-.markdown-editor .editor-document-body {
+.markdown-editor .editor-document-body:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: flex;
   min-height: 0;
   width: 100%;
@@ -85,7 +104,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   flex-direction: column;
 }
 
-.markdown-editor .editor-document-body > .ProseMirror {
+.markdown-editor .editor-document-body > .ProseMirror:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   flex: 1 0 auto;
 }
 
@@ -283,7 +302,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   max-width: var(--editor-document-width, 680px);
   margin: 0 auto;
   box-sizing: border-box;
-  padding: 0 2.5rem;
+  padding: 0 var(--editor-document-padding-inline, 3rem);
 }
 
 .memo-date-line {
@@ -304,45 +323,79 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   position: relative;
   width: 100%;
   /* Multiply a length by a number: typed length division needs Chromium 140+. */
-  --memo-title-font-size: calc(var(--editor-font-size, 16px) * 1.9);
+  --memo-title-font-size: calc(var(--editor-font-size, 16px) * 2.1);
   --memo-title-line-height: 1.15;
 }
 
-.memo-title-properties-toggle {
+.memo-title-property-actions {
   position: absolute;
-  /* Center the 18px button on the title's first line box. */
-  top: calc((var(--memo-title-font-size) * var(--memo-title-line-height) - 18px) / 2);
-  left: -1.4rem;
-  display: inline-flex;
-  width: 18px;
-  height: 18px;
+  right: 0.25rem;
+  bottom: 0;
+  transform: translateY(20px);
+  z-index: 2;
+  display: flex;
+  height: 32px;
+  overflow: hidden;
   align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-	border-radius: 4px;
-  background: transparent;
-  color: var(--muted-foreground);
-  cursor: pointer;
+  border-radius: 0.5rem;
+  background: var(--document-bg);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 4.5%), inset 0 0 0 1px var(--border);
   opacity: 0;
   pointer-events: none;
-  transform: none;
-  transition: opacity 0.12s ease, background-color 0.12s ease, color 0.12s ease;
+  transition: opacity 120ms ease;
 }
 
-/* Expanded properties affect color only; reveal the control on header hover
- * or when keyboard navigation focuses the button itself. */
-.memo-document-header:hover .memo-title-properties-toggle,
-.memo-title-properties-toggle:focus-visible {
+.memo-title-shell:hover .memo-title-property-actions,
+.memo-title-property-actions[data-property-area-hovered='true'],
+.memo-title-property-actions:focus-within,
+.memo-title-property-actions[data-popup-open='true'] {
   opacity: 1;
   pointer-events: auto;
 }
 
-.memo-title-properties-toggle:hover,
-.memo-title-properties-toggle:focus-visible {
+.memo-title-property-action {
+  display: inline-flex;
+  width: 36px;
+  height: 32px;
+  flex: 0 0 36px;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.memo-title-property-action:hover,
+.memo-title-property-action:focus-visible {
   background: var(--muted);
   color: var(--foreground);
   outline: none;
+}
+
+.memo-title-property-action svg {
+  display: block;
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+}
+
+.memo-title-property-action + .memo-title-property-action {
+  position: relative;
+}
+
+.memo-title-property-action + .memo-title-property-action::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background: var(--border);
+  content: '';
+  pointer-events: none;
 }
 
 .memo-title-properties-toggle[data-state='visible'] {
@@ -389,14 +442,14 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   pointer-events: none;
 }
 
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content):where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: block;
   width: 100%;
   min-height: 100%;
   max-width: var(--editor-document-width, 680px);
   margin: 0 auto;
   box-sizing: border-box;
-  padding: 0 2.5rem 10rem 2.5rem;
+  padding: 0 var(--editor-document-padding-inline, 3rem) 10rem;
   outline: none;
   font-family: var(--editor-font-family, var(--font-sans));
   font-size: var(--editor-font-size, 16px);
@@ -406,27 +459,28 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   caret-color: var(--brand);
   cursor: text;
   tab-size: 5;
+  overflow-wrap: anywhere;
 }
 
 /* Browser-column memo surfaces can be read-only while remaining selectable.
  * Make that contract explicit because contenteditable=false alone removes
  * keyboard focus behavior in WebKit. */
-.markdown-editor .ProseMirror:not(.agent-composer__input-content)[aria-readonly="true"] {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content)[aria-readonly="true"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   user-select: text;
   -webkit-user-select: text;
 }
 
-.markdown-editor:focus .ProseMirror:not(.agent-composer__input-content) {
+.markdown-editor:focus .ProseMirror:not(.agent-composer__input-content):where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   outline: none;
 }
 
 /* Native contenteditable carets use the full line box, so their height grows
  * with the user's line-spacing preference. StableCaret draws a glyph-height
  * caret instead; keep the native caret available during IME composition. */
-.markdown-editor .ProseMirror.has-document-stable-caret,
+.markdown-editor .ProseMirror.has-document-stable-caret:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
 .markdown-editor .ProseMirror.has-document-stable-caret :where(
   *:not(.agent-composer__input-content):not(.agent-composer__input-content *)
-) {
+):where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   caret-color: transparent !important;
 }
 
@@ -458,24 +512,43 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   53%, 100% { opacity: 0; }
 }
 
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) > :nth-child(1 of :not(.agent-thread-card, .frontmatter-property-node, .editor-block-gap, .ProseMirror-gapcursor)):is(h1, h2, h3, h4, h5, h6, p) {
-  padding-top: 0.8rem !important;
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) > :nth-child(1 of :not(.agent-thread-card, .frontmatter-property-node, .editor-block-gap, .ProseMirror-gapcursor)):is(h1, h2, h3, h4, h5, h6, p):where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
+  padding-top: var(--editor-first-block-offset) !important;
 }
 
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) > :nth-child(1 of :not(.agent-thread-card, .frontmatter-property-node, .editor-block-gap, .ProseMirror-gapcursor)):not(h1, h2, h3, h4, h5, h6, p) {
-  margin-top: 0.8rem !important;
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) > :nth-child(1 of :not(.agent-thread-card, .frontmatter-property-node, .editor-block-gap, .ProseMirror-gapcursor)):not(h1, h2, h3, h4, h5, h6, p):where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
+  margin-top: var(--editor-first-block-offset) !important;
 }
 
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) > .agent-thread-card:nth-child(1 of :not(.editor-block-gap, .ProseMirror-gapcursor)):not(.agent-thread-card--fullscreen) {
-  margin-top: 0.8rem !important;
+/* The insertion caret is drawn from the gap's flow position, which for a
+ * first block with `margin-top` is its margin edge — one offset above its border
+ * edge. Without compensation the caret floats in the empty margin: measured
+ * 18px above the block instead of the 5px it keeps everywhere else, and the
+ * 12px hover hit zone is left entirely inside that blank strip.
+ *
+ * Scope is "the document's first block", counted the way the Agent card offset
+ * counts it (frontmatter / gap / gap-cursor are not blocks; a card *is* one).
+ * Deliberately not "any block with margin-top": a code block after a leading
+ * card also gets `margin-top` from the rule above, but that margin collapses
+ * with the card's own `margin-bottom`, so the caret already sits inside the
+ * merged gap and pulling it down by another offset would push it into the block.
+ * Text blocks use `padding-top` and need no compensation. The gap widget and the
+ * caret are siblings, so `:has()` with `+` covers both orders. */
+.markdown-editor .editor-block-gap:has(+ :nth-child(1 of :not(.frontmatter-property-node, .editor-block-gap, .ProseMirror-gapcursor)):not(h1, h2, h3, h4, h5, h6, p)) .editor-block-gap__hit:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .editor-block-gap:has(+ .ProseMirror-gapcursor + :nth-child(1 of :not(.frontmatter-property-node, .editor-block-gap, .ProseMirror-gapcursor)):not(h1, h2, h3, h4, h5, h6, p)) .editor-block-gap__hit:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
+  top: calc(-6px + var(--editor-first-block-offset));
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) h1:where(:not(.agent-thread-card__message, .agent-thread-card__message *, .table-reference-node, .table-reference-node *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) h2:where(:not(.agent-thread-card__message, .agent-thread-card__message *, .table-reference-node, .table-reference-node *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) h3:where(:not(.agent-thread-card__message, .agent-thread-card__message *, .table-reference-node, .table-reference-node *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) h4:where(:not(.agent-thread-card__message, .agent-thread-card__message *, .table-reference-node, .table-reference-node *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) h5:where(:not(.agent-thread-card__message, .agent-thread-card__message *, .table-reference-node, .table-reference-node *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) h6:where(:not(.agent-thread-card__message, .agent-thread-card__message *, .table-reference-node, .table-reference-node *)) {
+.markdown-editor .ProseMirror-gapcursor:has(+ :nth-child(1 of :not(.frontmatter-property-node, .editor-block-gap, .ProseMirror-gapcursor)):not(h1, h2, h3, h4, h5, h6, p)):where(:not(.agent-conversation-surface, .agent-conversation-surface *))::after {
+  top: calc(-5px + var(--editor-first-block-offset));
+}
+
+.markdown-editor .tiptap:not(.agent-composer__input-content) h1:where(:not(.agent-conversation-surface, .agent-conversation-surface *, .table-reference-node, .table-reference-node *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) h2:where(:not(.agent-conversation-surface, .agent-conversation-surface *, .table-reference-node, .table-reference-node *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) h3:where(:not(.agent-conversation-surface, .agent-conversation-surface *, .table-reference-node, .table-reference-node *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) h4:where(:not(.agent-conversation-surface, .agent-conversation-surface *, .table-reference-node, .table-reference-node *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) h5:where(:not(.agent-conversation-surface, .agent-conversation-surface *, .table-reference-node, .table-reference-node *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) h6:where(:not(.agent-conversation-surface, .agent-conversation-surface *, .table-reference-node, .table-reference-node *)) {
   margin: 0;
   padding-top: 1.5rem;
   padding-bottom: 0.5rem;
@@ -484,30 +557,30 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   white-space: pre-wrap;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) h1:where(:not(.agent-thread-card__message, .agent-thread-card__message *, .table-reference-node, .table-reference-node *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) h1:where(:not(.agent-conversation-surface, .agent-conversation-surface *, .table-reference-node, .table-reference-node *)) {
   /* Keep heading scaling compatible with older Windows WebView2 runtimes. */
-  font-size: calc(var(--editor-font-size, 16px) * 1.9);
+  font-size: calc(var(--editor-font-size, 16px) * 1.8);
   padding-top: 1rem;
   padding-bottom: calc(var(--editor-font-size, 16px) * 0.3);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) h2:where(:not(.agent-thread-card__message, .agent-thread-card__message *, .table-reference-node, .table-reference-node *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) h2:where(:not(.agent-conversation-surface, .agent-conversation-surface *, .table-reference-node, .table-reference-node *)) {
   font-size: calc(var(--editor-font-size, 16px) * 1.5);
   padding-top: 0.6rem;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) h3:where(:not(.agent-thread-card__message, .agent-thread-card__message *, .table-reference-node, .table-reference-node *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) h3:where(:not(.agent-conversation-surface, .agent-conversation-surface *, .table-reference-node, .table-reference-node *)) {
   font-size: calc(var(--editor-font-size, 16px) * 1.2);
   padding-top: 0.4rem;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) h4:where(:not(.agent-thread-card__message, .agent-thread-card__message *, .table-reference-node, .table-reference-node *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) h4:where(:not(.agent-conversation-surface, .agent-conversation-surface *, .table-reference-node, .table-reference-node *)) {
   font-size: calc(var(--editor-font-size, 16px) * 1.05);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) h4:where(:not(.agent-thread-card__message, .agent-thread-card__message *, .table-reference-node, .table-reference-node *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) h5:where(:not(.agent-thread-card__message, .agent-thread-card__message *, .table-reference-node, .table-reference-node *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) h6:where(:not(.agent-thread-card__message, .agent-thread-card__message *, .table-reference-node, .table-reference-node *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) h4:where(:not(.agent-conversation-surface, .agent-conversation-surface *, .table-reference-node, .table-reference-node *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) h5:where(:not(.agent-conversation-surface, .agent-conversation-surface *, .table-reference-node, .table-reference-node *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) h6:where(:not(.agent-conversation-surface, .agent-conversation-surface *, .table-reference-node, .table-reference-node *)) {
   padding-top: 0.3rem;
 }
 
@@ -517,7 +590,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
  *  - 空 p / 非空 p 共享同一行高基线 (27px),
  *    段落下填充为行高的 0.25 倍 (6.75px)。 */
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) > p:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) > p:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   /* 0.25 行 box, 作为块间节奏 */
   margin: 0;
   padding-bottom: calc(var(--editor-font-size, 16px) * var(--editor-line-height, 1.8) * 0.25);
@@ -525,17 +598,17 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   text-indent: var(--editor-first-line-indent, 0em);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) > p:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):empty,
-.markdown-editor .tiptap:not(.agent-composer__input-content) > p:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):has(> br.ProseMirror-trailingBreak:only-child) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) > p:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):empty,
+.markdown-editor .tiptap:not(.agent-composer__input-content) > p:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):has(> br.ProseMirror-trailingBreak:only-child) {
   /* 1 行 box, 与非空 <p> 等高 */
   min-height: calc(var(--editor-font-size, 16px) * var(--editor-line-height, 1.8));
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) > p:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):empty::before {
+.markdown-editor .tiptap:not(.agent-composer__input-content) > p:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):empty::before {
   content: "\00a0";
 }
 
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) .terminal-inline-atom-caret-anchor {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) .terminal-inline-atom-caret-anchor:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: inline;
 }
 
@@ -543,32 +616,38 @@ html[data-platform="mac"] .markdown-editor .editor-content {
  * after contenteditable=false inline atoms in Safari/Chrome. The caret anchor
  * already provides the terminal landing point, so both DOM shapes should keep
  * the hack br visually hidden. */
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) .terminal-inline-atom-caret-anchor + br.ProseMirror-trailingBreak,
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) .terminal-inline-atom-caret-anchor + img.ProseMirror-separator + br.ProseMirror-trailingBreak {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) .terminal-inline-atom-caret-anchor + br.ProseMirror-trailingBreak:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) .terminal-inline-atom-caret-anchor + img.ProseMirror-separator + br.ProseMirror-trailingBreak:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: none;
 }
 
 /* Composer slash atoms use the same terminal caret decoration as note and
  * file-reference atoms. The composer is excluded from the document-editor
  * rule above, so keep the anchor visible here as an inline landing point. */
-.markdown-editor .agent-composer__input-content .terminal-inline-atom-caret-anchor {
+.markdown-editor .agent-composer__input-content .terminal-inline-atom-caret-anchor:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: inline;
 }
 
-.markdown-editor .agent-composer__input-content .terminal-inline-atom-caret-anchor + br.ProseMirror-trailingBreak,
-.markdown-editor .agent-composer__input-content .terminal-inline-atom-caret-anchor + img.ProseMirror-separator + br.ProseMirror-trailingBreak {
+.markdown-editor .agent-composer__input-content .terminal-inline-atom-caret-anchor + br.ProseMirror-trailingBreak:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .agent-composer__input-content .terminal-inline-atom-caret-anchor + img.ProseMirror-separator + br.ProseMirror-trailingBreak:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: none;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) strong:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) strong:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   font-weight: 700;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) em:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) em:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   font-style: italic;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) p:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) code {
+.markdown-editor .tiptap:not(.agent-composer__input-content) code:not(pre code):where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
+  /* Preserve normal word boundaries, but allow long paths and identifiers to wrap. */
+  white-space: inherit;
+  overflow-wrap: anywhere;
+}
+
+.markdown-editor .tiptap:not(.agent-composer__input-content) p:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) code:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   border: 1px solid var(--border);
   border-radius: 0.4rem;
   padding: 0rem 0.3rem;
@@ -582,7 +661,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
  * boundary is message-level so the nested composer remains an editor. */
 .markdown-editor
   .tiptap:not(.agent-composer__input-content)
-  pre:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):not(.agent-thread-card__message-code-block) {
+  pre:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):not(.agent-thread-card__message-code-block) {
   background: var(--editor-block-bg);
   border: 1px solid var(--border);
   border-radius: 0.5rem;
@@ -599,14 +678,14 @@ html[data-platform="mac"] .markdown-editor .editor-content {
 
 .markdown-editor
   .tiptap:not(.agent-composer__input-content)
-  pre:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):not(.agent-thread-card__message-code-block)
-  code {
+  pre:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):not(.agent-thread-card__message-code-block)
+  code:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   padding: 0;
   font-family: inherit;
 }
 
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) blockquote:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) blockquote:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   border-left: 0.1875rem solid var(--border);
   margin: calc(var(--editor-font-size, 16px) * var(--editor-line-height, 1.8) * 0.2) 0
     calc(var(--editor-font-size, 16px) * var(--editor-line-height, 1.8) * 0.52);
@@ -615,48 +694,48 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   font-style: normal;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) ol:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) ol:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   margin: 0;
   padding-top: 0;
   padding-right: 0;
   padding-left: 1.5rem;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) li:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) li:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   margin: 0;
   padding: 0;
   line-height: var(--editor-line-height, 1.8);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul:where(:not([data-type="taskList"], .agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul:where(:not([data-type="taskList"], .agent-conversation-surface, .agent-conversation-surface *)) {
   padding-left: calc(1.5rem - 2px);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul:where(:not([data-type="taskList"], .agent-thread-card__message, .agent-thread-card__message *)) > li:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul:where(:not([data-type="taskList"], .agent-conversation-surface, .agent-conversation-surface *)) > li:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   padding-left: 2px;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) td p:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) th p:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) td p:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) th p:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   margin-bottom: 0;
   padding-bottom: 0;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) li p:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) li p:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   margin: 0;
   padding-bottom: calc(var(--editor-font-size, 16px) * var(--editor-line-height, 1.8) * 0.25);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   list-style-type: disc;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul ul:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul ul:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   list-style-type: circle;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   background-color: var(--flowix-mark-bg, var(--flowix-default-mark-bg));
   color: var(--flowix-mark-fg, inherit);
   /* 文字色继承 document-foreground, 不另设 token */
@@ -664,83 +743,83 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   padding: 0.1rem 0.2rem;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="red"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="red"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-bg: color-mix(in oklch, var(--flowix-text-red) 20%, transparent);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg]:not([data-flowix-bg]) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg]:not([data-flowix-bg]):where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-bg: transparent;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="orange"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="orange"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-bg: color-mix(in oklch, var(--flowix-text-orange) 20%, transparent);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="yellow"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="yellow"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-bg: color-mix(in oklch, var(--flowix-text-yellow) 20%, transparent);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="green"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="green"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-bg: color-mix(in oklch, var(--flowix-text-green) 20%, transparent);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="cyan"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="cyan"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-bg: color-mix(in oklch, var(--flowix-text-cyan) 20%, transparent);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="blue"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="blue"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-bg: color-mix(in oklch, var(--flowix-text-blue) 20%, transparent);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="purple"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="purple"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-bg: color-mix(in oklch, var(--flowix-text-purple) 20%, transparent);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="pink"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="pink"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-bg: color-mix(in oklch, var(--flowix-text-pink) 20%, transparent);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="gray"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-bg="gray"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-bg: color-mix(in oklch, var(--flowix-text-gray) 20%, transparent);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="red"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="red"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-fg: var(--flowix-text-red);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="orange"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="orange"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-fg: var(--flowix-text-orange);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="yellow"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="yellow"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-fg: var(--flowix-text-yellow);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="green"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="green"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-fg: var(--flowix-text-green);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="cyan"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="cyan"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-fg: var(--flowix-text-cyan);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="blue"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="blue"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-fg: var(--flowix-text-blue);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="purple"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="purple"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-fg: var(--flowix-text-purple);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="pink"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="pink"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-fg: var(--flowix-text-pink);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="gray"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) mark[data-flowix-fg="gray"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   --flowix-mark-fg: var(--flowix-text-gray);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table):where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table):where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   border-collapse: separate;
   border-spacing: 0;
   table-layout: fixed;
@@ -750,8 +829,8 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   border-radius: 8px;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) td:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) th:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) td:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) th:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   border: 1px solid var(--border);
   border-top: none;
   border-left: none;
@@ -762,60 +841,60 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   vertical-align: top;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) th:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) th:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   background: var(--table-header-fill);
   font-weight: 600;
   text-align: left;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr td:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):first-child,
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr th:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):first-child {
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr td:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):first-child,
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr th:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):first-child {
   border-left: 1px solid var(--border);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:first-child td:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:first-child th:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:first-child td:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:first-child th:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   border-top: 1px solid var(--border);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:first-child td:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):first-child,
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:first-child th:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):first-child {
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:first-child td:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):first-child,
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:first-child th:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):first-child {
   border-top-left-radius: 8px;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:first-child td:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):last-child,
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:first-child th:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):last-child {
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:first-child td:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):last-child,
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:first-child th:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):last-child {
   border-top-right-radius: 8px;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:last-child td:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):first-child,
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:last-child th:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):first-child {
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:last-child td:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):first-child,
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:last-child th:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):first-child {
   border-bottom-left-radius: 8px;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:last-child td:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):last-child,
-.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:last-child th:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):last-child {
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:last-child td:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):last-child,
+.markdown-editor .tiptap:not(.agent-composer__input-content) table:not(.multidimensional-table) tr:last-child th:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):last-child {
   border-bottom-right-radius: 8px;
 }
 
 /* ProseMirror adds .ProseMirror-hideselection for invisible selections such as
  * NodeSelection. Keep this override important because the editor-wide ::selection
  * rule below is also important and otherwise paints the browser range again. */
-.markdown-editor .ProseMirror:not(.agent-composer__input-content).ProseMirror-hideselection :where(:not(.agent-thread-card__message, .agent-thread-card__message *))::selection {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content).ProseMirror-hideselection :where(:not(.agent-conversation-surface, .agent-conversation-surface *))::selection {
   background: transparent !important;
   color: inherit !important;
 }
 
-.markdown-editor .ProseMirror:not(.agent-composer__input-content).ProseMirror-hideselection :where(:not(.agent-thread-card__message, .agent-thread-card__message *))::-moz-selection {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content).ProseMirror-hideselection :where(:not(.agent-conversation-surface, .agent-conversation-surface *))::-moz-selection {
   background: transparent !important;
   color: inherit !important;
 }
 
-.markdown-editor .ProseMirror:not(.agent-composer__input-content).ProseMirror-hideselection {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content).ProseMirror-hideselection:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   caret-color: transparent;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .selectedCell::after {
+.markdown-editor .tiptap:not(.agent-composer__input-content) .selectedCell:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::after {
   content: "";
   position: absolute;
   z-index: 2;
@@ -835,7 +914,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
  *    取代原硬编码 #5262DC (hue 240 indigo) 在不同主题下脱节的问题.
  *  - hover: color-mix × white 25% 提亮派生, 与 .tiptap a:hover (white 20%)
  *    同公式一族, 各主题共享同一提亮曲线, 不会有"某主题的 hover 没设计". */
-.markdown-editor .tiptap:not(.agent-composer__input-content) .column-resize-handle {
+.markdown-editor .tiptap:not(.agent-composer__input-content) .column-resize-handle:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   position: absolute;
   right: -3px;
   top: 0;
@@ -847,12 +926,12 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   pointer-events: none;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) table tr > td:last-child .column-resize-handle,
-.markdown-editor .tiptap:not(.agent-composer__input-content) table tr > th:last-child .column-resize-handle {
+.markdown-editor .tiptap:not(.agent-composer__input-content) table tr > td:last-child .column-resize-handle:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) table tr > th:last-child .column-resize-handle:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   right: 0;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .column-resize-handle::before {
+.markdown-editor .tiptap:not(.agent-composer__input-content) .column-resize-handle:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::before {
   content: "";
   position: absolute;
   top: 0;
@@ -865,7 +944,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   transition: background-color 0.12s ease, opacity 0.12s ease;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .column-resize-handle:hover::before {
+.markdown-editor .tiptap:not(.agent-composer__input-content) .column-resize-handle:hover:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::before {
   background: color-mix(in oklch, var(--brand), white 25%);
   opacity: 1;
 }
@@ -873,15 +952,15 @@ html[data-platform="mac"] .markdown-editor .editor-content {
 /* prosemirror-tables 在鼠标进入列边检测区时给 editor 根节点加 `resize-cursor`。
  * 默认 cursor 规则来自 prosemirror-tables/style/tables.css, 但本项目未引入,
  * 故在此声明, 让整个编辑器区域(而非仅 2px handle)在靠近列边时都显示调整光标。 */
-.markdown-editor .tiptap:not(.agent-composer__input-content).resize-cursor,
-.markdown-editor .tiptap:not(.agent-composer__input-content).ProseMirror.resize-cursor {
+.markdown-editor .tiptap:not(.agent-composer__input-content).resize-cursor:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content).ProseMirror.resize-cursor:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   cursor: col-resize;
 }
 
 /* prosemirror-tables 在拖拽期间会给 cell 加 `column-resize-dragging` 装饰类;
  * 故意不样式化 — 列边高亮由 .column-resize-handle widget 自身形成连续线。 */
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .tableWrapper {
+.markdown-editor .tiptap:not(.agent-composer__input-content) .tableWrapper:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   overflow-x: auto;
   overflow-y: visible;
   max-width: 100%;
@@ -892,12 +971,12 @@ html[data-platform="mac"] .markdown-editor .editor-content {
 }
 
 /* relative 定位: 作为 column-resize-handle 的定位上下文 */
-.markdown-editor .tiptap:not(.agent-composer__input-content) table td:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) table th:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) table td:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) table th:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   position: relative;
 }
 
-.markdown-editor .table-edge-insert-button {
+.markdown-editor .table-edge-insert-button:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   position: absolute;
   z-index: 18;
   border: 1px solid var(--border);
@@ -915,20 +994,20 @@ html[data-platform="mac"] .markdown-editor .editor-content {
     color 0.12s ease;
 }
 
-.markdown-editor .table-edge-insert-hover-zone {
+.markdown-editor .table-edge-insert-hover-zone:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   position: absolute;
   z-index: 17;
   background: transparent;
   pointer-events: auto;
 }
 
-.markdown-editor .table-edge-insert-button[hidden],
-.markdown-editor .table-edge-insert-hover-zone[hidden] {
+.markdown-editor .table-edge-insert-button[hidden]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .table-edge-insert-hover-zone[hidden]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: none;
 }
 
-.markdown-editor .table-edge-insert-button::before,
-.markdown-editor .table-edge-insert-button::after {
+.markdown-editor .table-edge-insert-button:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::before,
+.markdown-editor .table-edge-insert-button:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::after {
   content: "";
   position: absolute;
   left: 50%;
@@ -940,31 +1019,31 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   transform: translate(-50%, -50%);
 }
 
-.markdown-editor .table-edge-insert-button::after {
+.markdown-editor .table-edge-insert-button:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::after {
   transform: translate(-50%, -50%) rotate(90deg);
 }
 
-.markdown-editor .table-edge-insert-button:hover {
+.markdown-editor .table-edge-insert-button:hover:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   background: var(--table-header-fill);
   color: var(--foreground, #111827);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul li:where(:not(.agent-thread-card__message, .agent-thread-card__message *))::marker {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul li:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::marker {
   color: var(--brand);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"]:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   list-style: none;
   padding-left: 0;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: flex;
   align-items: flex-start;
   gap: 8px;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) > label {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) > label:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   flex-shrink: 0;
   /* margin-top: 3px 之前用来把 checkbox 视觉下移对齐文字 baseline,
    * 但在 flex 容器里 margin 会进 outer size, 给 <li> 多撑 3px。
@@ -972,7 +1051,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
    * 但 transform 不参与 box model, 不会撑高 <li>。 */
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) > label input[type="checkbox"] {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) > label input[type="checkbox"]:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   width: 16px;
   height: 16px;
   cursor: pointer;
@@ -984,12 +1063,12 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   transform: translateY(3px);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) > label input[type="checkbox"]:checked {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) > label input[type="checkbox"]:checked:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   background-color: transparent;
   border-color: var(--muted-foreground);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) > label input[type="checkbox"]:checked::after {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) > label input[type="checkbox"]:checked:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::after {
   content: '✓';
   position: absolute;
   top: 50%;
@@ -1000,7 +1079,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   font-weight: bold;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) > label input[type="checkbox"]:checked::after {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) > label input[type="checkbox"]:checked:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::after {
   content: '';
   width: 11px;
   height: 9px;
@@ -1012,13 +1091,13 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   mask: var(--flowix-hand-check-mask) center / contain no-repeat;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) > div {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) > div:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   flex: 1;
 }
 
 /* text-decoration 是可继承属性，原本写在 > div 上会经由继承作用到嵌套的
  * 子 todo，所以选择器要限定到本级文本所在的 <p>，避免子级被划线。 */
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-thread-card__message, .agent-thread-card__message *))[data-checked="true"] > div > p {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-conversation-surface, .agent-conversation-surface *))[data-checked="true"] > div > p:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   text-decoration: line-through;
   color: var(--muted-foreground);
 }
@@ -1026,38 +1105,38 @@ html[data-platform="mac"] .markdown-editor .editor-content {
 /* todo 切到已完成态时, 标签底色跟着文本一起走灰, 视觉上"这条 todo 已经
  * 收尾, 标签也一并沉寂"。复用与文本同色的 muted-foreground, 保持和上方 li > p 的
  * color 一致 — 改 li 文字色时这里要同步。 */
-.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-thread-card__message, .agent-thread-card__message *))[data-checked="true"] > div > p .tag-node {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ul[data-type="taskList"] > li:where(:not(.agent-conversation-surface, .agent-conversation-surface *))[data-checked="true"] > div > p .tag-node:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   background: var(--muted-foreground);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ol:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ol:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   list-style-type: decimal;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) ol li:where(:not(.agent-thread-card__message, .agent-thread-card__message *))::marker {
+.markdown-editor .tiptap:not(.agent-composer__input-content) ol li:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::marker {
   color: var(--brand);
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) > img:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) > p > img:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) li > img:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) li > p > img:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) > img:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) > p > img:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) li > img:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) li > p > img:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   border-radius: 8px;
   border: 1px solid var(--border);
   margin-bottom: 0;
   padding-bottom: 1rem;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) > img.error:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) > p > img.error:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) li > img.error:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
-.markdown-editor .tiptap:not(.agent-composer__input-content) li > p > img.error:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) > img.error:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) > p > img.error:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) li > img.error:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .tiptap:not(.agent-composer__input-content) li > p > img.error:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   border: 1px dashed var(--muted-foreground);
   border-radius: 8px;
   opacity: 1 !important;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .editor-link-selection-highlight:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) .editor-link-selection-highlight:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   /* 链接选区高亮: 与 .is-block-selected 同思路, 用 --brand 派生透明底,
    * 在各主题下都能融入品牌色相, 避免硬编码 indigo. */
   background: color-mix(in oklch, var(--brand) 18%, transparent);
@@ -1065,7 +1144,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
 }
 
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) hr:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tiptap:not(.agent-composer__input-content) hr:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   border: none;
   border-top: 0.0625rem solid var(--border);
   margin: 0.4rem 0 0.8rem 0;
@@ -1085,12 +1164,12 @@ html[data-platform="mac"] .markdown-editor .editor-content {
  *     不再加 outline / box-shadow 等外框 — hr 自身就是 1px 边, 高亮
  *     只在线本身, 视觉更克制。
  * 选择器特异性 (0,3,1) 高于全局 .ProseMirror-selectednode (0,1,0)。 */
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) hr.is-block-selected:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) hr.ProseMirror-selectednode:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) hr.is-block-selected:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) hr.ProseMirror-selectednode:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   border-top-color: var(--brand);
 }
 
-.markdown-editor .tag-node:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tag-node:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   /* Tag decorations wrap live editable text. Keep them in the native inline
    * formatting context so WebKit can derive caret and IME geometry from the
    * text run instead of treating it as a flex container. */
@@ -1108,7 +1187,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   box-decoration-break: clone;
 }
 
-.markdown-editor .tag-node-prefix:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
+.markdown-editor .tag-node-prefix:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
 .frontmatter-property__edit-tag-chip .tag-node-prefix {
   /* The text node still contains the real `#`; this one-glyph font maps that
    * character to the property tag icon while keeping it in the native text
@@ -1122,7 +1201,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   caret-color: currentColor;
 }
 
-.markdown-editor .tag-node-content:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
+.markdown-editor .tag-node-content:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
 .frontmatter-property__edit-popover--editor .tag-node-content {
   display: inline;
   /* In-document tags and the editor's portaled property editor follow the
@@ -1134,31 +1213,31 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   display: inline;
 }
 
-.markdown-editor .tag-node:where(:not(.agent-thread-card__message, .agent-thread-card__message *)):hover {
+.markdown-editor .tag-node:where(:not(.agent-conversation-surface, .agent-conversation-surface *)):hover {
   cursor: text;
 }
 
 /* Each editable fragment has a real inline background wrapper. Both wrappers
  * use the editor font metrics, so their backgrounds align even though the
  * inner # retains its icon font. Keep every layer in native inline layout. */
-.markdown-editor .tag-node-prefix-box:where(:not(.agent-thread-card__message, .agent-thread-card__message *)),
-.markdown-editor .tag-node-content-box:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tag-node-prefix-box:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .tag-node-content-box:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   font-family: var(--editor-font-family, var(--font-sans));
   background: var(--document-tag-background);
   padding-block: 0;
 }
 
-.markdown-editor .tag-node-prefix-box:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tag-node-prefix-box:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   padding-inline-end: var(--document-tag-hash-gap, 0.09em);
   border-radius: 8px 0 0 8px;
 }
 
-.markdown-editor .tag-node-content-box:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tag-node-content-box:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   padding-inline-start: 0;
   border-radius: 0 8px 8px 0;
 }
 
-.markdown-editor .tag-node-prefix-box > .tag-node-prefix:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .tag-node-prefix-box > .tag-node-prefix:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   /* Restore the icon's original size inside the scaled tag wrapper. */
   font-size: calc(100% / var(--document-tag-font-scale));
 }
@@ -1175,7 +1254,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   }
 }
 
-.markdown-editor .math-block-node {
+.markdown-editor .math-block-node:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   position: relative;
   margin: 0;
   padding: 0.65rem 0.75rem;
@@ -1187,11 +1266,11 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   transition: background-color 120ms ease, box-shadow 120ms ease;
 }
 
-.markdown-editor .math-block-node.is-active {
+.markdown-editor .math-block-node.is-active:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   background: var(--editor-block-bg);
 }
 
-.markdown-editor .math-block-display {
+.markdown-editor .math-block-display:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   min-height: 2.15rem;
   display: flex;
   align-items: center;
@@ -1201,15 +1280,15 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   color: var(--foreground);
 }
 
-.markdown-editor .math-block-node.is-active .math-block-display {
+.markdown-editor .math-block-node.is-active .math-block-display:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   margin-bottom: 0;
 }
 
-.markdown-editor .math-block-node:not(.is-active) .math-block-editor {
+.markdown-editor .math-block-node:not(.is-active) .math-block-editor:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: none;
 }
 
-.markdown-editor .math-block-editor {
+.markdown-editor .math-block-editor:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   position: absolute;
   left: 50%;
   top: calc(100% + 0.42rem);
@@ -1227,7 +1306,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   transform-origin: top center;
 }
 
-.markdown-editor .math-block-hint {
+.markdown-editor .math-block-hint:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   margin: 0;
   padding-bottom: 0.35rem;
   font-size: 0.72rem;
@@ -1235,7 +1314,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   color: var(--muted-foreground);
 }
 
-.markdown-editor .math-block-input {
+.markdown-editor .math-block-input:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   width: 100%;
   min-height: 4.25rem;
   resize: vertical;
@@ -1251,14 +1330,14 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   padding: 0.42rem 0.5rem;
 }
 
-.markdown-editor .web-card-node {
+.markdown-editor .web-card-node:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   position: relative;
   margin: 0;
   padding: 0 0 0.55rem;
   cursor: text;
 }
 
-.markdown-editor .web-card {
+.markdown-editor .web-card:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1270,36 +1349,36 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   transition: border-color 120ms ease, background-color 120ms ease;
 }
 
-.markdown-editor .web-card-node:not(.has-url) .web-card {
+.markdown-editor .web-card-node:not(.has-url) .web-card:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   border-style: dashed;
   background: transparent;
 }
 
-.markdown-editor .web-card-node:not(.has-url) .web-card::before {
+.markdown-editor .web-card-node:not(.has-url) .web-card:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::before {
   content: "点击输入网址";
   color: var(--muted-foreground);
   font-size: 0.84rem;
   opacity: 0.72;
 }
 
-.markdown-editor .web-card-node.has-url .web-card {
+.markdown-editor .web-card-node.has-url .web-card:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   align-items: stretch;
   justify-content: flex-start;
   border-style: solid;
 }
 
-.markdown-editor .web-card-node.is-active .web-card {
+.markdown-editor .web-card-node.is-active .web-card:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   border-color: var(--border);
   background: var(--editor-block-bg);
 }
 
-.markdown-editor .web-card-content {
+.markdown-editor .web-card-content:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   min-width: 0;
   flex: 1;
   padding: 0.78rem 0.9rem;
 }
 
-.markdown-editor .web-card-title {
+.markdown-editor .web-card-title:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   overflow: hidden;
   color: var(--foreground);
   font-size: 0.94rem;
@@ -1309,7 +1388,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   white-space: nowrap;
 }
 
-.markdown-editor .web-card-description {
+.markdown-editor .web-card-description:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: -webkit-box;
   margin-top: 0.32rem;
   overflow: hidden;
@@ -1320,7 +1399,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   -webkit-line-clamp: 2;
 }
 
-.markdown-editor .web-card-link {
+.markdown-editor .web-card-link:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   margin-top: 0.48rem;
   overflow: hidden;
   color: color-mix(in oklch, var(--brand) 72%, var(--muted-foreground));
@@ -1330,25 +1409,25 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   white-space: nowrap;
 }
 
-.markdown-editor .web-card-preview {
+.markdown-editor .web-card-preview:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   width: 8.5rem;
   flex: 0 0 8.5rem;
   border-left: 1px solid var(--border);
   background: var(--muted);
 }
 
-.markdown-editor .web-card-preview img {
+.markdown-editor .web-card-preview img:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.markdown-editor .web-card-node:not(.is-active) .web-card-editor {
+.markdown-editor .web-card-node:not(.is-active) .web-card-editor:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: none;
 }
 
-.markdown-editor .web-card-editor {
+.markdown-editor .web-card-editor:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   position: absolute;
   left: 50%;
   top: calc(100% + 0.42rem);
@@ -1369,7 +1448,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   transform-origin: top center;
 }
 
-.markdown-editor .web-card-input {
+.markdown-editor .web-card-input:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   min-width: 0;
   flex: 1;
   border: 1px solid transparent;
@@ -1382,11 +1461,11 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   padding: 0.24rem 0.3rem;
 }
 
-.markdown-editor .web-card-input::placeholder {
+.markdown-editor .web-card-input:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::placeholder {
   color: var(--muted-foreground);
 }
 
-.markdown-editor .web-card-status {
+.markdown-editor .web-card-status:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   flex: 0 0 auto;
   color: var(--muted-foreground);
   font-size: 0.68rem;
@@ -1394,11 +1473,11 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   opacity: 0.72;
 }
 
-.markdown-editor .web-card-node.is-loading .web-card-status {
+.markdown-editor .web-card-node.is-loading .web-card-status:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   color: color-mix(in oklch, var(--brand) 70%, var(--foreground));
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) p.is-empty:where(:not(.agent-thread-card__message, .agent-thread-card__message *))::before {
+.markdown-editor .tiptap:not(.agent-composer__input-content) p.is-empty:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::before {
   content: attr(data-placeholder);
   color: var(--muted-foreground);
   opacity: 0.6;
@@ -1413,7 +1492,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
  * 它仍被加上 is-empty + data-placeholder, 原规则会一直显示。
  * ProseMirror 在 view.dom 上自动维护 ProseMirror-focused 类, 这里未聚焦
  * 时直接把 ::before 的 content 置 none 即可, 不影响聚焦态。 */
-.markdown-editor .tiptap:not(.agent-composer__input-content):not(.ProseMirror-focused) p.is-empty:where(:not(.agent-thread-card__message, .agent-thread-card__message *))::before {
+.markdown-editor .tiptap:not(.agent-composer__input-content):not(.ProseMirror-focused) p.is-empty:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::before {
   content: none;
 }
 
@@ -1421,7 +1500,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
  * 浮动菜单的 transform / delete 操作作用于哪一段。柔背景 + 圆角 + 左侧
  * 强调色, 视觉上读作"行指示", 不抢文本。
  * transition 只动画会被改动的属性, 避免影响光标闪烁等 ProseMirror 内部更新。 */
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) .is-block-selected {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) .is-block-selected:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   position: relative;
   background-color: color-mix(in oklch, var(--brand) 6%, transparent);
   border-radius: 6px;
@@ -1429,11 +1508,11 @@ html[data-platform="mac"] .markdown-editor .editor-content {
     background-color 120ms ease-out;
 }
 
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) .is-block-selected:hover {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) .is-block-selected:hover:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   background-color: color-mix(in oklch, var(--brand) 10%, transparent);
 }
 
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) .flowix-block-drop-indicator {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) .flowix-block-drop-indicator:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: block;
   height: 1px;
   margin: 0;
@@ -1442,7 +1521,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   pointer-events: none;
 }
 
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) .flowix-block-drag-source {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) .flowix-block-drag-source:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   opacity: 0.3;
 }
 
@@ -1467,8 +1546,8 @@ html[data-platform="mac"] .markdown-editor .editor-content {
   will-change: transform;
 }
 
-.flowix-block-drag-preview > .markdown-editor,
-.flowix-block-drag-preview > .markdown-editor > .ProseMirror {
+.flowix-block-drag-preview > .markdown-editor:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.flowix-block-drag-preview > .markdown-editor > .ProseMirror:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   width: 100%;
   height: auto;
   min-height: 0;
@@ -1479,7 +1558,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
  * atom 节点被 NodeSelection 选中时): 用品牌色 outline 替代 Tiptap 默认
  * 的浅蓝 #8cf, 与 .is-block-selected 左侧描边、::selection 文字底色共
  * 同收口到 var(--brand), 各主题下视觉一致。 */
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) .ProseMirror-selectednode {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) .ProseMirror-selectednode:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   /* outline: 2px solid var(--brand);
   outline-offset: 2px; */
   border-radius: 6px;
@@ -1491,7 +1570,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
 /* 编辑器内文本选区: 比全局 ::selection 更显眼, 配合块高亮读作"这段
  * 文字被选中了"。限定在 .markdown-editor 内, 避免影响侧栏 / 输入
  * 框等非编辑区域的选区色。 */
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) :where(:not(.agent-thread-card__message, .agent-thread-card__message *))::selection {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) :where(:not(.agent-conversation-surface, .agent-conversation-surface *))::selection {
   background: color-mix(in oklch, var(--brand) 26%, transparent) !important;
   color: inherit !important;
 }
@@ -1559,7 +1638,7 @@ html[data-platform="mac"] .markdown-editor .editor-content {
 }
 
 /* 时间戳行: 不可编辑, 随编辑器滚动 */
-.markdown-editor .timestamp-row {
+.markdown-editor .timestamp-row:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   font-size: 0.75rem;
   color: var(--muted-foreground);
   padding: 0.5rem 0;
@@ -1702,13 +1781,13 @@ html[data-platform="mac"] .markdown-editor .editor-content {
 
 
 
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) .search-result:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) .search-result:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   background-color: rgba(255, 213, 79, 0.4);
   border-radius: 2px;
   padding: 0 1px;
 }
 
-.markdown-editor .ProseMirror:not(.agent-composer__input-content) .search-result-current:where(:not(.agent-thread-card__message, .agent-thread-card__message *)) {
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) .search-result-current:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   background-color: rgba(255, 193, 7, 0.6);
   outline: 1px solid rgba(255, 152, 0, 0.8);
 }
@@ -1720,8 +1799,9 @@ html.flowix-block-dragging * {
 }
 
 /* Document-editor inline-atom hover actions. Composer actions use the shared
- * Agent Conversation stylesheet and intentionally do not use these rules. */
-.markdown-editor .tiptap:not(.agent-composer__input-content) .agent-inline-atom__actions {
+ * Agent Conversation stylesheet. Exclude composer atom wrappers directly so
+ * nested/fullscreen composers cannot inherit document button geometry. */
+.markdown-editor .editor-inline-atom:not(.agent-composer__inline-atom-wrapper) .agent-inline-atom__actions:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   position: absolute;
   z-index: 1;
   top: 50%;
@@ -1734,14 +1814,14 @@ html.flowix-block-dragging * {
   transition: opacity 0.12s ease, visibility 0.12s ease;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .editor-inline-atom:hover .agent-inline-atom__actions,
-.markdown-editor .tiptap:not(.agent-composer__input-content) .editor-inline-atom:focus-within .agent-inline-atom__actions,
-.markdown-editor .tiptap:not(.agent-composer__input-content) .editor-inline-atom.is-selected .agent-inline-atom__actions {
+.markdown-editor .editor-inline-atom:not(.agent-composer__inline-atom-wrapper):hover .agent-inline-atom__actions:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .editor-inline-atom:not(.agent-composer__inline-atom-wrapper):focus-within .agent-inline-atom__actions:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .editor-inline-atom:not(.agent-composer__inline-atom-wrapper).is-selected .agent-inline-atom__actions:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   opacity: 1;
   visibility: visible;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .agent-inline-atom__action {
+.markdown-editor .editor-inline-atom:not(.agent-composer__inline-atom-wrapper) .agent-inline-atom__action:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: inline-flex;
   width: 1.35rem;
   height: 1.35rem;
@@ -1755,152 +1835,19 @@ html.flowix-block-dragging * {
   cursor: pointer;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .agent-inline-atom__action:hover,
-.markdown-editor .tiptap:not(.agent-composer__input-content) .agent-inline-atom__action:focus-visible {
+.markdown-editor .editor-inline-atom:not(.agent-composer__inline-atom-wrapper) .agent-inline-atom__action:hover:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
+.markdown-editor .editor-inline-atom:not(.agent-composer__inline-atom-wrapper) .agent-inline-atom__action:focus-visible:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   color: var(--foreground);
   outline: none;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .agent-inline-atom__action > svg {
+.markdown-editor .editor-inline-atom:not(.agent-composer__inline-atom-wrapper) .agent-inline-atom__action > svg:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   width: 0.8rem;
   height: 0.8rem;
 }
 
-/* Image previews are portaled to body so the composer scroll region cannot clip them. */
-.agent-composer__image-preview-popover {
-  position: fixed;
-  z-index: 1000;
-  display: flex;
-  max-width: calc(100vw - 1rem);
-  max-height: calc(100vh - 1rem);
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  padding: 0.5rem;
-  border: 1px solid var(--border-popup, var(--border, #444));
-  border-radius: 0.75rem;
-  background: var(--input-bg, var(--document-bg, #1c1c1c));
-  box-shadow: 0 4px 24px -3px rgb(0 0 0 / 24%);
-  pointer-events: auto;
-}
-
-.agent-composer__image-preview-popover[hidden] {
-  display: none;
-}
-
-.agent-composer__image-preview-popover > img {
-  display: block;
-  width: auto;
-  height: auto;
-  max-width: min(18rem, calc(100vw - 1.7rem));
-  max-height: min(14rem, calc(100vh - 1.7rem));
-  border-radius: 0.4rem;
-  object-fit: contain;
-}
-
-.agent-composer__note-reference-preview {
-  position: fixed;
-  z-index: 1000;
-  display: flex;
-  width: min(18rem, calc(100vw - 1rem));
-  max-height: calc(100vh - 1rem);
-  flex-direction: column;
-  gap: 0.65rem;
-  overflow: hidden;
-  padding: 0.5rem;
-  border: 1px solid var(--border-popup, var(--border, #444));
-  border-radius: 0.75rem;
-  background: var(--input-bg, var(--document-bg, #1c1c1c));
-  box-shadow: 0 4px 24px -3px rgb(0 0 0 / 24%);
-  color: var(--foreground);
-  pointer-events: auto;
-}
-
-.agent-composer__note-reference-preview[hidden],
-.agent-composer__note-reference-preview-image[hidden] {
-  display: none;
-}
-
-.agent-composer__note-reference-preview-image {
-  display: block;
-  width: 100%;
-  max-height: min(10rem, 32vh);
-  border-radius: 0.45rem;
-  object-fit: cover;
-}
-
-.agent-composer__note-reference-preview-body {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.agent-composer__note-reference-preview-title-row {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.agent-composer__note-reference-preview-title {
-  display: -webkit-box;
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--foreground);
-  font-size: 0.875rem;
-  font-weight: 600;
-  line-height: 1.3;
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.agent-composer__note-reference-preview-text {
-  display: -webkit-box;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: 0.78rem;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-}
-
-.agent-composer__note-reference-preview-open {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: 0.2rem;
-  background: transparent;
-  color: var(--brand);
-  font: inherit;
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-
-.agent-composer__note-reference-preview-open:hover:not(:disabled) {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.agent-composer__note-reference-preview-open:focus-visible {
-  outline: 2px solid var(--brand);
-  outline-offset: 2px;
-}
-
-.agent-composer__note-reference-preview-open:disabled {
-  cursor: default;
-  opacity: 0.55;
-}
-
 /* Block boundaries are selection positions, not persisted empty paragraphs. */
-.markdown-editor .editor-block-gap {
+.markdown-editor .editor-block-gap:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: block;
   position: relative;
   height: 0;
@@ -1910,7 +1857,7 @@ html.flowix-block-dragging * {
 
 /* Horizontal I-beam: insertion cue without a hover line or resize arrows.
  * The white outline keeps it visible on light and dark card surfaces. */
-.markdown-editor .editor-block-gap__hit {
+.markdown-editor .editor-block-gap__hit:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   position: absolute;
   z-index: 2;
   inset: -6px 0 auto;
@@ -1918,18 +1865,18 @@ html.flowix-block-dragging * {
   cursor: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%2024%22%3E%3Cpath%20d%3D%22M4%208v8m0-4h16m0-4v8%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%223%22%20stroke-linecap%3D%22round%22%2F%3E%3Cpath%20d%3D%22M4%208v8m0-4h16m0-4v8%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E") 12 12, text;
 }
 
-.markdown-editor .ProseMirror-gapcursor {
+.markdown-editor .ProseMirror-gapcursor:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: none;
   position: relative;
   height: 0;
   pointer-events: none;
 }
 
-.markdown-editor .ProseMirror-focused .ProseMirror-gapcursor {
+.markdown-editor .ProseMirror-focused .ProseMirror-gapcursor:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: block;
 }
 
-.markdown-editor .ProseMirror-gapcursor::after {
+.markdown-editor .ProseMirror-gapcursor:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::after {
   content: '';
   position: absolute;
   /* Visual offset only: focusing a gap must not move document blocks. */
@@ -1945,10 +1892,10 @@ html.flowix-block-dragging * {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .markdown-editor .ProseMirror-gapcursor::after { animation: none; }
+  .markdown-editor .ProseMirror-gapcursor:where(:not(.agent-conversation-surface, .agent-conversation-surface *))::after { animation: none; }
 }
 
 /* A card's nested composer owns focus independently of the outer editor. */
-.markdown-editor .ProseMirror:has(input:focus, textarea:focus, [contenteditable="true"]:focus) > .ProseMirror-gapcursor {
+.markdown-editor .ProseMirror:has(input:focus, textarea:focus, [contenteditable="true"]:focus) > .ProseMirror-gapcursor:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: none;
 }

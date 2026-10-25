@@ -28,6 +28,18 @@ function page(items: AgentConversationInstance[], hasMore = false): AgentConvers
 }
 
 describe('loadRecentAgentConversations', () => {
+  it('skips empty placeholders across pages and preserves untitled message history', async () => {
+    const listPage = vi.fn<(query: AgentConversationListQuery, limit: number) => Promise<AgentConversationListPage>>()
+      .mockResolvedValueOnce(page([
+        { ...conversation('empty', 300), threadTitle: '', hasMessages: false },
+      ], true))
+      .mockResolvedValueOnce(page([
+        { ...conversation('untitled', 200), threadTitle: '', hasMessages: true },
+      ]));
+    expect((await loadRecentAgentConversations('nb-1', listPage)).map((row) => row.instanceId)).toEqual(['untitled']);
+    expect(listPage).toHaveBeenCalledTimes(2);
+  });
+
   it('loads up to the ten newest conversations regardless of date', async () => {
     const listPage = vi.fn<(query: AgentConversationListQuery, limit: number) => Promise<AgentConversationListPage>>()
       .mockResolvedValue(page([

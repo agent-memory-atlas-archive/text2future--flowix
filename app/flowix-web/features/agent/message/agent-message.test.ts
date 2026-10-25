@@ -265,3 +265,34 @@ describe("DeepSeek Harness reconnect error display", () => {
     ).toBe("Token Plan usage limit reached");
   });
 });
+
+describe('ordinary assistant content survives cloud error presentation', () => {
+  it.each([
+    ['assistant-live', '这是一条正常回复'],
+    ['assistant-history', '这是历史对话中的回答\n\n- 第一项\n- 第二项'],
+    ['assistant-stream', '正在生成的部分内容'],
+    ['assistant-code', '```ts\nconst message = "hello";\n```'],
+    ['assistant-auth-explanation', '出现 cloud API error 401 UNAUTHORIZED 时，请检查登录状态'],
+    ['assistant-token-explanation', 'INVALID_REFRESH_TOKEN 表示刷新令牌已失效'],
+    ['assistant-credit-example', '错误码 INSUFFICIENT_CREDITS 表示余额不足'],
+    ['assistant-model-example', '```text\nMODEL_NOT_FOUND\nCLOUD_MODELS_DISABLED\nMODEL_PRICING_NOT_CONFIGURED\n```'],
+    ['assistant-quoted-error', 'cloud API error 401 UNAUTHORIZED: quoted example'],
+  ])('preserves %s verbatim', (id, content) => {
+    expect(getAgentMessageVisibleContent({
+      id, role: 'assistant', content, timestamp: '2026-10-24T00:00:00.000Z',
+    }, 'zh-CN')).toBe(content);
+  });
+});
+
+
+describe('Cloud error rows', () => {
+  it.each([
+    ['error-cloud', 'cloud API error 401 UNAUTHORIZED: expired', '登录已过期，请重新登录'],
+    ['thread-turn-error', 'cloud API error 500 INTERNAL_ERROR: database details', '无法连接云模型，请稍后重试'],
+    ['error-membership', 'cloud API error 403 MEMBERSHIP_REQUIRED: inactive', '此模型需要有效的 Flowix Cloud 会员'],
+  ])('translates %s without exposing technical details', (id, content, expected) => {
+    const visible = getAgentMessageVisibleContent({ id, role: 'assistant', content, errorDetails: { category: 'provider', retryable: false }, timestamp: '2026-10-24T00:00:00.000Z' }, 'zh-CN');
+    expect(visible).toContain(expected);
+    expect(visible).not.toMatch(/cloud API error|database details|UNAUTHORIZED/);
+  });
+});

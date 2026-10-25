@@ -4,7 +4,6 @@ import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 
 import Frontmatter from './frontmatter';
-import { useSettingsStore } from '@/lib/store/settings-store';
 import {
   FrontmatterPropertyError,
   extractFrontmatter,
@@ -1149,7 +1148,7 @@ describe('frontmatter property helpers', () => {
     host.remove();
   });
 
-  it('adds an empty text property in response to the title property action', async () => {
+  it('adds a selected preset in response to the title property action', async () => {
     const host = document.createElement('div');
     document.body.append(host);
     const editor = new Editor({
@@ -1167,122 +1166,18 @@ describe('frontmatter property helpers', () => {
       .map((element) => element.textContent)).toEqual(['flowix_key', '状态']);
 
     window.dispatchEvent(new CustomEvent('flowix:add-property', {
-      detail: { propertyTargetId: 'file:display-frontmatter' },
+      detail: { propertyTargetId: 'file:display-frontmatter', presetKey: 'tags' },
     }));
-    expect([...host.querySelectorAll('.frontmatter-property__key')]
-      .map((element) => element.textContent)).toEqual(['flowix_key', '状态', 'key1']);
-    expect(host.querySelector('[data-property-key="key1"] .frontmatter-property__value-text')?.textContent)
-      .toBe('未设置');
+    expect(host.querySelector('[data-property-key="tags"]')).not.toBeNull();
     expect(parseVisibleFrontmatter(
       String(editor.state.doc.firstChild?.attrs.yamlContent ?? ''),
-    ).userData.key1).toBe('');
+    ).properties.map(({ key }) => key)).toContain('tags');
 
     window.dispatchEvent(new CustomEvent('flowix:add-property', {
       detail: { propertyTargetId: 'file:display-frontmatter' },
     }));
-    expect([...host.querySelectorAll('.frontmatter-property__key')]
-      .map((element) => element.textContent)).toEqual(['flowix_key', '状态', 'key1', 'key2']);
-
-    editor.destroy();
-    host.remove();
-  });
-
-  it('offers the draft row and the action bar when frontmatter has no visible property', async () => {
-    const host = document.createElement('div');
-    document.body.append(host);
-    const editor = new Editor({
-      element: host,
-      extensions: [StarterKit, Markdown, Frontmatter.configure({ propertyTargetId: 'file:display-frontmatter' })],
-      content: '---\n\n---\nBody',
-      contentType: 'markdown',
-    });
-
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
-
-    // This note already owns a frontmatter node, so it takes the node-view
-    // path; the widget path is covered by frontmatter-interactions.test.ts.
-    const nodeView = host.querySelector<HTMLElement>('.frontmatter-property-node')!;
-    expect(nodeView.hasAttribute('data-empty-properties')).toBe(false);
-    const row = host.querySelector<HTMLElement>('.frontmatter-property__empty-row')!;
-    expect(row).not.toBeNull();
-    expect(host.querySelectorAll('.frontmatter-property__actions')).toHaveLength(1);
-    expect(editor.getMarkdown()).not.toContain('key1');
-
-    row.querySelector<HTMLElement>('.frontmatter-property__empty-value')!.click();
-    const valueInput = document.body.querySelector<HTMLTextAreaElement>('.frontmatter-property__edit-input')!;
-    valueInput.value = 'done';
-    valueInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
-    row.querySelector<HTMLElement>('.frontmatter-property__empty-key')!.click();
-    const keyInput = document.body.querySelector<HTMLInputElement>('.frontmatter-property__edit-input')!;
-    keyInput.value = 'status';
-    keyInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-
-    expect(host.querySelector('.frontmatter-property__empty-row')).toBeNull();
-    expect(host.querySelector('[data-property-key="status"]')).not.toBeNull();
-    expect(editor.getMarkdown()).toContain('status: done');
-
-    editor.destroy();
-    host.remove();
-  });
-
-  it('keeps the node-view draft row mounted across visibility toggles', async () => {
-    const previousVisible = useSettingsStore.getState().propertiesVisible;
-    useSettingsStore.setState({ propertiesVisible: true });
-    const host = document.createElement('div');
-    document.body.append(host);
-    const editor = new Editor({
-      element: host,
-      extensions: [StarterKit, Markdown, Frontmatter.configure({ propertyTargetId: 'file:draft-visibility' })],
-      content: '---\n\n---\nBody',
-      contentType: 'markdown',
-    });
-
-    try {
-      await new Promise((resolve) => window.setTimeout(resolve, 0));
-      const row = host.querySelector<HTMLElement>('.frontmatter-property__empty-row')!;
-      const value = row.querySelector<HTMLElement>('.frontmatter-property__empty-value')!;
-      value.click();
-      const input = document.body.querySelector<HTMLTextAreaElement>('.frontmatter-property__edit-input')!;
-      input.value = 'local draft';
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
-
-      useSettingsStore.setState({ propertiesVisible: false });
-      expect(host.querySelector('.frontmatter-property__empty-row')).toBe(row);
-      useSettingsStore.setState({ propertiesVisible: true });
-
-      expect(host.querySelector('.frontmatter-property__empty-row')).toBe(row);
-      expect(value.textContent).toBe('local draft');
-      expect(editor.getMarkdown()).not.toContain('local draft');
-    } finally {
-      editor.destroy();
-      host.remove();
-      useSettingsStore.setState({ propertiesVisible: previousVisible });
-    }
-  });
-
-  it('falls back to the draft row after the last property is deleted', async () => {
-    const host = document.createElement('div');
-    document.body.append(host);
-    const editor = new Editor({
-      element: host,
-      extensions: [StarterKit, Markdown, Frontmatter.configure({ propertyTargetId: 'file:last-property' })],
-      content: '---\nstatus: done\n---\nBody',
-      contentType: 'markdown',
-    });
-
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
-
-    host.querySelector<HTMLElement>('[data-property-key="status"] .frontmatter-property__type-icon')!.click();
-    const items = document.body.querySelectorAll<HTMLButtonElement>(
-      '.frontmatter-property__item-menu [role="menuitem"]',
-    );
-    items[2].click();
-    await new Promise((resolve) => window.setTimeout(resolve, 0));
-
-    expect(host.querySelector('[data-property-key="status"]')).toBeNull();
-    expect(host.querySelectorAll('.frontmatter-property__display')).toHaveLength(1);
-    expect(host.querySelector('.frontmatter-property__empty-row')).not.toBeNull();
-    expect(host.querySelectorAll('.frontmatter-property__actions')).toHaveLength(1);
+    expect(host.querySelector('[data-property-key="key1"]')).toBeNull();
+    expect(host.querySelectorAll('.frontmatter-property__display')).toHaveLength(3);
 
     editor.destroy();
     host.remove();
@@ -1299,13 +1194,14 @@ describe('frontmatter property helpers', () => {
     });
 
     window.dispatchEvent(new CustomEvent('flowix:add-property', {
-      detail: { propertyTargetId: 'file:empty-document' },
+      detail: { propertyTargetId: 'file:empty-document', presetKey: 'tags' },
     }));
 
     expect(editor.state.doc.firstChild?.type.name).toBe('frontmatter');
-    expect(editor.state.doc.firstChild?.attrs.yamlContent).toBe('key1: ""');
-    expect(parseVisibleFrontmatter(String(editor.state.doc.firstChild?.attrs.yamlContent ?? '')).userData.key1).toBe('');
-    expect(host.querySelector('[data-property-key="key1"]')).not.toBeNull();
+    expect(parseVisibleFrontmatter(
+      String(editor.state.doc.firstChild?.attrs.yamlContent ?? ''),
+    ).properties.map(({ key }) => key)).toContain('tags');
+    expect(host.querySelector('[data-property-key="tags"]')).not.toBeNull();
 
     editor.destroy();
     host.remove();

@@ -1,0 +1,15 @@
+/* Shared overlay defaults. Keep relative ordering and existing visuals stable. */
+:root {
+  --layer-document-notice: 100;
+  --layer-dialog: 130;
+  --layer-popover: 150;
+  --layer-notice: 2147483647;
+
+  --floating-motion-standard: 400ms;
+  --floating-motion-fast: 200ms;
+
+  --floating-shadow-toast: 0 16px 40px rgba(15,18,25,0.22), 0 3px 10px rgba(15,18,25,0.18);
+  /* Document notices keep the toast geometry at half opacity. */
+  --floating-shadow-document: 0 16px 40px rgba(15,18,25,0.11), 0 3px 10px rgba(15,18,25,0.09);
+  --floating-shadow-actionable: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+}

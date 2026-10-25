@@ -10,7 +10,8 @@ describe('media library collection rename', () => {
   beforeEach(() => { vi.resetAllMocks(); vi.mocked(collectionNotebookId).mockResolvedValue('book'); });
   it('uses the stable collection identity and returns the committed content', async () => {
     const document = createMediaLibrary('Old');
-    const renamed = { ...document, collection: { ...document.collection, name: 'New', revision: 1 } };
+    // 集合的 name 不再存进文档（由集合路径派生），所以期望值里也没有它。
+    const renamed = { ...document, collection: { ...document.collection, revision: 1 } };
     const content = serializeMediaLibrary(renamed);
     vi.mocked(mutateCollectionFile).mockResolvedValue({ operationId: 'op', status: 'completed', collectionId: document.collection.id, actualName: 'New', actualRelativePath: 'New.lib.yaml', previousRelativePath: 'Old.lib.yaml', notebookPath: '/book', directoryMove: null, actualRevision: 1, indexSequence: 4, filePath: '/book/New.lib.yaml', content, errorCode: null });
     const onRenamed = vi.fn();

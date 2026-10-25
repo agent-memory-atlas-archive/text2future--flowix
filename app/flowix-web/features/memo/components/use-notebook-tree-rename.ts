@@ -5,7 +5,7 @@ import { useI18n } from '@/lib/i18n';
 import { toast } from '@/lib/toast';
 import { ensureFileDisplayIdentity } from '@/lib/file-display-registry';
 import { updateNoteLinksAfterMove } from '@features/memo/services/note-link-rewriter';
-import { replaceExternalDocumentPath } from '@features/workspace/use-cases/workspace-navigation';
+import { replaceExternalDocumentPath } from '@features/workspace/public/note-navigation-api';
 import { renameMarkdownTitle } from '@features/document/public/file-operations-api';
 import { renameWorkspaceFile } from '@features/workspace/public/shell-api';
 import { resourceKindFromPath } from '@features/editor/code-file';

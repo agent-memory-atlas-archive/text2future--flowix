@@ -378,7 +378,12 @@ export function useOverlayScrollbar() {
       event.preventDefault();
       markUserScrollIntent();
       scroller.scrollTop += event.deltaY;
-      scroller.scrollLeft += event.deltaX;
+      // `hidden` still permits programmatic scrolling; respect the surface's
+      // horizontal overflow policy when forwarding wheel events from its chrome.
+      const overflowX = scroller.ownerDocument.defaultView?.getComputedStyle(scroller).overflowX;
+      if (overflowX !== 'hidden' && overflowX !== 'clip') {
+        scroller.scrollLeft += event.deltaX;
+      }
       scheduleOverlayScrollbar(scroller);
     };
 

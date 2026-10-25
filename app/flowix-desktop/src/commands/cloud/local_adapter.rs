@@ -51,6 +51,7 @@ mod conflict_file_tests {
                 content_hash: v2_content_hash(&bytes),
                 size_bytes: bytes.len() as i64,
                 mime_type: "image/png".into(),
+                blob_id: None,
             },
             content: bytes,
         };

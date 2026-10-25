@@ -15,7 +15,7 @@ import type {
 } from './types';
 import type { WorkColumnTarget } from '@features/workspace/store/work-column-target';
 import { requireFileDisplayIdentity } from '@/lib/file-display-registry';
-import { resetCurrentCollectionView } from '@features/workspace/use-cases/workspace-navigation';
+import { resetCurrentCollectionView } from '@features/workspace/public/collection-navigation-api';
 import { toast } from '@/lib/toast';
 
 function assertNever(value: never): never {

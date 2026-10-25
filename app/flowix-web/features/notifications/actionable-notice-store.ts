@@ -26,7 +26,12 @@ export interface ActionableNotice {
   actionError?: string | null;
 }
 
-type NoticeEntry = ActionableNotice & { dismissed?: boolean; dismissedRevision?: string | number };
+type NoticeEntry = ActionableNotice & {
+  dismissed?: boolean;
+  dismissedRevision?: string | number;
+  // Retained across presentation updates; invalidated by a new revision or removal.
+  actionRun?: symbol;
+};
 
 const listeners = new Set<() => void>();
 const entries = new Map<string, NoticeEntry>();
@@ -56,6 +61,7 @@ export function upsertActionableNotice(notice: ActionableNotice) {
     ...notice,
     busyActionId: changedRevision ? null : (previous?.busyActionId ?? notice.busyActionId ?? null),
     actionError: changedRevision ? null : (previous?.actionError ?? notice.actionError ?? null),
+    actionRun: changedRevision ? undefined : previous?.actionRun,
     dismissed: changedRevision ? false : previous?.dismissed,
     dismissedRevision: changedRevision ? undefined : previous?.dismissedRevision,
   });
@@ -80,6 +86,8 @@ export async function runActionableNoticeAction(noticeId: string, actionId: stri
   const entry = entries.get(noticeId);
   const action = entry?.actions.find((candidate) => candidate.id === actionId);
   if (!entry || !action || entry.busyActionId) return;
+  const actionRun = Symbol();
+  entry.actionRun = actionRun;
   entry.busyActionId = actionId;
   entry.actionError = null;
   publish();
@@ -87,10 +95,15 @@ export async function runActionableNoticeAction(noticeId: string, actionId: stri
     await action.run();
   } catch (error) {
     const current = entries.get(noticeId);
-    if (current) current.actionError = error instanceof Error ? error.message : String(error);
+    if (current?.actionRun === actionRun) {
+      current.actionError = error instanceof Error ? error.message : String(error);
+    }
   } finally {
     const current = entries.get(noticeId);
-    if (current?.busyActionId === actionId) current.busyActionId = null;
-    publish();
+    if (current?.actionRun === actionRun) {
+      current.busyActionId = null;
+      current.actionRun = undefined;
+      publish();
+    }
   }
 }

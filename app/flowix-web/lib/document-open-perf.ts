@@ -1,3 +1,5 @@
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('lib/document-open-perf');
 /** Observation-only timing trace for one document-open transaction. */
 
 interface OpenDocumentTrace {
@@ -23,7 +25,7 @@ function writeTrace(
   meta?: Record<string, unknown>,
 ): void {
   const timestamp = now();
-  console.info('[perf:open-doc-trace]', {
+  logger.info('[perf:open-doc-trace]', {
     transitionId,
     phase,
     elapsedMs: round(timestamp - trace.startedAt),

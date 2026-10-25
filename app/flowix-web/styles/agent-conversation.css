@@ -1,0 +1,12 @@
+/* Shared Agent styling: root contract, card layout, messages and composer. */
+@import './agent-conversation/surface.css';
+@import './agent-thread-card/chrome.css';
+@import './agent-thread-card/controls.css';
+@import './agent-thread-card/messages.css';
+@import './agent-thread-card/markdown.css';
+@import './agent-thread-card/pi-model-picker.css';
+@import './agent-thread-card/background-terminals.css';
+@import './agent-thread-card/note-picker.css';
+@import './agent-conversation/titlebar.css';
+@import './agent-conversation/composer.css';
+@import './agent-thread-card/editor-host.css';

@@ -258,4 +258,4 @@ export const TOAST_DURATION_MS = 1600;
 
 /** Toast 阴影 (用于内联 box-shadow) */
 export const TOAST_SHADOW =
-  '0 16px 40px rgba(15,18,25,0.22), 0 3px 10px rgba(15,18,25,0.18)';
+  'var(--floating-shadow-toast)';

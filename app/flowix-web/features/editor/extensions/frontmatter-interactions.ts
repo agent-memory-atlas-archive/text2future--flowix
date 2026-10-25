@@ -1,12 +1,7 @@
-import { refreshEmptyPropertyRow } from './frontmatter-empty-row';
-
 /** Keep controls and pointer targets intact when workspace ownership changes. */
 export function syncFrontmatterEditability(root: HTMLElement, editable: boolean) {
-  root.querySelectorAll<HTMLElement>('.frontmatter-property__empty-row').forEach(refreshEmptyPropertyRow);
   root.querySelectorAll<HTMLElement>(
-    // The draft row keeps a static type icon: it has no saved position or
-    // delete target, so it must not advertise itself as a menu button.
-    '.frontmatter-property__display:not(.frontmatter-property__empty-row) .frontmatter-property__type-icon,'
+    '.frontmatter-property__display .frontmatter-property__type-icon,'
     + ' .frontmatter-property__display-key,'
     + ' .frontmatter-property__display-value:not([data-property-type="Image"])',
   ).forEach((control) => {

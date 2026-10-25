@@ -1,3 +1,4 @@
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
 import { resolveDatasetFilterForLocation } from '@features/collection/dataset-filter-location';
 import { reuseCollectionValue } from '@features/collection/content-equality';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -155,6 +156,7 @@ function MediaLibraryDatasetPopover({ document, notebook, filePath, editable, bu
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const { t } = useI18n();
   const condition = document ? mediaLibraryFileCondition(document) : {};
   const fixedFolderPath = document?.collection.placement === 'folder' && notebook && filePath
     ? notebookRelativeDirectoryPath(notebook.path, canonicalDirectoryPath(filePath.replace(/[\\/][^\\/]*$/, ''))) ?? ''
@@ -232,7 +234,7 @@ function MediaLibraryDatasetPopover({ document, notebook, filePath, editable, bu
         throw new Error(result.status === 'error' ? result.message : '无法保存数据集条件');
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '无法保存数据集条件');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableViewSave'));
       return false;
     } finally {
       setSaving(false);
@@ -453,7 +455,7 @@ function MediaLibraryReferenceSurface({ attrs, currentNotebookId, editable, onRe
       setResources(merged.slice(0, EMBED_RESOURCE_LIMIT));
       setHasMore(merged.length > EMBED_RESOURCE_LIMIT || hasMoreMatches);
     })().catch((reason) => {
-      if (active) setError(reason instanceof Error ? reason.message : String(reason));
+      if (active) setError(friendlyErrorMessage(reason, t, 'errors.friendly.mediaLoad'));
     }).finally(() => { if (active) setLoadingResources(false); });
     return () => { active = false; };
   }, [document?.dataset.filter, document?.dataset.source.depth, document?.dataset.source.path, document?.dataset.source.scope, external, filePath, fileType, hasDatasetCondition, hasDocument, mediaLibraryRecords, nearViewport, notebook?.id, notebook?.path, resourceRevision]);
@@ -468,7 +470,7 @@ function MediaLibraryReferenceSurface({ attrs, currentNotebookId, editable, onRe
         target: { kind: 'collection-reference', notebookId: notebook.id, collectionId: attrs.collectionId, collectionKind: 'media_library' },
       });
     } catch (reason) {
-      toast.error(reason instanceof Error ? reason.message : '无法打开媒体库');
+      toast.error(friendlyErrorMessage(reason, t, 'errors.friendly.mediaLoad'));
     }
   }, [attrs.collectionId, attrs.relativePath, filePath, notebook, onRelativePathChange]);
   const addMedia = useCallback(async () => {
@@ -535,7 +537,7 @@ function MediaLibraryReferenceSurface({ attrs, currentNotebookId, editable, onRe
       if (result.failed) toast.error(t('mediaLibrary.addMediaImportFailed', { count: result.failed }));
       if (result.completed.length) toast.success(t('mediaLibrary.addMediaSuccess', { count: result.completed.length }));
     } catch (reason) {
-      toast.error(reason instanceof Error ? reason.message : t('mediaLibrary.addMediaFailed'));
+      toast.error(friendlyErrorMessage(reason, t, 'errors.friendly.mediaAdd'));
     } finally {
       addMediaInFlightRef.current = false;
       setAddingMedia(false);
@@ -577,9 +579,9 @@ function MediaLibraryReferenceSurface({ attrs, currentNotebookId, editable, onRe
         views: reuseCollectionValue(current.views, result.document.views),
         dataset: { ...result.document.dataset, records: reuseCollectionValue(current.dataset.records, result.document.dataset.records) },
       } : result.document);
-      if (result.errorCode) toast.error(`集合已更新，后续操作待恢复：${result.errorCode}`);
+      if (result.errorCode) { console.warn('Collection follow-up failed', result.errorCode); toast.error(t('errors.friendly.collectionPartial')); };
     } catch (reason) {
-      toast.error(reason instanceof Error ? reason.message : '重命名媒体库失败');
+      toast.error(friendlyErrorMessage(reason, t, 'errors.friendly.mediaRename'));
     } finally {
       setRenaming(false);
       setEditingName(false);
@@ -645,7 +647,7 @@ function MediaLibraryReferenceSurface({ attrs, currentNotebookId, editable, onRe
       : external
         ? <div className="py-8 text-center text-sm text-[var(--muted-foreground)]">{t('collection.notInCurrentNotebook')}</div>
       : !notebook || reference.error
-        ? <div className="py-8 text-center text-sm text-[var(--muted-foreground)]">{reference.error ?? '找不到媒体库所属的笔记本'}</div>
+        ? <div className="py-8 text-center text-sm text-[var(--muted-foreground)]">{reference.error ? t('errors.friendly.mediaLoad') : '找不到媒体库所属的笔记本'}</div>
         : !nearViewport || loadingLibrary || loadingResources
           ? <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{Array.from({ length: 6 }, (_, index) => <div key={index} className="aspect-video animate-pulse rounded-md bg-[var(--muted)]" />)}</div>
           : error

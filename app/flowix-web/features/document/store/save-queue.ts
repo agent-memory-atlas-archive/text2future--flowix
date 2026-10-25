@@ -1,6 +1,8 @@
 import { enqueueDocumentCommit, waitForDocumentCommits } from './document-commit-queue';
 import { canonicalPath } from '@/lib/path';
 import { findFileDisplayPath } from '@/lib/file-display-registry';
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('document:save-queue');
 /** Body persistence adapter for the shared per-document title/body coordinator.
  * The buffer owns revisions and CAS baselines; this module owns IPC receipts.
  */
@@ -101,7 +103,7 @@ async function runOne(ctx: SaveContext, content: string): Promise<string | null>
     ctx.onError(content, ctx.revision, new Error(message));
     return null;
   } catch (err) {
-    console.error('[runOne] IPC threw', { path: ctx.path, err });
+    logger.error('IPC threw', { path: ctx.path, err });
     ctx.onError(content, ctx.revision, err);
     return null;
   }

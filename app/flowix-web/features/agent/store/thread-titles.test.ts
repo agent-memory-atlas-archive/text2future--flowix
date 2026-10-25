@@ -83,9 +83,9 @@ describe("thread-titles helpers", () => {
     ).toBe("检查可选清理");
     // 折叠换行 / 多空白为单空格。
     expect(deriveThreadTitleFromPrompt("hello\n\n  world")).toBe("hello world");
-    // 截断到 28 字符。
-    const long = "a".repeat(50);
-    expect(deriveThreadTitleFromPrompt(long)).toBe("a".repeat(28));
+    // 上限是 DERIVED_TITLE_MAX_CHARS = 100：超出才截断，未超出原样保留。
+    expect(deriveThreadTitleFromPrompt("a".repeat(150))).toBe("a".repeat(100));
+    expect(deriveThreadTitleFromPrompt("a".repeat(50))).toBe("a".repeat(50));
     // 空内容回退 fallback (默认空串)。
     expect(deriveThreadTitleFromPrompt("")).toBe("");
     expect(deriveThreadTitleFromPrompt("   ")).toBe("");

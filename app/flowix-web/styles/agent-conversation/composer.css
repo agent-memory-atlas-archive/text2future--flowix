@@ -15,11 +15,15 @@
   align-items: center;
   gap: 5px;
   align-self: end;
-  width: calc(100% - 24px);
+  /* Width must match the horizontal margin below (0.8rem each side = 1.6rem).
+   * The old `calc(100% - 24px)` left 24px of space for a 25.6px margin pair, so
+   * the capsule overflowed its track by 1.6px and was clipped on the right:
+   * measured 13.8px left gap vs 10.2px right gap in the inline card. */
+  width: calc(100% - 1.6rem);
   /* Allow the composer to shrink within its grid track, even when the input
    * contains a long unbroken string. */
   min-width: 0;
-  max-width: calc(100% - 24px);
+  max-width: calc(100% - 1.6rem);
   margin: 0 0.8rem 0.6rem;
   padding: 0 0.4rem 0 0.8rem;
   border: 1px solid var(--border);
@@ -36,6 +40,48 @@
    * 用 :where() 选非交互后代让优先级保持在 0, 不压过下面的 button /
    * image-remove 等子选择器 ── 按钮仍是 pointer 光标。 */
   cursor: text;
+}
+
+.agent-conversation-surface .agent-composer__scroll-to-latest {
+  position: absolute;
+  z-index: 5;
+  top: -2.5rem;
+  inset-inline-end: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  color: var(--muted-foreground);
+  background: var(--input-bg, var(--document-bg));
+  box-shadow: 0 2px 10px rgb(0 0 0 / 9%);
+  cursor: pointer;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.agent-conversation-surface .agent-composer__scroll-to-latest:hover,
+.agent-conversation-surface .agent-composer__scroll-to-latest:focus-visible {
+  color: var(--foreground);
+  background: var(--muted);
+  box-shadow: 0 3px 12px rgb(0 0 0 / 14%);
+}
+
+.agent-conversation-surface .agent-composer__scroll-to-latest[hidden] {
+  display: none;
+}
+
+.agent-composer__scroll-to-latest-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: currentColor;
 }
 
 /* Compact composer keeps its existing single-line outer height. */
@@ -59,8 +105,8 @@
 }
 
 .agent-conversation-surface .agent-composer--expanded {
-  width: calc(100% - 3rem);
-  max-width: 780px;
+  width: calc(100% - 2 * var(--agent-content-inline-inset));
+  max-width: var(--agent-content-max-width);
   margin: 0 auto 0.6rem;
   /* 全屏态: 宽度 / margin 与基线不同; 背景由基线 var(--document-bg) 提供,
    * 不再覆盖, 全屏 / 非全屏视觉一致。 */
@@ -72,10 +118,14 @@
 
 /* As compact input grows, keep side actions vertically centered.
  * 仍应相对整个 composer 上下居中；底部对齐只保留给 expanded composer
- * 的独立操作行布局。 */
+ * 的独立操作行布局。
+ *
+ * `--multi-line` 挂在 .agent-composer 自身 (composer-controller.ts), 不是
+ * 后代 ── 修饰类必须与 :not() 写在同一复合选择器上。旧写法
+ * `.agent-composer:not(...) .agent-composer--multi-line` 是后代选择器,
+ * 永远不会命中, 紧凑态多行时会被上一条 flex-end 拽到底部。 */
 .agent-conversation-surface
-  .agent-composer:not(.agent-composer--expanded)
-  .agent-composer--multi-line {
+  .agent-composer--multi-line:not(.agent-composer--expanded) {
   align-items: center;
 }
 
@@ -836,6 +886,22 @@
 @keyframes agent-composer-caret-blink {
   0%, 52% { opacity: 1; }
   53%, 100% { opacity: 0; }
+}
+
+/* Reduced motion keeps the caret, but stops the blink.
+ *
+ * The caret is drawn by the composer (not the native one) because the native
+ * caret in an embedded contenteditable jumps between layout passes, so this is
+ * the only caret the user sees while typing. It must never disappear under
+ * reduced motion — a solid bar is the standard treatment (VS Code, CodeMirror).
+ * Without this block composer.css was the only Agent stylesheet that ignored
+ * prefers-reduced-motion while the badge, skeleton, fork and update animations
+ * all honoured it. */
+@media (prefers-reduced-motion: reduce) {
+  .agent-composer__stable-caret {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 /* ── Shared composer card surface ───────────────────────────────────────── */
@@ -1620,9 +1686,6 @@
 .agent-composer__note-search:focus::placeholder {
   opacity: 0.6;
 }
-.flowix-notebook-selector-search:focus::placeholder {
-  opacity: 0.85;
-}
 
 /* 列表容器 — 仅承担垂直 padding, 不画外框; 水平方向不加 padding,
  * 让 item 自身的 6px 8px padding 与菜单项对齐。容器自身
@@ -1733,4 +1796,148 @@
   .agent-composer__send.agent-composer__send--stop:hover:not(:disabled) {
   background: var(--warning);
   filter: brightness(1.08);
+}
+
+/* ── Body-portaled composer popovers ────────────────────────────────
+ * These panels are appended to document.body (composer-attachment-preview.ts,
+ * note reference hover preview) so the composer's scroll region cannot clip
+ * them. They are therefore NOT scoped under .agent-conversation-surface:
+ * a fixed-position element portaled to body has no surface ancestor. They
+ * still belong to Agent UI, so they live here rather than in editor.css —
+ * the Agent stylesheet entry must be able to render Agent UI on its own.
+ * Consequence to respect in future edits: these selectors may only use
+ * theme tokens (var(--border), var(--input-bg)…), never surface-scoped
+ * custom properties such as --agent-content-max-width.
+ */
+/* Image previews are portaled to body so the composer scroll region cannot clip them. */
+.agent-composer__image-preview-popover {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  max-width: calc(100vw - 1rem);
+  max-height: calc(100vh - 1rem);
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 0.5rem;
+  border: 1px solid var(--border-popup, var(--border, #444));
+  border-radius: 0.75rem;
+  background: var(--input-bg, var(--document-bg, #1c1c1c));
+  box-shadow: 0 4px 24px -3px rgb(0 0 0 / 24%);
+  pointer-events: auto;
+}
+
+.agent-composer__image-preview-popover[hidden] {
+  display: none;
+}
+
+.agent-composer__image-preview-popover > img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(18rem, calc(100vw - 1.7rem));
+  max-height: min(14rem, calc(100vh - 1.7rem));
+  border-radius: 0.4rem;
+  object-fit: contain;
+}
+
+.agent-composer__note-reference-preview {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  width: min(18rem, calc(100vw - 1rem));
+  max-height: calc(100vh - 1rem);
+  flex-direction: column;
+  gap: 0.65rem;
+  overflow: hidden;
+  padding: 0.5rem;
+  border: 1px solid var(--border-popup, var(--border, #444));
+  border-radius: 0.75rem;
+  background: var(--input-bg, var(--document-bg, #1c1c1c));
+  box-shadow: 0 4px 24px -3px rgb(0 0 0 / 24%);
+  color: var(--foreground);
+  pointer-events: auto;
+}
+
+.agent-composer__note-reference-preview[hidden],
+.agent-composer__note-reference-preview-image[hidden] {
+  display: none;
+}
+
+.agent-composer__note-reference-preview-image {
+  display: block;
+  width: 100%;
+  max-height: min(10rem, 32vh);
+  border-radius: 0.45rem;
+  object-fit: cover;
+}
+
+.agent-composer__note-reference-preview-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.agent-composer__note-reference-preview-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.agent-composer__note-reference-preview-title {
+  display: -webkit-box;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.agent-composer__note-reference-preview-text {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
+.agent-composer__note-reference-preview-open {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0.2rem;
+  background: transparent;
+  color: var(--brand);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.agent-composer__note-reference-preview-open:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.agent-composer__note-reference-preview-open:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.agent-composer__note-reference-preview-open:disabled {
+  cursor: default;
+  opacity: 0.55;
 }

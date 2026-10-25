@@ -36,20 +36,20 @@ export function useNotebookViewActions({ kind, notebookId, notebookPath, itemsBy
   itemsByPath: ReadonlyMap<string, ViewDocument>;
   refresh: () => Promise<void>;
   updateIdentity: (relativePath: string, collectionId: string) => void;
-  onDeleteFile?: (item: DocTreeItem) => Promise<void>;
+  onDeleteFile?: (item: DocTreeItem, options?: { silent?: boolean }) => Promise<boolean | void>;
 }) {
   const { t } = useI18n();
   const messages = MESSAGES[kind];
   const deleteItem = useCallback(async (item: DocTreeItem) => {
     try {
       if (onDeleteFile) {
-        await onDeleteFile(item);
+        if (await onDeleteFile(item) === false) return;
       } else {
         if (!await files.delete(item.fullPath, notebookPath)) {
           toast.error(t('memo.fileTree.deleteFailed'));
           return;
         }
-        toast.success(t('memo.fileTree.deleted', { name: displayTitleFromFilename(item.name) }));
+        toast.success(t('status.deleteCompleted'));
       }
       if (notebookId) await refresh();
     } catch {

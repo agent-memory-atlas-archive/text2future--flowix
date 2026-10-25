@@ -9,7 +9,7 @@ import {
 import { parseAgentLink } from './agent-link-parser';
 
 const navigation = vi.hoisted(() => ({
-  openSurface: vi.fn(async () => ({ status: 'opened' as const, host: 'browser-column' as const, location: { host: 'browser-column' as const, tabId: 'text' } })),
+  openSurface: vi.fn(async () => ({ status: 'opened' as const, host: 'browser-column' as const, location: { host: 'browser-column' as const, surfaceId: 'text' } })),
 }));
 vi.mock('@features/workspace/public/browser-column-api', () => ({
   createFileBrowserTarget: (path: string, scopePath: string) => ({
@@ -149,6 +149,7 @@ describe('shared Agent link click dispatcher', () => {
     expect(event.defaultPrevented).toBe(true);
     expect(navigation.openSurface).toHaveBeenCalledWith({
       host: 'browser-column',
+      source: 'agent-message',
       target: { kind: 'external', path: '/Users/u/a b.md', scopePath: null, transitionId: null },
     });
   });
@@ -157,7 +158,7 @@ describe('shared Agent link click dispatcher', () => {
     const { peekAgentLocationRequest, consumeAgentLocationRequest } = await import(
       '@features/document/use-cases/agent-location-navigation',
     );
-    type OpenResult = { status: 'opened'; host: 'browser-column'; location: { host: 'browser-column'; tabId: string } };
+    type OpenResult = { status: 'opened'; host: 'browser-column'; location: { host: 'browser-column'; surfaceId: string } };
     let resolveFirst!: (value: OpenResult) => void;
     let resolveSecond!: (value: OpenResult) => void;
     navigation.openSurface
@@ -166,9 +167,9 @@ describe('shared Agent link click dispatcher', () => {
 
     const first = openAgentLink('/Users/u/a.md:10', null);
     const second = openAgentLink('/Users/u/a.md:144', null);
-    resolveSecond({ status: 'opened', host: 'browser-column', location: { host: 'browser-column', tabId: 'a' } });
+    resolveSecond({ status: 'opened', host: 'browser-column', location: { host: 'browser-column', surfaceId: 'a' } });
     await second;
-    resolveFirst({ status: 'opened', host: 'browser-column', location: { host: 'browser-column', tabId: 'a' } });
+    resolveFirst({ status: 'opened', host: 'browser-column', location: { host: 'browser-column', surfaceId: 'a' } });
     await first;
 
     const request = peekAgentLocationRequest('/Users/u/a.md');
@@ -185,7 +186,7 @@ describe('shared Agent link click dispatcher', () => {
     expect(openNoteByDeepLink).toHaveBeenCalledWith(
       'flowix://open?b=Notes&f=Projects%2FPlan.md',
       null,
-      { destination: 'browser-column' },
+      { destination: 'browser-column', source: 'agent-message' },
     );
   });
 });

@@ -16,10 +16,19 @@ impl SyncManager {
             .iter()
             .map(|notebook| notebook.notebook_id.as_str())
             .collect();
-        let remote = self
+        let mut remote = self
             .remote_from_bootstrap(access_token, &enabled_ids, &bootstrap)
             .await?;
         let complete = bootstrap.next_page_token.is_none();
+        let (cursor, head_cursor) = if complete {
+            let (changes, cursor, head_cursor) = self
+                .pull_v2_changes(access_token, bootstrap.cursor, &enabled_ids, None, &HashSet::new())
+                .await?;
+            remote.extend(changes);
+            (cursor, head_cursor)
+        } else {
+            (cursor, bootstrap.cursor)
+        };
         let bootstrapped_notebooks = if complete {
             enabled_notebooks
                 .iter()
@@ -32,8 +41,8 @@ impl SyncManager {
         Ok(V2AccountSyncReport {
             auth_generation: Some(generation),
             started_at,
-            cursor: if complete { bootstrap.cursor } else { cursor },
-            head_cursor: bootstrap.cursor,
+            cursor,
+            head_cursor,
             uploaded,
             deleted,
             remote,
@@ -152,20 +161,6 @@ impl SyncManager {
                     read_only: false,
                     deferred_notebooks: Vec::new(),
                 },
-                Err(SyncError::Api {
-                    status: 410, code, ..
-                }) if code == "CURSOR_EXPIRED" => {
-                    self.bootstrap_v2_snapshot(
-                        access_token,
-                        &enabled_notebooks,
-                        cursor,
-                        generation,
-                        started_at,
-                        uploaded,
-                        deleted,
-                    )
-                    .await?
-                }
                 Err(error) => return Err(error),
             }
         };

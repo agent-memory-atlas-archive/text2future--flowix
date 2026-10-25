@@ -1,5 +1,5 @@
 import type { I18nKey } from '@/lib/i18n';
-import { createComposerAddIcon } from '../agent-thread-card-icons';
+import { createArrowDownIcon, createComposerAddIcon } from '../agent-thread-card-icons';
 
 export interface AgentComposerDomFactoryOptions {
   inputDraft?: string;
@@ -17,6 +17,7 @@ export interface AgentComposerDomParts {
   codexSettingsPopover: HTMLDivElement;
   composerRolePopover: HTMLDivElement;
   sendButtonMount: HTMLSpanElement;
+  scrollToLatestButton: HTMLButtonElement;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -138,6 +139,13 @@ export function createAgentComposerDom(
   input.spellcheck = true;
   const sendButtonMount = document.createElement('span');
   sendButtonMount.className = 'agent-composer__send-tooltip';
+  const scrollToLatestButton = document.createElement('button');
+  scrollToLatestButton.type = 'button';
+  scrollToLatestButton.className = 'agent-composer__scroll-to-latest';
+  scrollToLatestButton.setAttribute('aria-label', options.t('editor.threadCard.scrollToLatest'));
+  scrollToLatestButton.title = options.t('editor.threadCard.scrollToLatest');
+  scrollToLatestButton.hidden = true;
+  scrollToLatestButton.append(createArrowDownIcon());
   const composerActions = document.createElement('div');
   composerActions.className = 'agent-composer__actions';
   const codexSettingsPopover = document.createElement('div');
@@ -158,7 +166,7 @@ export function createAgentComposerDom(
   // 左侧, 跟全屏态 grid 布局 `grid-column: 1` 把 actions 显式钉在第一列
   // ── 视觉位置对齐。 send button 仍以 sendButtonMount 收尾, 留在最右。
   inputRow.append(input);
-  composer.append(composerActions, inputRow, sendButtonMount);
+  composer.append(composerActions, inputRow, sendButtonMount, scrollToLatestButton);
   document.body.append(codexSettingsPopover, composerAddPopover, composerRolePopover);
   // 空区域点击聚焦 ── 见上方 COMPOSER_FOCUS_INTERACTIVE_SELECTOR 注释。
   // 优先使用 pointerdown，避免 click 时浏览器先把焦点移到 body；
@@ -176,6 +184,7 @@ export function createAgentComposerDom(
     composerRolePopover,
     composerAddPopover,
     sendButtonMount,
+    scrollToLatestButton,
   };
 }
 

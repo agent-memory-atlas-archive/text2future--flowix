@@ -100,9 +100,13 @@ it('shows membership failures and allows a successful retry', async () => {
   mocks.getState.mockResolvedValue({ ...snapshot(1), authenticated: true, authStatus: 'authenticated' });
   mocks.refreshMembership.mockRejectedValueOnce(new Error('offline'));
   await act(async () => root.render(<Harness />));
+  expect(mocks.refreshMembership).not.toHaveBeenCalled();
+  expect(current.membershipError).toBeNull();
+  let result: string | undefined;
+  await act(async () => { result = await current.refreshMembership(); });
+  expect(result).toBe('failed');
   expect(current.membershipError).toBe('offline');
   expect(current.membershipLoading).toBe(false);
-  let result: string | undefined;
   await act(async () => { result = await current.refreshMembership(); });
   expect(result).toBe('refreshed');
   expect(current.membershipError).toBeNull();
@@ -136,6 +140,7 @@ it('accepts a successful membership refresh from another window after verificati
   mocks.getState.mockResolvedValue({ ...snapshot(1), authenticated: true, authStatus: 'authenticated' });
   mocks.refreshMembership.mockRejectedValueOnce(new Error('offline'));
   await act(async () => root.render(<Harness />));
+  await act(async () => { await current.refreshMembership(); });
   expect(current.membershipError).toBe('offline');
   await act(async () => mocks.receive!({ ...snapshot(2), authenticated: true, authStatus: 'authenticated',
     membershipStatus: 'verified',
@@ -148,6 +153,8 @@ it('ignores a membership failure from a previous session', async () => {
   mocks.getState.mockResolvedValue({ ...snapshot(1), authenticated: true, authStatus: 'authenticated' });
   mocks.refreshMembership.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
   await act(async () => root.render(<Harness />));
+  expect(mocks.refreshMembership).not.toHaveBeenCalled();
+  await act(async () => { void current.refreshMembership(); });
   expect(current.membershipLoading).toBe(true);
   await act(async () => mocks.receive!(snapshot(2)));
   await act(async () => reject(new Error('old failure')));
@@ -155,15 +162,14 @@ it('ignores a membership failure from a previous session', async () => {
   expect(current.membershipLoading).toBe(false);
 });
 
-it('coalesces concurrent membership refreshes and throttles focus refreshes', async () => {
+it('coalesces explicit membership refreshes and does not refresh on focus', async () => {
   let resolve!: () => void;
   mocks.getState.mockResolvedValue({ ...snapshot(1), authenticated: true, authStatus: 'authenticated', account: { user: { id: 'user-1' } } } as CloudState);
   mocks.refreshMembership.mockReturnValueOnce(new Promise((done) => { resolve = () => done({}); }));
-  vi.spyOn(Date, 'now').mockReturnValue(100_000);
   await act(async () => root.render(<Harness />));
   await act(async () => {
-    window.dispatchEvent(new Event('focus'));
-    window.dispatchEvent(new Event('focus'));
+    void current.refreshMembership();
+    void current.refreshMembership();
   });
   expect(mocks.refreshMembership).toHaveBeenCalledTimes(1);
   await act(async () => resolve());
@@ -171,13 +177,17 @@ it('coalesces concurrent membership refreshes and throttles focus refreshes', as
   expect(mocks.refreshMembership).toHaveBeenCalledTimes(1);
 });
 
-it('clears the focus throttle after logout so the next session reloads membership', async () => {
+it('does not poll membership after authentication or window focus', async () => {
   mocks.getState.mockResolvedValue({ ...snapshot(1), authenticated: true, authStatus: 'authenticated', account: { user: { id: 'user-1' } } } as CloudState);
+  const setInterval = vi.spyOn(window, 'setInterval');
   await act(async () => root.render(<Harness />));
-  expect(mocks.refreshMembership).toHaveBeenCalledTimes(1);
+  expect(mocks.refreshMembership).not.toHaveBeenCalled();
+  expect(setInterval).not.toHaveBeenCalled();
+  await act(async () => window.dispatchEvent(new Event('focus')));
+  expect(mocks.refreshMembership).not.toHaveBeenCalled();
   await act(async () => mocks.receive!(snapshot(2)));
   await act(async () => mocks.receive!({ ...snapshot(3), authenticated: true, authStatus: 'authenticated', account: { user: { id: 'user-1' } } } as CloudState));
-  expect(mocks.refreshMembership).toHaveBeenCalledTimes(2);
+  expect(mocks.refreshMembership).not.toHaveBeenCalled();
 });
 
 it('returns failure to callers and success after retry without an unhandled rejection', async () => {
@@ -210,4 +220,24 @@ it('returns stale to all coalesced callers after the session changes', async () 
   await expect(second).resolves.toBe('stale');
   expect(current.membershipError).toBeNull();
   expect(current.membershipLoading).toBe(false);
+});
+
+it.each(['success', 'failure'] as const)('returns stale to all callers when a refresh ends with %s after unmount', async (outcome) => {
+  mocks.getState.mockResolvedValue({ ...snapshot(1), authenticated: true, authStatus: 'authenticated' });
+  await act(async () => root.render(<Harness />));
+  let finish!: () => void;
+  mocks.refreshMembership.mockReturnValueOnce(new Promise<void>((resolve, reject) => {
+    finish = () => outcome === 'success' ? resolve() : reject(new Error('late failure'));
+  }));
+  let first!: ReturnType<typeof current.refreshMembership>;
+  let second!: ReturnType<typeof current.refreshMembership>;
+  await act(async () => {
+    first = current.refreshMembership();
+    second = current.refreshMembership();
+  });
+  expect(mocks.refreshMembership).toHaveBeenCalledTimes(1);
+  await act(async () => root.unmount());
+  await act(async () => finish());
+  await expect(first).resolves.toBe('stale');
+  await expect(second).resolves.toBe('stale');
 });

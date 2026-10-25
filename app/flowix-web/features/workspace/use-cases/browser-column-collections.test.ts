@@ -46,10 +46,10 @@ describe('browser column collection navigation', () => {
     const item = fixture(type, '项目.index.yaml');
     const opened = await openBrowserColumnText('/notes/项目.index.yaml', '/notes');
     expect(opened?.host).toBe('browser-column');
-    const tab = useBrowserColumnStore.getState().tabs[0];
+    const tab = useBrowserColumnStore.getState().current!;
     expect(tab.target).toMatchObject({ collectionType: type, collectionDisplay: { collectionId: item.collectionId } });
     await selectBrowserColumnFile(tab.id, '/notes/plan.md');
-    expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({
+    expect(useBrowserColumnStore.getState().current!.target).toMatchObject({
       activeFilePath: '/notes/plan.md', collectionType: undefined, collectionDisplay: undefined,
     });
   });
@@ -60,7 +60,7 @@ describe('browser column collection navigation', () => {
     const target: WorkColumnTarget = { kind: 'collection', ...display, collectionType: 'table', filePath: '/notes/旧.index.yaml', notebookPath: '/notes', name: '项目' };
     activate(target);
     await openWorkColumnTargetInBrowserColumn(target);
-    expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({
+    expect(useBrowserColumnStore.getState().current!.target).toMatchObject({
       activeFilePath: '/notes/移动后.index.yaml', collectionType: 'table', collectionDisplay: display,
     });
     expect(useWorkColumnStore.getState().navigation.target).toEqual(target);
@@ -73,7 +73,7 @@ describe('browser column collection navigation', () => {
     fixture(type, filename);
     activate({ kind, filePath: `/notes/${filename}`, notebookPath: '/notes', notebookId: 'notes' });
     await openWorkColumnTargetInBrowserColumn(useWorkColumnStore.getState().navigation.target);
-    expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({ collectionType: type });
+    expect(useBrowserColumnStore.getState().current!.target).toMatchObject({ collectionType: type });
   });
 
   it('preserves the work column when collection resolution fails', async () => {
@@ -82,7 +82,7 @@ describe('browser column collection navigation', () => {
     const target: WorkColumnTarget = { kind: 'table', filePath: '/notes/项目.index.yaml', notebookPath: '/notes', notebookId: 'notes' };
     activate(target);
     await expect(openWorkColumnTargetInBrowserColumn(target)).rejects.toThrow('集合身份冲突');
-    expect(useBrowserColumnStore.getState().tabs).toEqual([]);
+    expect(useBrowserColumnStore.getState().current).toBeNull();
     expect(useWorkColumnStore.getState().navigation.target).toEqual(target);
   });
 
@@ -95,14 +95,14 @@ describe('browser column collection navigation', () => {
     vi.mocked(externalDocuments.read).mockResolvedValue(valid.replace(/placement: \w+/, 'placement: standalone1'));
     const opened = await openBrowserColumnText('/notes/broken.index.yaml', '/notes');
     expect(opened).not.toBeNull();
-    const tab = useBrowserColumnStore.getState().tabs[0];
+    const tab = useBrowserColumnStore.getState().current!;
     expect(tab.target).toMatchObject({
       activeFilePath: '/notes/broken.index.yaml', collectionType: type, collectionUnavailableReason: '集合文件格式无效',
     });
     await selectBrowserColumnFile(tab.id, '/notes/plan.md');
-    expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({ activeFilePath: '/notes/plan.md', collectionUnavailableReason: undefined });
-    await selectBrowserColumnFile(tab.id, '/notes/broken.index.yaml');
-    expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({
+    expect(useBrowserColumnStore.getState().current!.target).toMatchObject({ activeFilePath: '/notes/plan.md', collectionUnavailableReason: undefined });
+    await selectBrowserColumnFile(useBrowserColumnStore.getState().current?.id!, '/notes/broken.index.yaml');
+    expect(useBrowserColumnStore.getState().current!.target).toMatchObject({
       activeFilePath: '/notes/broken.index.yaml', collectionType: type, collectionUnavailableReason: '集合文件格式无效',
     });
   });

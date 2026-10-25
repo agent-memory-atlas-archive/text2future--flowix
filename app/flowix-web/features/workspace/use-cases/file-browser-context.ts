@@ -3,7 +3,7 @@ import { getSelectedWorkspaceNotebookId, getWorkspaceMemoState } from '@features
 import { getWorkspaceAgentResourceFolders } from '@features/agent/public/workspace-api';
 import { resolveFileBrowserRoot, type FileBrowserContext } from '../store/file-browser-target';
 
-/** Resolve file ownership at the workspace boundary, including restored tabs. */
+/** Resolve file ownership at the workspace boundary, including restored content. */
 export function resolveFileBrowserContext(
   filePath: string | null,
   context: FileBrowserContext,

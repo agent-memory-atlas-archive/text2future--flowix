@@ -68,7 +68,10 @@ pub use frontmatter::{
 pub use index_store::{NoteContentCommit, NoteContentRevision};
 pub use local_migrations::{initialize_local_migration_table, NotebookInitializationJob};
 pub use internal_migration::{NotebookInternalMigrationReport, NOTEBOOK_INTERNAL_MIGRATION_KEY};
-pub use storage_repair::{ensure_storage_directory, read_or_create_json, backup_database, backup_storage_file, is_rebuildable_storage_error, with_database_rebuild};
+pub use storage_repair::{
+    backup_database, backup_storage_file, database_file_is_corrupt, discard_database_for_runtime, ensure_storage_directory,
+    is_rebuildable_storage_error, read_or_create_json, with_database_rebuild, with_corrupt_database_rebuild,
+};
 pub use database_layout::{prepare_database_directory, DATABASE_DIRECTORY_NAME};
 pub use media_resource::{
     media_kind_for_path, media_resource_id, resource_catalog_id, resource_kind_for_path, IndexedResource,

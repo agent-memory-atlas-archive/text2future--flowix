@@ -5,7 +5,7 @@ import { useBrowserColumnStore } from '../store/browser-column-store';
 
 /** Update presentation state in place. Never start navigation or reload data. */
 export function setCollectionActiveView(
-  location: { host: 'main-third' } | { host: 'browser-column'; tabId: string },
+  location: { host: 'main-third' } | { host: 'browser-column'; surfaceId: string },
   expected: Pick<CollectionDisplayDescriptor, 'notebookId' | 'collectionId'>,
   viewId: string | null,
 ): boolean {
@@ -25,14 +25,13 @@ export function setCollectionActiveView(
     return true;
   }
   const state = useBrowserColumnStore.getState();
-  const tab = state.tabs.find((candidate) => candidate.id === location.tabId);
-  if (tab?.target.kind !== 'file-browser' || !tab.target.collectionDisplay || !matches(tab.target.collectionDisplay)) return false;
-  if (tab.target.collectionUnavailableReason && tab.target.collectionUnavailableReason !== '此视图已不存在，请重新选择视图') return false;
-  if (tab.target.collectionDisplay.viewId === viewId) return true;
-  ensureCollectionDisplay({ ...tab.target.collectionDisplay, viewId }, tab.target.collectionDisplay.displayId);
-  const target = tab.target;
-  useBrowserColumnStore.setState({ tabs: state.tabs.map((candidate) => candidate.id === tab.id
-    ? { ...tab, target: { ...target, collectionDisplay: { ...target.collectionDisplay!, viewId }, collectionUnavailableReason: undefined } }
-    : candidate) });
+  const entry = (state.current?.id === location.surfaceId ? state.current : null);
+  if (entry?.target.kind !== 'file-browser' || !entry.target.collectionDisplay || !matches(entry.target.collectionDisplay)) return false;
+  if (entry.target.collectionUnavailableReason && entry.target.collectionUnavailableReason !== '此视图已不存在，请重新选择视图') return false;
+  if (entry.target.collectionDisplay.viewId === viewId) return true;
+  ensureCollectionDisplay({ ...entry.target.collectionDisplay, viewId }, entry.target.collectionDisplay.displayId);
+  const target = entry.target;
+  useBrowserColumnStore.setState({ current: { ...entry, target: { ...target,
+    collectionDisplay: { ...target.collectionDisplay!, viewId }, collectionUnavailableReason: undefined } } });
   return true;
 }

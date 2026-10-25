@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { files, type CollectionChangedEvent, type DocTreeItem } from '@platform/tauri/client';
 import { canonicalDirectoryPath, canonicalPath } from '@/lib/path';
 import { createLogger } from '@/lib/logger';
+import { mergeNoteMetadata, noteMetadata } from '../services/note-metadata-service';
 
 const logger = createLogger('folder-tree');
 const REFRESH_DEDUP_WINDOW_MS = 350;
@@ -146,6 +147,8 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
   const rootKey = canonicalDirectoryPath(folderPath);
   const [rootChildren, setRootChildren] = useState<DocTreeItem[]>([]);
   const [nodes, setNodes] = useState<Map<string, DocTreeItem>>(() => new Map());
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [dirtyDirectories, setDirtyDirectories] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
@@ -156,21 +159,21 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
   // 请求代际: 每次 folderPath 变化 / 手动刷新自增, 迟到响应按代丢弃。
   const generationRef = useRef(0);
   const mountedRef = useRef(true);
-  // Retain updates only for reads already in flight. Later reads remain authoritative.
-  const metadataReadsRef = useRef(new Set<Map<string, NonNullable<DocTreeItem['memoMeta']>>>());
-  const readWithLatestMetadata = useCallback(async <T extends DocTreeItem[] | null>(read: () => Promise<T>): Promise<T> => {
-    const updates = new Map<string, NonNullable<DocTreeItem['memoMeta']>>();
-    metadataReadsRef.current.add(updates);
-    try {
-      const items = await read();
-      if (!items || updates.size === 0) return items;
-      return items.map((item) => {
-        const memoMeta = updates.get(canonicalPath(item.fullPath));
-        return memoMeta && item.type === 'document' ? { ...item, memoMeta } : item;
-      }) as T;
-    } finally {
-      metadataReadsRef.current.delete(updates);
+  const readWithLatestMetadata = useCallback(async <T extends DocTreeItem[] | null>(directory: string, read: () => Promise<T>): Promise<T> => {
+    const checkpoint = noteMetadata.checkpoint();
+    const generation = generationRef.current;
+    const items = await read();
+    if (!items || !mountedRef.current || generation !== generationRef.current) return items;
+    const listed = new Set(items.map((item) => canonicalPath(item.fullPath)));
+    const parent = canonicalDirectoryPath(directory);
+    for (const item of nodesRef.current.values()) {
+      const path = canonicalPath(item.fullPath);
+      if (path.slice(0, path.lastIndexOf('/')) === parent && !listed.has(path)
+        && noteMetadata.get(path).revision <= checkpoint) noteMetadata.deletePrefix(path);
     }
+    return items.map((item) => item.type === 'document'
+      ? { ...item, memoMeta: mergeNoteMetadata(item.fullPath, item.memoMeta, checkpoint) }
+      : item) as T;
   }, []);
   const directoryRefreshesRef = useRef(new Map<string, Promise<void>>());
   const directoryRefreshSequenceRef = useRef(new Map<string, number>());
@@ -181,8 +184,6 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
   const rootRefreshSequenceRef = useRef(0);
   const rootChildrenRef = useRef(rootChildren);
   rootChildrenRef.current = rootChildren;
-  const nodesRef = useRef(nodes);
-  nodesRef.current = nodes;
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
   const pendingRenamesRef = useRef(0);
@@ -389,7 +390,7 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
     setLoadingDirectories(new Set());
     setDirectoryErrors(new Set());
     try {
-      const items = await readWithLatestMetadata(() => files.getTree(folderPath));
+      const items = await readWithLatestMetadata(folderPath, () => files.getTree(folderPath));
       if (!mountedRef.current || generation !== generationRef.current) return;
       if (items === null) {
         setRootChildren([]);
@@ -445,7 +446,7 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
     });
 
     const generation = generationRef.current;
-    const request = readWithLatestMetadata(() => files.getDirChildren(dirPath))
+    const request = readWithLatestMetadata(dirPath, () => files.getDirChildren(dirPath))
       .then((children) => {
         if (
           !mountedRef.current
@@ -584,7 +585,7 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
     const requestSequence = rootRefreshSequenceRef.current + 1;
     rootRefreshSequenceRef.current = requestSequence;
     const generation = generationRef.current;
-    const request = readWithLatestMetadata(() => files.getTree(folderPath))
+    const request = readWithLatestMetadata(folderPath, () => files.getTree(folderPath))
       .then((items) => {
         if (
           !mountedRef.current
@@ -748,7 +749,7 @@ export function useFolderTree(folderPath: string, options?: FolderTreeOptions) {
   const updateNoteMetadata = useCallback((path: string, memoMeta: NonNullable<DocTreeItem['memoMeta']>) => {
     const key = canonicalPath(path);
     if (!isPathAtOrBelow(key, rootKey)) return;
-    for (const updates of metadataReadsRef.current) updates.set(key, memoMeta);
+    noteMetadata.update(key, memoMeta);
     const patch = (item: DocTreeItem): DocTreeItem => {
       if (canonicalPath(item.fullPath) === key && item.type === 'document') return { ...item, memoMeta };
       if (!item.children?.some((child) => canonicalPath(child.fullPath) === key)) return item;

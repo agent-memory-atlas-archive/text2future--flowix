@@ -54,7 +54,7 @@ export function NotebookCreateContextMenuItems({
           </span>
         </ContextMenuItem>
         {onCreateWorkDocuments && <ContextMenuItem onClick={onCreateWorkDocuments} className={MENU_ITEM_CLASS}>
-          <WorkDocumentsIcon className="mr-2 h-4 w-4" />
+          <WorkDocumentsIcon className="mr-2 h-4 w-4 opacity-100" />
           <span>{t('memo.create.workDocuments')}</span>
           <span className="ml-auto text-xs text-[var(--muted-foreground)] opacity-50 group-hover:text-[var(--primary-foreground)] group-focus-visible:text-[var(--primary-foreground)]">
             {t('memo.create.workDocumentsTypes')}

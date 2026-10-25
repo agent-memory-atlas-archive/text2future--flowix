@@ -1,10 +1,9 @@
 import type { MarkdownLocation } from '@platform/tauri/client';
 import type { WorkWorkspaceSurfaceTarget, BrowserWorkspaceSurfaceTarget } from './surface-target';
 
-export type BrowserSurfaceOpenDisposition = 'focus-existing' | 'replace-active' | 'open-in-column';
 export type WorkspaceContentLocation =
   | { host: 'main-third'; state: 'active' | 'pending' }
-  | { host: 'browser-column'; tabId: string };
+  | { host: 'browser-column'; surfaceId: string };
 
 export interface WorkspaceOpenNavigationOptions {
   history?: 'push' | 'skip';
@@ -18,15 +17,18 @@ export interface WorkWorkspaceSurfaceOptions extends WorkspaceOpenNavigationOpti
 }
 export interface BrowserWorkspaceSurfaceOptions {
   notebookId?: string | null;
-  browserDisposition?: BrowserSurfaceOpenDisposition;
 }
+export type WorkspaceNavigationSource = 'notebook-tree' | 'notebook-tree-new-tab' | 'agent-message';
+
 export interface WorkWorkspaceSurfaceRequest {
-  /** Missing host means Work. */
-  host?: 'main-third';
+  source?: WorkspaceNavigationSource;
+  /** Callers own the destination; focus and runtime state must not infer it. */
+  host: 'main-third';
   target: WorkWorkspaceSurfaceTarget;
   options?: WorkWorkspaceSurfaceOptions;
 }
 export interface BrowserWorkspaceSurfaceRequest {
+  source?: WorkspaceNavigationSource;
   host: 'browser-column';
   target: BrowserWorkspaceSurfaceTarget;
   options?: BrowserWorkspaceSurfaceOptions;
@@ -42,6 +44,6 @@ export type WorkspaceSurfaceOpenResult = WorkWorkspaceOpenResult | BrowserWorksp
 /** Internal Browser adapter detail, normalized by openWorkspaceSurface. */
 export type BrowserColumnNavigationResult = {
   host: 'browser-column';
-  tabId: string;
+  surfaceId: string;
   alreadyOpen: boolean;
 } | null;

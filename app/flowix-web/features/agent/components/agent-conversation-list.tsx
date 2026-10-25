@@ -1,7 +1,10 @@
 'use client';
 
+import { useStartedLiveThreads } from './use-started-live-threads';
+
 import { removeAgentConversation } from '@features/agent/use-cases/remove-conversation';
 import { ConversationActionItems } from './conversation-action-items';
+import { AgentConversationHoverCard } from '@features/agent/components/agent-conversation-hover-card';
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from 'react';
 import {
@@ -79,6 +82,7 @@ interface AgentConversationListProps {
 export function AgentConversationList({ isActive = true, onBack }: AgentConversationListProps) {
   const { t } = useI18n();
   const instances = useAgentSessionStore((state) => state.conversationRegistry.instances);
+  const startedLiveThreads = useStartedLiveThreads();
   const threadTombstones = useAgentSessionStore((state) => state.threadTombstones);
   const lifecycleVersion = useAgentSessionStore((state) => state.lifecycleVersion);
   // This map changes only when lifecycle fields change, not for text chunks.
@@ -197,8 +201,8 @@ export function AgentConversationList({ isActive = true, onBack }: AgentConversa
   }, [t]);
 
   const conversations = useMemo(() => selectVisibleConversations(
-    conversationPage, instances, currentNotebookId, threadTombstones,
-  ), [conversationPage, currentNotebookId, instances, threadTombstones]);
+    conversationPage, instances, currentNotebookId, threadTombstones, startedLiveThreads,
+  ), [conversationPage, currentNotebookId, instances, threadTombstones, startedLiveThreads]);
 
   useEffect(() => {
     if (!conversationDetailOpen || !selectedInstanceId) return;
@@ -265,7 +269,7 @@ export function AgentConversationList({ isActive = true, onBack }: AgentConversa
 
     prepareConversation(instance);
 
-    await openWorkspaceSurface({ target: { kind: 'agent-conversation', instanceId: instance.instanceId } });
+    await openWorkspaceSurface({ host: 'main-third', target: { kind: 'agent-conversation', instanceId: instance.instanceId } });
   }, [markThreadRead, prepareConversation]);
 
   const openConversationInBrowserColumn = useCallback((instance: AgentConversationInstance) => {
@@ -444,101 +448,102 @@ export function AgentConversationList({ isActive = true, onBack }: AgentConversa
                         className="absolute inset-x-0 top-0"
                         style={{ height: size, transform: `translateY(${start}px)` }}
                       >
-                    <div
-                      className={cn(
-                        'group relative flex h-9 w-full items-center rounded-lg px-2 text-left transition-colors',
-                        selected ? 'bg-[var(--muted)]' : 'hover:bg-[var(--muted)]',
-                      )}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => void revealConversation(instance)}
-                          title={t('status.agent.openConversation')}
-                          className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left text-[var(--foreground)]"
-                        >
-                        <span className={cn(
-                          'relative flex h-4 w-4 shrink-0 items-center justify-center rounded-full',
-                          running && 'agent-conversation-list__icon--running',
-                        )}>
-                          <AgentIcon typeKey={agent.id} alt="" className="h-4 w-4 object-contain" />
-                          {(running || (!!instance.threadId
-                            && latestCompletedRunIds[instance.threadId] !== readThroughRunIds[instance.threadId]
-                            && !(conversationDetailOpen && selectedInstanceId === instance.instanceId))) && (
-                            <span
-                              aria-hidden="true"
-                              className={cn(
-                                'absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 rounded-full',
-                                running ? 'bg-[var(--success)]' : 'bg-[var(--muted-foreground)]',
-                              )}
-                            />
-                          )}
-                        </span>
-                        <span className={cn('agent-conversation-list__title min-w-0 flex-1 select-none text-sm font-normal', selected ? 'opacity-100' : 'opacity-80')}>
-                          {instance.title?.trim() || t('common.untitled')}
-                        </span>
-                        <time className="shrink-0 text-xs text-[var(--muted-foreground)] group-hover:hidden" dateTime={new Date(instance.updatedAt).toISOString()}>
-                          {formatTimeAgo(instance.updatedAt, t, { compact: true })}
-                        </time>
-                        </button>
-                        <DropdownMenu
-                            open={openMenuId === instance.instanceId}
-                            onOpenChange={(open) => setOpenMenuId(open ? instance.instanceId : null)}
+                        <AgentConversationHoverCard instance={instance}>
+                          <div
                             className={cn(
-                              'flex w-0 shrink-0 overflow-hidden opacity-0 transition-[width,opacity] duration-[37.5ms] group-focus-within:w-6 group-focus-within:opacity-100 group-hover:w-6 group-hover:opacity-100',
-                              openMenuId === instance.instanceId && 'w-6 opacity-100',
+                              'group relative flex h-9 w-full items-center rounded-lg px-2 text-left transition-colors',
+                              selected ? 'bg-[var(--muted)]' : 'hover:bg-[var(--muted)]',
                             )}
                           >
-                            <DropdownMenuTrigger asChild onClick={(event) => event.stopPropagation()}>
-                              <button
-                                type="button"
-                                aria-label={t('agent.chat.conversation.more')}
-                                className={cn(
-                                  'rounded bg-[var(--muted)] p-1 text-[var(--muted-foreground)] transition-[opacity,color] hover:text-[var(--foreground)] focus-visible:opacity-100',
+                            <button
+                              type="button"
+                              onClick={() => void revealConversation(instance)}
+                              title={t('status.agent.openConversation')}
+                              className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left text-[var(--foreground)]"
+                            >
+                              <span className={cn(
+                                'relative flex h-4 w-4 shrink-0 items-center justify-center rounded-full',
+                                running && 'agent-conversation-list__icon--running',
+                              )}>
+                                <AgentIcon typeKey={agent.id} alt="" className="h-4 w-4 object-contain" />
+                                {(running || (!!instance.threadId
+                                  && latestCompletedRunIds[instance.threadId] !== readThroughRunIds[instance.threadId]
+                                  && !(conversationDetailOpen && selectedInstanceId === instance.instanceId))) && (
+                                  <span
+                                    aria-hidden="true"
+                                    className={cn(
+                                      'absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 rounded-full',
+                                      running ? 'bg-[var(--success)]' : 'bg-[var(--muted-foreground)]',
+                                    )}
+                                  />
                                 )}
-                              >
-                                <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-                              </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" className="w-[160px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
-                              <ConversationActionItems favorite={favoriteIds.has(instance.instanceId)}
-                                onOpen={() => openConversationInBrowserColumn(instance)}
-                                onFavorite={() => toggleFavorite(instance.instanceId)}
-                                onRename={() => renameConversation(instance)}
-                                onArchive={() => void removeConversation(instance, 'archive')}
-                                onDelete={() => void removeConversation(instance, 'delete')}
-                              />
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        <>
-                          <button
-                            type="button"
-                            aria-label={favoriteIds.has(instance.instanceId) ? t('agent.chat.conversation.unfavorite') : t('agent.chat.conversation.favorite')}
-                            aria-pressed={favoriteIds.has(instance.instanceId)}
-                            title={favoriteIds.has(instance.instanceId) ? t('agent.chat.conversation.unfavorite') : t('agent.chat.conversation.favorite')}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              toggleFavorite(instance.instanceId);
-                            }}
-                            className={cn(
-                              'shrink-0 overflow-hidden rounded p-1 text-[var(--muted-foreground)] transition-[width,opacity,color] duration-[37.5ms] hover:text-[var(--foreground)] focus-visible:opacity-100',
-                              favoriteIds.has(instance.instanceId)
-                                ? 'w-6 opacity-100'
-                                : 'w-0 opacity-0 group-focus-within:w-6 group-focus-within:opacity-100 group-hover:w-6 group-hover:opacity-100',
-                            )}
-                          >
-                            <StarIcon className="h-4 w-4" weight={favoriteIds.has(instance.instanceId) ? 'fill' : 'regular'} aria-hidden="true" />
-                          </button>
-                        </>
-                    </div>
+                              </span>
+                              <span className={cn('agent-conversation-list__title min-w-0 flex-1 select-none text-sm font-normal', selected ? 'opacity-100' : 'opacity-80')}>
+                                {instance.title?.trim() || t('common.untitled')}
+                              </span>
+                              <time className="shrink-0 text-xs text-[var(--muted-foreground)] group-hover:hidden" dateTime={new Date(instance.updatedAt).toISOString()}>
+                                {formatTimeAgo(instance.updatedAt, t, { compact: true })}
+                              </time>
+                            </button>
+                            <DropdownMenu
+                              open={openMenuId === instance.instanceId}
+                              onOpenChange={(open) => setOpenMenuId(open ? instance.instanceId : null)}
+                              className={cn(
+                                'flex w-0 shrink-0 overflow-hidden opacity-0 transition-[width,opacity] duration-[37.5ms] group-focus-within:w-6 group-focus-within:opacity-100 group-hover:w-6 group-hover:opacity-100',
+                                openMenuId === instance.instanceId && 'w-6 opacity-100',
+                              )}
+                            >
+                              <DropdownMenuTrigger asChild onClick={(event) => event.stopPropagation()}>
+                                <button
+                                  type="button"
+                                  aria-label={t('agent.chat.conversation.more')}
+                                  className="rounded bg-[var(--muted)] p-1 text-[var(--muted-foreground)] transition-[opacity,color] hover:text-[var(--foreground)] focus-visible:opacity-100"
+                                >
+                                  <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="w-[160px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
+                                <ConversationActionItems
+                                  favorite={favoriteIds.has(instance.instanceId)}
+                                  onOpen={() => openConversationInBrowserColumn(instance)}
+                                  onFavorite={() => toggleFavorite(instance.instanceId)}
+                                  onRename={() => renameConversation(instance)}
+                                  onArchive={() => void removeConversation(instance, 'archive')}
+                                  onDelete={() => void removeConversation(instance, 'delete')}
+                                />
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                            <button
+                              type="button"
+                              aria-label={favoriteIds.has(instance.instanceId) ? t('agent.chat.conversation.unfavorite') : t('agent.chat.conversation.favorite')}
+                              aria-pressed={favoriteIds.has(instance.instanceId)}
+                              title={favoriteIds.has(instance.instanceId) ? t('agent.chat.conversation.unfavorite') : t('agent.chat.conversation.favorite')}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                toggleFavorite(instance.instanceId);
+                              }}
+                              className={cn(
+                                'shrink-0 overflow-hidden rounded p-1 text-[var(--muted-foreground)] transition-[width,opacity,color] duration-[37.5ms] hover:text-[var(--foreground)] focus-visible:opacity-100',
+                                favoriteIds.has(instance.instanceId)
+                                  ? 'w-6 opacity-100'
+                                  : 'w-0 opacity-0 group-focus-within:w-6 group-focus-within:opacity-100 group-hover:w-6 group-hover:opacity-100',
+                              )}
+                            >
+                              <StarIcon className="h-4 w-4" weight={favoriteIds.has(instance.instanceId) ? 'fill' : 'regular'} aria-hidden="true" />
+                            </button>
+                          </div>
+                        </AgentConversationHoverCard>
                       </div>
                     </ContextMenuTrigger>
                     <ContextMenuContent className="w-[160px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
-                      <ConversationActionItems context favorite={favoriteIds.has(instance.instanceId)}
-                                onOpen={() => openConversationInBrowserColumn(instance)}
-                                onFavorite={() => toggleFavorite(instance.instanceId)}
-                                onRename={() => renameConversation(instance)}
-                                onArchive={() => void removeConversation(instance, 'archive')}
-                                onDelete={() => void removeConversation(instance, 'delete')}
+                      <ConversationActionItems
+                        context
+                        favorite={favoriteIds.has(instance.instanceId)}
+                        onOpen={() => openConversationInBrowserColumn(instance)}
+                        onFavorite={() => toggleFavorite(instance.instanceId)}
+                        onRename={() => renameConversation(instance)}
+                        onArchive={() => void removeConversation(instance, 'archive')}
+                        onDelete={() => void removeConversation(instance, 'delete')}
                       />
                     </ContextMenuContent>
                   </ContextMenu>

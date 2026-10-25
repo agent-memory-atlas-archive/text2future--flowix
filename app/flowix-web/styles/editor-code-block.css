@@ -22,7 +22,7 @@
  * subtree as a plain pre > code so browser selections cannot terminate on
  * toolbar or preview DOM and be mapped to the end of the code block.
  */
-.markdown-editor .tiptap:not(.agent-composer__input-content) .code-block-wrapper > .code-block-editor {
+.markdown-editor .tiptap:not(.agent-composer__input-content) .code-block-wrapper > .code-block-editor:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   order: 2;
   z-index: 1;
   margin: 0;
@@ -39,14 +39,14 @@
   word-break: break-word;
 }
 
-.markdown-editor .tiptap:not(.agent-composer__input-content) .code-block-wrapper > .code-block-editor > .code-block-content {
+.markdown-editor .tiptap:not(.agent-composer__input-content) .code-block-wrapper > .code-block-editor > .code-block-content:where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
   display: block;
   min-height: 1lh;
   white-space: inherit;
   word-break: inherit;
 }
 
-:is([data-theme="dark"], [data-theme="mist"]) .markdown-editor .tiptap:not(.agent-composer__input-content) .code-block-wrapper > .code-block-editor > .code-block-content,
+:is([data-theme="dark"], [data-theme="mist"]) .markdown-editor .tiptap:not(.agent-composer__input-content) .code-block-wrapper > .code-block-editor > .code-block-content:where(:not(.agent-conversation-surface, .agent-conversation-surface *)),
 :is([data-theme="dark"], [data-theme="mist"]) .code-editor .cm-line {
   opacity: 0.68;
 }

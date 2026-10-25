@@ -1,9 +1,9 @@
 @import './fonts.css';
 @import './checkbox.css';
+@import './floating-tokens.css';
 
 /* Tiptap 编辑器相关样式集中收口:
  *   - editor.css            容器/排版基础 (ProseMirror 排版 / 基础 markdown 节点)
- *   - editor-agent-thread-card  AgentThreadCard NodeView
  *   - editor-note-reference    笔记内引用样式
  *   - editor-code-block        代码块浮层 (语言选择器 / 复制 / 全屏 overlay 容器)
  *   - editor-mermaid           mermaid SVG 渲染样式 (字号 / 对齐 / 主题 ──
@@ -15,10 +15,8 @@
 @import './editor.css';
 @import './editor-frontmatter.css';
 @import './multidimensional-table.css';
-@import './editor-agent-thread-card.css';
-/* Shared composer styles used by standalone and embedded Agent conversations. */
-@import './agent-conversation/titlebar.css';
-@import './agent-conversation/composer.css';
+/* Agent conversation surfaces own their styling independently of the editor. */
+@import './agent-conversation.css';
 @import './editor-note-reference.css';
 @import './editor-code-block.css';
 @import './editor-mermaid.css';
@@ -32,9 +30,14 @@
 /* 自定义滚动条 ── 全局 webkit 滚动条 + .overlay-scrollbar-* 组件样式。
  * macOS 主文档全局外观和组件自绘样式见 overlay-scrollbar.css。 */
 @import './overlay-scrollbar.css';
+@import './created-document-notices.css';
+@import './work-column-selection.css';
 @import './cloud-status-icon.css';
 @import './plugin-markmap.css';
 @import './agent-icon.css';
+/* Media resource surfaces (video/image/pdf chrome) live outside the Agent tree
+ * even though they share its surface color. */
+@import './media-surface.css';
 @import './onboarding.css';
 
 /* 主题色板单一真源在 css/theme, JS 只通过 data-theme 切换;
@@ -96,31 +99,6 @@ html.flowix-drag-drop-active * {
 	.flowix-spin {
 		animation: none;
 	}
-}
-
-/* Browser column 的激活 tab 顶部指示线从中心向两侧展开，避免切换时
- * 线条瞬间出现。 */
-.browser-column-active-tab-indicator {
-	background: linear-gradient(
-		90deg,
-		transparent 0%,
-		var(--brand) 40%,
-		var(--brand) 60%,
-		transparent 100%
-	);
-	transform: scaleX(0);
-	transform-origin: center;
-	animation: browser-column-active-tab-indicator-in 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-/* Keep the active Browser tab as a standalone card with the same radius on
- * every corner. Keep this outside the Tailwind utility layer so the shape is
- * shared by every Browser Column surface. */
-.browser-column-tab-active {
-	position: relative;
-	z-index: 1;
-	background-color: var(--muted);
-	background-image: none;
 }
 
 /* 全局搜索命令面板是带分组/搜索结果的特殊菜单。保留多行结果的内容高度，
@@ -292,21 +270,7 @@ html.flowix-drag-drop-active * {
 	);
 }
 
-@keyframes browser-column-active-tab-indicator-in {
-	from {
-		transform: scaleX(0);
-	}
-	to {
-		transform: scaleX(1);
-	}
-}
 
-@media (prefers-reduced-motion: reduce) {
-	.browser-column-active-tab-indicator {
-		animation: none;
-		transform: none;
-	}
-}
 
 /* 中间列顶部的产品图标: 深色模式使用单色白版，保留 PNG 的透明背景。 */
 :is([data-theme="dark"], [data-theme="mist"]) .product-icon {
@@ -509,6 +473,8 @@ html.flowix-drag-drop-active * {
 }
 
 :root {
+	/* Shared fade for editor titlebars and Agent conversation headers. */
+	--titlebar-gradient: linear-gradient(to bottom, var(--bg-titlebar), transparent);
 	--flowix-hand-check-mask: url("data:image/svg+xml,%3Csvg viewBox='-1 -1 16 13' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='black' d='M1.15 5.9c.16-.22.44-.28.72-.16 1.32.56 2.42 1.2 3.36 2.06C6.72 5.38 9.12 2.86 12.35.88c.32-.2.72-.16.9.09.18.24.05.6-.26.84-3.45 2.76-5.56 5.4-7.1 8.23-.14.25-.41.4-.71.4-.28 0-.53-.13-.68-.35-.88-1.18-1.95-2.12-3.19-3.12-.29-.23-.38-.75-.16-1.07Z'/%3E%3C/svg%3E");
 }
 
@@ -571,7 +537,7 @@ html.flowix-drag-drop-active * {
 		--bgColor-muted: var(--muted);
 	}
 
-	.tiptap:not(.agent-composer__input-content) {
+	.tiptap:not(.agent-composer__input-content):where(:not(.agent-conversation-surface, .agent-conversation-surface *)) {
 		background: var(--background) !important;
 		overflow: hidden;
 	}
@@ -783,6 +749,14 @@ html.flowix-drag-drop-active * {
 		transform-origin: top left !important;
 	}
 
+	/* 笔记本选择器的搜索框复用 .agent-composer__note-search 的排版, 但
+	 * 「聚焦时 placeholder 变淡」是 Agent composer 的语义, 这里还原。
+	 * 规则放在本文件 (与 .flowix-notebook-selector-popup 同处) 而不是
+	 * composer.css: 它属于笔记本选择器, 不属于 Agent 输入区。 */
+	.flowix-notebook-selector-search:focus::placeholder {
+		opacity: 0.85;
+	}
+
 	@media (prefers-reduced-motion: reduce) {
 		.flowix-popover-content {
 			animation: none !important;
@@ -980,7 +954,7 @@ html.flowix-drag-drop-active * {
  * package's runtime-injected styles fail in a Windows WebView2 environment. */
 .flowix-toaster[data-sonner-toaster] {
 	position: fixed !important;
-	z-index: 2147483647 !important;
+	z-index: var(--layer-notice) !important;
 	width: var(--width, 356px) !important;
 	margin: 0 !important;
 	padding: 0 !important;
@@ -1008,12 +982,12 @@ html.flowix-drag-drop-active * {
 }
 
 /* Agent 运行列表中运行中实例的 icon 外框,
- * 复用 editor-agent-thread-card.css 中的
+ * 复用 agent-conversation.css 中的
  * `agent-type-badge-running-border` keyframes,
  * 视觉与 AgentThreadCard header 的 running icon 完全一致。
  *
  * 选择器不在 .markdown-editor 下, 因此 keyframes 必须能在全局范围
- * 被找到 (editor-agent-thread-card.css 中 keyframes 定义本身没有
+ * 被找到 (agent-conversation.css 中 keyframes 定义本身没有
  * 作用域, 这里放心复用)。 */
 .agent-runtime-list__icon--running {
   animation: agent-type-badge-running-border 1.2s ease-in-out infinite alternate;

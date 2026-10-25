@@ -1,3 +1,5 @@
+import { useI18n } from '@/lib/i18n';
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
 import { useCallback, useEffect, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import type { NoteEntry } from '@platform/tauri/client';
 import { setDocumentProperties } from '@features/document/public/path-properties';
@@ -36,6 +38,7 @@ interface TableCellWriterOptions {
 }
 
 export function useTableCellWriter({ enabled, loadGeneration, notebookPath, loadSequenceRef, setNotes, pendingNotePropertiesRef }: TableCellWriterOptions) {
+  const { t } = useI18n();
   const [cellStatusesByRecord, setCellStatusesByRecord] = useState<Map<string, ReadonlyMap<string, TableCellSaveStatus>>>(() => new Map());
   const writesRef = useRef(new Set<Promise<void>>());
   const errorsRef = useRef(new Set<string>());
@@ -130,7 +133,7 @@ export function useTableCellWriter({ enabled, loadGeneration, notebookPath, load
           queue.rollbackValue = request.propertyValue;
           failure = null;
         } catch (error) {
-          failure = error instanceof Error ? error.message : '保存笔记属性失败';
+          failure = friendlyErrorMessage(error, t, 'errors.friendly.propertySave');
           if (!queue.pending) break;
         }
       }

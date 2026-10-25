@@ -16,3 +16,13 @@ export async function openExternallyCreatedNote(
     options: { notebookId },
   });
 }
+
+/** A deliberate card action uses normal navigation, including activating an existing tab. */
+export async function openCreatedDocumentFromNotice(path: string, notebookPath: string, notebookId: string): Promise<boolean> {
+  const result = await openWorkspaceSurface({
+    host: 'browser-column',
+    target: { kind: 'external', path, scopePath: notebookPath, transitionId: null },
+    options: { notebookId },
+  });
+  return result.status !== 'cancelled';
+}

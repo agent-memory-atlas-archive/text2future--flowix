@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { getBrowserColumnSurfaceDefinition, browserColumnSurfaceSupports, type BrowserColumnSurface } from './browser-column-registry';
 import { workspaceSurfaceRendererRegistry } from './workspace-surface-renderer-registry';
 
-const base = { tabId: 'tab-1', instanceKey: 'tab:tab-1' };
+const base = { surfaceId: 'tab-1', instanceKey: 'tab:tab-1' };
 
 describe('Browser surface adapter', () => {
   it('uses common appearance and capabilities for conversation, media and web', () => {

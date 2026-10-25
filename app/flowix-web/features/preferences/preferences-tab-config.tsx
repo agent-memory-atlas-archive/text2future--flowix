@@ -2,6 +2,7 @@ import { lazy, type ComponentType, type LazyExoticComponent, type ReactNode } fr
 import {
   CloudIcon,
   FadersHorizontalIcon,
+  InfoIcon,
   KeyboardIcon,
   RulerIcon,
   StarFourIcon,
@@ -10,7 +11,7 @@ import {
 } from '@phosphor-icons/react';
 import type { I18nKey } from '@/lib/i18n';
 import mcpPluginIcon from '@/assets/mcp-plugin-settings.svg';
-import { AgentIcon } from '@features/agent/components/agent-icon';
+import { AgentIcon } from '@features/agent/public/icon-api';
 
 export interface PreferenceTabProps {
   productInfo?: import('@platform/tauri/client').ProductInfo | null;
@@ -76,6 +77,11 @@ export const PREFERENCE_TAB_GROUPS = [
         icon: <UserIcon className="w-4 h-4" />, contentWidth: 'normal',
         visibleInProductMenu: false,
         ...lazyPreferenceTab(() => import('@features/preferences/sections/cloud-sync').then((module) => ({ default: module.CloudSyncSection }))),
+      },
+      {
+        id: 'productIntro', labelKey: 'preferences.tabs.productIntro',
+        icon: <InfoIcon className="w-4 h-4" weight="regular" />, contentWidth: 'wide',
+        ...lazyPreferenceTab(() => import('@features/preferences/sections/product-intro').then((module) => ({ default: module.ProductIntroSection }))),
       },
     ],
   },

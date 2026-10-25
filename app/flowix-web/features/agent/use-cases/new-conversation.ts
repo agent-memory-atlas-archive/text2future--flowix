@@ -33,6 +33,7 @@ function createAgentConversationInstance(typeKey: AgentTypeKey, notebookId: stri
 
 function openAgentConversation(instanceId: string): void {
   void openWorkspaceSurface({
+    host: 'main-third',
     target: { kind: 'agent-conversation', instanceId, blankIfMissing: true },
   });
 }
@@ -40,6 +41,12 @@ function openAgentConversation(instanceId: string): void {
 /** Create a conversation instance for the browser column's host-specific navigation. */
 export function createBrowserColumnAgentConversation(typeKey: AgentTypeKey, notebookId: string): string {
   return createAgentConversationInstance(typeKey, notebookId).instanceId;
+}
+
+/** Drop an empty Browser conversation when its navigation is cancelled before mounting. */
+export function discardUnopenedBrowserColumnAgentConversation(instanceId: string): void {
+  const instance = useAgentSessionStore.getState().conversationRegistry.instances[instanceId];
+  if (instance && !instance.threadId) useAgentSessionStore.getState().removeInstance(instanceId);
 }
 
 /** Create and open a blank conversation scoped to a notebook. */

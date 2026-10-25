@@ -1,190 +1,146 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from 'react';
-import { CaretDownIcon, CaretUpIcon, CodeIcon, EyeIcon } from '@phosphor-icons/react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 
 import { useI18n } from '@/lib/i18n';
-import { files } from '@platform/tauri/client';
+import { countTextUnits, extractBodyContent } from '@features/document/components/session/document-utils';
+import { documentIdentityFromFile, documentIdentityKey } from '@features/document/store/document-identity';
+import { useDocumentMetricsStore } from '@features/document/store/document-metrics-store';
+import { subscribeExternalDocumentChanges } from '@features/document/store/external-document-watch';
+import { useWorkspaceFocusStore } from '@features/workspace/store/workspace-focus-store';
+import { useDocumentStore } from '@features/document/store/document-store';
+import { workspaceSurfaceAppearance } from '@features/workspace/public/surface-api';
+import { WorkspaceSurfaceStateView } from './workspace-surface-state-view';
+import { useLocalHtmlPreview } from './use-local-html-preview';
 import { DocumentContainer } from '@features/document/components/document-container';
 import { connectLocalHtmlScrollbar } from '@shared/ui/local-html-scrollbar';
-import { Tooltip } from '@shared/ui/tooltip';
-import type { SurfacePresentationUpdate } from '@features/workspace/model/surface-contract';
+import { useDocumentEditorMode, setDocumentEditorMode } from '@features/document/store/document-editor-view-store';
+import type { SurfacePresentationUpdate, SurfaceState } from '@features/workspace/model/surface-contract';
 import type { DocumentContentStatus } from '@features/document/components/session/types';
 
 type DocumentProps = ComponentProps<typeof DocumentContainer>;
 
-const iconButtonStyle: CSSProperties = {
-  width: 28,
-  height: 28,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-export function HtmlResourceView({
-  filePath,
-  scopePath,
-  documentProps,
-  reportPresentation,
-}: {
+type HtmlResourceProps = {
   filePath: string;
   scopePath: string | null;
   documentProps: DocumentProps;
   reportPresentation?: (update: SurfacePresentationUpdate) => void;
-}) {
-  const { t } = useI18n();
-  const [mode, setMode] = useState<'preview' | 'source'>('preview');
-  const [localToolbarCollapsed, setLocalToolbarCollapsed] = useState(documentProps.toolbarCollapsed ?? false);
-  const toolbarCollapsed = documentProps.onToolbarCollapsedChange
-    ? documentProps.toolbarCollapsed ?? false
-    : localToolbarCollapsed;
-  const setToolbarCollapsed = documentProps.onToolbarCollapsedChange ?? setLocalToolbarCollapsed;
-  const src = useMemo(() => files.toAssetUrl(filePath), [filePath]);
-  const previewRef = useRef<HTMLIFrameElement>(null);
-  const [previewState, setPreviewState] = useState<'loading' | 'ready' | 'error'>('loading');
+};
+
+export function HtmlResourceView(props: HtmlResourceProps) {
+  return <HtmlResourceSession key={JSON.stringify([props.filePath, props.scopePath])} {...props} />;
+}
+
+function HtmlResourceSession({ filePath, scopePath, documentProps, reportPresentation }: HtmlResourceProps) {
+  const host = documentProps.workspaceHost ?? 'main-third';
+  const identity = useMemo(() => documentIdentityFromFile(documentProps.fileIdentity), [documentProps.fileIdentity]);
+  // Share the note's host-scoped mode preference; 'rich' renders the HTML preview.
+  const mode = useDocumentEditorMode(host, identity);
   const [previewRetry, setPreviewRetry] = useState(0);
-  const retryPreview = useCallback(() => {
-    setPreviewState('loading');
-    setPreviewRetry((current) => current + 1);
-  }, []);
-  const onContentStateChange = useCallback((state: DocumentContentStatus) => {
-    if (mode !== 'source') return;
-    if (state.status === 'loading') {
-      reportPresentation?.({ state: {
-        status: 'loading', loadingMode: 'blocking', retainContent: state.retainContent,
-      } });
-    } else if (state.status === 'missing-note') {
-      reportPresentation?.({ state: {
-        status: 'error', message: { key: 'document.load.missingNoteTitle' }, detailText: state.path,
-        actions: [
-          { id: 'retry', label: { key: 'error.retry' }, enabled: true, run: state.retry },
-          { id: 'preview', label: { key: 'htmlResource.preview' }, enabled: true, run: () => setMode('preview') },
-        ],
-      } });
-    } else if (state.status === 'error') {
-      reportPresentation?.({ state: {
-        status: 'error', message: { key: 'error.unexpected', fallbackText: state.message },
-        actions: [
-          { id: 'retry', label: { key: 'error.retry' }, enabled: true, run: state.retry },
-          { id: 'preview', label: { key: 'htmlResource.preview' }, enabled: true, run: () => setMode('preview') },
-        ],
-      } });
-    } else {
-      reportPresentation?.({ state: { status: 'ready' } });
+  const retryPreview = useCallback(() => setPreviewRetry((current) => current + 1), []);
+  useEffect(() => subscribeExternalDocumentChanges(filePath, scopePath, retryPreview), [filePath, retryPreview, scopePath]);
+  const showSource = useCallback(() => setDocumentEditorMode(host, identity, 'source'), [host, identity]);
+  const onDocumentResolved = useCallback((available: boolean) => {
+    if (documentProps.documentSessionMode !== 'isolated' && documentProps.transitionId != null) {
+      useDocumentStore.getState().finishDocumentTransition(documentProps.transitionId, available ? 'ready' : 'unavailable');
     }
-  }, [mode, reportPresentation, setMode]);
-
-  useEffect(() => {
-    if (mode !== 'preview') return;
-    reportPresentation?.({ state: previewState === 'loading'
-      ? { status: 'loading', loadingMode: 'blocking', retainContent: false }
-      : previewState === 'error'
-        ? { status: 'error', message: { key: 'document.file.unavailable' },
-            actions: [
-              { id: 'retry', label: { key: 'error.retry' }, enabled: true, run: retryPreview },
-              { id: 'source', label: { key: 'htmlResource.source' }, enabled: true, run: () => setMode('source') },
-            ] }
-        : { status: 'ready' } });
-  }, [mode, previewState, reportPresentation, retryPreview, setMode]);
-
-  useEffect(() => {
-    const iframe = previewRef.current;
-    if (iframe) return connectLocalHtmlScrollbar(iframe);
-  }, [src, mode]);
-
-  useEffect(() => {
-    if (mode === 'preview') setPreviewState('loading');
-  }, [mode, src]);
+  }, [documentProps.documentSessionMode, documentProps.transitionId]);
 
   return (
     <div className="relative h-full min-h-0 min-w-0">
-      <div className="editor-toolbar">
-        {toolbarCollapsed ? (
-          <Tooltip content={t('editor.toolbar.expandTooltip')}>
-            <button
-              className="toolbar-expand-handle"
-              type="button"
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => setToolbarCollapsed(false)}
-              aria-label={t('editor.toolbar.expand')}
-              aria-expanded={false}
-              style={{ width: '2.4rem', height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            >
-              <CaretUpIcon size={14} weight="bold" />
-            </button>
-          </Tooltip>
-        ) : (
-          <div className="toolbar-content">
-            <Tooltip content={t('htmlResource.preview')}>
-              <button
-                type="button"
-                aria-pressed={mode === 'preview'}
-                aria-label={t('htmlResource.preview')}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => { setPreviewState('loading'); setMode('preview'); }}
-                className={`toolbar-button ${mode === 'preview' ? 'active' : ''}`}
-                style={iconButtonStyle}
-              >
-                <EyeIcon size={16} weight="bold" />
-              </button>
-            </Tooltip>
-            <Tooltip content={t('htmlResource.source')}>
-              <button
-                type="button"
-                aria-pressed={mode === 'source'}
-                aria-label={t('htmlResource.source')}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => setMode('source')}
-                className={`toolbar-button ${mode === 'source' ? 'active' : ''}`}
-                style={iconButtonStyle}
-              >
-                <CodeIcon size={16} weight="bold" />
-              </button>
-            </Tooltip>
-            <Tooltip content={t('editor.toolbar.collapseTooltip')}>
-              <button
-                className="toolbar-button"
-                type="button"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => setToolbarCollapsed(true)}
-                aria-label={t('editor.toolbar.collapse')}
-                aria-expanded={true}
-                style={iconButtonStyle}
-              >
-                <CaretDownIcon size={14} weight="bold" />
-              </button>
-            </Tooltip>
-          </div>
-        )}
-      </div>
       <div className="absolute inset-0 min-h-0 min-w-0">
-        <div
-          aria-hidden={mode !== 'source'}
-          inert={mode !== 'source'}
-          className={`absolute inset-0 ${mode === 'source' ? 'z-10' : 'invisible pointer-events-none'}`}
-        >
-          <DocumentContainer
-            {...documentProps}
-            onContentStateChange={reportPresentation ? onContentStateChange : undefined}
-            isExternalDocument
-            externalScopePath={scopePath}
-            readOnly
-          />
-        </div>
-        {mode === 'preview' && (
-          <iframe
-            key={`${src}:${previewRetry}`}
-            ref={previewRef}
-            title={filePath.split(/[\\/]/).filter(Boolean).pop() ?? filePath}
-            src={src}
-            onLoad={() => setPreviewState('ready')}
-            onError={() => setPreviewState('error')}
-            sandbox="allow-scripts"
-            referrerPolicy="no-referrer"
-            className="absolute inset-0 h-full w-full border-0 bg-white"
-          />
+        {mode === 'source' ? (
+          <HtmlSourceView documentProps={documentProps} scopePath={scopePath} reportPresentation={reportPresentation} />
+        ) : (
+          <HtmlPreview key={previewRetry} filePath={filePath} scopePath={scopePath}
+            documentProps={documentProps} retry={retryPreview} showSource={showSource} onDocumentResolved={onDocumentResolved}
+            reportPresentation={reportPresentation} />
         )}
       </div>
     </div>
   );
+}
+
+const HTML_APPEARANCE = workspaceSurfaceAppearance('file-html');
+
+function HtmlPreview({ filePath, scopePath, documentProps, reportPresentation, retry, showSource, onDocumentResolved }: {
+  filePath: string;
+  scopePath: string | null;
+  reportPresentation?: HtmlResourceProps['reportPresentation'];
+  documentProps: DocumentProps;
+  retry: () => void;
+  showSource: () => void;
+  onDocumentResolved: (available: boolean) => void;
+}) {
+  const { t } = useI18n();
+  const { iframeRef, src, content, phase, onLoad } = useLocalHtmlPreview(filePath, scopePath);
+  const focused = useWorkspaceFocusStore((state) => state.focusedHostId === (documentProps.workspaceHost ?? 'main-third'));
+  const documentKey = documentIdentityKey(documentIdentityFromFile(documentProps.fileIdentity));
+  const charCount = useMemo(() => content === null ? 0 : countTextUnits(extractBodyContent(content)), [content]);
+  const metadataCallback = useRef(documentProps.onMetainfoData);
+  metadataCallback.current = documentProps.onMetainfoData;
+  useEffect(() => {
+    if (content === null) return;
+    metadataCallback.current?.({
+      memoContent: content, memoPath: null, charCount, tokenCount: Math.ceil(charCount / 4),
+      createdAt: '', updatedAt: '', isFavorited: false, frontmatterMeta: {},
+    });
+  }, [charCount, content]);
+  useEffect(() => {
+    if (!focused) return;
+    if (content !== null) useDocumentMetricsStore.getState().setCharCount(documentKey, charCount);
+    return () => useDocumentMetricsStore.getState().clear(documentKey);
+  }, [charCount, content, documentKey, focused]);
+  const waiting = phase === 'reading' || phase === 'loading';
+  const failed = phase === 'error' || phase === 'timeout';
+  useEffect(() => {
+    reportPresentation?.({ state: waiting
+      ? { status: 'loading', loadingMode: 'background', retainContent: true }
+      : { status: 'ready' } });
+  }, [reportPresentation, waiting]);
+  useEffect(() => {
+    if (src) onDocumentResolved(true);
+    else if (failed) onDocumentResolved(false);
+  }, [failed, onDocumentResolved, src]);
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (iframe) return connectLocalHtmlScrollbar(iframe);
+  }, [iframeRef, src]);
+
+  return <div className="absolute inset-0 min-h-0 min-w-0">
+    {src && <iframe ref={iframeRef} title={filePath.split(/[\\/]/).pop() ?? filePath}
+      src={src} onLoad={onLoad} sandbox="allow-scripts" referrerPolicy="no-referrer"
+      className="absolute inset-0 h-full w-full border-0 bg-white" />}
+    {waiting && <div role="status" className="pointer-events-none absolute left-3 top-3 z-10 rounded-lg bg-[var(--card)] px-3 py-2 text-xs text-[var(--muted-foreground)] shadow-sm">
+      {t('htmlResource.loading')}
+    </div>}
+    {failed && <div className="absolute inset-0 z-10">
+      <WorkspaceSurfaceStateView appearance={HTML_APPEARANCE} state={{
+        status: 'error', message: { key: phase === 'timeout' ? 'htmlResource.timeout' : 'document.file.unavailable' },
+        actions: [
+          { id: 'retry', label: { key: 'error.retry' }, enabled: true, run: retry },
+          { id: 'source', label: { key: 'htmlResource.source' }, enabled: true, run: showSource },
+        ],
+      }} />
+    </div>}
+  </div>;
+}
+
+function HtmlSourceView({ documentProps, scopePath, reportPresentation }: Pick<HtmlResourceProps, 'documentProps' | 'scopePath' | 'reportPresentation'>) {
+  const [contentState, setContentState] = useState<DocumentContentStatus>({ status: 'loading', retainContent: false });
+  const state: SurfaceState = contentState.status === 'ready' ? { status: 'ready' }
+    : contentState.status === 'loading' ? { status: 'loading', loadingMode: 'blocking', retainContent: false }
+    : { status: 'error', message: contentState.status === 'missing-note'
+        ? { key: 'document.load.missingNoteTitle' }
+        : { key: 'error.unexpected', fallbackText: contentState.message },
+      actions: [{ id: 'retry', label: { key: 'error.retry' }, enabled: true, run: contentState.retry }] };
+  useEffect(() => {
+    reportPresentation?.({ state: contentState.status === 'loading'
+      ? { status: 'loading', loadingMode: 'background', retainContent: true }
+      : { status: 'ready' } });
+  }, [contentState.status, reportPresentation]);
+  return <WorkspaceSurfaceStateView state={state} appearance={HTML_APPEARANCE} keepContentMounted>
+    <DocumentContainer {...documentProps} onContentStateChange={setContentState}
+      isExternalDocument externalScopePath={scopePath} readOnly />
+  </WorkspaceSurfaceStateView>;
 }

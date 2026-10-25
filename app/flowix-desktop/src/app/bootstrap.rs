@@ -199,6 +199,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(crate::frame_scrollbar::init())
+        .plugin(crate::local_html_preview::init())
         .manage(crate::app_update::AppUpdateState::default())
         .manage(open_targets::PendingOpenTargets::default())
         .manage(memo_watcher.clone())
@@ -558,14 +559,11 @@ pub fn run() {
             commands::cloud::cloud_create_checkout,
             commands::cloud::cloud_submit_feedback,
             commands::cloud::cloud_sync_now,
-            commands::cloud::cloud_note_history,
             commands::cloud::list_local_path_archives,
             commands::cloud::restore_local_path_version,
-            commands::cloud::cloud_preview_note_revision,
             commands::cloud::cloud_list_conflicts,
             commands::cloud::cloud_resolve_markdown_conflict,
             commands::cloud::cloud_resolve_attachment_conflict,
-            commands::cloud::cloud_restore_note_revision,
             // Device-local notebook workspaces (local.db).
             commands::agent_workspace::get_agent_workspace,
             commands::agent_workspace::attach_notebook_directory,
@@ -844,173 +842,173 @@ fn spawn_workbench_startup(
     watcher_retry_stop: Arc<AtomicBool>,
 ) {
     tauri::async_runtime::spawn_blocking(move || {
-        loop {
-            let started = Instant::now();
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                prepare_startup_storage(
-                    &device_registry,
-                    &memo_file,
-                    &thread_manager,
-                    &cloud_sync,
-                    &user_config_for_watcher,
-                    &user_config_dir,
-                    &startup,
-                )?;
-                let initial_notebooks = crate::lock_utils::read_lock(&memo_file, "memo_file")
-                    .read_notebook_configs()
-                    .map_err(|error| format!("reload notebook registry failed: {error}"))?;
-                prepare_notebook_selection(&initial_notebooks, &memo_file, &startup)?;
-                Ok::<_, String>(initial_notebooks)
-            }));
+        let started = Instant::now();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prepare_startup_storage(
+                &device_registry,
+                &memo_file,
+                &thread_manager,
+                &cloud_sync,
+                &user_config_for_watcher,
+                &user_config_dir,
+                &startup,
+            )?;
+            Ok::<_, String>(())
+        }));
 
-            match result {
-                Ok(Ok(_)) => {
-                    // Clean crash leftovers before any workspace can start a new run.
-                    match thread_manager.clear_all_loading() {
-                        Ok(0) => tracing::debug!("[Startup] no orphan is_loading=1 rows"),
-                        Ok(n) => tracing::info!("[Startup] cleared {n} orphan is_loading=1 rows"),
-                        Err(error) => tracing::warn!("[Startup] clear_all_loading failed: {error}"),
-                    }
-                    startup.mark_ready();
-                    record_startup_stage(&startup, "native-ready");
-                    tracing::info!(
-                        elapsed_ms = started.elapsed().as_millis(),
-                        "[startup] workspace ready"
-                    );
-                    open_targets::dispatch(&app, open_targets::command_line_targets(std::env::args()), "cold-start");
-                    if !startup.wait_until_interactive(Duration::from_secs(120)) {
-                        tracing::warn!(
-                            "[startup] first workspace paint was not reported within 120 seconds; releasing independent services as a degraded liveness fallback"
-                        );
-                        record_startup_stage(&startup, "interactive-timeout-degraded-release");
-                    }
-                    record_startup_stage(&startup, "background-start");
-                    let app_for_cli_detection = app.clone();
-                    tauri::async_runtime::spawn_blocking(move || {
-                        app_for_cli_detection
-                            .state::<AppState>()
-                            .agent_external_config
-                            .run_startup_detect();
-                    });
-                    crate::maintenance::spawn_startup_maintenance(
-                        app.package_info().version.to_string(),
-                        user_config_dir,
-                        thread_manager,
-                    );
-                    // Cloud readiness/credentials are independent of local startup.
-                    let cloud_app = app.clone();
-                    let session_manager = cloud_sync.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let mut delay = Duration::from_secs(2);
-                        loop {
-                            let manager = session_manager.clone();
-                            let initialized = tauri::async_runtime::spawn_blocking(move || {
-                                manager.initialize_storage()
-                            }).await;
-                            match initialized {
-                                Ok(Ok(())) => break,
-                                Ok(Err(error)) => tracing::warn!(%error, retry_in_ms = delay.as_millis(),
-                                    "background cloud storage unavailable; retry scheduled"),
-                                Err(error) => tracing::warn!(%error, retry_in_ms = delay.as_millis(),
-                                    "background cloud storage worker failed; retry scheduled"),
-                            }
-                            tokio::time::sleep(delay).await;
-                            delay = (delay * 2).min(Duration::from_secs(60));
-                        }
-                        if let Ok(state) = session_manager.state() { let _ = cloud_app.emit("cloud-state-changed", state); }
-                        commands::cloud::start_cloud_sync_polling(cloud_app);
-                        tauri::async_runtime::spawn(async move { session_manager.run_session_service().await; });
-                    });
-                    if let Err(error) = user_config_for_watcher.clear_legacy_watcher_exclusions() {
-                        tracing::warn!(%error, "background watcher defaults could not be persisted");
-                    }
-                    start_post_startup_services(app.clone(), external_runtimes);
-                    let background = app.state::<AppState>().notebook_background.clone();
-                    // Serialize selection + binding so the active root cannot
-                    // lag behind a concurrent notebook switch.
-                    let (current_notebook_id, initial_notebooks) = {
-                        let app_state = app.state::<AppState>();
-                        let app_state = app_state.inner();
-                        let _transition = app_state
-                            .notebook_transition
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        let current_notebook_id = crate::lock_utils::read_lock(&memo_file, "memo_file")
-                            .current_notebook_id_value();
-                        let mut watcher = memo_watcher.write().unwrap_or_else(|p| p.into_inner());
-                        let configs = crate::watcher::runtime::read_registered_notebooks(
-                            user_config_for_watcher.config_dir(),
-                        );
-                        watcher.set_whitelist(user_config_for_watcher.get_preference().watcher);
-                        match configs {
-                            Ok(configs) => {
-                                watcher.rebind_current_notebook(
-                                    app.clone(),
-                                    current_notebook_id.as_deref(),
-                                    configs
-                                        .iter()
-                                        .find(|config| {
-                                            current_notebook_id.as_deref()
-                                                == Some(config.id.as_str())
-                                        })
-                                        .cloned(),
-                                );
-                                (current_notebook_id, configs)
-                            }
-                            Err(error) => {
-                                tracing::warn!(%error, "startup watcher snapshot unavailable; retry deferred");
-                                watcher.rebind_current_notebook(
-                                    app.clone(),
-                                    current_notebook_id.as_deref(),
-                                    None,
-                                );
-                                (current_notebook_id, Vec::new())
-                            }
-                        }
-                    };
-                    if let Some(notebook) = initial_notebooks.iter().find(|n| Some(n.id.as_str()) == current_notebook_id.as_deref()) {
-                        background.prioritize(&notebook.id);
-                    }
-                    background.start(app.clone(), user_config_for_watcher.config_dir().clone());
-                    for notebook in &initial_notebooks {
-                        if current_notebook_id.as_deref() != Some(notebook.id.as_str()) {
-                            background.request(&notebook.id, false, false);
-                        }
-                    }
-                    spawn_notebook_watch_retry(
+        match &result {
+            Ok(Err(error)) => tracing::warn!(%error, "startup preparation skipped"),
+            Err(_) => tracing::warn!("startup preparation panicked; entering product"),
+            _ => {}
+        }
+        // Stage 2 runs even if a migration returned an error or panicked.
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            prepare_runtime_storage(
+                &memo_file,
+                &thread_manager,
+                &user_config_for_watcher,
+                &startup,
+            );
+        }))
+        .is_err()
+        {
+            tracing::warn!("runtime preparation panicked; entering product");
+        }
+        // Clean crash leftovers before any workspace can start a new run.
+        match thread_manager.clear_all_loading() {
+            Ok(0) => tracing::debug!("[Startup] no orphan is_loading=1 rows"),
+            Ok(n) => tracing::info!("[Startup] cleared {n} orphan is_loading=1 rows"),
+            Err(error) => tracing::warn!("[Startup] clear_all_loading failed: {error}"),
+        }
+        startup.mark_ready();
+        record_startup_stage(&startup, "native-ready");
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "[startup] workspace ready"
+        );
+        open_targets::dispatch(
+            &app,
+            open_targets::command_line_targets(std::env::args()),
+            "cold-start",
+        );
+        if !startup.wait_until_interactive(Duration::from_secs(120)) {
+            tracing::warn!(
+                "[startup] first workspace paint was not reported within 120 seconds; releasing independent services as a degraded liveness fallback"
+            );
+            record_startup_stage(&startup, "interactive-timeout-degraded-release");
+        }
+        record_startup_stage(&startup, "background-start");
+        let app_for_cli_detection = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            app_for_cli_detection
+                .state::<AppState>()
+                .agent_external_config
+                .run_startup_detect();
+        });
+        crate::maintenance::spawn_startup_maintenance(
+            app.package_info().version.to_string(),
+            user_config_dir,
+            thread_manager,
+        );
+        // Cloud readiness/credentials are independent of local startup.
+        let cloud_app = app.clone();
+        let session_manager = cloud_sync.clone();
+        tauri::async_runtime::spawn(async move {
+            let mut delay = Duration::from_secs(2);
+            loop {
+                let manager = session_manager.clone();
+                let initialized = tauri::async_runtime::spawn_blocking(move || {
+                    manager.initialize_runtime_storage()
+                })
+                .await;
+                match initialized {
+                    Ok(Ok(())) => break,
+                    Ok(Err(error)) => tracing::warn!(%error, retry_in_ms = delay.as_millis(),
+                                "background cloud storage unavailable; retry scheduled"),
+                    Err(error) => tracing::warn!(%error, retry_in_ms = delay.as_millis(),
+                                "background cloud storage worker failed; retry scheduled"),
+                }
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(60));
+            }
+            if let Ok(state) = session_manager.state() {
+                let _ = cloud_app.emit("cloud-state-changed", state);
+            }
+            commands::cloud::start_cloud_sync_polling(cloud_app);
+            tauri::async_runtime::spawn(async move {
+                session_manager.run_session_service().await;
+            });
+        });
+        if let Err(error) = user_config_for_watcher.clear_legacy_watcher_exclusions() {
+            tracing::warn!(%error, "background watcher defaults could not be persisted");
+        }
+        start_post_startup_services(app.clone(), external_runtimes);
+        let background = app.state::<AppState>().notebook_background.clone();
+        // Serialize selection + binding so the active root cannot
+        // lag behind a concurrent notebook switch.
+        let (current_notebook_id, initial_notebooks) = {
+            let app_state = app.state::<AppState>();
+            let app_state = app_state.inner();
+            let _transition = app_state
+                .notebook_transition
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let current_notebook_id =
+                crate::lock_utils::read_lock(&memo_file, "memo_file").current_notebook_id_value();
+            let mut watcher = memo_watcher.write().unwrap_or_else(|p| p.into_inner());
+            let configs = crate::watcher::runtime::read_registered_notebooks(
+                user_config_for_watcher.config_dir(),
+            );
+            watcher.set_whitelist(user_config_for_watcher.get_preference().watcher);
+            match configs {
+                Ok(configs) => {
+                    watcher.rebind_current_notebook(
                         app.clone(),
-                        memo_watcher.clone(),
-                        user_config_for_watcher.config_dir().clone(),
-                        background.clone(),
-                        watcher_retry_stop.clone(),
+                        current_notebook_id.as_deref(),
+                        configs
+                            .iter()
+                            .find(|config| {
+                                current_notebook_id.as_deref() == Some(config.id.as_str())
+                            })
+                            .cloned(),
                     );
-                    tracing::info!(
-                        elapsed_ms = started.elapsed().as_millis(),
-                        "[startup] background services admitted"
-                    );
-                    record_startup_stage(&startup, "background-services-admitted");
-                    return;
+                    (current_notebook_id, configs)
                 }
-                Ok(Err(error)) => {
-                    tracing::error!("[startup] foreground preparation failed: {error}");
-                    crate::runtime_log::record_event("error", "startup.failed", serde_json::json!({
-                    "step": startup.status().step, "error": error,
-                    "elapsedMs": startup.elapsed_ms(), "attemptElapsedMs": started.elapsed().as_millis()
-                }).to_string());
-                    startup.mark_failed(error);
-                }
-                Err(_) => {
-                    tracing::error!("[startup] foreground preparation panicked");
-                    crate::runtime_log::record_event(
-                        "error",
-                        "startup.failed",
-                        "startup migration panicked",
+                Err(error) => {
+                    tracing::warn!(%error, "startup watcher snapshot unavailable; retry deferred");
+                    watcher.rebind_current_notebook(
+                        app.clone(),
+                        current_notebook_id.as_deref(),
+                        None,
                     );
-                    startup.mark_failed("startup migration panicked");
+                    (current_notebook_id, Vec::new())
                 }
             }
-            startup.wait_for_retry();
+        };
+        if let Some(notebook) = initial_notebooks
+            .iter()
+            .find(|n| Some(n.id.as_str()) == current_notebook_id.as_deref())
+        {
+            background.prioritize(&notebook.id);
         }
+        background.start(app.clone(), user_config_for_watcher.config_dir().clone());
+        for notebook in &initial_notebooks {
+            if current_notebook_id.as_deref() != Some(notebook.id.as_str()) {
+                background.request(&notebook.id, false, false);
+            }
+        }
+        spawn_notebook_watch_retry(
+            app.clone(),
+            memo_watcher.clone(),
+            user_config_for_watcher.config_dir().clone(),
+            background.clone(),
+            watcher_retry_stop.clone(),
+        );
+        tracing::info!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "[startup] background services admitted"
+        );
+        record_startup_stage(&startup, "background-services-admitted");
     });
 }
 
@@ -1102,36 +1100,70 @@ fn spawn_notebook_watch_retry(
     });
 }
 
+fn skip_startup_error<T, E: std::fmt::Display>(step: &str, result: Result<T, E>) -> Option<T> {
+    match result {
+        Ok(value) => Some(value),
+        Err(error) => {
+            tracing::warn!(%step, %error, "startup operation skipped");
+            None
+        }
+    }
+}
+
+fn prepare_runtime_storage(
+    memo_file: &Arc<RwLock<flowix_core::memo_file::MemoFile>>,
+    thread_manager: &ThreadManager,
+    user_config: &crate::config::UserConfigStore,
+    startup: &crate::app::startup::StartupCoordinator,
+) {
+    startup.mark_running(
+        crate::app::startup::StartupStage::WorkspacePreparation,
+        "preparingData",
+    );
+    skip_startup_error(
+        "initialize thread runtime",
+        thread_manager.initialize_runtime_storage(),
+    );
+    {
+        let memo = crate::lock_utils::read_lock(memo_file, "memo_file");
+        skip_startup_error(
+            "initialize notebook runtime",
+            memo.initialize_runtime_registry_storage(),
+        );
+        // Both stores share local.db: notebooks must exist before property presets.
+        skip_startup_error(
+            "initialize runtime configuration",
+            user_config.initialize_current_runtime_storage(),
+        );
+    }
+    let initial_notebooks = skip_startup_error(
+        "read notebook registry",
+        crate::lock_utils::read_lock(memo_file, "memo_file").read_notebook_configs(),
+    )
+    .unwrap_or_default();
+    skip_startup_error(
+        "select notebook",
+        prepare_notebook_selection(&initial_notebooks, memo_file, startup),
+    );
+    user_config.prepare_initialized_runtime();
+}
+
 fn prepare_startup_storage(
     device_registry: &crate::device_registration::DeviceRegistry,
     memo_file: &Arc<RwLock<flowix_core::memo_file::MemoFile>>,
-    thread_manager: &ThreadManager,
-    cloud_sync: &flowix_sync::SyncManager,
+    _thread_manager: &ThreadManager,
+    _cloud_sync: &flowix_sync::SyncManager,
     user_config: &crate::config::UserConfigStore,
     user_config_dir: &Path,
     startup: &crate::app::startup::StartupCoordinator,
 ) -> Result<(), String> {
-    if device_registry.last_successful_app_version().is_some()
-        && !user_config_dir
-            .join("db/local.db")
-            .try_exists()
-            .map_err(|error| error.to_string())?
-        && !user_config_dir
-            .join("local.db")
-            .try_exists()
-            .map_err(|error| error.to_string())?
-    {
-        return Err(
-            "notebook registry is missing from an existing installation; recovery required".into(),
-        );
-    }
     let version_init_pending = version_initialization_pending(device_registry);
     if version_init_pending {
         startup.mark_running(
             crate::app::startup::StartupStage::Initialization,
             "versionInitialization",
         );
-        startup.set_progress(0, 0, 4, "prepareDatabasePaths");
+        startup.set_progress(0, 0, 2, "prepareDatabasePaths");
     } else {
         // Also reset retry state here: even a failed rebuild stays in stage 2.
         startup.mark_running(
@@ -1140,51 +1172,56 @@ fn prepare_startup_storage(
         );
     }
     if version_init_pending {
-        crate::storage_initialization::prepare_database_paths(user_config_dir)
-            .map_err(|error| format!("prepare database paths failed: {error}"))?;
+        if let Err(error) = crate::storage_initialization::prepare_database_paths(user_config_dir) {
+            tracing::warn!(%error, "database path migration skipped");
+        }
     } else {
-        flowix_core::memo_file::ensure_storage_directory(&user_config_dir.join("db"))
-            .map_err(|error| format!("prepare current database directory failed: {error}"))?;
+        skip_startup_error(
+            "prepare database directory",
+            flowix_core::memo_file::ensure_storage_directory(&user_config_dir.join("db")),
+        );
     }
+    // Thread and cloud databases are opened in stage 2 / background services.
     if version_init_pending {
-        startup.set_progress(8, 1, 4, "prepareThreadDatabase");
+        startup.set_progress(15, 1, 2, "prepareNotebookRegistry");
     }
-    thread_manager
-        .initialize_storage()
-        .map_err(|error| format!("initialize thread database failed: {error}"))?;
-    if version_init_pending {
-        startup.set_progress(16, 2, 4, "prepareSyncDatabase");
-    }
-    if version_init_pending {
-        cloud_sync.initialize_storage()
-            .map_err(|error| format!("initialize sync database failed: {error}"))?;
-    }
-    if version_init_pending {
-        startup.set_progress(24, 3, 4, "prepareNotebookRegistry");
-    }
-    {
+    let registry_migrated = if version_init_pending {
         let memo = crate::lock_utils::read_lock(memo_file, "memo_file");
-        let result = memo.initialize_registry_storage();
-        result.map_err(|error| format!("initialize notebook registry failed: {error}"))?;
-    }
+        memo.migrate_existing_registry_storage()
+    } else {
+        true
+    };
     if version_init_pending {
-        startup.set_progress(30, 4, 4, "prepareNotebookRegistry");
+        startup.set_progress(30, 2, 2, "prepareNotebookRegistry");
     }
     user_config.prepare_runtime_watcher_exclusions();
     if !version_init_pending {
         // Stage 2 only opens/rebuilds current runtime stores. Do not inspect or
         // replay legacy jobs, even if their completion records were lost or a
         // notebook was unavailable during the first initialization.
-        user_config.ensure_runtime_storage()?;
         user_config.prepare_initialized_runtime();
         tracing::info!("[startup] version initialization already completed for this app version");
         record_startup_stage(startup, "version-initialization-skipped");
         return Ok(());
     }
 
-    if crate::lock_utils::read_lock(memo_file, "memo_file")
-        .local_migration_completed(crate::storage_initialization::CONFIG_LOCAL_MIGRATIONS_JOB)
-        .map_err(|error| format!("read configuration initialization progress failed: {error}"))?
+    if !registry_migrated {
+        // No usable migration source. Leave registry creation to stage 2;
+        // querying the migration journal here would create it prematurely.
+        user_config.prepare_initialized_runtime();
+        skip_startup_error(
+            "record initialization completion",
+            device_registry.complete_version_initialization(),
+        );
+        return Ok(());
+    }
+
+    if skip_startup_error(
+        "read configuration migration progress",
+        crate::lock_utils::read_lock(memo_file, "memo_file")
+            .local_migration_completed(crate::storage_initialization::CONFIG_LOCAL_MIGRATIONS_JOB),
+    )
+    .unwrap_or(false)
     {
         user_config.prepare_initialized_runtime();
     }
@@ -1193,9 +1230,13 @@ fn prepare_startup_storage(
         "[startup] starting version initialization"
     );
     record_startup_stage(startup, "version-initialization-start");
-    device_registry.begin_version_initialization()?;
+    skip_startup_error(
+        "record initialization start",
+        device_registry.begin_version_initialization(),
+    );
 
-    let migrations_complete =
+    let migrations_complete = skip_startup_error(
+        "migrate legacy storage",
         crate::storage_initialization::initialize_legacy_storage_with_progress(
             device_registry,
             &crate::lock_utils::read_lock(memo_file, "memo_file"),
@@ -1206,18 +1247,22 @@ fn prepare_startup_storage(
                 let percent = 30 + (55 * completed / total.max(1)) as u8;
                 startup.set_progress(percent, completed, total, task);
             },
-        )?;
+        ),
+    )
+    .unwrap_or(false);
 
     startup.set_progress(88, 0, 2, "prepareRuntimeStorage");
-    user_config.ensure_runtime_storage()?;
     startup.set_progress(95, 1, 2, "activateRuntime");
     user_config.prepare_initialized_runtime();
 
     if migrations_complete {
-        device_registry.complete_version_initialization()?;
+        skip_startup_error(
+            "record initialization completion",
+            device_registry.complete_version_initialization(),
+        );
     } else {
         tracing::warn!(
-            "optional storage migrations remain pending; startup continues and retries next launch"
+            "storage migrations remain pending; startup continues and retries next launch"
         );
     }
     startup.set_progress(100, 2, 2, "completeInitialization");
@@ -1531,6 +1576,80 @@ mod missing_dependency_tests {
     }
 
     #[test]
+    fn initialization_marker_write_failure_does_not_block_fresh_runtime() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().to_path_buf();
+        let config = get_user_config_dir(&home);
+        let user = Arc::new(user_config::UserConfigStore::new(home));
+        let device = crate::device_registration::DeviceRegistry::load(&config, "test");
+        let marker = config.join("boot/boot.json");
+        if marker.is_file() {
+            std::fs::remove_file(&marker).unwrap();
+        }
+        std::fs::create_dir_all(&marker).unwrap();
+        let memo = Arc::new(RwLock::new(flowix_core::memo_file::MemoFile::new(
+            config.clone(),
+        )));
+        let threads = ThreadManager::new_uninitialized(config.join("db/thread.db")).unwrap();
+        let startup = StartupCoordinator::new();
+        prepare_storage(&config, user.clone(), &device, &memo, &startup).unwrap();
+        assert!(!config.join("db/local.db").exists());
+        prepare_runtime_storage(&memo, &threads, &user, &startup);
+        assert!(memo
+            .read()
+            .unwrap()
+            .read_notebook_configs()
+            .unwrap()
+            .is_empty());
+        user.initialize_current_runtime_storage().unwrap();
+    }
+
+    #[test]
+    fn unavailable_property_data_uses_defaults_without_deleting_shared_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().to_path_buf();
+        let config = get_user_config_dir(&home);
+        let user = user_config::UserConfigStore::new(home);
+        let memo = Arc::new(RwLock::new(flowix_core::memo_file::MemoFile::new(config.clone())));
+        memo.read().unwrap().initialize_registry_storage().unwrap();
+        user.initialize_current_runtime_storage().unwrap();
+        let connection = rusqlite::Connection::open(config.join("db/local.db")).unwrap();
+        connection.execute_batch("INSERT INTO notebooks(id,name,path,is_default,created_at,updated_at) VALUES ('keep','Keep','/tmp/keep',1,1,1); INSERT INTO property_presets(scope,id,property_key,property_type,revision,updated_at) VALUES ('user','fld_bad','custom','Text','invalid',1);").unwrap();
+        let threads = ThreadManager::new_uninitialized(config.join("db/thread.db")).unwrap();
+        prepare_runtime_storage(&memo, &threads, &user, &StartupCoordinator::new());
+        assert_eq!(memo.read().unwrap().read_notebook_configs().unwrap()[0].id,"keep");
+        let defaults = user.get_property_presets().unwrap();
+        assert!(defaults.system_fields.iter().any(|field| field.key == "status"));
+        assert_eq!(connection.query_row("SELECT revision FROM property_presets WHERE id='fld_bad'",[],|row|row.get::<_,String>(0)).unwrap(),"invalid");
+        assert!(!config.join("db/rebuild-backups").exists());
+    }
+
+    #[test]
+    fn broken_property_schema_preserves_existing_notebook_registry() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().to_path_buf();
+        let config = get_user_config_dir(&home);
+        let user = user_config::UserConfigStore::new(home);
+        let memo = Arc::new(RwLock::new(flowix_core::memo_file::MemoFile::new(
+            config.clone(),
+        )));
+        memo.read().unwrap().initialize_registry_storage().unwrap();
+        let connection = rusqlite::Connection::open(config.join("db/local.db")).unwrap();
+        connection.execute_batch("INSERT INTO notebooks(id,name,path,is_default,created_at,updated_at) VALUES ('keep','Keep','/tmp/keep',1,11,22);").unwrap();
+        let before = serde_json::to_value(memo.read().unwrap().read_notebook_configs().unwrap()).unwrap();
+        connection
+            .execute_batch("CREATE TABLE property_presets (bad TEXT);")
+            .unwrap();
+        drop(connection);
+        let threads = ThreadManager::new_uninitialized(config.join("db/thread.db")).unwrap();
+        let startup = StartupCoordinator::new();
+        prepare_runtime_storage(&memo, &threads, &user, &startup);
+        assert_eq!(serde_json::to_value(memo.read().unwrap().read_notebook_configs().unwrap()).unwrap(), before);
+        user.initialize_current_runtime_storage().unwrap();
+        assert!(!config.join("db/rebuild-backups").exists());
+    }
+
+    #[test]
     fn completed_version_skips_legacy_jobs_despite_old_settings_and_offline_notebooks() {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().to_path_buf();
@@ -1731,7 +1850,7 @@ mod missing_dependency_tests {
     }
 
     #[test]
-    fn corrupt_registry_blocks_startup_without_replacing_notebooks() {
+    fn corrupt_registry_is_preserved_and_startup_continues() {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().to_path_buf();
         let config = get_user_config_dir(&home);
@@ -1757,12 +1876,12 @@ mod missing_dependency_tests {
         let startup = StartupCoordinator::new();
         assert!(
             prepare_startup_storage(&device, &memo, &threads, &sync, &user, &config, &startup)
-                .is_err()
+                .is_ok()
         );
-        assert_eq!(
-            std::fs::read(config.join("db/local.db")).unwrap(),
-            b"invalid database"
-        );
+        assert_eq!(std::fs::read(config.join("db/local.db")).unwrap(), b"invalid database");
+        prepare_runtime_storage(&memo, &threads, &user, &startup);
+        assert!(config.join("db/rebuild-backups").is_dir());
+        assert!(memo.read().unwrap().read_notebook_configs().unwrap().is_empty());
         assert_eq!(
             std::fs::read(config.join("db/sync.db")).unwrap(),
             b"invalid database"
@@ -1770,7 +1889,7 @@ mod missing_dependency_tests {
     }
 
     #[test]
-    fn missing_registry_requires_recovery_with_completed_boot_marker() {
+    fn missing_registry_is_created_on_demand_with_completed_boot_marker() {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().to_path_buf();
         let config_dir = get_user_config_dir(&home);
@@ -1802,8 +1921,10 @@ mod missing_dependency_tests {
             &config_dir,
             &startup,
         )
-        .is_err());
+        .is_ok());
         assert!(device.is_version_initialization_complete());
         assert!(!config_dir.join("db/local.db").exists());
+        prepare_runtime_storage(&memo, &threads, &user_config, &startup);
+        assert!(memo.read().unwrap().read_notebook_configs().unwrap().is_empty());
     }
 }

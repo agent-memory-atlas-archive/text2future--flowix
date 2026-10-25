@@ -181,7 +181,7 @@
   }
 
   html.flowix-pdf-printing .flowix-pdf-print-scope .markdown-editor .ProseMirror h1 {
-    font-size: calc(var(--editor-font-size, 16px) * 1.9);
+    font-size: calc(var(--editor-font-size, 16px) * 1.8);
     padding-top: 1rem;
     padding-bottom: calc(var(--editor-font-size, 16px) * 0.3);
   }

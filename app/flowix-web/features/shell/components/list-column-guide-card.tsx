@@ -2,6 +2,7 @@
 
 import {
   useState,
+  useEffect,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
@@ -9,29 +10,43 @@ import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 
 import { useI18n, type I18nKey } from '@/lib/i18n';
 import type { MemoListViewTab } from '@features/memo/components/memo-list-view-tabs';
+import { NotebookTreeVisibilityList } from '@features/memo/components/notebook-tree-visibility-list';
 
 const DISMISSED_KEY = 'flowix:list-column-guide:dismissed:v1';
+
+function wasDismissed() {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(DISMISSED_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
 
 const PAGES = [
   {
     view: 'folders',
     title: 'memo.guide.fileTree.title',
+    subtitle: undefined,
     description: 'memo.guide.fileTree.description',
   },
   {
-    view: 'conversations',
-    title: 'memo.guide.conversations.title',
-    description: 'memo.guide.conversations.description',
+    view: 'folders',
+    title: 'memo.guide.modules.title',
+    subtitle: 'memo.guide.modules.subtitle',
+    description: undefined,
   },
   {
     view: 'cards',
     title: 'memo.guide.notes.title',
+    subtitle: undefined,
     description: 'memo.guide.notes.description',
   },
 ] satisfies ReadonlyArray<{
   view: MemoListViewTab;
   title: I18nKey;
-  description: I18nKey;
+  subtitle?: I18nKey;
+  description?: I18nKey;
 }>;
 
 function actionButtonHandlers(action: () => void) {
@@ -46,23 +61,6 @@ function actionButtonHandlers(action: () => void) {
   };
 }
 
-function wasDismissed() {
-  if (typeof window === 'undefined') return false;
-  try {
-    return window.localStorage.getItem(DISMISSED_KEY) === 'true';
-  } catch {
-    return false;
-  }
-}
-
-function rememberDismissed() {
-  try {
-    window.localStorage.setItem(DISMISSED_KEY, 'true');
-  } catch {
-    // Keep the guide dismissible when storage is unavailable.
-  }
-}
-
 export function ListColumnGuideCard({
   activeView,
   onViewChange,
@@ -72,27 +70,27 @@ export function ListColumnGuideCard({
 }) {
   const { t } = useI18n();
   const [dismissed, setDismissed] = useState(wasDismissed);
-  const [visitedPages, setVisitedPages] = useState<ReadonlySet<MemoListViewTab>>(
-    () => new Set(),
-  );
-  const pageIndex = PAGES.findIndex(({ view }) => view === activeView);
+  const [pageIndex, setPageIndex] = useState(() => PAGES.findIndex(({ view }) => view === activeView));
+  useEffect(() => {
+    if (activeView === 'conversations') return;
+    setPageIndex((index) => PAGES[index]?.view === activeView
+      ? index
+      : PAGES.findIndex(({ view }) => view === activeView));
+  }, [activeView]);
   const page = PAGES[pageIndex];
-  const canStart = PAGES.every(({ view }) => visitedPages.has(view));
+  const canStart = pageIndex === PAGES.length - 1;
 
   const dismiss = () => {
-    rememberDismissed();
+    try {
+      window.localStorage.setItem(DISMISSED_KEY, 'true');
+    } catch {
+      // Keep the guide dismissible when storage is unavailable.
+    }
     setDismissed(true);
   };
 
-  const markPageSeen = (view: MemoListViewTab) => {
-    setVisitedPages((seen) => {
-      if (seen.has(view)) return seen;
-      return new Set([...seen, view]);
-    });
-  };
-
   const selectPage = (index: number) => {
-    markPageSeen(PAGES[index].view);
+    setPageIndex(index);
     onViewChange(PAGES[index].view);
   };
 
@@ -101,11 +99,10 @@ export function ListColumnGuideCard({
       dismiss();
       return;
     }
-    markPageSeen(activeView);
-    selectPage((pageIndex + 1) % PAGES.length);
+    selectPage(pageIndex + 1);
   };
 
-  if (dismissed || !page) return null;
+  if (dismissed || !page || activeView === 'conversations') return null;
 
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-3 z-40 flex justify-center px-3">
@@ -114,9 +111,16 @@ export function ListColumnGuideCard({
         className="pointer-events-auto w-full max-w-[360px] rounded-2xl border border-[var(--border-popup)] bg-[color-mix(in_oklch,var(--card)_96%,transparent)] p-3.5 backdrop-blur-xl"
       >
         <div className="mb-2 flex items-center justify-between gap-3">
-          <h2 className="min-w-0 text-[15px] font-semibold leading-5 tracking-[-0.02em] text-[var(--foreground)]">
-            {t(page.title)}
-          </h2>
+          <div className="min-w-0">
+            <h2 className="text-[15px] font-semibold leading-5 tracking-[-0.02em] text-[var(--foreground)]">
+              {t(page.title)}
+            </h2>
+            {page.subtitle && (
+              <p className="mt-0.5 text-xs leading-4 text-[var(--muted-foreground)]">
+                {t(page.subtitle)}
+              </p>
+            )}
+          </div>
           <button
             type="button"
             aria-label={t('memo.guide.close')}
@@ -129,9 +133,9 @@ export function ListColumnGuideCard({
         </div>
 
         <div aria-live="polite" aria-atomic="true" className="min-h-[36px]">
-          <p className="text-sm leading-5 text-[var(--foreground)]">
+          {pageIndex === 1 ? <NotebookTreeVisibilityList /> : page.description && <p className="text-sm leading-5 text-[var(--foreground)]">
             {t(page.description)}
-          </p>
+          </p>}
         </div>
 
         <div className="mt-2 flex items-center justify-between">

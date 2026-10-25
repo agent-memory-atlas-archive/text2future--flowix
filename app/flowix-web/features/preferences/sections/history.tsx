@@ -1,10 +1,11 @@
 'use client';
 
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SectionHeader } from '@features/preferences/sections/primitives';
 import { useI18n } from '@/lib/i18n';
 import { toast } from '@/lib/toast';
-import { errorMessage } from '@/lib/error-message';
 import { notes, type PathArchiveSummary, type PathVersionMeta } from '@platform/tauri/client';
 import { Button } from '@shared/ui/button';
 import { useDocumentStore } from '@features/document/store/document-store';
@@ -21,8 +22,8 @@ export function HistorySection() {
 
   const loadArchives = useCallback(async () => {
     try { setArchives(await notes.listArchives()); }
-    catch (error) { toast.error(errorMessage(error)); }
-  }, []);
+    catch (error) { toast.error(friendlyErrorMessage(error, t, 'errors.friendly.historyLoad')); }
+  }, [t]);
   useEffect(() => { void loadArchives(); }, [loadArchives]);
 
   const openArchive = async (archive: PathArchiveSummary) => {
@@ -33,13 +34,14 @@ export function HistorySection() {
     try {
       const items = await notes.listVersions(archive.notebookId, archive.relativePath);
       if (request === requestSequence.current) setVersions(items);
-    } catch (error) { if (request === requestSequence.current) toast.error(errorMessage(error)); }
+    } catch (error) { if (request === requestSequence.current) toast.error(friendlyErrorMessage(error, t, 'errors.friendly.historyLoad')); }
     finally { if (request === requestSequence.current) setBusy(false); }
   };
 
   const restore = async (version: PathVersionMeta) => {
     if (!selected || !window.confirm(t('preferences.history.restoreConfirm'))) return;
     const archive = selected;
+    let restored = false;
     setBusy(true);
     try {
       const session = useDocumentStore.getState().activeExternalSession;
@@ -53,6 +55,7 @@ export function HistorySection() {
         }
       }
       await notes.restoreArchivedVersion(archive.notebookId, archive.relativePath, version.id);
+      restored = true;
       if (active && useDocumentStore.getState().activeExternalSession?.fileIdentity.path === active.fileIdentity.path) {
         const content = await notes.readDocument(active.fileIdentity.path);
         if (content !== null) {
@@ -62,7 +65,7 @@ export function HistorySection() {
       toast.success(t('preferences.history.restored'));
       setVersions(await notes.listVersions(archive.notebookId, archive.relativePath));
       await loadArchives();
-    } catch (error) { toast.error(errorMessage(error)); }
+    } catch (error) { console.warn('Version restore or refresh failed', error); toast.error(restored ? t('errors.friendly.historyRestoredRefresh') : friendlyErrorMessage(error, t, 'errors.friendly.historyRestore')); }
     finally { setBusy(false); }
   };
 

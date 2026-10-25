@@ -1,20 +1,17 @@
+/**
+ * Workspace 需要的 Agent **目录**查询。
+ *
+ * 这里的两个函数在渲染期同步执行（`resolveFileBrowserContext` 用它判断文件归属），
+ * 所以只能静态依赖 agent-workspace-store —— 一个 20 文件 / 约 3.3k 行的轻量 store。
+ * 会话级操作（需要 agent-session-store，约 220 文件 / 3.3 万行）已拆到
+ * `workspace-session-api.ts`，走函数体内动态 import。不要把两者合并回来。
+ */
 import { useAgentWorkspaceStore } from '@features/agent/store/agent-workspace-store';
-import { useAgentSessionStore } from '@features/agent/store/agent-session-store';
 
 export interface WorkspaceAgentRepository {
   path: string;
   name: string;
   missing: boolean;
-}
-
-/** Restore a persisted conversation through the Agent-owned session lifecycle. */
-export async function hydrateWorkspaceAgentConversation(instanceId: string) {
-  return useAgentSessionStore.getState().hydrateInstance(instanceId);
-}
-
-/** Whether the current process already has this conversation instance in memory. */
-export function hasWorkspaceAgentConversation(instanceId: string): boolean {
-  return useAgentSessionStore.getState().getInstance(instanceId) !== null;
 }
 
 /** Resolve resource roots without exposing Agent access configuration stores. */

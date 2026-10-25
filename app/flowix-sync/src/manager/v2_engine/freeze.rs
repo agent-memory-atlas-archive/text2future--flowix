@@ -103,6 +103,7 @@ impl SyncManager {
                             },
                         )
                         .await?;
+                    let blob_id = reservation.data.blob_id.clone();
                     drop(self.account.require_auth_generation(generation)?);
                     self.client
                         .v2_upload_blob(
@@ -116,28 +117,6 @@ impl SyncManager {
                             note.content.clone(),
                         )
                         .await?;
-                    for attachment in &note.attachments {
-                        drop(self.account.require_auth_generation(generation)?);
-                        let reservation = self
-                            .client
-                            .v2_reserve_blob(
-                                access_token,
-                                &attachment.metadata.content_hash,
-                                attachment.metadata.size_bytes,
-                                "attachment",
-                                &attachment.metadata.mime_type,
-                            )
-                            .await?;
-                        drop(self.account.require_auth_generation(generation)?);
-                        self.client
-                            .v2_upload_blob(
-                                access_token,
-                                &reservation.upload,
-                                &attachment.metadata.mime_type,
-                                attachment.content.clone(),
-                            )
-                            .await?;
-                    }
                     V2PushOperation::NotePut {
                         operation_id: operation_id.clone(),
                         base_revision: base_revision.clone(),
@@ -151,14 +130,10 @@ impl SyncManager {
                                 "markdown".into()
                             },
                             content_hash,
+                            blob_id,
                             size_bytes: i64::try_from(note.content.len()).map_err(|_| {
                                 SyncError::InvalidState("memo content length exceeds i64".into())
                             })?,
-                            attachments: note
-                                .attachments
-                                .iter()
-                                .map(|item| item.metadata.clone())
-                                .collect(),
                         },
                     }
                 }

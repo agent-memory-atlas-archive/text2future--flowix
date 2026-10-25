@@ -97,8 +97,8 @@ export function acquireMemoEventBridge(): () => void {
 
 // ---- Phase 2: dedup middleware ----------------------------------------------
 //
-// 装在最外层 (dispatch 入口) — 后续 filter / log 等 middleware 看到的是
-// dedup 后的"最终事件", 不是中间事件。 这是有意的, 减少下游 rerender。
+// 业务 handler / filter 接收合并后的事件，减少下游重复更新。
+// 后注册的 middleware 位于更外层，会先于 dedup 执行。
 // 守门防止多次 install (StrictMode / HMR 重复 import 不会重复挂 middleware)。
 let memoDedupInstalled = false;
 function installMemoDedup(): void {

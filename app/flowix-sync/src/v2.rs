@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-pub const PROTOCOL_EPOCH: i64 = 2;
+pub const PROTOCOL_EPOCH: i64 = 3;
 
 pub fn v2_content_hash(bytes: &[u8]) -> String {
     base64_url_no_pad(&Sha256::digest(bytes))
@@ -124,6 +124,8 @@ pub struct V2Attachment {
     pub content_hash: String,
     pub size_bytes: i64,
     pub mime_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -182,6 +184,7 @@ pub fn collect_v2_attachments(
                 content_hash: v2_content_hash(&content),
                 size_bytes: i64::try_from(content.len())
                     .map_err(|_| "attachment exceeds i64".to_string())?,
+                blob_id: None,
             },
             content,
         });
@@ -439,6 +442,8 @@ pub struct V2SyncStatus {
     pub server_time: i64,
 }
 
+/// Latest index state newer than the requested cursor, including deletion tombstones.
+/// This is a current head, not a historical operation log entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct V2Change {
@@ -446,9 +451,12 @@ pub struct V2Change {
     pub entity_type: String,
     pub entity_id: String,
     pub notebook_id: Option<String>,
+    #[serde(default)]
+    pub moved_from_note_id: Option<String>,
     pub revision: String,
     pub kind: String,
     pub created_at: i64,
+    pub updated_at: i64,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
@@ -460,10 +468,10 @@ pub struct V2Change {
     #[serde(default)]
     pub content_hash: Option<String>,
     #[serde(default)]
+    pub blob_id: Option<String>,
+    #[serde(default)]
     pub size_bytes: Option<i64>,
     pub deleted: bool,
-    #[serde(default)]
-    pub attachments: Vec<V2Attachment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -491,29 +499,6 @@ pub struct V2Bootstrap {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct V2History {
-    pub note_id: String,
-    pub notebook_id: String,
-    pub current_revision: String,
-    pub revisions: Vec<V2HistoryRevision>,
-    #[serde(default)]
-    pub next_before_seq: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct V2HistoryRevision {
-    pub revision: String,
-    pub deleted: bool,
-    pub relative_path: Option<String>,
-    pub content_hash: Option<String>,
-    pub size_bytes: i64,
-    pub sync_seq: i64,
-    pub created_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct V2BootstrapNotebook {
     pub id: String,
     pub name: String,
@@ -536,13 +521,13 @@ pub struct V2BootstrapNote {
     pub moved_from_note_id: Option<String>,
     pub revision: String,
     pub content_hash: Option<String>,
+    #[serde(default)]
+    pub blob_id: Option<String>,
     pub size_bytes: i64,
     pub deleted: bool,
     pub sync_seq: i64,
     pub created_at: i64,
     pub updated_at: i64,
-    #[serde(default)]
-    pub attachments: Vec<V2Attachment>,
 }
 
 #[derive(Debug, Clone)]
@@ -579,6 +564,7 @@ pub struct V2Usage {
 #[serde(rename_all = "camelCase")]
 pub struct V2BlobReservation {
     pub reservation_id: String,
+    pub blob_id: String,
     pub content_hash: String,
     pub size_bytes: i64,
     pub expires_at: i64,
@@ -617,7 +603,7 @@ pub struct V2BlobDownloadEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct V2BlobDownload {
-    pub content_hash: String,
+    pub blob_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -695,9 +681,8 @@ pub struct V2NotePut {
     pub filename: String,
     pub file_kind: String,
     pub content_hash: String,
+    pub blob_id: String,
     pub size_bytes: i64,
-    #[serde(default)]
-    pub attachments: Vec<V2Attachment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -815,8 +800,8 @@ mod tests {
                 filename: "abc12345.md".into(),
                 file_kind: "markdown".into(),
                 content_hash: "A".repeat(43),
+                blob_id: "blob_test_123".into(),
                 size_bytes: 12,
-                attachments: Vec::new(),
             },
         })
         .unwrap();

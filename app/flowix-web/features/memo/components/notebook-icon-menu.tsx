@@ -9,8 +9,8 @@ import {
   DropdownMenuTrigger,
 } from '@shared/ui/dropdown-menu';
 import { useI18n } from '@/lib/i18n';
-import { PREFERENCE_TAB_GROUPS } from '@features/preferences/public/app-api';
-import { AgentIcon } from '@features/agent/components/agent-icon';
+import { PREFERENCE_TAB_GROUPS } from '@features/preferences/public/tabs-api';
+import { AgentIcon } from '@features/agent/public/icon-api';
 import productLogo from '@/assets/productlogo.png';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';

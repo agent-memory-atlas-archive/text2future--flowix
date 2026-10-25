@@ -3,6 +3,8 @@ import { canonicalDirectoryPath, canonicalPath } from '@/lib/path';
 import type { TableViewType } from '@features/multidimensional-table/public/create-api';
 import { NotebookDocumentCreateDialog, type NotebookDocumentCreateRequest } from './notebook-document-create-dialog';
 
+const refreshNothing = () => Promise.resolve();
+
 export function relativeFolderPath(notebookPath: string, folderPath: string): string {
   const root = canonicalDirectoryPath(notebookPath);
   const folder = canonicalPath(folderPath);
@@ -10,12 +12,13 @@ export function relativeFolderPath(notebookPath: string, folderPath: string): st
   return folder.startsWith(`${root}/`) ? folder.slice(root.length + 1) : folder;
 }
 
-export function useNotebookTreeCreation({ notebookId, notebookPath, defaultCreateFolder, refreshTables, refreshMediaLibraries }: {
+export function useNotebookTreeCreation({ notebookId, notebookPath, defaultCreateFolder, refreshTables, refreshMediaLibraries, refreshWorkDocumentCollections = refreshNothing }: {
   notebookId: string | null;
   notebookPath: string;
   defaultCreateFolder?: string | null;
   refreshTables: () => Promise<void>;
   refreshMediaLibraries: () => Promise<void>;
+  refreshWorkDocumentCollections?: () => Promise<void>;
 }) {
   const [request, setRequest] = useState<NotebookDocumentCreateRequest | null>(null);
   const open = useCallback((kind: NotebookDocumentCreateRequest['kind'], inViews = false, parentPath?: string, viewType?: TableViewType) => {
@@ -23,9 +26,9 @@ export function useNotebookTreeCreation({ notebookId, notebookPath, defaultCreat
     setRequest({
       kind, notebook: { id: notebookId, path: notebookPath }, inViews, viewType,
       parentFolder: () => parentPath === undefined || (kind === 'table' && inViews) ? defaultCreateFolder : relativeFolderPath(notebookPath, parentPath),
-      refresh: kind === 'table' ? refreshTables : kind === 'media-library' ? refreshMediaLibraries : undefined,
+      refresh: kind === 'table' ? refreshTables : kind === 'media-library' ? refreshMediaLibraries : refreshWorkDocumentCollections,
     });
-  }, [notebookId, notebookPath, defaultCreateFolder, refreshTables, refreshMediaLibraries]);
+  }, [notebookId, notebookPath, defaultCreateFolder, refreshTables, refreshMediaLibraries, refreshWorkDocumentCollections]);
   const actions = useMemo(() => ({
     openNewTableDialog: (inViews = false, parentPath?: string, viewType?: TableViewType) => open('table', inViews, parentPath, viewType),
     openNewMediaLibraryDialog: (inViews = false, parentPath?: string) => open('media-library', inViews, parentPath),

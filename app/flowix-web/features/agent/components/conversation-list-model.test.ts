@@ -22,6 +22,33 @@ describe('conversation list model', () => {
     expect(rows[1].title).toBe('new title');
   });
 
+  it('hides empty cards and recovery placeholders but retains untitled messages', () => {
+    const empty = { ...conversation('empty', 900), title: '', threadId: null };
+    const recovery = { ...conversation('recovery', 800), title: '', hasMessages: false };
+    const untitled = { ...conversation('untitled', 700), title: '', hasMessages: true };
+    const sending = { ...conversation('sending', 600), title: '' };
+    const page = mergeConversationPage(EMPTY_CONVERSATION_PAGE_STATE, [empty, recovery, untitled]);
+    expect(selectVisibleConversations(page, { empty, recovery, sending }, 'nb', {}, {
+      sending: true,
+    }).map((row) => row.instanceId)).toEqual(['untitled', 'sending']);
+  });
+
+  it('keeps durable message evidence when a newer live snapshot has not hydrated it', () => {
+    const history = { ...conversation('untitled', 100), title: '', hasMessages: true };
+    const live = { ...conversation('untitled', 200), title: '' };
+    const page = mergeConversationPage(EMPTY_CONVERSATION_PAGE_STATE, [history]);
+    const rows = selectVisibleConversations(page, { live }, 'nb', {});
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ updatedAt: 200, hasMessages: true });
+  });
+
+  it('uses one row for instances bound to the same thread', () => {
+    const named = { ...conversation('named', 100), threadId: 'shared' };
+    const placeholder = { ...conversation('placeholder', 200), threadId: 'shared', title: '' };
+    const page = mergeConversationPage(EMPTY_CONVERSATION_PAGE_STATE, [named]);
+    expect(selectVisibleConversations(page, { placeholder }, 'nb', {})).toEqual([named]);
+  });
+
   it('allows all notebooks when none is selected', () => {
     const page = mergeConversationPage(EMPTY_CONVERSATION_PAGE_STATE, [conversation('other', 200, 'other')]);
     expect(selectVisibleConversations(page, { live: conversation('live', 100) }, null, {}).map((row) => row.instanceId)).toEqual(['other', 'live']);

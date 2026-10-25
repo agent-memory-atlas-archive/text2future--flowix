@@ -9,6 +9,7 @@ import {
 } from './memo-title-editor';
 import type { RenameDocumentTitle } from './memo-title-session';
 import type { ClipboardSnapshot } from '@features/editor/extensions/paste-rules/clipboard';
+import type { WorkspaceHostId } from '@features/workspace/public/host-api';
 
 interface MemoDocumentHeaderProps {
   displayId: string;
@@ -16,10 +17,14 @@ interface MemoDocumentHeaderProps {
   renameTitle: RenameDocumentTitle;
   updatedAt: Date | null;
   editable: boolean;
+  propertyActionsEnabled?: boolean;
+  workspaceHost?: WorkspaceHostId;
+  onActivateProperties?: () => void;
   autoFocus?: boolean;
   sourceMode?: boolean;
   useDocumentSelection?: boolean;
   showPropertiesToggle?: boolean;
+  propertyAreaHovered?: boolean;
   allowReadOnlyBoundaryNavigation?: boolean;
   onMoveToBody: (request: MemoTitleBodyNavigation) => void;
   onPasteToBody?: (snapshot: ClipboardSnapshot) => void;
@@ -56,10 +61,14 @@ export function MemoDocumentHeader({
   renameTitle,
   updatedAt,
   editable,
+  propertyActionsEnabled,
+  workspaceHost,
+  onActivateProperties,
   autoFocus = false,
   sourceMode = false,
   useDocumentSelection = false,
   showPropertiesToggle = true,
+  propertyAreaHovered = false,
   allowReadOnlyBoundaryNavigation = true,
   onMoveToBody,
   onPasteToBody,
@@ -78,9 +87,13 @@ export function MemoDocumentHeader({
       filename={filename}
       renameTitle={renameTitle}
       editable={editable}
+      propertyActionsEnabled={propertyActionsEnabled}
+      workspaceHost={workspaceHost}
+      onActivateProperties={onActivateProperties}
       autoFocus={autoFocus}
       useDocumentSelection={useDocumentSelection}
       showPropertiesToggle={showPropertiesToggle && !sourceMode}
+      propertyAreaHovered={propertyAreaHovered}
       allowReadOnlyBoundaryNavigation={allowReadOnlyBoundaryNavigation}
       onMoveToBody={onMoveToBody}
       onPasteToBody={onPasteToBody}

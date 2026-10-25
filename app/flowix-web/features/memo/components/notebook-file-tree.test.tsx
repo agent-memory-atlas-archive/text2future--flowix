@@ -2,12 +2,15 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { files, notes, type DocTreeItem } from '@platform/tauri/client';
+import { collections, files, notes, type CollectionIndexItem, type DocTreeItem } from '@platform/tauri/client';
 import { toast } from '@/lib/toast';
 import { noteRepository } from '@features/memo/services/note-repository';
 import { EXTERNAL_FILE_DROP_EVENT } from '@features/document/components/use-external-file-drop';
 import type { FolderTreeController } from './use-folder-tree';
 import * as folderTreeModule from './use-folder-tree';
+import { noteMetadata } from '../services/note-metadata-service';
+import * as openSurfaceApi from '@features/workspace/public/open-surface-api';
+import { useNotebookTreeSelectionStore } from '../store/notebook-tree-selection-store';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
 import {
   NotebookFileTree,
@@ -49,7 +52,7 @@ vi.mock('@shared/ui/overlay-scrollbar', () => ({
 vi.mock('@shared/ui/context-menu', () => ({
   ContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  ContextMenuContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ContextMenuContent: ({ children }: { children: React.ReactNode }) => <div role="menu">{children}</div>,
   ContextMenuItem: ({ children, onClick }: { children: React.ReactNode; onClick?: React.MouseEventHandler<HTMLDivElement> }) => <div onClick={onClick}>{children}</div>,
   ContextMenuSubmenu: ({ label, children }: { label: string; children: React.ReactNode }) => <div>{label}{children}</div>,
   ContextMenuSeparator: () => <hr />,
@@ -133,6 +136,7 @@ describe('NotebookFileTree pointer dragging', () => {
   let capturedElement: HTMLElement | null = null;
 
   beforeEach(() => {
+    noteMetadata.clear();
     environment.IS_REACT_ACT_ENVIRONMENT = true;
     host = document.createElement('div');
     document.body.append(host);
@@ -586,6 +590,58 @@ describe('NotebookFileTree pointer dragging', () => {
     await act(async () => root.unmount());
   });
 
+  it.each([false, true])('updates work-document Views membership through the context menu (save fails: %s)', async (saveFails) => {
+    let inViews = false;
+    const collection: CollectionIndexItem = {
+      indexSequence: 1, relativePath: 'Resources.index.yaml', collectionId: 'col_resources',
+      collectionType: 'work_documents', name: 'Resources', schemaVersion: 2,
+      payloadSchemaVersion: 1, revision: 1, properties: {}, createdAt: null, updatedAt: null,
+      modifiedMs: 1, sizeBytes: 0, contentHash: null, parseState: 'valid', errorCode: null,
+      inViews: false, identityConflict: false,
+    };
+    vi.spyOn(files, 'listTableDocuments').mockResolvedValue([]);
+    vi.spyOn(files, 'listMediaLibraries').mockResolvedValue([]);
+    vi.spyOn(collections, 'list').mockImplementation(async () => [{ ...collection, inViews }]);
+    const setInViews = vi.spyOn(collections, 'setInViews').mockImplementation(async (_notebookId, _collectionId, next) => {
+      if (saveFails) throw new Error('save failed');
+      inViews = next;
+    });
+    const resource = { ...item('/notes/Resources.index.yaml', 'document'), resourceKind: 'other' as const };
+    const tree = {
+      rootChildren: [resource], nodes: new Map([[resource.fullPath, resource]]),
+      expanded: new Set<string>(), loading: false, error: null,
+      toggle: vi.fn(), expandTo: vi.fn(async () => {}), collapseAll: vi.fn(),
+      refresh: vi.fn(async () => {}), refreshDirectories: vi.fn(async () => {}), reload: vi.fn(async () => {}),
+    } as unknown as FolderTreeController;
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(
+        <NotebookFileTree notebookId="notebook-1" notebookPath="/notes" notebookName="Notes"
+          tree={tree} onNoteSelect={vi.fn()} onCreateNote={vi.fn()} onMoveNote={successfulMove} />,
+      ));
+      const views = () => host.querySelector('[data-notebook-views-section="true"]')!;
+      const action = (key: string, scope: ParentNode = host) => Array.from(scope.querySelectorAll<HTMLElement>('[role="menu"] div'))
+        .find((node) => node.textContent === key)!;
+      expect(views().querySelector('[data-notebook-tree-kind]')).toBeNull();
+      await act(async () => action('multidimensionalTable.viewMembership.add').click());
+      expect(setInViews).toHaveBeenCalledWith('notebook-1', 'col_resources', true);
+      if (saveFails) {
+        expect(views().querySelector('[data-notebook-tree-kind]')).toBeNull();
+        expect(toast.error).toHaveBeenCalledWith('multidimensionalTable.viewMembership.saveFailed');
+        expect(action('multidimensionalTable.viewMembership.add')).toBeDefined();
+      } else {
+        expect(views().querySelector('[data-notebook-tree-kind]')).not.toBeNull();
+        expect(views().textContent).toContain('Resources');
+        await act(async () => action('multidimensionalTable.viewMembership.hide', views()).click());
+        expect(setInViews).toHaveBeenLastCalledWith('notebook-1', 'col_resources', false);
+        expect(views().querySelector('[data-notebook-tree-kind]')).toBeNull();
+        expect(action('multidimensionalTable.viewMembership.add')).toBeDefined();
+      }
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it('captures a drag on the clicked row so a normal click can still open it', async () => {
     const { root } = await mount(successfulMove);
     const noteRow = host.querySelector<HTMLElement>('[data-notebook-tree-kind="note"]')!;
@@ -1028,6 +1084,141 @@ describe('NotebookFileTree pointer dragging', () => {
     expect(treeRoot.className).toContain('bg-[color-mix(in_oklch,var(--brand)_10%,transparent)]');
     await act(async () => childNoteRow.dispatchEvent(pointerEvent('pointerup', 20, 10)));
     await vi.waitFor(() => expect(onMoveNote).toHaveBeenCalledWith([moveSource('/notes/projects/child.md')], '/notes'));
+    await act(async () => root.unmount());
+  });
+
+  it.each(['false', 'throw', 'success'] as const)('retains only failed batch deletions (%s)', async (outcome) => {
+    const { root, tree } = await mountFlatNotes(successfulMove);
+    const documents = ['a', 'b', 'c'].map(name => item(`/notes/${name}.txt`, 'document'));
+    const onDeleteFile = vi.fn(async (document: DocTreeItem) => {
+      if (document.fullPath.endsWith('b.txt') && outcome !== 'success') {
+        if (outcome === 'throw') throw new Error('permission denied');
+        return false;
+      }
+      return true;
+    });
+    await act(async () => root.render(
+      <NotebookFileTree notebookPath="/notes" notebookName="Notes"
+        tree={{ ...tree, rootChildren: documents }} onNoteSelect={vi.fn()}
+        onCreateNote={vi.fn()} onMoveNote={successfulMove} onDeleteFile={onDeleteFile} />,
+    ));
+    const rows = host.querySelectorAll<HTMLElement>('[data-notebook-tree-path$=".txt"]');
+    await act(async () => rows[0].dispatchEvent(clickEvent()));
+    await act(async () => rows[2].dispatchEvent(clickEvent({ shiftKey: true })));
+    const menu = host.querySelector('[role="menu"]')!;
+    const deleteAction = Array.from(menu.children).find(child => child.textContent === 'memo.fileTree.delete')!;
+    await act(async () => deleteAction.dispatchEvent(clickEvent()));
+    const confirm = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent === 'memo.fileTree.delete')!;
+    expect(confirm).toBeDefined();
+    vi.mocked(toast.error).mockClear();
+    vi.mocked(toast.success).mockClear();
+    await act(async () => confirm.click());
+    expect(onDeleteFile.mock.calls.map(([document]) => document.fullPath)).toEqual(documents.map(document => document.fullPath));
+    expect(onDeleteFile).toHaveBeenCalledWith(documents[0], { silent: true });
+    const selected = Array.from(host.querySelectorAll<HTMLElement>('[data-notebook-tree-path$=".txt"][aria-selected="true"]'));
+    expect(selected.map(row => row.dataset.notebookTreePath)).toEqual(outcome === 'success' ? [] : ['/notes/b.txt']);
+    expect(outcome === 'success' ? toast.success : toast.error).toHaveBeenCalledWith('memo.fileTree.deleteSelectedResult');
+    expect(outcome === 'success' ? toast.error : toast.success).not.toHaveBeenCalled();
+    await act(async () => root.unmount());
+  });
+
+  it.each([
+    { ctrlKey: true }, { metaKey: true }, { shiftKey: true },
+  ])('includes media libraries in multi-selection (%o)', async (modifiers) => {
+    vi.spyOn(files, 'listTableDocuments').mockResolvedValue([]);
+    vi.spyOn(collections, 'list').mockResolvedValue([]);
+    vi.spyOn(files, 'listMediaLibraries').mockResolvedValue([{
+      relativePath: 'library.lib.yaml', collectionId: 'media-1', name: 'Library',
+      modifiedMs: 1, inViews: false,
+    }]);
+    const openSurface = vi.spyOn(openSurfaceApi, 'openWorkspaceSurface').mockResolvedValue({ status: 'cancelled', host: 'main-third', reason: 'navigation-cancelled' });
+    const { root, tree } = await mountFlatNotes(successfulMove);
+    const first = item('/notes/a.md', 'document');
+    const library = item('/notes/library.lib.yaml', 'document');
+    const onNoteSelect = vi.fn();
+    try {
+      await act(async () => root.render(
+        <NotebookFileTree notebookId="notebook-1" notebookPath="/notes" notebookName="Notes"
+          tree={{ ...tree, rootChildren: [first, library] }} activeFilePath={first.fullPath} onNoteSelect={onNoteSelect}
+          onCreateNote={vi.fn()} onMoveNote={successfulMove} />,
+      ));
+      const rows = host.querySelectorAll<HTMLElement>('[data-notebook-tree-path]');
+      const noteRow = Array.from(rows).find(row => row.dataset.notebookTreePath === first.fullPath)!;
+      const libraryRow = Array.from(rows).find(row => row.dataset.notebookTreePath === library.fullPath)!;
+      await act(async () => noteRow.dispatchEvent(clickEvent()));
+      await act(async () => libraryRow.dispatchEvent(clickEvent(modifiers)));
+      expect(useNotebookTreeSelectionStore.getState().paths).toEqual([first.fullPath, library.fullPath]);
+      expect(libraryRow.getAttribute('aria-selected')).toBe('true');
+      expect(useNotebookTreeSelectionStore.getState().contentKinds.get(library.fullPath)).toBe('media-library');
+      expect(openSurface).not.toHaveBeenCalled();
+      expect(onNoteSelect).toHaveBeenCalledTimes(1);
+      if (!modifiers.shiftKey) {
+        await act(async () => libraryRow.dispatchEvent(clickEvent(modifiers)));
+        expect(useNotebookTreeSelectionStore.getState().paths).toEqual([first.fullPath]);
+      }
+      // A normal media-library click sets the anchor for the next Shift range.
+      await act(async () => libraryRow.dispatchEvent(clickEvent()));
+      expect(openSurface).toHaveBeenCalledTimes(1);
+      expect(useNotebookTreeSelectionStore.getState().paths).toEqual([library.fullPath]);
+      await act(async () => noteRow.dispatchEvent(clickEvent({ shiftKey: true })));
+      expect(useNotebookTreeSelectionStore.getState().paths).toEqual([first.fullPath, library.fullPath]);
+      expect(onNoteSelect).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
+  it('only offers deletion when opening the context menu on multiple selected notes', async () => {
+    const { root } = await mountFlatNotes(successfulMove);
+    const rows = host.querySelectorAll<HTMLElement>('[data-notebook-tree-kind="note"]');
+    await act(async () => rows[0].dispatchEvent(clickEvent()));
+    await act(async () => rows[2].dispatchEvent(clickEvent({ shiftKey: true })));
+    await act(async () => rows[1].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 })));
+    const menus = Array.from(host.querySelectorAll('[role="menu"]'));
+    expect(menus.filter(menu => menu.textContent === 'memo.fileTree.delete')).toHaveLength(3);
+    await act(async () => root.unmount());
+  });
+
+  it('keeps the original range anchor across repeated Shift clicks', async () => {
+    const { root } = await mountFlatNotes(successfulMove);
+    const rows = host.querySelectorAll<HTMLElement>('[data-notebook-tree-kind="note"]');
+    await act(async () => rows[0].dispatchEvent(clickEvent()));
+    await act(async () => rows[2].dispatchEvent(clickEvent({ shiftKey: true })));
+    await act(async () => rows[1].dispatchEvent(clickEvent({ shiftKey: true })));
+    expect(Array.from(rows).map(row => row.getAttribute('aria-selected'))).toEqual(['true', 'true', 'false', 'false']);
+    await act(async () => root.unmount());
+  });
+
+  it('selects and drags a range from the pinned list', async () => {
+    const onMoveNote = vi.fn<TestMoveNote>(successfulMove);
+    const { root, tree } = await mount(onMoveNote);
+    vi.mocked(noteRepository.listByPath).mockResolvedValueOnce({
+      notes: ['a', 'b', 'c'].map(name => ({
+        relativePath: `pinned/${name}.md`, title: name, preview: '', thumbnail: null,
+        tags: [], todos: [], agents: [], createdAt: 1, updatedAt: 1,
+        favorited: true, icon: null, colors: [], properties: {},
+      })), nextCursor: null, hasMore: false,
+    });
+    const render = (activeFilePath?: string) => root.render(
+      <NotebookFileTree notebookId="notebook-1" notebookPath="/notes" notebookName="Notes" tree={tree}
+        activeFilePath={activeFilePath} onNoteSelect={vi.fn()} onCreateNote={vi.fn()} onMoveNote={onMoveNote} />,
+    );
+    await act(async () => render());
+    const rows = host.querySelectorAll<HTMLElement>('[data-notebook-tree-path^="/notes/pinned/"]');
+    expect(rows).toHaveLength(3);
+    await act(async () => rows[0].dispatchEvent(clickEvent()));
+    await act(async () => render('/notes/pinned/a.md'));
+    await act(async () => rows[2].dispatchEvent(clickEvent({ shiftKey: true })));
+    expect(Array.from(rows).every(row => row.getAttribute('aria-selected') === 'true')).toBe(true);
+    const folder = host.querySelector<HTMLElement>('[data-notebook-tree-kind="folder"]')!;
+    vi.mocked(document.elementFromPoint).mockReturnValue(folder);
+    await act(async () => rows[1].dispatchEvent(pointerEvent('pointerdown', 10, 10)));
+    await act(async () => rows[1].dispatchEvent(pointerEvent('pointermove', 20, 10)));
+    await act(async () => rows[1].dispatchEvent(pointerEvent('pointerup', 20, 10)));
+    await vi.waitFor(() => expect(onMoveNote).toHaveBeenCalledWith(
+      ['a', 'b', 'c'].map(name => ({ path: `/notes/pinned/${name}.md`, resourceKind: 'note' })), '/notes/projects',
+    ));
     await act(async () => root.unmount());
   });
 

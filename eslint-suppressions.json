@@ -1,0 +1,1052 @@
+{
+  "app/flowix-web/app/app.tsx": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    },
+    "no-control-regex": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/components/agent-conversation-detail.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    },
+    "prefer-const": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/components/agent-conversation-list.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/agent/components/agent-conversation-status-bar.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/agent/components/agent-conversation-titlebar.tsx": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/agent/components/agent-tasks-section.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/components/use-agent-conversation-surface.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/runtime/workspace-snapshot.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/services/dsh-command-service.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/store/context-block.ts": {
+    "no-restricted-imports": {
+      "count": 4
+    }
+  },
+  "app/flowix-web/features/agent/store/initial-runtime-config.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/store/thread-lifecycle-slice.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/agent-link-parser.ts": {
+    "no-control-regex": {
+      "count": 2
+    },
+    "no-useless-escape": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/agent-thread-card-markdown-spec.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/agent-thread-card-markdown.ts": {
+    "no-control-regex": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/agent-thread-card-view.tsx": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/chrome/header-chrome-controller.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/composer/composer-attachment-node-view.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/composer/composer-attachment-token.ts": {
+    "no-control-regex": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "no-useless-escape": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/composer/composer-controller.ts": {
+    "no-control-regex": {
+      "count": 2
+    },
+    "no-restricted-imports": {
+      "count": 3
+    },
+    "prefer-const": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/composer/composer-folder-controller.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    },
+    "no-unsafe-finally": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/composer/composer-folder-data.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/composer/composer-folder-token.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/composer/composer-inline-atom-caret.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/composer/composer-skill-token.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/composer/composer-slash-token.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/link-navigation.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/note/note-picker-controller.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/runtime/thread-card-source.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/settings/external-agent-settings-controller.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/settings/featured-note-cards.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/settings/featured-notes-controller.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    },
+    "prefer-const": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/thread-card/settings/notebook-agent-settings-dialog.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/agent/use-cases/new-conversation.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/collection/folder-collection.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/collection/mutations.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/collection/note-filter-menu.tsx": {
+    "no-restricted-imports": {
+      "count": 9
+    }
+  },
+  "app/flowix-web/features/collection/recovery.ts": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/document/components/agent-thread-card-titlebar.tsx": {
+    "no-restricted-imports": {
+      "count": 5
+    }
+  },
+  "app/flowix-web/features/document/components/csv-preview.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/components/document-container.tsx": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 2
+    },
+    "no-restricted-imports": {
+      "count": 4
+    }
+  },
+  "app/flowix-web/features/document/components/document-save-status.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/components/document-titlebar-controls.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/components/document-titlebar.tsx": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/document/components/lazy-code-editor.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/components/lazy-document-editor.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/components/memo-document-header.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/components/memo-title-editor.tsx": {
+    "no-restricted-imports": {
+      "count": 8
+    }
+  },
+  "app/flowix-web/features/document/components/use-document-commands.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/components/use-document-titlebar-colors.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/properties/color-value-input.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/properties/frontmatter-model.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/document/properties/presets.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/properties/property-type-metadata.ts": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/document/properties/property-type.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/document/properties/tag-value-input.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/public/path-properties.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/public/startup-api.ts": {
+    "prefer-const": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/public/workspace-api.ts": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/store/document-history-store.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/use-cases/agent-location-navigation.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/use-cases/document-navigation.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/document/use-cases/local-document-operations.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/document/use-cases/open-document-local-link.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/editor/code-file.ts": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/editor/components/drag-context-menu/actions.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/editor/components/slash-menu-dropdown.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/editor/extensions/attachment-link/nodes/view-image.ts": {
+    "no-useless-escape": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/editor/extensions/attachment-link/upload/plugin.ts": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/editor/extensions/frontmatter-node-view.ts": {
+    "no-restricted-imports": {
+      "count": 8
+    }
+  },
+  "app/flowix-web/features/editor/extensions/frontmatter-property-editor.ts": {
+    "no-restricted-imports": {
+      "count": 9
+    }
+  },
+  "app/flowix-web/features/editor/extensions/frontmatter-property-error.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/editor/extensions/frontmatter-property-key-picker.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/editor/extensions/frontmatter-property-value.ts": {
+    "no-restricted-imports": {
+      "count": 5
+    }
+  },
+  "app/flowix-web/features/editor/extensions/frontmatter-view-lifecycle.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/editor/extensions/frontmatter.ts": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/editor/extensions/note-link/note-reference-markdown.ts": {
+    "no-useless-escape": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/editor/extensions/note-link/view-note.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/editor/extensions/note-mention/note-mention-data.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/editor/extensions/paste-rules/markdown.ts": {
+    "no-useless-escape": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/editor/extensions/paste-rules/rules.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/editor/extensions/shared/inline-atom-maintenance.test.ts": {
+    "prefer-const": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/editor/extensions/slash-menu.tsx": {
+    "no-restricted-imports": {
+      "count": 4
+    }
+  },
+  "app/flowix-web/features/editor/markdown-editor-extensions.ts": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/editor/markdown-editor.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/editor/markdown-parser-extensions.ts": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/editor/markdown-parser.test.ts": {
+    "no-unexpected-multiline": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/media-library/add-location.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/media-library/media-library-filter-panel.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/media-library/media-library-photo-wall.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/media-library/media-library-reference-markdown.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/media-library/media-library-reference-node.tsx": {
+    "no-restricted-imports": {
+      "count": 6
+    }
+  },
+  "app/flowix-web/features/media-library/media-library-reference-picker.tsx": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/media-library/media-library-view.tsx": {
+    "no-restricted-imports": {
+      "count": 7
+    }
+  },
+  "app/flowix-web/features/media-library/model.ts": {
+    "no-restricted-imports": {
+      "count": 5
+    }
+  },
+  "app/flowix-web/features/media-library/rename-media-library.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/components/file-type-icon.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/memo/components/memo-card.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/components/memo-create-location.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/components/memo-list-loading-state.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/components/memo-list.tsx": {
+    "no-restricted-imports": {
+      "count": 4
+    }
+  },
+  "app/flowix-web/features/memo/components/notebook-access-files-list.test.ts": {
+    "@typescript-eslint/no-require-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/components/notebook-access-files-list.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/components/notebook-create-form.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/memo/components/notebook-dialogs.tsx": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/memo/components/notebook-document-create-dialog.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/memo/components/notebook-file-tree.test.tsx": {
+    "@typescript-eslint/no-this-alias": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/components/notebook-file-tree.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/memo/components/notebook-folder-view.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/memo/components/notebook-list.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/components/notebook-repositories-section.tsx": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/memo/components/notebook-setup-coordinator.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/components/notebook-setup-notice-host.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/components/notebook-tree-file-icon.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/components/notebook-tree-row.tsx": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/memo/components/tag-tree.tsx": {
+    "@typescript-eslint/no-unused-expressions": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/components/use-notebook-todo-count.ts": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/components/use-notebook-tree-rename.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/public/file-icon-api.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/services/note-query-key.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/memo/store/note-store.ts": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/memo/use-cases/open-memo-session.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/builtin-fields.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/create-table-file.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/model.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    },
+    "no-unsafe-optional-chaining": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/table-commands.ts": {
+    "no-restricted-imports": {
+      "count": 4
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/table-document-view.tsx": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 2
+    },
+    "no-restricted-imports": {
+      "count": 22
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/table-field-header.tsx": {
+    "no-restricted-imports": {
+      "count": 4
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/table-note-properties.ts": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/table-preset-bindings.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/table-record-row.tsx": {
+    "no-restricted-imports": {
+      "count": 7
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/table-reference-markdown.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/table-reference-node.tsx": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/table-reference-picker.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/table-secondary-views.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/table-tag-value-input.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/use-auto-content-column-widths.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/use-calendar-controller.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/use-table-session.ts": {
+    "no-restricted-imports": {
+      "count": 4
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/use-table-title.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/use-table-view-management.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/view-selection.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/onboarding/notebook-template-icon.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/onboarding/onboarding-screen.tsx": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/plugin/plugin-agent-workbench.tsx": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/plugin/plugin-document-view.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/plugin/plugin-runner.ts": {
+    "prefer-const": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/plugin/plugin-workbench.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/preferences/public/app-api.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/preferences/sections/agent.tsx": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/preferences/sections/agents.tsx": {
+    "no-restricted-imports": {
+      "count": 4
+    }
+  },
+  "app/flowix-web/features/preferences/sections/document-properties.tsx": {
+    "no-restricted-imports": {
+      "count": 5
+    }
+  },
+  "app/flowix-web/features/preferences/sections/dsh.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/preferences/sections/file-management.tsx": {
+    "no-restricted-imports": {
+      "count": 5
+    }
+  },
+  "app/flowix-web/features/preferences/sections/format.tsx": {
+    "@typescript-eslint/no-floating-promises": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/preferences/sections/general.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/preferences/sections/history.tsx": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/preferences/sections/pi-cloud-models-section.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/preferences/sections/pi.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/preferences/sections/shortcuts.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/properties/property-preset-service.ts": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/shell/components/list-column-content.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/shell/components/list-column-guide-card.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/shell/components/list-column.tsx": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/shell/components/status-bar/notebook-selector-popup.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/shell/components/status-bar/status-bar.tsx": {
+    "no-restricted-imports": {
+      "count": 4
+    }
+  },
+  "app/flowix-web/features/shell/components/workspace-column-context-menu.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/shell/use-cases/finish-onboarding.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/shortcuts/actions.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/surface/browser-column-registry.tsx": {
+    "no-restricted-imports": {
+      "count": 6
+    }
+  },
+  "app/flowix-web/features/surface/code-surface-view.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/surface/document-list-view.tsx": {
+    "no-restricted-imports": {
+      "count": 5
+    },
+    "prefer-const": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/surface/file-browser-view.tsx": {
+    "no-restricted-imports": {
+      "count": 6
+    }
+  },
+  "app/flowix-web/features/surface/html-resource-view.tsx": {
+    "no-restricted-imports": {
+      "count": 10
+    }
+  },
+  "app/flowix-web/features/surface/markdown-document-surface.tsx": {
+    "no-restricted-imports": {
+      "count": 6
+    }
+  },
+  "app/flowix-web/features/surface/media-resource-view.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/surface/registry.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/surface/resolver.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/surface/types.ts": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/surface/use-document-list-data.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/surface/work-column-surface-adapter.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/surface/work-documents-collection-view.tsx": {
+    "no-restricted-imports": {
+      "count": 4
+    }
+  },
+  "app/flowix-web/features/surface/work-file-browser-view.tsx": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/surface/workspace-file-browser-surface-renderer.tsx": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/surface/workspace-surface-lifecycle-bridge.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/surface/workspace-surface-renderer-contract.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/surface/workspace-surface-renderers.tsx": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/surface/workspace-surface-runtime.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/surface/workspace-web-surface-renderer.tsx": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/work-documents/model.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/workspace/use-cases/browser-column-collections.test.ts": {
+    "@typescript-eslint/no-non-null-asserted-optional-chain": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/workspace/use-cases/browser-column-navigation.test.ts": {
+    "@typescript-eslint/no-non-null-asserted-optional-chain": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/workspace/use-cases/browser-column-navigation.ts": {
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/features/workspace/use-cases/collection-display-tracking.ts": {
+    "no-restricted-imports": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/features/workspace/use-cases/workspace-navigation.ts": {
+    "no-empty": {
+      "count": 1
+    },
+    "no-restricted-imports": {
+      "count": 3
+    }
+  },
+  "app/flowix-web/lib/safe-link.ts": {
+    "no-control-regex": {
+      "count": 2
+    }
+  },
+  "app/flowix-web/platform/tauri/event-bus.ts": {
+    "prefer-const": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/shared/ui/popover.tsx": {
+    "prefer-const": {
+      "count": 2
+    }
+  }
+}

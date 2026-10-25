@@ -1,37 +1,12 @@
 /**
- * `memoDispatcher` dedup middleware — 同笔记路径短窗口内合并, last-write-wins。
+ * Coalesce same-note updates within 50ms, keeping the latest payload and merging
+ * derived-change flags. Keys are (notebookId, relativePath).
  *
- * 背景:
- * - 后端 fs_watcher 在 FSEvents 双触发 / 编辑器 debounce save 期间
- *   可能短时间内对同一条 memo emit 多个 `updated` 事件。
- * - Agent 工具链 (read_memo → edit_memo → read_memo) 也可能短时间内
- *   多次更新同一条 memo。
- * - 没有 dedup 时, 前端 `handleMemoUpdated` 会连续跑 N 次
- *   `upsertSortedMemo` → N 次 `set()` → N 次 React rerender。
- *   `useExternalDocumentChangeWatch` 也会跑 N 次 `reloadDocument` →
- *   N 次 IPC + N 次 `applyLoadedContent`。
+ * Create/delete events cancel pending updates and dispatch immediately. Tag
+ * operations flush affected updates before dispatch; derived-only and stale
+ * revision events still forward their derived invalidations separately.
  *
- * 设计:
- * - 按 `getKey(event)` 拿到同一笔记的 key (`notebookId + relativePath`)。
- * - 同 key 在 `delay` 窗口内有新事件 → 清掉旧 timer, 用新事件覆盖
- *   pending, 重启 timer。
- * - timer 到期 → 把最后一次事件 `next()` 给下游, 清掉 pending entry。
- * - 不同 key 互不影响 (按 key 分桶)。
- * - 无 key 的事件 (理论上 MemoEvent 三种 kind 都有 key) 立即 next,
- *   不走 dedup。
- *
- * 注意: deleted 事件也走同一 key — 短窗口内 created → updated → deleted
- * 会合并成最后的 deleted, 符合"用户最终状态"的语义。
- *
- * delay 取值:
- * - 50ms — 后端 fs_watcher 150ms 防抖 + 编辑器典型 100-300ms save
- *   debounce 期间能稳定收敛 2-5 个事件。 短到 UI 看起来即时。
- * - 不要超过 200ms — 跨过这个阈值用户能感知到"列表反应慢"。
- *
- * middleware 顺序: 必须挂在最外层 (dispatch 入口处)。 后续如果加
- * filter / log 等 middleware, 它们看到的是 dedup 后的"最终事件", 不
- * 是中间事件。 这是有意的 ── filter 只关心最终状态, log 也只关心
- * 真正派发的事件。
+ * Register this middleware last when it must run before other middleware.
  */
 
 import type { DispatcherMiddleware } from '@/lib/event-dispatcher';
@@ -55,12 +30,12 @@ function memoEventKey(event: MemoEvent): string | undefined {
   if (event.kind === 'updated')
     return JSON.stringify([event.notebookId, event.memo.relativePath]);
   if (event.kind === 'deleted') return JSON.stringify([event.notebookId, event.relativePath]);
-  // tags_renamed 没有单笔记路径维度，立即派发。
+  // Tag operations affect multiple paths and dispatch immediately.
   return undefined;
 }
 
 /**
- * 创建一个 dedup middleware 实例, 同 key 在 `delay` ms 内合并为最后一次。
+ * 创建 update 合并中间件；create / delete 不延迟。
  *
  * 用法 (在应用启动早期调一次):
  *

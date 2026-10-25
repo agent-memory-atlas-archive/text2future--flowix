@@ -4,6 +4,7 @@ import { createLogger } from '@/lib/logger';
 
 const logger = createLogger('notebook-tree-sections');
 export type NotebookTreeSection = 'agents' | 'pinned' | 'views' | 'files' | 'repositories';
+const sectionListeners = new Set<(notebookId: string, order: NotebookTreeSection[], hidden: NotebookTreeSection[]) => void>();
 
 const DEFAULT_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'views', 'files', 'repositories'];
 const PREVIOUS_DEFAULT_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'files', 'views'];
@@ -36,23 +37,32 @@ export function useNotebookTreeSections(notebookId: string | null, isActive: boo
   useEffect(() => {
     if (!isActive) return;
     let cancelled = false;
+    let updated = false;
+    const receiveSections = (id: string, order: NotebookTreeSection[], hidden: NotebookTreeSection[]) => {
+      if (id !== notebookId) return;
+      updated = true;
+      setSectionOrder(order);
+      setHiddenSections(hidden);
+    };
+    sectionListeners.add(receiveSections);
     setSectionOrder(DEFAULT_TREE_SECTION_ORDER);
     setHiddenSections([]);
-    if (!notebookId) return () => { cancelled = true; };
+    if (!notebookId) return () => { cancelled = true; sectionListeners.delete(receiveSections); };
     void system.getNotebookFileTreePreferences(notebookId).then((preferences) => {
-      if (cancelled) return;
+      if (cancelled || updated) return;
       setSectionOrder(normalizeTreeSectionOrder(preferences.sectionOrder));
       setHiddenSections((preferences.hiddenSections ?? []).filter((item): item is NotebookTreeSection => DEFAULT_TREE_SECTION_ORDER.includes(item as NotebookTreeSection)));
     }).catch((error) => {
       logger.warn('failed to load notebook file tree preferences', { error, notebookId });
     });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; sectionListeners.delete(receiveSections); };
   }, [isActive, notebookId]);
 
   const updateSections = useCallback((order: NotebookTreeSection[], hidden: NotebookTreeSection[]) => {
     setSectionOrder(order);
     setHiddenSections(hidden);
     if (!notebookId) return;
+    sectionListeners.forEach((listener) => listener(notebookId, order, hidden));
     void system.setNotebookFileTreeSectionOrder(notebookId, order, hidden).catch((error) => {
       logger.warn('failed to save notebook tree preferences', { error, notebookId });
     });

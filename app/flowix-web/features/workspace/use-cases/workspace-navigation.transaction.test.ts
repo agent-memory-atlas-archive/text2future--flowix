@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   memoState: {
@@ -74,6 +74,7 @@ vi.mock('@platform/tauri/client', () => ({
 import { useWorkColumnStore } from '../store/work-column-store';
 import { NavigationCancelledError } from '@/lib/navigation-cancelled-error';
 import { useBrowserColumnStore } from '../store/browser-column-store';
+import { registerWorkspaceSurfaceLifecycle } from '../store/surface-lifecycle-store';
 import {
   openExternalTarget,
   reconcileDeletedNotebook,
@@ -96,10 +97,13 @@ function resetWorkspace() {
 }
 
 
+afterEach(() => { registerWorkspaceSurfaceLifecycle('saving-tab', null); });
+
 describe('workspace navigation transaction', () => {
   beforeEach(() => {
     resetWorkspace();
     useBrowserColumnStore.getState().reset();
+    vi.clearAllMocks();
     mocks.memoState.selectedNote = { notebookId: 'notebook-a', relativePath: 'old.md' };
     mocks.memoState.selectedNotebook = null;
     mocks.memoState.selectedNotebookId = null;
@@ -179,6 +183,79 @@ describe('workspace navigation transaction', () => {
     expect(useWorkColumnStore.getState().navigation.target).toMatchObject({
       kind: 'external', path: '/notes/a.md', scopePath: '/notes',
     });
+  });
+
+  it('switches Work without resetting or flushing the independent Browser session', async () => {
+    const notebook = {
+      id: 'next-notebook', name: 'Next', path: '/next',
+      createdAt: 0, updatedAt: 0, isDefault: false,
+    };
+    useWorkColumnStore.setState((state) => ({
+      navigation: { ...state.navigation, target: { kind: 'plugin-workbench', plugin: {} as never } },
+    }));
+    useBrowserColumnStore.setState({
+      visible: true,
+      current: { id: 'web-tab', target: { kind: 'web', url: 'https://example.com' } } as never,
+    });
+    const reset = vi.spyOn(useBrowserColumnStore.getState(), 'reset');
+    const browserBefore = useBrowserColumnStore.getState();
+    const flush = vi.fn(async () => false);
+    registerWorkspaceSurfaceLifecycle('web-tab', { status: 'ready', flush });
+
+    await selectNotebook(notebook);
+
+    expect(mocks.clearDocument).toHaveBeenCalledOnce();
+    expect(reset).not.toHaveBeenCalled();
+    expect(useWorkColumnStore.getState().navigation.target).toEqual({ kind: 'empty' });
+    expect(useBrowserColumnStore.getState()).toBe(browserBefore);
+    expect(flush).not.toHaveBeenCalled();
+    registerWorkspaceSurfaceLifecycle('web-tab', null);
+    reset.mockRestore();
+  });
+
+  it('retains notebook and surfaces when Work saving is refused', async () => {
+    const previous = { id: 'old', path: '/old' };
+    mocks.memoState.selectedNotebook = previous;
+    mocks.memoState.selectedNotebookId = previous.id;
+    const target = { kind: 'web' as const, url: 'https://old.example' };
+    useWorkColumnStore.setState((state) => ({ navigation: { ...state.navigation, target } }));
+    useBrowserColumnStore.getState().openContent({
+      id: 'saving-tab', title: 'Saving', icon: null, target,
+    });
+    const browserBefore = useBrowserColumnStore.getState();
+    mocks.clearDocument.mockRejectedValueOnce(new NavigationCancelledError('Work save refused'));
+
+    await expect(selectNotebook({
+      id: 'next', name: 'Next', path: '/next', createdAt: 0, updatedAt: 0, isDefault: false,
+    })).rejects.toBeInstanceOf(NavigationCancelledError);
+
+    expect(mocks.setCurrentNotebook).not.toHaveBeenCalled();
+    expect(mocks.memoState.setSelectedNotebook).not.toHaveBeenCalled();
+    expect(mocks.memoState.selectedNote).toEqual({ notebookId: 'notebook-a', relativePath: 'old.md' });
+    expect(useBrowserColumnStore.getState()).toBe(browserBefore);
+    expect(useWorkColumnStore.getState().navigation.target).toEqual(target);
+    expect(mocks.clearDocument).toHaveBeenCalledOnce();
+  });
+
+  it('only switches Work once when a queued notebook switch is superseded', async () => {
+    let release!: () => void;
+    const saving = new Promise<void>((resolve) => { release = resolve; });
+    mocks.clearDocument.mockImplementationOnce(() => saving);
+    const book = (id: string) => ({
+      id, name: id, path: `/${id}`, createdAt: 0, updatedAt: 0, isDefault: false,
+    });
+    const reset = vi.spyOn(useBrowserColumnStore.getState(), 'reset');
+    const first = selectNotebook(book('first'));
+    await vi.waitFor(() => expect(mocks.clearDocument).toHaveBeenCalledOnce());
+    const second = selectNotebook(book('second'));
+    release();
+    await Promise.all([first, second]);
+
+    expect(mocks.setCurrentNotebook).toHaveBeenCalledExactlyOnceWith('second');
+    expect(mocks.memoState.selectedNotebook?.id).toBe('second');
+    expect(reset).not.toHaveBeenCalled();
+    expect(useWorkColumnStore.getState().notebookSwitchesInFlight).toBe(0);
+    reset.mockRestore();
   });
 
   it('rolls back notebook selection when switching the backend notebook fails', async () => {

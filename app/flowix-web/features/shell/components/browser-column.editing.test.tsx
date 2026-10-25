@@ -24,7 +24,7 @@ it('does not force the right document read-only when the same memo is open on th
   const work = useWorkColumnStore.getState();
   work.commitNavigation(work.beginNavigation(target, null), target);
   const tab = { id: 'memo:both', title: 'Both', icon: null, target: { kind: 'file-browser' as const, activeFilePath: target.path, folderPath: '/notes', notebookId: 'notes', scopePath: '/notes', fileTreeVisible: true, fileTreeWidth: 220 } };
-  useBrowserColumnStore.getState().openTab(tab);
+  useBrowserColumnStore.getState().openContent(tab);
   try {
     await act(async () => root.render(<BrowserColumn width={500} layoutKey="test" onResize={() => {}} toolbarCollapsed={false} onToolbarCollapsedChange={() => {}} />));
     for (const host of ['main-third', 'browser-column'] as const) {
@@ -65,46 +65,6 @@ it('keeps the content host and horizontal resize control mounted at narrow width
     expect(element.querySelector('[role="separator"]')).not.toBeNull();
   } finally {
     await act(async () => root.unmount());
-    environment.IS_REACT_ACT_ENVIRONMENT = false;
-  }
-});
-
-it('waits for the optimistic tab header to paint before activating heavy content', async () => {
-  const environment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
-  environment.IS_REACT_ACT_ENVIRONMENT = true;
-  const element = document.createElement('div');
-  const root = createRoot(element);
-  const frames: FrameRequestCallback[] = [];
-  vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
-    frames.push(callback);
-    return frames.length;
-  }));
-  const first = { id: 'web:first', title: 'First', icon: null, target: { kind: 'web' as const, url: 'https://first.example' } };
-  const second = { id: 'web:second', title: 'Second', icon: null, target: { kind: 'web' as const, url: 'https://second.example' } };
-  useBrowserColumnStore.getState().openTab(first);
-  useBrowserColumnStore.getState().openTab(second);
-  useBrowserColumnStore.getState().commitTab(first.id);
-
-  try {
-    await act(async () => root.render(<BrowserColumn width={500} layoutKey="paint" onResize={() => {}} toolbarCollapsed={false} onToolbarCollapsedChange={() => {}} />));
-    const onSelectTab = renderHeader.mock.lastCall?.[0].onSelectTab as (tabId: string) => Promise<boolean | null>;
-    const selecting = onSelectTab(second.id);
-
-    expect(useBrowserColumnStore.getState().activeTabId).toBe(first.id);
-    expect(frames).toHaveLength(1);
-    frames.shift()?.(0);
-    expect(useBrowserColumnStore.getState().activeTabId).toBe(first.id);
-    expect(frames).toHaveLength(1);
-
-    await act(async () => {
-      frames.shift()?.(16);
-      await selecting;
-    });
-    expect(useBrowserColumnStore.getState().activeTabId).toBe(second.id);
-  } finally {
-    await act(async () => root.unmount());
-    useBrowserColumnStore.getState().reset();
-    vi.unstubAllGlobals();
     environment.IS_REACT_ACT_ENVIRONMENT = false;
   }
 });

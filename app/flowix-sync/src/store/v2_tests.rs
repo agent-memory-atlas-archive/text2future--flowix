@@ -134,8 +134,8 @@ fn v2_dirty_generation_does_not_lose_an_edit_that_arrives_during_upload() {
             filename: "abc12345.md".into(),
             file_kind: "markdown".into(),
             content_hash: "hash-a".into(),
+            blob_id: "blob_test_123".into(),
             size_bytes: 6,
-            attachments: Vec::new(),
         },
     };
     let data = V2OperationData {

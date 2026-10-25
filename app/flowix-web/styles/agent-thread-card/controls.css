@@ -14,7 +14,7 @@
  *
  * 选类名 __icon-btn (而非 __header-btn) ── 后续若 composer / footer
  * 等位置出现同款方形按钮可直接复用同一基类, 不必再起一个名字。 */
-.markdown-editor .agent-thread-card__icon-btn {
+.agent-thread-card__icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -32,7 +32,7 @@
     color 150ms ease;
 }
 
-.markdown-editor .agent-thread-card__icon-btn:hover {
+.agent-thread-card__icon-btn:hover {
   background: color-mix(in oklch, var(--muted) 70%, transparent);
   color: var(--foreground);
 }
@@ -41,18 +41,18 @@
  * 且因后定义而胜出, 导致按钮设 hidden 仍占位 ── 在基类层显式声明
  * [hidden] = display: none, 任何 __icon-btn 子类 (delete / fullscreen /
  * collapse) 设 hidden 都能正确隐藏。 */
-.markdown-editor .agent-thread-card__icon-btn[hidden] {
+.agent-thread-card__icon-btn[hidden] {
   display: none;
 }
 
 /* 折叠按钮 ── 14×14 Caret 图标。
  * 颜色与 meta 文字一致 (muted-foreground), hover 时背景 var(--muted) 形成
  * "可点击"暗示。不用圆形是因为只有 22px, 圆角 5px 与 agent-icon 视觉对齐。 */
-.markdown-editor .agent-thread-card__collapse {
+.agent-thread-card__collapse {
   /* 视觉由 __icon-btn 提供 ── 这里仅放独有扩展点 (当前无) */
 }
 
-.markdown-editor .agent-thread-card__chevron-icon {
+.agent-thread-card__chevron-icon {
   display: block;
   width: 14px;
   height: 14px;
@@ -66,13 +66,12 @@
   transition: transform 150ms ease;
 }
 
-.markdown-editor
-  .agent-thread-card--collapsed
+.agent-thread-card--collapsed
   .agent-thread-card__chevron-icon {
   transform: rotate(180deg);
 }
 
-.markdown-editor .agent-thread-card--fullscreen .agent-thread-card__collapse {
+.agent-thread-card--fullscreen .agent-thread-card__collapse {
   display: none;
 }
 
@@ -83,16 +82,14 @@
  * 隐藏, reasoning chevron 不会渲染; 反之卡片展开、某条 reasoning 折叠
  * 时, 这里的修饰类仍然能命中。每条 reasoning 独立切旋转, 与父级
  * card 折叠态解耦。 */
-.markdown-editor
-  .agent-thread-card__message--reasoning:not(
+.agent-thread-card__message--reasoning:not(
     .agent-thread-card__message--reasoning-collapsed
   )
   .agent-thread-card__chevron-icon {
   transform: rotate(90deg);
 }
 
-.markdown-editor
-  .agent-thread-card__message--reasoning-collapsed
+.agent-thread-card__message--reasoning-collapsed
   .agent-thread-card__chevron-icon {
   transform: rotate(0deg);
 }
@@ -106,11 +103,11 @@
  *   - 语义解耦: __collapse 是'折叠/展开', __delete 是'删除对话', 行为完全不同。
  *   - 未来扩展: __delete 可能加二次确认 / loading 态 / 错误提示, __collapse 不会。
  *   - DevTools 可读性: 看 className 就能直接区分。 */
-.markdown-editor .agent-thread-card__delete {
+.agent-thread-card__delete {
   /* 视觉由 __icon-btn 提供; 删除按钮 hover 只提示 error 色, 不改变背景。 */
 }
 
-.markdown-editor .agent-thread-card__delete:hover {
+.agent-thread-card__delete:hover {
   background: transparent;
   color: var(--destructive);
 }
@@ -118,7 +115,7 @@
 /* 复用 __copy-icon 口径 ── 14×14, color 继承按钮文字色, 不缩小。
  * 之所以独立类不复用, 是因为以后可能给删除按钮单独调 hover 色或加危险态, 独立类
  * 给未来留扩展空间。 */
-.markdown-editor .agent-icon__trash {
+.agent-conversation-surface .agent-icon__trash {
   display: block;
   width: 14px;
   height: 14px;
@@ -127,11 +124,11 @@
 }
 
 /* 全屏按钮 ── 视觉同 __icon-btn 基类。 */
-.markdown-editor .agent-thread-card__fullscreen {
+.agent-thread-card__fullscreen {
   /* 视觉由 __icon-btn 提供 ── 这里仅放独有扩展点 (当前无) */
 }
 
-.markdown-editor .agent-thread-card__fullscreen-icon {
+.agent-thread-card__fullscreen-icon {
   display: block;
   width: 14px;
   height: 14px;
@@ -146,11 +143,11 @@
  *
  * 图标借用 Phosphor 的 FileTextIcon, 颜色继承按钮文字色, 与全屏 /
  * 折叠 / 删除等图标保持口径一致。 */
-.markdown-editor .agent-thread-card__view-note {
+.agent-thread-card__view-note {
   /* 视觉由 __icon-btn 提供 ── 这里仅放独有扩展点 (当前无) */
 }
 
-.markdown-editor .agent-thread-card__view-note-icon {
+.agent-thread-card__view-note-icon {
   display: block;
   width: 14px;
   height: 14px;
@@ -172,7 +169,7 @@
  * ── 颜色 ──
  *   - var(--muted-foreground) ── 跟其它 header 弱交互元素同 token,
  *     暗示"这是辅助信息, 不是可点击的操作"。 */
-.markdown-editor .agent-thread-card__no-source {
+.agent-thread-card__no-source {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -186,14 +183,14 @@
 /* "…" 下拉触发按钮 ── 视觉同 __icon-btn 基类, glyph 由基类居中布局消化,
  * 这里只放独有扩展点。当前没有自定义样式, 保留空规则以维持 selector
  * 的语义锚点, 未来若需要微调 (例如触发态颜色) 直接在这里补。 */
-.markdown-editor .agent-thread-card__more {
+.agent-thread-card__more {
   /* 视觉由 __icon-btn 提供 ── 这里仅放独有扩展点 (当前无) */
 }
 
 /* "…" 图标 ── 14×14, color 继承按钮文字色, 与全屏 / 折叠 / 删除
  * 等图标的尺寸口径一致 (14×14)。lucide 的 MoreHorizontal 默认 stroke
  * 略细, 在 28px 方格里视觉重量跟其他基类图标持平, 不需要再调粗细。 */
-.markdown-editor .agent-thread-card__more-icon {
+.agent-thread-card__more-icon {
   display: block;
   width: 14px;
   height: 14px;
@@ -228,7 +225,7 @@
  *     其它 1px 描边 (e.g. agent-type-badge) 用同一 token, 视觉一致。
  *   - 不用 var(--muted-foreground) ── 那是文字色 token, 在分割线这
  *     种"非文字"几何元素上复用偏亮, 会让分割线变成"第二条文字"。 */
-.markdown-editor .agent-thread-card__actions-divider {
+.agent-thread-card__actions-divider {
   display: block;
   width: 1px;
   height: 16px;
@@ -237,11 +234,11 @@
   border-radius: 0.5px;
 }
 
-.markdown-editor .agent-thread-card__actions-divider[hidden] {
+.agent-thread-card__actions-divider[hidden] {
   display: none;
 }
 
-.markdown-editor .agent-thread-card__copy-icon {
+.agent-thread-card__copy-icon {
   display: block;
   width: 14px;
   height: 14px;
@@ -260,7 +257,7 @@
  *    卡片边缘有缓冲。3.6rem ≈ 57.6px (16px 根字号), 接近 composer
  *    高度 (≈55px), 给消息"与 composer 对齐的呼吸感"。左右 12px
  *    保持与原来一致, 不影响消息气泡的左右间距。 */
-.markdown-editor .agent-thread-card__body {
+.agent-thread-card__body {
   /* The message renderer owns the visible-row scroll anchor. */
   overflow-anchor: none;
   min-height: 0;
@@ -281,8 +278,7 @@
 
 /* A click transfers wheel ownership to the embedded message viewport. Keep a
  * quiet top/bottom inset cue on the whole card until the user clicks elsewhere. */
-.markdown-editor
-  .agent-thread-card.agent-thread-card--message-scroll-active
+.agent-thread-card.agent-thread-card--message-scroll-active
   > .agent-thread-card__container {
   box-shadow:
     inset 0 5px 14px -8px color-mix(in oklch, var(--brand) 18%, transparent),
@@ -291,17 +287,17 @@
     inset -5px 0 14px -8px color-mix(in oklch, var(--brand) 18%, transparent);
 }
 
-html[data-platform="mac"] .markdown-editor .agent-thread-card__body-frame {
+html[data-platform="mac"] .agent-thread-card__body-frame {
   min-height: 0;
   height: 100%;
 }
 
-html[data-platform="mac"] .markdown-editor .agent-thread-card__body-frame > .agent-thread-card__body {
+html[data-platform="mac"] .agent-thread-card__body-frame > .agent-thread-card__body {
   height: 100%;
   scrollbar-gutter: auto;
 }
 
-.markdown-editor .agent-thread-card--fullscreen .agent-thread-card__body {
+.agent-thread-card--fullscreen .agent-thread-card__body {
   overflow-y: scroll;
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
@@ -312,8 +308,7 @@ html[data-platform="mac"] .markdown-editor .agent-thread-card__body-frame > .age
  * body 是 grid 的第一块可见区域。复用独立 Agent 对话的顶部滚动提示：
  * sticky 伪元素不会增加布局高度，只有 body 已向下滚动时才显示，避免
  * 在消息区顶部制造一条常驻分隔线。 */
-.markdown-editor
-  .agent-thread-card--fullscreen
+.agent-thread-card--fullscreen
   .agent-thread-card__body::before {
   display: block;
   position: sticky;
@@ -333,8 +328,7 @@ html[data-platform="mac"] .markdown-editor .agent-thread-card__body-frame > .age
   transition: opacity 200ms ease;
 }
 
-.markdown-editor
-  .agent-thread-card--fullscreen
+.agent-thread-card--fullscreen
   .agent-thread-card__body.agent-thread-card__body--scrolled::before {
   opacity: 1;
 }
@@ -356,48 +350,14 @@ html[data-platform="mac"] .markdown-editor .agent-thread-card__body-frame > .age
   background: var(--agent-bg, var(--document-bg));
 }
 
-/* 独立 Agent 对话标题栏与消息区使用完全相同的纯色背景。
- * 只作用于 AgentConversationTitlebar, 不覆盖布局级 --bg-titlebar, 因此
- * 普通文档标题栏、偏好设置标题栏和 WindowsTitlebarControls 保持原样。 */
-.agent-conversation-titlebar {
-  background-color: var(--agent-bg, var(--document-bg));
-  background-image: none;
-}
-
-/* Agent-owned titlebars use the same surface as the conversation body. This
- * class is intentionally independent of fullscreen state so Browser Column
- * conversations and fullscreen embedded Thread Cards cannot drift apart. */
+/* Standalone, Browser Column and fullscreen Agent titlebars share the
+ * conversation surface color and the editor's titlebar fade. */
+.agent-conversation-titlebar,
 .agent-surface-titlebar {
   background-color: var(--agent-bg, var(--document-bg));
-  background-image: linear-gradient(
-    to bottom,
-    color-mix(in oklch, var(--primary) 3%, transparent),
-    transparent
-  );
+  background-image: var(--titlebar-gradient);
 }
 
-/* Media resources share the same surface background as conversations, while
- * keeping their own semantic chrome type. */
-.media-surface-titlebar {
-  background-color: var(--agent-bg, var(--document-bg));
-  background-image: none;
-}
-
-/* WebView native video controls are painted inside the replaced element and
- * may ignore the element's border-radius at the corners. Clip the complete
- * rendered layer so the controls' gray overlay follows the same radius,
- * without introducing a sizing wrapper that could crop the video. */
-.media-resource-video {
-  clip-path: inset(0 round 0.5rem);
-}
-
-/* The native WebKit controls panel is darker than the media surface by
- * default. Keep the native controls, but make their gray mask lighter and
- * semi-transparent so the video remains visible underneath. */
-.media-resource-video::-webkit-media-controls-panel {
-  background-color: rgb(96 96 96 / 50%);
-  background-image: none;
-}
 
 /* Keep the relocated control's shape identical to the Thread Card's former
  * fullscreen button: transparent, borderless, and 28px square. Its error
@@ -432,13 +392,6 @@ html[data-platform="mac"] .markdown-editor .agent-thread-card__body-frame > .age
   color: currentColor;
 }
 
-/* Keep the standalone Agent conversation surface on the product font, like
- * embedded Thread Cards. The nested Tiptap composer opts into the user font
- * on its own editor element. */
-.markdown-editor.agent-conversation-detail {
-  font-family: var(--font-sans);
-}
-
 /* 右侧列对话详情 (AgentConversationDetail) header ── 与内嵌 Thread Card
  * 共享同一套基类 .agent-thread-card__header (40px 高 + 0.8rem 左右内边距 +
  * flex space-between + 28×28 icon-btn)。 这里只覆盖两件内嵌卡片做不到 /
@@ -456,7 +409,7 @@ html[data-platform="mac"] .markdown-editor .agent-thread-card__body-frame > .age
  * 不再覆盖 width / padding / margin ── 0.8rem 内边距由基类提供, header
  * 撑满父级宽度, 与内嵌卡片全屏态同源; 内容区 (body / messages) 的 780px
  * 居中由各自 selector 单独约束, 互不干扰。 */
-.markdown-editor.agent-conversation-detail .agent-conversation-detail__header {
+.agent-conversation-detail .agent-conversation-detail__header {
   flex: 0 0 auto;
   cursor: default;
 }
@@ -498,127 +451,117 @@ html[data-platform="mac"] .agent-conversation-detail .agent-thread-card__body {
 
 /* Keep the running indicator on the same message-column track in every
  * Thread Card mode. Expanded surfaces below narrow this shared track. */
-.markdown-editor .agent-thread-card__messages,
-.markdown-editor .agent-thread-card__body > .agent-thread-card__loading-indicator {
+.agent-thread-card__messages,
+.agent-thread-card__body > .agent-thread-card__loading-indicator {
   width: 100%;
 }
 
 /* 独立对话的消息区不允许长 URL / token / 代码行把整个 surface 撑出
  * 横向滚动。仅限第三列 AgentConversationDetail, 不影响文档内嵌卡片及其
  * fullscreen 模式。 */
-.markdown-editor.agent-conversation-detail .agent-thread-card__messages,
-.markdown-editor.agent-conversation-detail .agent-thread-card__message,
-.markdown-editor.agent-conversation-detail .agent-thread-card__message-content {
+.agent-conversation-detail .agent-thread-card__messages,
+.agent-conversation-detail .agent-thread-card__message,
+.agent-conversation-detail .agent-thread-card__message-content {
   min-width: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
-.markdown-editor.agent-conversation-detail .agent-thread-card__message-content pre,
-.markdown-editor.agent-conversation-detail .agent-thread-card__message-content code,
-.markdown-editor.agent-conversation-detail .agent-thread-card__message-content table {
+.agent-conversation-detail .agent-thread-card__message-content pre,
+.agent-conversation-detail .agent-thread-card__message-content code,
+.agent-conversation-detail .agent-thread-card__message-content table {
   max-width: 100%;
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
-.markdown-editor.agent-conversation-detail .agent-thread-card__message-content pre {
+.agent-conversation-detail .agent-thread-card__message-content pre {
   white-space: pre-wrap;
 }
 
-.markdown-editor.agent-conversation-detail .agent-thread-card__messages,
-.markdown-editor.agent-conversation-detail .agent-thread-card__skeleton,
-.markdown-editor.agent-conversation-detail .agent-thread-card__loading-indicator {
-  width: calc(100% - 3rem);
-  max-width: 780px;
+.agent-conversation-detail .agent-thread-card__messages,
+.agent-conversation-detail .agent-thread-card__skeleton,
+.agent-conversation-detail .agent-thread-card__loading-indicator {
+  width: calc(100% - 2 * var(--agent-content-inline-inset));
+  max-width: var(--agent-content-max-width);
   margin-inline: auto;
 }
 
-.markdown-editor.agent-conversation-detail .agent-composer {
+.agent-conversation-detail .agent-composer {
   align-self: center;
-  width: calc(100% - 3rem);
-  max-width: 780px;
+  width: calc(100% - 2 * var(--agent-content-inline-inset));
+  max-width: var(--agent-content-max-width);
   margin: 0 auto 0.6rem;
 }
 
-.markdown-editor
-  .agent-thread-card--thread-cache-loading
+.agent-thread-card--thread-cache-loading
   .agent-thread-card__body {
   pointer-events: none;
 }
 
-/* 折叠态 ── 隐藏 body / composer, 卡片仅保留 header。
- * grid 容器 (.agent-thread-card__container) 中 1fr 行在 body
- * display: none 时, grid 把它的轨道高缩到 0, composer 行被
- * grid-template-rows 推到 body 顶 ── 视觉上等同于"body 消失,
- * composer 顶到 header 下"。注意: --collapsed 类仍挂在卡片根
- * (.agent-thread-card) 上, 通过后代选择器跨过 __container 命中
- * 各子元素。
- *
- * min-height 显式归 0 ── 否则基线 13rem 会把折叠态撑成 13rem
- * 高 (只剩 header 时仍锁在 13rem, 折叠按钮毫无意义)。 */
-.markdown-editor .agent-thread-card--collapsed .agent-thread-card__container {
+/* Inline collapse keeps only the header. Own this at the card container
+ * boundary so shared composer variants, queued messages, and platform-specific
+ * scroll wrappers cannot leak out. The selector outranks shared surface styles
+ * regardless of import order. Fullscreen shows the complete conversation even
+ * when the persisted inline card is collapsed. */
+.agent-thread-card--collapsed:not(.agent-thread-card--fullscreen)
+  > .agent-thread-card__container {
   min-height: 0;
+  grid-template-rows: var(--atc-header-h);
 }
 
-.markdown-editor .agent-thread-card--collapsed .agent-thread-card__body {
+.agent-thread-card--collapsed:not(.agent-thread-card--fullscreen)
+  > .agent-thread-card__container
+  > :not(.agent-thread-card__header) {
   display: none;
 }
 
-html[data-platform="mac"] .markdown-editor .agent-thread-card--collapsed .agent-thread-card__body-frame {
-  display: none;
-}
-
-.markdown-editor .agent-thread-card--collapsed .agent-composer {
-  display: none;
-}
-
-.markdown-editor .agent-thread-card__messages {
+.agent-thread-card__messages {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.markdown-editor .agent-thread-card__skeleton {
+.agent-thread-card__skeleton {
   display: flex;
   width: 100%;
-  max-width: 780px;
+  max-width: var(--agent-content-max-width);
   flex-direction: column;
   gap: 18px;
   margin: 0 auto;
   padding: 2px 0 4px;
 }
 
-.markdown-editor .agent-thread-card__skeleton-item {
+.agent-thread-card__skeleton-item {
   display: flex;
   min-width: 0;
   align-items: flex-start;
   gap: 8px;
 }
 
-.markdown-editor .agent-thread-card__skeleton-item--assistant,
-.markdown-editor .agent-thread-card__skeleton-item--user {
+.agent-thread-card__skeleton-item--assistant,
+.agent-thread-card__skeleton-item--user {
   flex-direction: column;
 }
 
-.markdown-editor .agent-thread-card__skeleton-item--user {
+.agent-thread-card__skeleton-item--user {
   width: min(76%, 420px);
   align-self: flex-end;
 }
 
-.markdown-editor .agent-thread-card__skeleton-item--user.agent-thread-card__skeleton-item--left {
+.agent-thread-card__skeleton-item--user.agent-thread-card__skeleton-item--left {
   align-self: flex-start;
 }
 
-.markdown-editor .agent-thread-card__skeleton-line {
+.agent-thread-card__skeleton-line {
   display: block;
   flex: 0 0 auto;
   border-radius: 999px;
   background: color-mix(in oklch, var(--muted-foreground) 7%, transparent);
 }
 
-.markdown-editor .agent-thread-card__skeleton-lines {
+.agent-thread-card__skeleton-lines {
   display: flex;
   width: 100%;
   min-width: 0;
@@ -626,49 +569,45 @@ html[data-platform="mac"] .markdown-editor .agent-thread-card--collapsed .agent-
   gap: 8px;
 }
 
-.markdown-editor .agent-thread-card__skeleton-line {
+.agent-thread-card__skeleton-line {
   height: 14px;
 }
 
-.markdown-editor .agent-thread-card__skeleton-line--long {
+.agent-thread-card__skeleton-line--long {
   width: 88%;
 }
 
-.markdown-editor .agent-thread-card__skeleton-line--medium {
+.agent-thread-card__skeleton-line--medium {
   width: 64%;
 }
 
-.markdown-editor .agent-thread-card__skeleton-line--short {
+.agent-thread-card__skeleton-line--short {
   width: 38%;
 }
 
-.markdown-editor
-  .agent-thread-card__skeleton-item--user
+.agent-thread-card__skeleton-item--user
   .agent-thread-card__skeleton-lines {
   align-items: flex-end;
 }
 
-.markdown-editor
-  .agent-thread-card__skeleton-item--user.agent-thread-card__skeleton-item--left
+.agent-thread-card__skeleton-item--user.agent-thread-card__skeleton-item--left
   .agent-thread-card__skeleton-lines {
   align-items: flex-start;
 }
 
-.markdown-editor
-  .agent-thread-card--fullscreen
+.agent-thread-card--fullscreen
   .agent-thread-card__skeleton {
-  width: calc(100% - 3rem);
+  width: calc(100% - 2 * var(--agent-content-inline-inset));
 }
 
-.markdown-editor .agent-thread-card--fullscreen .agent-thread-card__messages,
-.markdown-editor
-  .agent-thread-card--fullscreen
+.agent-thread-card--fullscreen .agent-thread-card__messages,
+.agent-thread-card--fullscreen
   .agent-thread-card__loading-indicator {
-  width: calc(100% - 3rem);
-  max-width: 780px;
+  width: calc(100% - 2 * var(--agent-content-inline-inset));
+  max-width: var(--agent-content-max-width);
   margin-inline: auto;
 }
 
-.markdown-editor .agent-thread-card__messages > * {
+.agent-thread-card__messages > * {
   max-width: 100%;
 }

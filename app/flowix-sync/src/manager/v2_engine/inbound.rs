@@ -11,36 +11,24 @@ impl SyncManager {
         access_token: &str,
         note_id: &str,
         content_hash: Option<&str>,
+        blob_id: Option<&str>,
         deleted: bool,
-        attachment_manifest: &[crate::v2::V2Attachment],
     ) -> Result<DownloadedNotePayload, SyncError> {
         let content = if deleted {
             None
         } else if let Some(hash) = content_hash {
+            let blob_id = blob_id.ok_or_else(|| SyncError::InvalidState("cloud note has no blob ID".into()))?;
             Some(
-                self.download_verified_v2_blob(access_token, note_id, hash)
+                self.download_verified_v2_blob(access_token, note_id, blob_id, hash)
                     .await?,
             )
         } else {
             None
         };
 
-        let mut attachments = Vec::new();
-        if !deleted {
-            attachments.reserve(attachment_manifest.len());
-            for metadata in attachment_manifest {
-                attachments.push(crate::v2::V2RemoteAttachment {
-                    content: self
-                        .download_verified_v2_blob(access_token, note_id, &metadata.content_hash)
-                        .await?,
-                    metadata: metadata.clone(),
-                });
-            }
-        }
-
         Ok(DownloadedNotePayload {
             content,
-            attachments,
+            attachments: Vec::new(),
         })
     }
 
@@ -60,17 +48,10 @@ impl SyncManager {
                 "cloud v2 changes cursor did not advance".into(),
             ));
         }
-        let mut latest = HashMap::<(String, String), V2Change>::new();
-        for change in page.changes {
-            latest.insert(
-                (change.entity_type.clone(), change.entity_id.clone()),
-                change,
-            );
-        }
-        let mut changes: Vec<_> = latest.into_values().collect();
-        changes.sort_by_key(|change| change.sync_seq);
+        // The server returns one current index head per entity, ordered by
+        // sync sequence. Intermediate edits are compacted at the source.
         let mut remote = Vec::new();
-        for change in changes {
+        for change in page.changes {
             // P0-1: 跳过本端刚 push 产生的 change，避免把自己的上传当成远端更新拉回
             // 覆盖本地（单端 echo）。其他设备的 change 不在 self_sync_seqs 中，正常 apply。
             if self_sync_seqs.contains(&change.sync_seq) {
@@ -112,8 +93,8 @@ impl SyncManager {
                         access_token,
                         &change.entity_id,
                         change.content_hash.as_deref(),
+                        change.blob_id.as_deref(),
                         change.deleted,
-                        &change.attachments,
                     )
                     .await?;
                 remote.push(V2RemoteApply::Note {
@@ -166,8 +147,8 @@ impl SyncManager {
                     access_token,
                     &note.id,
                     note.content_hash.as_deref(),
+                    note.blob_id.as_deref(),
                     note.deleted,
-                    &note.attachments,
                 )
                 .await?;
             remote.push(V2RemoteApply::Note {
@@ -194,11 +175,12 @@ impl SyncManager {
         &self,
         access_token: &str,
         note_id: &str,
+        blob_id: &str,
         expected_hash: &str,
     ) -> Result<Vec<u8>, SyncError> {
         let content = self
             .client
-            .v2_download_blob(access_token, expected_hash)
+            .v2_download_blob(access_token, blob_id)
             .await?;
         verify_v2_blob(note_id, expected_hash, content)
     }

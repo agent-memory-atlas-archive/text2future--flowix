@@ -368,7 +368,7 @@ function PopoverContent({
 		<div
 			ref={contentRef}
 			className={cn(
-				"flowix-popover-content fixed z-[150] w-[200px] bg-[var(--card)] border border-[var(--border-popup)] rounded-lg p-1",
+				"flowix-popover-content fixed z-[var(--layer-popover)] w-[200px] bg-[var(--card)] border border-[var(--border-popup)] rounded-lg p-1",
 				shadowClass,
 				className
 			)}

@@ -7,52 +7,52 @@
   padding: 4px;
 }
 
-.pi-model-picker {
+.agent-pi-model-picker {
   display: flex;
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
 }
 
-.pi-model-picker__panel {
+.agent-pi-model-picker__panel {
   min-height: 0;
   flex: 1 1 auto;
   overflow-y: auto;
   padding: 2px 0 0;
 }
 
-.pi-model-picker__category {
+.agent-pi-model-picker__category {
   min-width: 0;
 }
 
-.pi-model-picker__category + .pi-model-picker__category {
+.agent-pi-model-picker__category + .agent-pi-model-picker__category {
   margin-top: 8px;
   padding-top: 6px;
 }
 
-.pi-model-picker__models {
+.agent-pi-model-picker__models {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.pi-model-picker__provider {
+.agent-pi-model-picker__provider {
   min-width: 0;
 }
 
-.pi-model-picker__item {
+.agent-pi-model-picker__item {
   min-height: 32px;
   padding-inline: 10px;
 }
 
-.pi-model-picker__checkmark-placeholder {
+.agent-pi-model-picker__checkmark-placeholder {
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
   visibility: hidden;
 }
 
-.pi-model-picker__provider-icon {
+.agent-pi-model-picker__provider-icon {
   width: 16px;
   height: 16px;
   flex: 0 0 auto;
@@ -60,22 +60,22 @@
   object-fit: contain;
 }
 
-.pi-model-picker__multiplier,
-.pi-model-picker__provider-name {
+.agent-pi-model-picker__multiplier,
+.agent-pi-model-picker__provider-name {
   flex: 0 0 auto;
   color: var(--muted-foreground);
   font-size: 12px;
   line-height: 1.2;
 }
 
-.pi-model-picker__provider-name {
+.agent-pi-model-picker__provider-name {
   max-width: 96px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.pi-model-picker__provider-label {
+.agent-pi-model-picker__provider-label {
   padding: 7px 8px 4px;
   color: var(--muted-foreground);
   font-size: 11px;
@@ -83,7 +83,7 @@
   line-height: 1.3;
 }
 
-.pi-model-picker__empty {
+.agent-pi-model-picker__empty {
   padding: 18px 12px;
   color: var(--muted-foreground);
   font-size: 13px;
@@ -91,13 +91,13 @@
   text-align: center;
 }
 
-.pi-model-picker__empty--category {
+.agent-pi-model-picker__empty--category {
   padding-block: 10px;
   font-size: 12px;
   text-align: left;
 }
 
-.pi-model-picker__reasoning {
+.agent-pi-model-picker__reasoning {
   flex: 0 0 auto;
   padding: 0 4px 4px;
 }

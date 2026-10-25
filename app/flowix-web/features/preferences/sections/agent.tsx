@@ -1,5 +1,8 @@
 'use client';
 
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
+import { saveAgentConfig, upsertAgentConfig, type AgentConfigStore } from './save-agent-config';
+
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   listenToUserConfigChanges,
@@ -36,7 +39,7 @@ import iconDeepseek from '@/assets/icon-deepseek.svg';
 import iconOpenrouter from '@/assets/icon-openrouter.svg';
 import iconOllama from '@/assets/icon-ollama.svg';
 import type { AgentTypeKey } from '@/types/agent';
-import { AgentIcon } from '@features/agent/components/agent-icon';
+import { AgentIcon } from '@features/agent/public/icon-api';
 
 type TestConnection = (config: AgentConfig) => Promise<TestConnectionResult>;
 
@@ -45,14 +48,6 @@ export interface AgentSectionModelFormActions {
   test(): Promise<boolean>;
 }
 
-interface AgentConfigStore {
-	get: () => Promise<{ model: AgentConfig }>;
-	/** Full llm-pi-ai route list; only DeepSeek Harness provides this. */
-	list?: () => Promise<{ model: AgentConfig }[]>;
-	set: (config: AgentConfig) => Promise<void>;
-	/** Optional append operation used by DeepSeek Harness model management. */
-	add?: (config: AgentConfig) => Promise<void>;
-}
 
 interface ModelDirectory {
   modelCatalog: () => Promise<DeepSeekHarnessModelCatalog>;
@@ -476,7 +471,7 @@ export function AgentSection({
         if (!cancelled) setModelCatalog(catalog);
       })
       .catch((error: unknown) => {
-        if (!cancelled) setModelDiscoveryError(error instanceof Error ? error.message : String(error));
+        if (!cancelled) setModelDiscoveryError(friendlyErrorMessage(error, t, 'errors.friendly.modelsDiscover'));
       });
     return () => {
       cancelled = true;
@@ -532,8 +527,7 @@ export function AgentSection({
         if (cancelled) return;
         // 关键: 不要把 savedConfig / localConfig 重置成 DEFAULT — 否则
         // 用户点"保存"会覆盖真实配置文件。保持原状, 改用错误态 UI。
-        const msg = err instanceof Error ? err.message : String(err);
-        setLoadError(msg);
+        setLoadError(friendlyErrorMessage(err, t, 'errors.friendly.configLoad'));
         console.error('[AgentSection] Failed to load ai_config:', err);
       }
     })();
@@ -662,23 +656,13 @@ export function AgentSection({
     // later, while preserving the explicit Test connection action.
     setIsSaving(true);
     try {
-			const appendModel = modelDirectory && modelFormMode?.kind === 'add';
-			if (appendModel && configStore.add) {
-				await configStore.add(configToSave);
-			} else {
-				await configStore.set(configToSave);
-			}
-	      const listed = modelDirectory && configStore.list
-	        ? await configStore.list()
-	        : null;
-        const persistedConfig = listed?.find((entry) => {
-          const route = entry.model.providerId?.trim() || entry.model.provider;
-          const target = configToSave.providerId?.trim() || configToSave.provider;
-          return route === target;
-        })?.model
-          ?? (appendModel && configStore.add ? (await configStore.get()).model : configToSave);
+      const result = await saveAgentConfig(configStore, configToSave, {
+        append: Boolean(modelDirectory && modelFormMode?.kind === 'add'),
+        refreshDirectory: Boolean(modelDirectory),
+      });
+      const persistedConfig = result.config;
       const stillClean = formSnapshot === JSON.stringify(localConfigRef.current);
-      if (listed) setProviderConfigs(listed.map((entry) => entry.model));
+      setProviderConfigs((current) => result.listed ?? upsertAgentConfig(current, persistedConfig));
       setSavedConfig(persistedConfig);
       setIsTesting(false);
       if (modelDirectory && stillClean) {
@@ -688,17 +672,17 @@ export function AgentSection({
           setModelFormMode(null);
         }
       }
-      toast.success(t('preferences.agent.saved'));
+      if (result.refreshFailed) toast.info(t('errors.friendly.configSavedRefreshFailed'));
+      else toast.success(t('preferences.agent.saved'));
       return true;
       // If the user typed during the in-flight save, the form has moved
       // past `snapshot` — the saved-on-disk state no longer matches the
       // form, so we go straight to `idle` (which will then show the unsaved
       // hint). The toast still confirms the snapshot that was persisted.
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
       // 保存失败时清理测试状态，避免上一次测试成功的状态残留。
       setIsTesting(false);
-      toast.error(`${t('preferences.agent.saveFailed')}: ${msg}`);
+      toast.error(friendlyErrorMessage(err, t, 'errors.friendly.configSave'));
       console.error('[AgentSection] Failed to save ai_config:', err);
       return false;
     } finally {
@@ -758,8 +742,8 @@ export function AgentSection({
         toast.success(t('preferences.agent.testSuccess', { ms: result.latencyMs }));
       } else {
         const errorKind = formatErrorKind(result.error?.kind, t);
-        const detail = result.error?.message?.trim();
-        toast.error(detail ? `${errorKind}: ${detail}` : errorKind);
+        console.warn('[AgentSection] Connection test failed', result.error);
+        toast.error(errorKind);
       }
       return result;
     } catch (err) {
@@ -767,15 +751,7 @@ export function AgentSection({
       // land here when the command itself threw (network to the Tauri
       // host, JSON parse, command missing, ...). Wrap as `Other` and
       // surface through the shared toast.
-      const message = err instanceof Error ? err.message : String(err);
-      const fallback: TestConnectionResult = {
-        ok: false,
-        latencyMs: 0,
-        modelId: cfg.model,
-        summary: '',
-        error: { kind: 'other', message },
-      };
-      toast.error(`${formatErrorKind(fallback.error?.kind, t)}: ${message}`);
+      toast.error(friendlyErrorMessage(err, t, 'errors.friendly.connectionTest'));
       console.error('[AgentSection] test_ai_connection IPC threw:', err);
       return null;
     }
@@ -906,7 +882,7 @@ export function AgentSection({
       setDiscoveredModels(result.models);
     } catch (error) {
       if (requestId !== discoveryRequestRef.current) return;
-      setModelDiscoveryError(error instanceof Error ? error.message : String(error));
+      setModelDiscoveryError(friendlyErrorMessage(error, t, 'errors.friendly.modelsDiscover'));
     } finally {
       if (requestId === discoveryRequestRef.current) setModelDiscoveryBusy(false);
     }
@@ -995,27 +971,18 @@ export function AgentSection({
       apiKeys: { ...localConfig.apiKeys, [id]: draft.apiKey },
     };
     try {
-      if (formMode?.kind === 'add' && configStore.add) {
-        await configStore.add(nextConfig);
-      } else {
-        await configStore.set(nextConfig);
-      }
-      const listed = modelDirectory && configStore.list
-        ? await configStore.list()
-        : null;
-      const persistedConfig = listed?.find((entry) => {
-        const route = entry.model.providerId?.trim() || entry.model.provider;
-        return route === id;
-      })?.model
-        ?? (formMode?.kind === 'add' && configStore.add
-          ? (await configStore.get()).model
-          : nextConfig);
-      if (listed) setProviderConfigs(listed.map((entry) => entry.model));
+      const result = await saveAgentConfig(configStore, nextConfig, {
+        append: formMode?.kind === 'add',
+        refreshDirectory: Boolean(modelDirectory),
+      });
+      const persistedConfig = result.config;
+      setProviderConfigs((current) => result.listed ?? upsertAgentConfig(current, persistedConfig));
       setLocalConfig(persistedConfig);
       setSavedConfig(persistedConfig);
       setIsSaving(false);
       setIsTesting(false);
-      toast.success(t('preferences.agent.saved'));
+      if (result.refreshFailed) toast.info(t('errors.friendly.configSavedRefreshFailed'));
+      else toast.success(t('preferences.agent.saved'));
       setDiscoveredModels([]);
       setModelDiscoveryError(null);
       setShowCustomProviderForm(false);
@@ -1025,8 +992,8 @@ export function AgentSection({
       return null;
     } catch (error) {
       console.error('[AgentSection] Failed to create custom DSH provider:', error);
-      const message = error instanceof Error ? error.message : String(error);
-      toast.error(`${t('preferences.agent.saveFailed')}: ${message}`);
+      const message = friendlyErrorMessage(error, t, 'errors.friendly.configSave');
+      toast.error(message);
       return message;
     }
   };
@@ -1148,7 +1115,8 @@ export function AgentSection({
       setModelFormMode(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(`${t('preferences.agent.saveFailed')}: ${message}`);
+      console.warn('[AgentSection] Save failed', message);
+      toast.error(t('errors.friendly.configSave'));
       console.error('[AgentSection] Failed to delete custom DSH model:', error);
     } finally {
       setModelManagementBusy(false);
@@ -1245,7 +1213,7 @@ export function AgentSection({
       <div className="space-y-3 pb-6">
         <SectionHeader title={t('preferences.agent.title')} size="compact" />
         <div className="rounded-md border border-[color-mix(in_oklch,var(--destructive)_40%,transparent)] bg-[color-mix(in_oklch,var(--destructive)_10%,transparent)] px-4 py-3 text-sm text-[var(--destructive)]">
-          {t('preferences.agent.loadFailed')}: {loadError}
+          {loadError}
         </div>
         <div className="text-xs text-[var(--muted-foreground)]">
           {t('preferences.agent.loadFailedHint')}

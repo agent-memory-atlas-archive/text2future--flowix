@@ -31,8 +31,7 @@ export type { WorkColumnTarget } from '@features/workspace/store/work-column-tar
 export function getVisibleWorkspaceSurfaceHosts(): ('main-third' | 'browser-column')[] {
   const hosts: ('main-third' | 'browser-column')[] = ['main-third'];
   const browser = useBrowserColumnStore.getState();
-  if (browser.visible && browser.activeTabId
-    && browser.tabs.some((tab) => tab.id === browser.activeTabId)) hosts.push('browser-column');
+  if (browser.visible && browser.current) hosts.push('browser-column');
   return hosts;
 }
 

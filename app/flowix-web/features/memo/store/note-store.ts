@@ -83,6 +83,7 @@ export function noteIndexFor(notes: readonly NoteListItem[]): Map<string, NoteLi
 }
 
 const memoListRequestLogger = createLogger('memo-list-query');
+const noteStoreLogger = createLogger('memo:note-store');
 const recentMemoListRequestCounts = new Map<string, { startedAt: number; count: number }>();
 
 /** Development-only visibility into repeated backend reads for one query burst. */
@@ -875,7 +876,7 @@ export const useNoteStore = create<NoteLibraryStore>()(
         } catch (error) {
           // 失败时重新拉一次 list 跟服务端对齐 (notebook 列表较短, 直接重拉比
           // 维护本地乐观回滚更稳)。
-          console.error('[reorderNotebooks] failed', error);
+          noteStoreLogger.error('reorderNotebooks failed', { error });
           const nbList = await notebookRepository.list();
           set({ notebooks: nbList as Notebook[] });
         }

@@ -1,3 +1,4 @@
+import { CreatedDocumentNoticeHost } from '../created-document-notice-host';
 import { lazy, Suspense, useEffect } from 'react';
 import { useMainWindowBusinessController } from './use-main-window-business-controller';
 import { useMainWindowSystemController } from './use-main-window-system-controller';
@@ -19,6 +20,7 @@ export function MainWindow() {
     <Suspense fallback={<StartupEntryScreen />}>
       <MainLayout business={business} system={system} />
       <WorkbenchMountedSignal />
+      <CreatedDocumentNoticeHost />
     </Suspense>
   );
 }

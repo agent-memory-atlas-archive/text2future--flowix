@@ -2,7 +2,6 @@ import { useCallback } from 'react';
 import { usePropertyPresetStore } from '@features/properties/property-preset-store';
 import { useUserSettings } from '@features/preferences/hooks/use-user-settings';
 import { useUserSettingsStore } from '@features/preferences/store/user-settings-store';
-export { PREFERENCE_TAB_GROUPS } from '@features/preferences/preferences-tab-config';
 export { useApplyFontSettings } from '@features/preferences/hooks/use-apply-font-settings';
 
 export function useAppPreferencesViewModel() {

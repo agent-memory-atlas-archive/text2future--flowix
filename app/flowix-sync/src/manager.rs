@@ -5,7 +5,7 @@ use crate::error::SyncError;
 use crate::models::*;
 use crate::store::SyncStore;
 use crate::v2::{
-    V2AccountSyncReport, V2Bootstrap, V2Change, V2EntityType, V2FreezeOperation, V2LocalNote,
+    V2AccountSyncReport, V2Bootstrap, V2EntityType, V2FreezeOperation, V2LocalNote,
     V2LocalNotebook, V2OperationKind, V2PushOperation, V2RemoteApply,
 };
 use chrono::Utc;

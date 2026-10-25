@@ -6,7 +6,7 @@ import {
 import { useDocumentStore } from '@features/document/store/document-store';
 import {
   historyEntryFromWorkColumnTarget,
-} from '@features/workspace/use-cases/workspace-navigation';
+} from '@features/workspace/public/note-navigation-api';
 import { openWorkspaceSurface } from '@features/workspace/public/open-surface-api';
 import { openFolderCollection } from '@features/workspace/public/main-window-api';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';

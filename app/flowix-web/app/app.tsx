@@ -6,7 +6,6 @@ import { useWorkspaceStartupStore, applyNativeStartupStatus, isWorkspaceInteract
 import { ErrorBoundary } from "@shared/error-boundary";
 import { Toaster, toast } from "sonner";
 import { useAppPreferencesViewModel } from "@features/preferences/public/app-api";
-import { useAppAgentRuntimeViewModel } from "@features/agent/public/app-api";
 import { useApplyFontSettings } from "@features/preferences/public/app-api";
 import { ThemeProvider } from "@features/theme";
 import { NativeEditMenuBridge, ShortcutsProvider } from "@features/shortcuts";
@@ -16,16 +15,25 @@ import "@features/shortcuts/actions";
 import { boot, listenToUserConfigChanges, windows } from "@platform/tauri/client";
 import { syncUserConfigChange } from "./user-config-sync";
 import { useAgentWorkspaceWindowLifecycle } from "./use-agent-workspace-window-lifecycle";
-import { invalidateDshModelConfigs } from "@features/agent/public/app-api";
+import {
+  invalidateDshModelConfigs,
+  refreshAgentRuntime as requestAgentRuntimeRefresh,
+  subscribeAgentPersistenceError,
+} from "@features/agent/public/app-api";
 import { createLogger } from "@/lib/logger";
 import { ActionableNoticeHost } from "@features/notifications/actionable-notice-host";
-import { NotebookSetupNoticeHost } from "@features/memo/components/notebook-setup-notice-host";
-import { NotebookSetupCoordinator } from "@features/memo/components/notebook-setup-coordinator";
-import { useAgentPersistenceError } from "@features/agent/public/app-api";
 import { translate, type AppLanguage } from "@/lib/i18n";
 
+// 首屏不需要这两个 host：它们只在"笔记本缺少设置项"或"文档保存失败"时才有内容。
+// 用 lazy 把它们连同 memo 组件树移出启动图（DocumentSaveNotifications 同理）。
 const DocumentSaveNotifications = lazy(() => import('@features/document/public/app-api')
   .then(module => ({ default: module.DocumentSaveNotifications })));
+
+const NotebookSetupCoordinator = lazy(() => import('@features/memo/components/notebook-setup-coordinator')
+  .then(module => ({ default: module.NotebookSetupCoordinator })));
+
+const NotebookSetupNoticeHost = lazy(() => import('@features/memo/components/notebook-setup-notice-host')
+  .then(module => ({ default: module.NotebookSetupNoticeHost })));
 
 const logger = createLogger("app");
 
@@ -78,8 +86,12 @@ function MainWindowShortcuts({ children, overrides }: React.ComponentProps<typeo
 }
 
 function AppToaster({ language }: { language: AppLanguage }) {
-  const persistenceError = useAgentPersistenceError();
+  // 走公开的 window 事件契约，而不是订阅 agent-data-store：
+  // 根组件只需要"缓存写失败"这一个信号，不该为它把整个 store 拖进启动图。
+  const [persistenceError, setPersistenceError] = useState<string | null>(null);
   const lastPersistenceError = useRef<string | null>(null);
+
+  useEffect(() => subscribeAgentPersistenceError(setPersistenceError), []);
 
   useEffect(() => {
     if (!persistenceError) {
@@ -100,8 +112,8 @@ function AppToaster({ language }: { language: AppLanguage }) {
       closeButton={false}
     />
     <Suspense fallback={null}><DocumentSaveNotifications /></Suspense>
-    <NotebookSetupCoordinator />
-    <NotebookSetupNoticeHost />
+    <Suspense fallback={null}><NotebookSetupCoordinator /></Suspense>
+    <Suspense fallback={null}><NotebookSetupNoticeHost /></Suspense>
     <ActionableNoticeHost />
     </>
   );
@@ -161,7 +173,6 @@ function App() {
     loadInitial,
     flushPending,
   } = useAppPreferencesViewModel();
-  const { refreshAgentRuntime } = useAppAgentRuntimeViewModel();
   useApplyFontSettings(format);
 
 
@@ -244,10 +255,11 @@ function App() {
       if (kind === "dsh_config") invalidateDshModelConfigs();
       syncUserConfigChange(kind, {
         reloadPreferences: loadInitial,
-        refreshAgentRuntime: () => refreshAgentRuntime({ force: true }),
+        // 公开入口只暴露命令，store 由它内部动态加载，根组件不持有 agent 状态。
+        refreshAgentRuntime: () => requestAgentRuntimeRefresh({ force: true }),
       });
     });
-  }, [loadInitial, refreshAgentRuntime]);
+  }, [loadInitial]);
 
   useEffect(() => {
     const handleHashChange = () => setHash(window.location.hash);
@@ -284,7 +296,7 @@ function App() {
   }
 
   return (
-    <ErrorBoundary language={language}>
+    <ErrorBoundary language={language} resetKeys={[hash]}>
       <I18nProvider language={language}>
         <ThemeProvider>
           <StartupGate>

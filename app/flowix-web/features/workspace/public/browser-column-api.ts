@@ -1,78 +1,41 @@
 import { useCallback } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import {
-  canOpenBrowserColumnTargetInWorkColumn,
-  useBrowserColumnStore,
-  type BrowserColumnTab,
-} from '@features/workspace/store/browser-column-store';
-import { useWorkspaceFocusStore } from '@features/workspace/store/workspace-focus-store';
-import {
-  activateBrowserColumnTab,
-} from '@features/workspace/use-cases/browser-column-coordinator';
-import {
-  createFileBrowserTarget,
-  removeBrowserColumnTabsByPath,
-  selectBrowserColumnFile,
-} from '@features/workspace/use-cases/browser-column-navigation';
-import { openBrowserColumnTabInWorkColumn } from '@features/workspace/use-cases/surface-opening';
+import { useBrowserColumnStore } from '../store/browser-column-store';
+import { useWorkspaceFocusStore } from '../store/workspace-focus-store';
 
 export { openWorkspaceSurface } from './open-surface-api';
 export type { OpenWorkspaceSurfaceRequest, BrowserWorkspaceSurfaceRequest } from './open-surface-api';
-
-export {
-  createFileBrowserTarget,
-  removeBrowserColumnTabsByPath,
-  selectBrowserColumnFile,
-};
-export { openBrowserColumnTabInWorkColumn };
-
-export {
-  canOpenBrowserColumnTargetInWorkColumn,
-  type BrowserColumnTab,
-};
-export type { BrowserColumnTarget } from '@features/workspace/store/browser-column-store';
+export { createFileBrowserTarget, removeBrowserColumnContentByPath, selectBrowserColumnFile, navigateBrowserColumnHistory } from '../use-cases/browser-column-navigation';
+export { openBrowserColumnContentInWorkColumn } from '../use-cases/surface-opening';
+export { canOpenBrowserColumnTargetInWorkColumn } from '../store/browser-column-store';
+export type { BrowserColumnEntry, BrowserColumnTarget } from '../store/browser-column-store';
+export { closeBrowserColumnContent, clearBrowserColumnSession } from '../use-cases/browser-column-closing';
 
 export function useBrowserColumnViewModel() {
-  return useBrowserColumnStore(useShallow((state) => {
-    const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId) ?? null;
-    const activePath = activeTab?.target.kind === 'file-browser' ? activeTab.target.activeFilePath : null;
-    return {
-      tabs: state.tabs,
-      activeTabId: state.activeTabId,
-      activeTab,
-      activeWebRuntime: state.activeTabId && activeTab?.target.kind === 'web'
-        ? state.webRuntimes[state.activeTabId] ?? null
-        : null,
-      activePathHasDuplicateTab: activePath !== null
-        && state.tabs.filter(
-          (tab) => tab.target.kind === 'file-browser' && tab.target.activeFilePath === activePath,
-        ).length > 1,
-    };
-  }));
+  return useBrowserColumnStore(useShallow((state) => ({
+    current: state.current,
+    webRuntime: state.webRuntime,
+    canNavigateBack: state.backStack.length > 0,
+    canNavigateForward: state.forwardStack.length > 0,
+  })));
 }
 
 export function useBrowserColumnFocusViewModel() {
-  const isFocused = useWorkspaceFocusStore(
-    (state) => state.focusedHostId === 'browser-column',
-  );
+  const isFocused = useWorkspaceFocusStore((state) => state.focusedHostId === 'browser-column');
   const focusHost = useWorkspaceFocusStore((state) => state.focusHost);
   const focusBrowserColumn = useCallback(() => focusHost('browser-column'), [focusHost]);
   return { isFocused, focusBrowserColumn };
 }
 
-export const selectBrowserColumnTab = activateBrowserColumnTab;
-
 export function hideBrowserColumn(): void {
   useBrowserColumnStore.getState().setVisible(false);
 }
 
-export function reorderBrowserColumnTab(tabId: string, beforeTabId: string | null): void {
-  useBrowserColumnStore.getState().reorderTab(tabId, beforeTabId);
+export function useBrowserColumnVisible(): boolean {
+  return useBrowserColumnStore((state) => state.visible);
 }
 
-export {
-  closeBrowserColumnTab,
-  closeOtherBrowserColumnTabs,
-  closeBrowserColumnTabsToRight,
-  closeAllBrowserColumnTabs,
-} from '../use-cases/browser-column-closing';
+export function toggleBrowserColumn(): void {
+  const state = useBrowserColumnStore.getState();
+  state.setVisible(!state.visible);
+}

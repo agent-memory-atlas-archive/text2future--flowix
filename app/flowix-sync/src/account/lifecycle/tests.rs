@@ -629,7 +629,7 @@ async fn full_storage_still_pushes_deletes_and_preserves_pending_puts() {
             counted.fetch_add(1, Ordering::SeqCst);
             (
                 200,
-                json!({"data": {"protocolEpoch": 2, "headCursor": 2, "results": [{
+                json!({"data": {"protocolEpoch": 3, "headCursor": 2, "results": [{
                     "operationId": "op_delete_full", "ok": true, "status": 200,
                     "data": {"entityType": "note", "entityId": "note_delete", "revision": "rev_2",
                         "syncSeq": 2, "deleted": true, "resolution": "fast_forward"}
@@ -639,7 +639,7 @@ async fn full_storage_still_pushes_deletes_and_preserves_pending_puts() {
         path if path.starts_with("/v2/sync/changes?") => (
             200,
             json!({"data": {
-                "protocolEpoch": 2, "cursor": 2, "headCursor": 2, "hasMore": false, "changes": []
+                "protocolEpoch": 3, "cursor": 2, "headCursor": 2, "hasMore": false, "changes": []
             }}),
         ),
         _ => panic!("unexpected request (uploads must be deferred): {path}"),
