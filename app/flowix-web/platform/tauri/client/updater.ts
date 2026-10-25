@@ -24,6 +24,7 @@ export type AppUpdateDownloadProgress =
 let checkPromise: Promise<AppUpdate | null> | null = null;
 let installPromise: Promise<void> | null = null;
 let installingVersion: string | null = null;
+let activeCommand: string | null = null;
 let latestProgress: AppUpdateDownloadProgress | null = null;
 const progressListeners = new Set<(progress: AppUpdateDownloadProgress) => void>();
 
@@ -67,12 +68,27 @@ export async function consumeAppUpdateResult(): Promise<AppUpdateInstallResult |
   return await invoke<AppUpdateInstallResult | null>('consume_app_update_result');
 }
 
-export async function installAppUpdate(
+export function downloadAppUpdate(
+  version: string,
+  onProgress?: (progress: AppUpdateDownloadProgress) => void,
+): Promise<void> {
+  return runPackageOperation('download_app_update', version, onProgress);
+}
+
+export function installAppUpdate(
+  version: string,
+  onProgress?: (progress: AppUpdateDownloadProgress) => void,
+): Promise<void> {
+  return runPackageOperation('install_app_update', version, onProgress);
+}
+
+async function runPackageOperation(
+  command: 'download_app_update' | 'install_app_update',
   version: string,
   onProgress?: (progress: AppUpdateDownloadProgress) => void,
 ): Promise<void> {
   if (installPromise) {
-    if (version !== installingVersion) throw new Error('A different application update is currently being installed.');
+    if (version !== installingVersion || command !== activeCommand) throw new Error('A different application update is currently being installed.');
     if (onProgress) {
       progressListeners.add(onProgress);
       if (latestProgress) onProgress(latestProgress);
@@ -83,6 +99,7 @@ export async function installAppUpdate(
   }
   if (checkPromise) throw new Error('An application update check is currently in progress.');
   installingVersion = version;
+  activeCommand = command;
   latestProgress = null;
   if (onProgress) progressListeners.add(onProgress);
 
@@ -92,8 +109,8 @@ export async function installAppUpdate(
       for (const listener of progressListeners) listener(event.payload);
     });
     try {
-      await invoke('install_app_update', { version });
-      await relaunch();
+      await invoke(command, { version });
+      if (command === 'install_app_update') await relaunch();
     } finally {
       await unlisten();
     }
@@ -105,6 +122,7 @@ export async function installAppUpdate(
     if (installPromise === pending) {
       installPromise = null;
       installingVersion = null;
+      activeCommand = null;
       latestProgress = null;
       progressListeners.clear();
     }

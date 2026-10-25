@@ -7,6 +7,8 @@ use tauri_plugin_updater::UpdaterExt;
 
 #[path = "app_update_cache.rs"]
 mod update_cache;
+#[path = "app_update_download.rs"]
+mod update_download;
 #[path = "app_update_state.rs"]
 mod update_state;
 use self::update_cache::{prepare_update_package, verify_cached_package, PreparedUpdate};
@@ -247,20 +249,36 @@ pub async fn check_app_update(
         return Ok(None);
     };
 
-    let info = update_info(&update);
-    if info.notify {
-        let prepared = prepare_update_package(&app, update, false).await?;
-        *state
-            .prepared
+    Ok(Some(update_info(&update)))
+}
+
+/// Download and verify without installing or restarting the application.
+#[tauri::command]
+pub async fn download_app_update(
+    app: AppHandle,
+    version: String,
+    state: State<'_, AppUpdateState>,
+) -> Result<(), String> {
+    let (abort_handle, abort_registration) = AbortHandle::new_pair();
+    {
+        let mut active = state
+            .active
             .lock()
-            .map_err(|_| "application update state is unavailable".to_string())? = Some(prepared);
-    } else {
-        *state
-            .prepared
-            .lock()
-            .map_err(|_| "application update state is unavailable".to_string())? = None;
+            .map_err(|_| "application update state is unavailable".to_string())?;
+        if !active.phase.start() {
+            return Err("an application update is already in progress".to_string());
+        }
+        active.abort = Some(abort_handle);
     }
-    Ok(Some(info))
+    let _guard = ActiveUpdateGuard(state.active.clone());
+    let task = async {
+        let _check_guard = state.check_lock.lock().await;
+        download_requested_update(&app, &state.prepared, &version).await?;
+        Ok::<_, String>(())
+    };
+    Abortable::new(task, abort_registration)
+        .await
+        .map_err(|_| "application update cancelled".to_string())?
 }
 
 #[tauri::command]

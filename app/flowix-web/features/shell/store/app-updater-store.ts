@@ -1,10 +1,10 @@
 import { create } from 'zustand';
 import {
-  checkAppUpdate, installAppUpdate, cancelAppUpdate,
+  checkAppUpdate, downloadAppUpdate, installAppUpdate, cancelAppUpdate,
   type AppUpdate, type AppUpdateDownloadProgress,
 } from '@platform/tauri/client/updater';
 
-export type AppUpdaterStatus = 'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'installing' | 'error';
+export type AppUpdaterStatus = 'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'ready' | 'installing' | 'error';
 
 export interface AppUpdaterState {
   status: AppUpdaterStatus;
@@ -12,6 +12,7 @@ export interface AppUpdaterState {
   progress: AppUpdateDownloadProgress | null;
   error: unknown;
   checkNow: () => Promise<AppUpdate | null>;
+  downloadNow: () => Promise<void>;
   installNow: () => Promise<void>;
   cancelNow: () => Promise<void>;
 }
@@ -30,15 +31,33 @@ export const useAppUpdaterStore = create<AppUpdaterState & { checkStarted: boole
   checkNow: () => {
     if (checkPromise) return checkPromise;
     if (installPromise) return Promise.reject(new Error('An application update is currently being installed.'));
+    const previous = get();
     set({ checkStarted: true, status: 'checking', error: null, progress: null });
     const pending = Promise.resolve().then(checkAppUpdate).then((update) => {
-      set({ update, status: update ? 'available' : 'none' });
+      set({ update, status: update ? (previous.status === 'ready' && previous.update?.version === update.version ? 'ready' : 'available') : 'none' });
       return update;
     }).catch((error: unknown) => {
-      set({ update: null, status: 'error', error });
+      set({ update: previous.update, status: previous.update ? previous.status : 'error', error });
       throw error;
     }).finally(() => { if (checkPromise === pending) checkPromise = null; });
     checkPromise = pending;
+    return pending;
+  },
+  downloadNow: () => {
+    if (installPromise) return installPromise;
+    if (checkPromise) return Promise.reject(new Error('An application update check is currently in progress.'));
+    const update = get().update;
+    if (!update || get().status === 'ready') return Promise.resolve();
+    set({ status: 'downloading', error: null, progress: null });
+    const pending = Promise.resolve().then(() => downloadAppUpdate(update.version, (progress) => {
+      set({ progress });
+    })).then(() => {
+      set({ status: 'ready', progress: null });
+    }).catch((error: unknown) => {
+      set({ status: 'available', progress: null, error: isCancellationError(error) ? null : error });
+      throw error;
+    }).finally(() => { if (installPromise === pending) installPromise = null; });
+    installPromise = pending;
     return pending;
   },
   installNow: () => {
@@ -46,11 +65,12 @@ export const useAppUpdaterStore = create<AppUpdaterState & { checkStarted: boole
     if (checkPromise) return Promise.reject(new Error('An application update check is currently in progress.'));
     const update = get().update;
     if (!update) return Promise.resolve();
-    set({ status: 'downloading', error: null, progress: null });
+    const prepared = get().status === 'ready';
+    set({ status: prepared ? 'installing' : 'downloading', error: null, progress: null });
     const pending = Promise.resolve().then(() => installAppUpdate(update.version, (progress) => {
       set({ progress, status: progress.phase === 'installing' ? 'installing' : 'downloading' });
     })).catch((error: unknown) => {
-      set({ status: 'available', progress: null, error: isCancellationError(error) ? null : error });
+      set({ status: prepared ? 'ready' : 'available', progress: null, error: isCancellationError(error) ? null : error });
       throw error;
     }).finally(() => { if (installPromise === pending) installPromise = null; });
     installPromise = pending;

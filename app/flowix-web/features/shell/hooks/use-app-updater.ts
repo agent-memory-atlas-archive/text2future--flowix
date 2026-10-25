@@ -29,7 +29,8 @@ export function useAppUpdater({
         void runStartupStage3Task('app-update-auto-check', async () => {
           if (cancelled || useAppUpdaterStore.getState().checkStarted) return;
           try {
-            await checkNow();
+            const update = await checkNow();
+            if (update?.notify) await useAppUpdaterStore.getState().downloadNow();
           } catch {
             // Automatic check and predownload failures stay silent.
           }

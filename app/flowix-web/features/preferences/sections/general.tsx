@@ -48,9 +48,10 @@ export function GeneralSection({ language, productInfo, afterGeneral, updateSett
 
   const handleInstallUpdate = async () => {
     try {
-      await updater.installNow();
+      if (updater.status === 'ready') await updater.installNow();
+      else await updater.downloadNow();
     } catch {
-      toast.error(t('appUpdates.installFailed'));
+      toast.error(t(updater.status === 'ready' ? 'appUpdates.installFailed' : 'appUpdates.downloadFailed'));
     }
   };
 
@@ -157,6 +158,11 @@ export function GeneralSection({ language, productInfo, afterGeneral, updateSett
                   {updater.update.body}
                 </p>
               )}
+              {updater.error != null && !updatingProduct && (
+                <p role="alert" className="mt-2 text-sm text-[var(--destructive)]">
+                  {t(updater.status === 'ready' ? 'appUpdates.installFailed' : 'appUpdates.downloadFailed')}
+                </p>
+              )}
               {updatingProduct && updater.progress && (
                 <UpdateProgress
                   className="mt-3"
@@ -174,9 +180,9 @@ export function GeneralSection({ language, productInfo, afterGeneral, updateSett
               size="sm"
               className="rounded-lg"
               onClick={handleInstallUpdate}
-              disabled={updatingProduct}
+              disabled={checkingUpdates || updatingProduct}
             >
-              {downloadingUpdate ? t('appUpdates.downloading') : installingUpdate ? t('appUpdates.installing') : t('appUpdates.install')}
+              {downloadingUpdate ? t('appUpdates.downloading') : installingUpdate ? t('appUpdates.installing') : t(updater.status === 'ready' ? 'appUpdates.install' : 'appUpdates.download')}
             </Button>
           </div>
         </div>

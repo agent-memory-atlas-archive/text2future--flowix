@@ -3,7 +3,7 @@ const mocks=vi.hoisted(() => ({invoke:vi.fn(),listen:vi.fn(),relaunch:vi.fn()}))
 vi.mock('@tauri-apps/api/core', () => ({invoke:mocks.invoke}));
 vi.mock('@tauri-apps/api/event', () => ({listen:mocks.listen}));
 vi.mock('@tauri-apps/plugin-process', () => ({relaunch:mocks.relaunch}));
-import { installAppUpdate } from './updater';
+import { downloadAppUpdate, installAppUpdate } from './updater';
 beforeEach(() => vi.resetAllMocks());
 afterEach(() => vi.unstubAllGlobals());
 it('replays progress to later callers and delivers subsequent events to both', async () => {
@@ -32,4 +32,18 @@ it('allows retry after listener setup fails', async () => {
   await expect(installAppUpdate('1.1.0')).rejects.toThrow('listen failed');
   await installAppUpdate('1.1.0');
   expect(mocks.invoke).toHaveBeenCalledTimes(1);
+});
+
+it('downloads with progress without relaunching', async () => {
+  const unlisten = vi.fn();
+  const progress = vi.fn();
+  mocks.listen.mockImplementation(async (_event, callback) => {
+    callback({payload:{phase:'progress',downloadedBytes:10,contentLength:20}});
+    return unlisten;
+  });
+  await downloadAppUpdate('1.1.0', progress);
+  expect(mocks.invoke).toHaveBeenCalledWith('download_app_update',{version:'1.1.0'});
+  expect(progress).toHaveBeenCalledWith({phase:'progress',downloadedBytes:10,contentLength:20});
+  expect(mocks.relaunch).not.toHaveBeenCalled();
+  expect(unlisten).toHaveBeenCalledTimes(1);
 });

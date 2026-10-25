@@ -4,8 +4,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { useAppUpdater } from '../hooks/use-app-updater';
 import { useAppUpdaterStore } from './app-updater-store';
 import type { AppUpdateDownloadProgress } from '@platform/tauri/client/updater';
-const mocks = vi.hoisted(() => ({ check: vi.fn(), install: vi.fn(), cancel: vi.fn() }));
-vi.mock('@platform/tauri/client/updater', () => ({checkAppUpdate:mocks.check, installAppUpdate:mocks.install, cancelAppUpdate:mocks.cancel}));
+const mocks = vi.hoisted(() => ({ check: vi.fn(), download: vi.fn(), install: vi.fn(), cancel: vi.fn() }));
+vi.mock('@platform/tauri/client/updater', () => ({checkAppUpdate:mocks.check, downloadAppUpdate:mocks.download, installAppUpdate:mocks.install, cancelAppUpdate:mocks.cancel}));
 vi.mock('@/lib/startup-stage3', () => ({
   waitForStartupStage3: async () => {},
   runStartupStage3Task: async (_name: string, task: () => Promise<void>) => task(),
@@ -98,4 +98,53 @@ it('runs one silent automatic check across entries and allows manual retry after
   expect(useAppUpdaterStore.getState()).toMatchObject({status:'error',update:null});
   await act(async () => {await useAppUpdaterStore.getState().checkNow();});
   expect(useAppUpdaterStore.getState().status).toBe('available');
+});
+
+it('manual checking does not download; download progress ends ready without installing', async () => {
+  await useAppUpdaterStore.getState().checkNow();
+  expect(mocks.download).not.toHaveBeenCalled();
+  const download = deferred<void>();
+  mocks.download.mockImplementation((_version, progress) => {
+    progress({phase:'progress', downloadedBytes:10, contentLength:20});
+    return download.promise;
+  });
+  const pending = useAppUpdaterStore.getState().downloadNow();
+  expect(useAppUpdaterStore.getState().downloadNow()).toBe(pending);
+  await Promise.resolve();
+  expect(useAppUpdaterStore.getState()).toMatchObject({status:'downloading',progress:{downloadedBytes:10}});
+  download.resolve(); await pending;
+  expect(useAppUpdaterStore.getState().status).toBe('ready');
+  expect(mocks.install).not.toHaveBeenCalled();
+  await useAppUpdaterStore.getState().checkNow();
+  expect(useAppUpdaterStore.getState().status).toBe('ready');
+  await useAppUpdaterStore.getState().installNow();
+  expect(mocks.install).toHaveBeenCalledTimes(1);
+});
+it('retains discovered update after a failed download and allows retry', async () => {
+  await useAppUpdaterStore.getState().checkNow();
+  mocks.download.mockRejectedValueOnce(new Error('download failed'));
+  await expect(useAppUpdaterStore.getState().downloadNow()).rejects.toThrow('download failed');
+  expect(useAppUpdaterStore.getState()).toMatchObject({status:'available',update});
+  await useAppUpdaterStore.getState().downloadNow();
+  expect(useAppUpdaterStore.getState().status).toBe('ready');
+});
+it('automatically checks and downloads without installing', async () => {
+  vi.useFakeTimers();
+  function Entry() {useAppUpdater({autoCheck:true,delayMs:10});return null;}
+  const root=createRoot(document.createElement('div')); roots.push(root);
+  await act(async () => root.render(<Entry />));
+  await act(async () => {await vi.advanceTimersByTimeAsync(10);});
+  expect(mocks.check).toHaveBeenCalledTimes(1);
+  expect(mocks.download).toHaveBeenCalledTimes(1);
+  expect(useAppUpdaterStore.getState().status).toBe('ready');
+  expect(mocks.install).not.toHaveBeenCalled();
+});
+it('does not automatically download releases with notifications disabled', async () => {
+  vi.useFakeTimers();
+  mocks.check.mockResolvedValue({...update,notify:false});
+  function Entry() {useAppUpdater({autoCheck:true,delayMs:10});return null;}
+  const root=createRoot(document.createElement('div')); roots.push(root);
+  await act(async () => root.render(<Entry />));
+  await act(async () => {await vi.advanceTimersByTimeAsync(10);});
+  expect(mocks.download).not.toHaveBeenCalled();
 });

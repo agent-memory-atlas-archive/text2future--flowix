@@ -519,6 +519,7 @@ pub fn run() {
             commands::dsh::dsh_manage_profile_plugin,
             crate::app_update::install_app_update,
             crate::app_update::check_app_update,
+            crate::app_update::download_app_update,
             crate::app_update::consume_app_update_result,
             crate::app_update::cancel_app_update,
             commands::boot::get_boot_features,

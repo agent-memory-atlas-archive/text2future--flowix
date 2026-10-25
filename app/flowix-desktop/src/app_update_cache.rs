@@ -1,12 +1,10 @@
+use super::update_download::{download_to_file, partial_may_be_complete};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     fmt::Write as _,
     path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
-    },
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::Update;
@@ -93,12 +91,9 @@ async fn remove_old_update_packages(directory: &std::path::Path, keep: &std::pat
 
 pub(super) async fn prepare_update_package(
     app: &AppHandle,
-    mut update: Update,
+    update: Update,
     report_progress: bool,
 ) -> Result<PreparedUpdate, String> {
-    // Package downloads need a larger budget than the manifest request, but
-    // must still release the check/install lock if the server stops responding.
-    update.timeout = Some(std::time::Duration::from_secs(10 * 60));
     let package_path = update_cache_location(app, &update)?;
     let directory = package_path
         .parent()
@@ -125,63 +120,58 @@ pub(super) async fn prepare_update_package(
     }
 
     let partial_path = package_path.with_extension("part");
-    let _ = tokio::fs::remove_file(&partial_path).await;
-    let downloaded_bytes = Arc::new(AtomicU64::new(0));
-    let started = Arc::new(AtomicBool::new(false));
-    let progress_app = report_progress.then(|| app.clone());
-    let chunk_app = progress_app.clone();
-    let chunk_bytes = downloaded_bytes.clone();
-    let chunk_started = started.clone();
-    let finish_bytes = downloaded_bytes.clone();
-    let bytes = update
-        .download(
-            move |chunk_length, content_length| {
-                let Some(progress_app) = chunk_app.as_ref() else {
-                    return;
-                };
-                if !chunk_started.swap(true, Ordering::Relaxed) {
-                    let _ = progress_app.emit(
-                        "app-update-progress",
-                        json!({ "phase": "started", "contentLength": content_length }),
-                    );
-                }
-                let downloaded = chunk_bytes.fetch_add(chunk_length as u64, Ordering::Relaxed)
-                    + chunk_length as u64;
-                let _ = progress_app.emit(
-                    "app-update-progress",
-                    json!({
-                        "phase": "progress",
-                        "downloadedBytes": downloaded,
-                        "contentLength": content_length,
-                    }),
-                );
-            },
-            move || {
-                if let Some(progress_app) = progress_app.as_ref() {
-                    let _ = progress_app.emit(
-                        "app-update-progress",
-                        json!({
-                            "phase": "finished",
-                            "downloadedBytes": finish_bytes.load(Ordering::Relaxed),
-                        }),
-                    );
-                }
-            },
-        )
-        .await
-        .map_err(|error| format!("failed to download update: {error}"))?;
-
-    // `Update::download` verifies the signature. Verify here as well so the
-    // same rule applies to freshly downloaded and previously cached bytes.
-    verify_cached_package(app, &update, &bytes)?;
-    tokio::fs::write(&partial_path, &bytes)
-        .await
-        .map_err(|error| format!("failed to write cached application update: {error}"))?;
-    if let Err(error) = tokio::fs::rename(&partial_path, &package_path).await {
+    let metadata_path = partial_path.with_extension("resume.json");
+    // An exit after the last byte but before publication needs no new request.
+    let complete = partial_may_be_complete(&partial_path) && match tokio::fs::read(&partial_path).await {
+        Ok(bytes) => verify_cached_package(app, &update, &bytes).is_ok(),
+        Err(_) => false,
+    };
+    if !complete {
+        let mut builder = reqwest::Client::builder()
+            .https_only(true)
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(10 * 60))
+            .no_gzip().no_brotli().no_deflate().no_zstd()
+            .user_agent(concat!("Flowix/", env!("CARGO_PKG_VERSION")));
+        if update.no_proxy {
+            builder = builder.no_proxy();
+        } else if let Some(proxy) = &update.proxy {
+            builder = builder.proxy(reqwest::Proxy::all(proxy.as_str()).map_err(|e| e.to_string())?);
+        }
+        let client = builder.build().map_err(|e| format!("failed to configure update download: {e}"))?;
+        let mut last_progress = Instant::now();
+        let mut started = false;
+        download_to_file(&client, &update.download_url, update.headers.clone(), &partial_path, |downloaded, total| {
+            if !report_progress { return; }
+            if !started {
+                started = true;
+                let _ = app.emit("app-update-progress", json!({ "phase": "started", "contentLength": total }));
+            } else if last_progress.elapsed() < Duration::from_millis(150) && Some(downloaded) != total {
+                return;
+            }
+            last_progress = Instant::now();
+            let _ = app.emit("app-update-progress", json!({
+                "phase": "progress", "downloadedBytes": downloaded, "contentLength": total,
+            }));
+        }).await.map_err(|error| {
+            tracing::warn!(event = "app_update.download_failed", version = %update.version, %error, "application update download failed; partial file retained");
+            error
+        })?;
+    }
+    let bytes = tokio::fs::read(&partial_path).await
+        .map_err(|e| format!("failed to read downloaded application update: {e}"))?;
+    if let Err(error) = verify_cached_package(app, &update, &bytes) {
+        tracing::warn!(event = "app_update.verification_failed", version = %update.version, %error, "discarding invalid application update");
+        // Never keep a corrupt complete file that would fail every future attempt.
         let _ = tokio::fs::remove_file(&partial_path).await;
-        return Err(format!(
-            "failed to publish cached application update: {error}"
-        ));
+        let _ = tokio::fs::remove_file(&metadata_path).await;
+        return Err(error);
+    }
+    tokio::fs::rename(&partial_path, &package_path).await
+        .map_err(|e| format!("failed to publish cached application update: {e}"))?;
+    let _ = tokio::fs::remove_file(&metadata_path).await;
+    if report_progress {
+        let _ = app.emit("app-update-progress", json!({ "phase": "finished", "downloadedBytes": bytes.len() }));
     }
     remove_old_update_packages(directory, &package_path).await;
 

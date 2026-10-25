@@ -18,7 +18,7 @@ export function ProductUpdatePill({
   const { t } = useI18n();
   const { status, update } = updater;
 
-  if (!update || !update.notify || status === 'error' || status === 'none' || status === 'idle' || status === 'checking') {
+  if (!update || !update.notify || (status !== 'ready' && status !== 'installing')) {
     return null;
   }
 
@@ -48,7 +48,7 @@ export function ProductUpdatePill({
         },
       })
     : undefined;
-  const isUpdating = status === 'downloading' || status === 'installing';
+  const isUpdating = status === 'installing';
 
   return (
     <Tooltip
