@@ -14,8 +14,9 @@ const itemClass = 'h-7 items-center justify-start gap-0 rounded-lg px-2 py-0 tex
 const labelClass = 'px-[0.375rem] pb-[0.35rem] pt-[0.35rem] text-xs font-normal leading-[1.2] text-[var(--muted-foreground)]';
 
 /** Shared context menu for the Work and Browser column title bars. */
-export function WorkspaceColumnContextMenu({ children, onCreateNote, onCreateAgentConversation }: {
+export function WorkspaceColumnContextMenu({ children, isWindows, onCreateNote, onCreateAgentConversation }: {
   children: ReactElement;
+  isWindows: boolean;
   onCreateNote?: (templateId?: string) => void;
   onCreateAgentConversation?: (typeKey: AgentTypeKey) => void;
 }) {
@@ -62,7 +63,7 @@ export function WorkspaceColumnContextMenu({ children, onCreateNote, onCreateAge
 
   return (
     <ContextMenu onOpenChange={setMenuOpen}>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuTrigger asChild data-workspace-column-context-menu={isWindows ? 'windows' : undefined}>{children}</ContextMenuTrigger>
       <ContextMenuContent className="w-[200px] space-y-0.5 rounded-xl p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
         <ContextMenuItem onClick={toggleBrowserColumn} className={itemClass}>
           <Columns2 className="mr-2 h-4 w-4" aria-hidden="true" />

@@ -186,7 +186,7 @@ export function BrowserColumnHeader(props: BrowserColumnHeaderProps) {
     try { if (await navigateBrowserColumnHistory(direction) === null) toast.error(t('tabWindow.switchFailed')); }
     catch (error) { toast.error(error instanceof Error ? error.message : t('tabWindow.switchFailed')); }
   };
-  return <WorkspaceColumnContextMenu onCreateNote={props.onCreateNote} onCreateAgentConversation={props.onCreateAgentConversation}><header data-browser-column-header data-tauri-drag-region
+  return <WorkspaceColumnContextMenu isWindows={windows} onCreateNote={props.onCreateNote} onCreateAgentConversation={props.onCreateAgentConversation}><header data-browser-column-header data-tauri-drag-region
     data-thread-card-fullscreen={fullscreen ? '' : undefined}
     className={`relative flex shrink-0 items-center gap-1 pl-1 pr-2 ${windows ? 'h-9 min-h-9 pr-[126px]' : 'h-12 min-h-12'} ${special}`}
     style={special ? undefined : { backgroundImage: WORK_COLUMN_TITLEBAR_GRADIENT }}>

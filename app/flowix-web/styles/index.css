@@ -861,6 +861,13 @@ html.flowix-drag-drop-active * {
 		cursor: default;
 	}
 
+	/* Windows native drag regions consume right-clicks before the web menu.
+	 * Keep the data attributes: Tauri still handles left-drag and double-click. */
+	[data-workspace-column-context-menu="windows"],
+	[data-workspace-column-context-menu="windows"] [data-tauri-drag-region] {
+		-webkit-app-region: no-drag;
+	}
+
 	/* 兜底: 任何直接调用 toast.custom() 的未样式化 toast 保持水平居中,
 	 * 配合 lib/toast.tsx 的居中修复, 防止再次出现 toast 偏左问题。 */
 	[data-sonner-toast][data-styled="false"] {

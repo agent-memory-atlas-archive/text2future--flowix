@@ -5,7 +5,7 @@ import { WorkspaceColumnContextMenu } from './workspace-column-context-menu';
 /** Main work-column menu coordinates host actions around the visual frame. */
 export function WorkColumnTitlebar(props: WorkColumnTitlebarShellProps) {
   return (
-    <WorkspaceColumnContextMenu>
+    <WorkspaceColumnContextMenu isWindows={props.isWindows}>
       <WorkColumnTitlebarShell {...props}
         showTrafficLightSpacer={isMac() && props.showTrafficLightSpacer} />
     </WorkspaceColumnContextMenu>

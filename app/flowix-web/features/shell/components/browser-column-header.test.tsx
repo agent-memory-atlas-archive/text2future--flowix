@@ -12,7 +12,9 @@ vi.mock('@features/document/public/shell-api', () => ({
   useFullscreenAgentThreadCardInfo: () => null,
 }));
 vi.mock('@features/agent/public/shell-api', () => ({ AgentIcon: () => null, useBrowserColumnAgentHeaderModel: () => ({ conversationInstances: {} }), useNewConversationAgentSelection: () => ({ options: [] }) }));
-it('shows one current title and history controls without a tab strip, and preserves hide', async () => {
+it.each([true, false])('shows the current title, preserves hide and applies the context-menu drag policy (Windows: %s)', async (windows) => {
+  const userAgent = vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(windows ? 'Windows' : 'Macintosh');
+  const platform = vi.spyOn(navigator, 'platform', 'get').mockReturnValue(windows ? 'Win32' : 'MacIntel');
   const environment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   environment.IS_REACT_ACT_ENVIRONMENT = true;
   useBrowserColumnStore.getState().reset();
@@ -24,10 +26,13 @@ it('shows one current title and history controls without a tab strip, and preser
   try {
     await act(async () => root.render(<BrowserColumnHeader current={state.current} activeSurfaceChrome="document" onToggleMemoEditorMode={vi.fn()} onOpenInWorkColumn={vi.fn()} onCloseColumn={hide} isFocused={false} canCreate={false} onCreateNote={vi.fn()} onCreateAgentConversation={vi.fn()} />));
     expect(node.querySelector('[role="tablist"]')).toBeNull();
+    const header = node.querySelector('[data-browser-column-header]')!;
+    expect(header.getAttribute('data-workspace-column-context-menu')).toBe(windows ? 'windows' : null);
+    expect(header.hasAttribute('data-tauri-drag-region')).toBe(true);
     expect(node.textContent).toContain('Current page');
     expect(node.querySelector<HTMLButtonElement>('[aria-label="document.titlebar.back"]')?.disabled).toBe(true);
     expect(node.querySelector<HTMLButtonElement>('[aria-label="document.titlebar.forward"]')?.disabled).toBe(true);
     await act(async () => node.querySelector<HTMLButtonElement>('[aria-label="tabWindow.closeColumn"]')?.click());
     expect(hide).toHaveBeenCalledOnce();
-  } finally { await act(async () => root.unmount()); node.remove(); environment.IS_REACT_ACT_ENVIRONMENT = false; }
+  } finally { await act(async () => root.unmount()); node.remove(); environment.IS_REACT_ACT_ENVIRONMENT = false; userAgent.mockRestore(); platform.mockRestore(); }
 });
