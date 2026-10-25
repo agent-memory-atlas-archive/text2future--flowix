@@ -1882,7 +1882,10 @@ html.flowix-block-dragging * {
   /* Visual offset only: focusing a gap must not move document blocks. */
   top: -5px;
   left: 0;
-  right: 0;
+  /* Own the caret size instead of relying on Tiptap's injected 20px width.
+   * Scale with the editor line height while the gap hit area stays full-width. */
+  right: auto;
+  width: 0.8lh;
   border-top: 2px solid var(--brand);
   animation: editor-block-gap-blink 1.1s steps(2, start) infinite;
 }
