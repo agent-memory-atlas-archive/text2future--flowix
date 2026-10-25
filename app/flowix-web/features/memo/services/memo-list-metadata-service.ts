@@ -2,6 +2,8 @@ import type { Notebook } from '@features/memo/store/note-store';
 import { memos, system, tags } from '@platform/tauri/client';
 import { applyPinOrdering } from '@features/memo/components/tag-reorder';
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('memo-list-metadata-service');
 export interface MemoLibraryMetadata {
   tagMap: Record<string, string>;
   tagOptions: MemoTagTreeItem[];
@@ -220,15 +222,15 @@ export async function loadMemoLibraryMetadata({
     prefixCountsResult,
   ] = await Promise.all([
     tags.getAll(notebook.id).catch((error) => {
-      console.warn('[memo-list-metadata-service] Failed to load tags:', error);
+      logger.warn('Failed to load tags:', error);
       return { tags: [] };
     }),
     memos.getUsedTagIds(notebook.id).catch((error) => {
-      console.warn('[memo-list-metadata-service] Failed to load used tags:', error);
+      logger.warn('Failed to load used tags:', error);
       return { usedTagIds: [], tagCounts: [], totalMemoCount: 0, agentMemoCount: 0, todoMemoCount: 0 };
     }),
     system.getTagMetadata(notebook.id).catch((error) => {
-      console.warn('[memo-list-metadata-service] Failed to load tag system metadata:', error);
+      logger.warn('Failed to load tag system metadata:', error);
       return { hidden: [], order: [], layout: [], pinnedByParent: {} };
     }),
     // 路径式 tag 树的前缀计数: 每个 prefix (e.g. `中国`) 对应"挂了
@@ -236,7 +238,7 @@ export async function loadMemoLibraryMetadata({
     // 数字必须用这个 (按 memo 数, 不能按 tag 数累加, 否则同一
     // memo 多个子 tag 会在父 prefix 重复计)。
     tags.getPrefixCounts(notebook.id).catch((error) => {
-      console.warn('[memo-list-metadata-service] Failed to load tag prefix counts:', error);
+      logger.warn('Failed to load tag prefix counts:', error);
       return {} as Record<string, number>;
     }),
   ]);

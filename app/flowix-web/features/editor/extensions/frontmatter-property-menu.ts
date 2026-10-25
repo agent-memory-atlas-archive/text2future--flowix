@@ -3,7 +3,7 @@ import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api'
 
 export type PropertyMenuAction = 'up' | 'down' | 'delete';
 
-/** Shared menu for saved properties and the unsaved empty row. */
+/** Shared menu for saved properties. */
 export function createPropertyItemMenu(
   anchor: HTMLElement,
   propertyKey: string,

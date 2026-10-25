@@ -1,0 +1,42 @@
+/* Root contract shared by standalone conversations and embedded Thread Cards.
+ * Product/theme tokens are shared intentionally; document typography is not. */
+.agent-conversation-surface {
+  --agent-content-max-width: 780px;
+  --agent-content-inline-inset: 1.5rem;
+  /* Composer geometry belongs to the surface root, not to .agent-thread-card:
+   * every Agent surface (standalone, fullscreen, inline card) carries this
+   * class, so a composer never depends on having a Thread Card ancestor.
+   * Card-only tokens (--atc-min-height / --atc-max-height / --atc-header-h)
+   * stay in chrome.css. */
+  --atc-send-size: 28px;
+  --atc-bottom-pad: 10px;
+  --atc-composer-max-h: 200px;
+  font-family: var(--font-sans);
+  font-size: var(--font-size, 15px);
+  line-height: var(--font-line-height, 1.6);
+  font-weight: 400;
+  font-style: normal;
+  letter-spacing: normal;
+  text-align: start;
+  text-indent: 0;
+  text-transform: none;
+  color: var(--foreground);
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
+  tab-size: 5;
+}
+
+/* Standalone hosts do not borrow .markdown-editor's container layout. */
+.agent-conversation-detail {
+  isolation: isolate;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  -webkit-overflow-scrolling: touch;
+}

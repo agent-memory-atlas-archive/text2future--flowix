@@ -262,7 +262,7 @@ function AgentConversationDetailContent({
         },
         source: { kind: 'dedicated', notebookId: currentInstance.source.notebookId ?? null },
       });
-      await openWorkspaceSurface({ target: { kind: 'agent-conversation', instanceId: fork.instanceId } });
+      await openWorkspaceSurface({ host: 'main-third', target: { kind: 'agent-conversation', instanceId: fork.instanceId } });
     } catch (error) {
       logger.error(`Failed to fork ${agentType} conversation`, { error });
       toast.error(error instanceof Error ? error.message : String(error));
@@ -463,6 +463,11 @@ function AgentConversationDetailContent({
       inputDraft: restoredDraft,
       t: (key) => tRef.current(key),
     });
+    const handleScrollToLatest = (event: MouseEvent): void => {
+      event.stopPropagation();
+      messagesControllerRef.current?.scrollToBottomSmooth();
+    };
+    composerParts.scrollToLatestButton.addEventListener('click', handleScrollToLatest);
     composerMount.append(composerParts.composer);
     const {
       composer,
@@ -539,6 +544,9 @@ function AgentConversationDetailContent({
         bottomFollowThresholdPx: BOTTOM_FOLLOW_THRESHOLD_PX,
         topHistoryLoadThresholdPx: TOP_HISTORY_LOAD_THRESHOLD_PX,
         scrollDeltaEpsilonPx: SCROLL_DELTA_EPSILON_PX,
+        onAtBottomChange: (atBottom) => {
+          composerParts.scrollToLatestButton.hidden = atBottom;
+        },
         isDestroyed: () => destroyedRef.current,
         isCollapsed: () => false,
         isFullscreen: () => true,
@@ -691,6 +699,7 @@ function AgentConversationDetailContent({
     return () => {
       destroyedRef.current = true;
       body.removeEventListener('click', handleMessageLinkClick);
+      composerParts.scrollToLatestButton.removeEventListener('click', handleScrollToLatest);
       composerController.flushPendingDraft();
       surface.dispose();
       composerAttachmentsController.dispose();
@@ -750,7 +759,7 @@ function AgentConversationDetailContent({
 
   return (
     <section
-      className="agent-conversation-detail agent-conversation-surface markdown-editor flex h-full min-h-0 flex-col"
+      className="agent-conversation-detail agent-conversation-surface flex h-full min-h-0 flex-col"
       style={getAgentMessageTypographyCssVars(messageFontMode, messageSizeMode) as CSSProperties}
     >
       <div ref={domRef} className="agent-thread-card agent-conversation-detail__card flex min-h-0 flex-1 flex-col">

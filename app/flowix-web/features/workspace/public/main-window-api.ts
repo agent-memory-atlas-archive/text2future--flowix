@@ -2,6 +2,7 @@ import { useWorkColumnStore } from '@features/workspace/store/work-column-store'
 
 export {
   clearPluginWorkbenchTarget,
+  closeAgentTarget,
   dismissNavigationFailure,
   prepareActiveWorkColumnDocumentLeave,
   openFolderCollection,

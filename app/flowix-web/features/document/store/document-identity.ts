@@ -32,8 +32,8 @@ export function documentIdentityKey(identity: DocumentIdentity): string {
 }
 
 /** Surface-scoped event target for frontmatter controls on any Markdown file. */
-export function documentPropertyTargetId(displayId: string): string {
-  return `file:${displayId}`;
+export function documentPropertyTargetId(displayId: string, hostId?: string): string {
+  return hostId ? `file:${displayId}:${hostId}` : `file:${displayId}`;
 }
 
 /** Convert runtime identity into a durable path-based address. */

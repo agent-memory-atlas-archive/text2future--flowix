@@ -30,7 +30,7 @@ export function ActionableNoticeHost() {
     //   - pb-8 (32px) 底部再多给一些, 因为投影向下偏移最明显;
     //   - top-4 + pt-4 = 32px, 让卡片视觉顶边仍停在原来的 top-8 位置。
     <div
-      className="pointer-events-none fixed left-1/2 top-4 z-[2147483647] flex max-h-[calc(100vh-4rem)] w-[min(44rem,calc(100vw-2rem))] -translate-x-1/2 flex-col items-center gap-2 overflow-y-auto p-4 pb-8"
+      className="pointer-events-none fixed left-1/2 top-4 z-[var(--layer-notice)] flex max-h-[calc(100vh-4rem)] w-[min(44rem,calc(100vw-2rem))] -translate-x-1/2 flex-col items-center gap-2 overflow-y-auto p-4 pb-8"
       data-actionable-notice-host
       role="region"
       aria-label={t('notifications.actionable.region')}
@@ -43,14 +43,12 @@ export function ActionableNoticeHost() {
             key={notice.id}
             role={notice.tone === 'neutral' ? 'status' : 'alert'}
             aria-live={index === 0 && notice.tone !== 'neutral' ? 'assertive' : 'polite'}
-            className={`pointer-events-auto w-full ${notice.width === 'wide' ? '' : notice.width === 'narrow' ? 'max-w-[24rem]' : 'max-w-[36rem]'} animate-in slide-in-from-top-2 fade-in duration-200 rounded-xl border bg-[var(--card)] px-4 py-3 text-sm text-[var(--foreground)] shadow-xl ${notice.tone === 'error' ? 'border-destructive/30' : notice.tone === 'warning' ? 'border-[color-mix(in_oklch,var(--warning)_30%,transparent)]' : 'border-[var(--border)]'}`}
+            className={`pointer-events-auto w-full ${notice.width === 'wide' ? '' : notice.width === 'narrow' ? 'max-w-[24rem]' : 'max-w-[36rem]'} animate-in slide-in-from-top-2 fade-in duration-[var(--floating-motion-fast)] rounded-xl border bg-[var(--card)] px-4 py-3 text-sm text-[var(--foreground)] [box-shadow:var(--floating-shadow-actionable)] ${notice.tone === 'error' ? 'border-destructive/30' : notice.tone === 'warning' ? 'border-[color-mix(in_oklch,var(--warning)_30%,transparent)]' : 'border-[var(--border)]'}`}
           >
             <div className="flex items-center gap-3">
-              {notice.leadingIcon === 'loading'
+              {notice.leadingIcon === 'loading' || working
                 ? <Loader2 className="h-4 w-4 shrink-0 flowix-spin text-[var(--primary)]" aria-hidden="true" />
-                : working
-                  ? <Loader2 className="h-4 w-4 shrink-0 flowix-spin text-[var(--primary)]" aria-hidden="true" />
-                  : <Icon className={`h-4 w-4 shrink-0 ${notice.tone === 'error' ? 'text-destructive' : notice.tone === 'warning' ? 'text-[var(--warning)]' : 'text-[var(--muted-foreground)]'}`} aria-hidden="true" />}
+                : <Icon className={`h-4 w-4 shrink-0 ${notice.tone === 'error' ? 'text-destructive' : notice.tone === 'warning' ? 'text-[var(--warning)]' : 'text-[var(--muted-foreground)]'}`} aria-hidden="true" />}
               <div className="min-w-0 flex-1">
                 <strong className="block font-semibold">{notice.title}</strong>
                 {/* 副文案最多 1 行, 超出省略。 */}

@@ -115,10 +115,16 @@ export function getAgentMessageVisibleContent(
           message.errorDetails?.source === "dsh-history",
       ),
     );
-    return cloudModelAccessErrorMessage(
-      formattedError,
-      (key, params) => translate(language, key, params),
-    );
+    // Error codes can also appear in normal answers, quoted logs and code blocks
+    // Only a diagnostic row containing an actual Cloud API error is translated
+    const isErrorRow = Boolean(message.errorDetails);
+    if (isErrorRow && /^\s*(?:Error:\s*)?cloud API error\s+\d{3}\s+[A-Z_]+:/u.test(formattedError)) {
+      return cloudModelAccessErrorMessage(
+        formattedError,
+        (key, params) => translate(language, key, params),
+      );
+    }
+    return formattedError;
   }
 
   return message.content || "";

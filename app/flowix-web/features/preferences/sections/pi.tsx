@@ -1,5 +1,7 @@
 'use client';
 
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
+
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronRight, Loader2, Plus, X } from 'lucide-react';
 import { PencilSimpleIcon, TrashSimpleIcon } from '@phosphor-icons/react';
@@ -111,7 +113,7 @@ export function PiSettingsSection() {
         setFeatures({ toolSearch: value.toolSearch });
       })
       .catch((error) => {
-        if (!cancelled) setFeaturesError(error instanceof Error ? error.message : String(error));
+        if (!cancelled) setFeaturesError(friendlyErrorMessage(error, t, 'errors.friendly.piLoad'));
       })
       .finally(() => { if (!cancelled) setFeaturesLoading(false); });
     return () => { cancelled = true; };
@@ -131,14 +133,14 @@ export function PiSettingsSection() {
     try { await piModels.saveFeatures(next); }
     catch (error) {
       setFeatures(features);
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.piSave'));
     } finally { setFeaturesSaving(false); }
   };
 
   const reload = useCallback(async () => {
     setError(null);
     try { setProviders(await piModels.list()); }
-    catch (value) { setError(value instanceof Error ? value.message : String(value)); }
+    catch (value) { setError(friendlyErrorMessage(value, t, 'errors.friendly.piLoad')); }
     finally { setLoading(false); }
   }, []);
 
@@ -154,7 +156,7 @@ export function PiSettingsSection() {
         }
       })
       .catch((value) => {
-        if (!cancelled) setProviderCatalogError(value instanceof Error ? value.message : String(value));
+        if (!cancelled) setProviderCatalogError(friendlyErrorMessage(value, t, 'errors.friendly.modelsRefresh'));
       });
     return () => { cancelled = true; };
   }, []);
@@ -252,7 +254,8 @@ export function PiSettingsSection() {
           await reload();
           setDraft(null);
           setEditingId(null);
-          toast.error(`${t('preferences.pi.oldProviderCleanupFailed')}: ${value instanceof Error ? value.message : String(value)}`);
+          console.warn('Old provider cleanup failed', value);
+          toast.error(t('preferences.pi.oldProviderCleanupFailed'));
           return;
         }
       }
@@ -261,7 +264,7 @@ export function PiSettingsSection() {
       setEditingId(null);
       toast.success(t('preferences.pi.saved'));
     } catch (value) {
-      toast.error(value instanceof Error ? value.message : String(value));
+      toast.error(friendlyErrorMessage(value, t, 'errors.friendly.piSave'));
     } finally { setBusy(false); }
   };
 
@@ -273,7 +276,7 @@ export function PiSettingsSection() {
       const latency = await piModels.test({ ...draft, models, credentialConfigured: false });
       toast.success(`${t('preferences.pi.testSuccess')} (${latency} ms)`);
     } catch (value) {
-      toast.error(value instanceof Error ? value.message : String(value));
+      toast.error(friendlyErrorMessage(value, t, 'errors.friendly.connectionTest'));
     } finally { setTesting(false); }
   };
 
@@ -293,7 +296,7 @@ export function PiSettingsSection() {
       }).join('\n'));
       toast.success(`${t('preferences.pi.discovered')} (${found.length})`);
     } catch (value) {
-      toast.error(value instanceof Error ? value.message : String(value));
+      toast.error(friendlyErrorMessage(value, t, 'errors.friendly.modelsDiscover'));
     } finally { setDiscovering(false); }
   };
 
@@ -304,7 +307,7 @@ export function PiSettingsSection() {
       await reload();
       toast.success(t('preferences.pi.deleted'));
     } catch (value) {
-      toast.error(value instanceof Error ? value.message : String(value));
+      toast.error(friendlyErrorMessage(value, t, 'errors.friendly.modelRemove'));
     } finally { setBusy(false); }
   };
 

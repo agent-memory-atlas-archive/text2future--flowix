@@ -32,7 +32,7 @@ pub use v2::{
     V2Attachment, V2BlobDownload, V2BlobDownloadCapability, V2BlobDownloadEnvelope,
     V2BlobReservation, V2BlobReservationEnvelope, V2BlobUpload, V2Bootstrap, V2BootstrapNote,
     V2Change, V2ChangesPage, V2CloudAccount, V2ConflictMaterial, V2DirtyEntity, V2EntityType,
-    V2FreezeOperation, V2History, V2HistoryRevision, V2InflightOperation, V2LocalAttachment,
+    V2FreezeOperation, V2InflightOperation, V2LocalAttachment,
     V2LocalNote, V2LocalNotebook, V2NoteState, V2NotebookState, V2OperationError, V2OperationKind,
     V2PendingMove, V2PushOperation, V2PushResult, V2RemoteApply, V2RemoteAttachment, V2SyncStatus,
     V2SyncedNotebook, PROTOCOL_EPOCH,

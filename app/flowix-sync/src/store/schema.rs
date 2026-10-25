@@ -20,8 +20,24 @@ impl SyncStore {
         self.initialize_schema_locked()
     }
 
+    /// Background runtime fallback after best-effort startup migrations.
+    pub fn initialize_runtime_schema(&self) -> Result<(), SyncError> {
+        let _guard = self.schema_lock.lock().unwrap_or_else(|p| p.into_inner());
+        if let Err(error) = self.initialize_schema_locked() {
+            if !flowix_core::memo_file::database_file_is_corrupt(&self.path).unwrap_or(false) {
+                return Err(error);
+            }
+            tracing::warn!(%error, "sync migration skipped; recreating runtime database");
+            self.schema_ready
+                .store(false, std::sync::atomic::Ordering::Release);
+            flowix_core::memo_file::discard_database_for_runtime(&self.path);
+            self.initialize_schema_locked()?;
+        }
+        Ok(())
+    }
+
     fn initialize_schema_locked(&self) -> Result<(), SyncError> {
-        flowix_core::memo_file::with_database_rebuild(&self.path, || {
+        flowix_core::memo_file::with_corrupt_database_rebuild(&self.path, || {
             let connection = self.open_raw().map_err(std::io::Error::other)?;
             Self::initialize_v2_schema(&connection).map_err(std::io::Error::other)?;
             connection
@@ -92,6 +108,36 @@ mod storage_rebuild_tests {
         }
         assert!(path.is_file());
         assert!(!path.parent().unwrap().join("rebuild-backups").exists());
+    }
+
+    #[test]
+    fn runtime_sync_write_lock_preserves_existing_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("sync.db");
+        let store = SyncStore::new(&path).unwrap();
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch("CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES ('keep'); BEGIN IMMEDIATE;").unwrap();
+        assert!(store.initialize_runtime_schema().is_err());
+        connection.execute_batch("ROLLBACK;").unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT value FROM retained", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            "keep"
+        );
+        assert!(!temp.path().join("rebuild-backups").exists());
+    }
+
+    #[test]
+    fn runtime_sync_storage_recreates_even_when_backup_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("sync.db");
+        std::fs::write(&path, b"broken sync database").unwrap();
+        std::fs::write(temp.path().join("rebuild-backups"), b"blocked").unwrap();
+        let store = SyncStore::new_uninitialized(&path);
+        store.initialize_runtime_schema().unwrap();
+        assert!(!store.session_restore_blocked().unwrap());
     }
 
     #[test]

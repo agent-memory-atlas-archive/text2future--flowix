@@ -9,8 +9,11 @@ export interface ExternalDocumentChangeContext {
   runOnce<T>(key: string, operation: () => T | Promise<T>): Promise<T>;
 }
 
+// Listener recovery is an invalidation, not a fabricated native revision.
+export type ExternalDocumentChange = ExternalDocumentChangedEvent | { kind: 'invalidated'; path: string };
+
 type ExternalDocumentChangeHandler = (
-  event: ExternalDocumentChangedEvent,
+  event: ExternalDocumentChange,
   context: ExternalDocumentChangeContext,
 ) => void | Promise<void>;
 
@@ -21,6 +24,8 @@ interface WatchGroup {
   subscribers: Map<symbol, ExternalDocumentChangeHandler>;
   active: boolean;
   leaseId: string | null;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+  retryAttempts: number;
 }
 
 const logger = createLogger('external-document-watch');
@@ -28,6 +33,8 @@ const watchGroups = new Map<string, WatchGroup>();
 const recentEvents = new Map<string, number>();
 const EVENT_DEDUP_WINDOW_MS = 2_000;
 const MAX_RECENT_EVENTS = 512;
+const WATCH_RETRY_BASE_MS = 1000;
+const WATCH_RETRY_MAX_MS = 30_000;
 let eventUnlisten: UnlistenFn | null = null;
 
 function watchGroupKey(path: string, scopePath: string | null): string {
@@ -62,13 +69,15 @@ function isDuplicateEvent(key: string): boolean {
   return false;
 }
 
-function dispatchExternalDocumentChange(event: ExternalDocumentChangedEvent): void {
+function dispatchExternalDocumentChange(event: ExternalDocumentChange): void {
   const path = canonicalPath(event.path);
   const groups = [...watchGroups.values()].filter((group) => group.path === path && group.active);
-  if (groups.length === 0 || isDuplicateEvent(eventKey(path, event))) return;
-
-  if (event.source === 'user_edit' && event.originWindowLabel === getCurrentWindow().label) return;
-  if (consumeExpectedExternalDocumentEvent(path, event.kind, event.revision)) return;
+  if (groups.length === 0) return;
+  if (event.kind !== 'invalidated') {
+    if (isDuplicateEvent(eventKey(path, event))) return;
+    if (event.source === 'user_edit' && event.originWindowLabel === getCurrentWindow().label) return;
+    if (consumeExpectedExternalDocumentEvent(path, event.kind, event.revision)) return;
+  }
 
   // Several path/scope leases can target the same file in one window. Route a
   // matching revision once, while each mounted view updates its own local state.
@@ -100,6 +109,11 @@ function ensureEventSubscription(): void {
   eventUnlisten = subscribe<ExternalDocumentChangedEvent>(
     'external-document-changed',
     dispatchExternalDocumentChange,
+    { onListenerReady: () => {
+      recentEvents.clear();
+      const paths = new Set([...watchGroups.values()].filter((group) => group.active).map((group) => group.path));
+      for (const path of paths) dispatchExternalDocumentChange({ kind: 'invalidated', path });
+    } },
   );
 }
 
@@ -112,15 +126,26 @@ function registerWatch(group: WatchGroup): void {
       return;
     }
     group.leaseId = leaseId;
+    if (group.retryAttempts > 0) {
+      group.retryAttempts = 0;
+      dispatchExternalDocumentChange({ kind: 'invalidated', path: group.path });
+    }
   }).catch((error: unknown) => {
     if (group.active && watchGroups.get(group.key) === group) {
-      logger.warn('registration failed', { path: group.path, error });
+      const delay = Math.min(WATCH_RETRY_BASE_MS * 2 ** group.retryAttempts, WATCH_RETRY_MAX_MS);
+      group.retryAttempts += 1;
+      group.retryTimer = setTimeout(() => {
+        group.retryTimer = null;
+        registerWatch(group);
+      }, delay);
+      logger.warn('registration failed; retry scheduled', { error, delay });
     }
   });
 }
 
 function releaseWatchGroup(group: WatchGroup): void {
   group.active = false;
+  if (group.retryTimer) clearTimeout(group.retryTimer);
   watchGroups.delete(group.key);
   if (group.leaseId) {
     void windows.unwatchExternalDocument(group.leaseId).catch((error: unknown) => {
@@ -151,6 +176,8 @@ export function subscribeExternalDocumentChanges(
       subscribers: new Map(),
       active: true,
       leaseId: null,
+      retryTimer: null,
+      retryAttempts: 0,
     };
     watchGroups.set(key, group);
     ensureEventSubscription();

@@ -43,26 +43,35 @@ export function DocumentSaveStatus({ identity, scopePath }: {
   const filename = path.split(/[\\/]/).pop() ?? path;
 
   const resolve = useCallback(async (choice: 'retry' | 'local' | 'disk') => {
+    const session = findDocumentSession(identity.displayId);
+    if (!session) return;
     const currentBuffer = getDocumentBuffer(identity);
     if (currentBuffer.savingRevision !== null || isTitleSaving(identity.displayId)) return;
     const currentPath = findFileDisplayPath(identity.displayId) ?? identity.path;
     captureLatestDocumentContent(identity);
     const revision = currentBuffer.capturedRevision;
+    let conflictContent = currentBuffer.conflictContent;
+    const sameDocument = () => findDocumentSession(identity.displayId) === session
+      && (findFileDisplayPath(identity.displayId) ?? identity.path) === currentPath;
+    const decisionStillCurrent = () => sameDocument()
+      && currentBuffer.capturedRevision === revision
+      && currentBuffer.conflictContent === conflictContent;
     try {
       if (choice !== 'retry') {
         // Keep the local copy recoverable before an explicit conflict decision.
-        if (!await protectDocumentDraft(identity, currentPath, 'save-error')) return;
+        if (!await protectDocumentDraft(identity, currentPath, 'save-error') || !decisionStillCurrent()) return;
         const disk = await localDocumentOperations.read({ path: currentPath, scopePath });
+        if (!decisionStillCurrent()) return;
         if (disk === null) throw new Error(t('document.save.missing'));
         captureLatestDocumentContent(identity);
-        if (currentBuffer.capturedRevision !== revision) return;
+        if (!decisionStillCurrent()) return;
         if (choice === 'disk') {
           await clearRecoveryDraftThrough(
             { ...identity, path: currentPath },
-            findDocumentSession(identity.displayId)!.recoveryRevision,
+            session.recoveryRevision,
           );
           captureLatestDocumentContent(identity);
-          if (currentBuffer.capturedRevision !== revision) return;
+          if (!decisionStillCurrent()) return;
           applyLoadedDocumentContent(identity, currentPath, disk, { preservePending: false });
           void protectDocumentDraft(identity, currentPath, 'autosave');
           return;
@@ -72,13 +81,16 @@ export function DocumentSaveStatus({ identity, scopePath }: {
         currentBuffer.lastSavedContent = disk;
         currentBuffer.conflicted = false;
         currentBuffer.conflictContent = null;
+        conflictContent = null;
       }
       currentBuffer.saveError = null;
       await saveDocumentContent({ identity, path: currentPath, content: currentBuffer.content, scopePath, force: true });
     } catch (error) {
-      currentBuffer.saveError = error instanceof Error ? error.message : String(error);
+      if (decisionStillCurrent()) {
+        currentBuffer.saveError = error instanceof Error ? error.message : String(error);
+      }
     } finally {
-      notifyDocumentBufferChanged(identity, 'save_settled');
+      if (sameDocument()) notifyDocumentBufferChanged(identity, 'save_settled');
     }
   }, [identity, scopePath, t]);
 

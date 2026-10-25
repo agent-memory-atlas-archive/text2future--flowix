@@ -15,6 +15,7 @@ interface PathNoteChangedPayload {
   source?: 'external_tool';
   originWindowLabel?: string;
   entry?: NoteEntry;
+  previousFavorited?: boolean;
 }
 
 export type NotebookPathMove = {
@@ -41,7 +42,7 @@ export interface PathMutationResult {
 export type NotebookChange = (
   | { kind: 'path-moved'; notebookId: string; relativePath: string; previousRelativePath: string; directory: boolean }
   | { kind: 'resource-created'; notebookId: string; relativePath: string; source?: 'external_tool'; originWindowLabel?: string }
-  | { kind: 'resource-updated'; notebookId: string; relativePath: string; entry: NoteEntry; originWindowLabel?: string }
+  | { kind: 'resource-updated'; notebookId: string; relativePath: string; entry: NoteEntry; originWindowLabel?: string; previousFavorited?: boolean }
   | { kind: 'resource-deleted'; notebookId: string; relativePath: string }
   | { kind: 'query-invalidated'; notebookId: string; relativePath: string | null }
 ) & { changeId?: string };
@@ -109,6 +110,7 @@ export function normalizeNotebookChange(payload: PathNoteChangedPayload): Notebo
       notebookId,
       relativePath,
       entry: payload.entry,
+      ...(payload.previousFavorited !== undefined ? { previousFavorited: payload.previousFavorited } : {}),
       originWindowLabel: payload.originWindowLabel,
       changeId: payload.changeId,
     };

@@ -49,6 +49,7 @@ interface UseDocumentCommandsOptions {
   currentDocumentPath: string | null;
   getCurrentDocumentContent: () => string;
   getCurrentDocumentEditor: () => Editor | null;
+  pdfHost?: 'main-third' | 'browser-column';
   onExported?: (filePath: string) => void;
 }
 
@@ -101,6 +102,7 @@ export function useDocumentCommands({
   currentDocumentPath,
   getCurrentDocumentContent,
   getCurrentDocumentEditor,
+  pdfHost = 'main-third',
   onExported,
 }: UseDocumentCommandsOptions) {
   const getExportableDocument = useCallback(async (): Promise<ExportableDocument | null> => {
@@ -227,7 +229,7 @@ export function useDocumentCommands({
       const target = await promptExportTarget(doc, 'pdf', { name: pdfName, extensions: ['pdf'] });
       if (!target) return;
 
-      restorePrintView = await preparePdfPrint(getCurrentDocumentEditor());
+      restorePrintView = await preparePdfPrint(getCurrentDocumentEditor(), pdfHost);
       const ok = await dialogs.exportPdf(target);
       if (ok) onExported?.(target);
       toast[ok ? 'success' : 'error'](
@@ -242,7 +244,7 @@ export function useDocumentCommands({
       restore?.();
       pdfExportInProgress = false;
     }
-  }, [getCurrentDocumentEditor, onExported, promptExportTarget, requireExportableDocument]);
+  }, [getCurrentDocumentEditor, onExported, pdfHost, promptExportTarget, requireExportableDocument]);
 
   return {
     handleCopyFullText,

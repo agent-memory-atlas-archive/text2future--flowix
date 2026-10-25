@@ -26,7 +26,8 @@ function startFileDisplayTracking(): () => void {
       if (target?.kind === 'media-library') addFile(target.filePath);
       if (target?.kind === 'media') addFile(target.filePath);
     }
-    for (const tab of useBrowserColumnStore.getState().tabs) {
+    const browser = useBrowserColumnStore.getState();
+    for (const tab of browser.current ? [browser.current] : []) {
       if (tab.target.kind === 'media') addFile(tab.target.filePath);
       if (tab.target.kind === 'file-browser' && tab.target.activeFilePath) {
         addFile(tab.target.activeFilePath);
@@ -39,7 +40,7 @@ function startFileDisplayTracking(): () => void {
       ...getWorkspaceDocumentHistory()]) {
       if (target?.kind === 'collection') retained.push(target);
     }
-    for (const tab of useBrowserColumnStore.getState().tabs) {
+    for (const tab of [...(browser.current ? [browser.current] : []), ...browser.backStack, ...browser.forwardStack]) {
       if (tab.target.kind === 'file-browser' && tab.target.collectionDisplay) retained.push(tab.target.collectionDisplay);
     }
     reconcileCollectionDisplays(retained);
@@ -63,7 +64,7 @@ function startFileDisplayTracking(): () => void {
 
 let stopGlobalTracking: (() => void) | null = null;
 
-/** Initialize before the first surface render; persisted browser tabs are already hydrated then. */
+/** Initialize before the first surface render; the persisted browser session are already hydrated then. */
 export function ensureFileDisplayTrackingStarted(): void {
   if (!stopGlobalTracking) stopGlobalTracking = startFileDisplayTracking();
   ensureCollectionDisplayTrackingStarted();

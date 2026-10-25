@@ -1,5 +1,7 @@
 'use client';
 
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
+
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, Loader2 } from 'lucide-react';
 import { useShortcutScope, pushHandler } from '@features/shortcuts';
@@ -11,28 +13,24 @@ import {
   listenToCloudStateChanges,
   mediaResources,
   notes,
-  notebooks as notebooksClient,
   windows as tauriWindows,
   type CloudNotebook,
-  type NotebookSetupReport,
 } from '@platform/tauri/client';
 import { useTauriRpc } from '@platform/tauri/use-tauri-rpc';
 import {
   cloudSyncErrorMessage,
   isInvalidRefreshTokenError,
-  notebookCreateErrorMessage,
 } from '@platform/tauri/errors';
 import { useCreateNotebookFlow } from '@features/memo/hooks/use-create-notebook-flow';
 import { useImportNotebookSelection } from '@features/memo/hooks/use-import-notebook-selection';
 import { useEmptyNotebookPrompt } from '@features/memo/hooks/use-empty-notebook-prompt';
-import { clearActionableNotice, dismissActionableNotice, upsertActionableNotice } from '@features/notifications/actionable-notice-store';
 import { noteRepository, notebookRepository } from '@features/memo/services/note-repository';
 import { getVisibleCreateFilter, useNoteStore, useTagStore, type NoteListItem, type Notebook } from '@features/memo/store';
 import { noteListItemRelativePath } from '@/types/note-item';
-import { upsertNotebookSetupJob, useNotebookSetupJob } from '@features/memo/store/notebook-setup-store';
+import { NotebookSetupResultNotices } from './notebook-setup-notice-host';
 import { getNotebookIconOption, NotebookIcon } from '@features/memo/components/notebook-icon';
 import { openNotebookNote } from '@features/memo/use-cases/open-notebook-note';
-import { clearWorkspaceDocument } from '@features/workspace/use-cases/workspace-navigation';
+import { clearWorkspaceDocument } from '@features/workspace/public/note-navigation-api';
 import { selectNotebook } from '@features/workspace/public/main-window-api';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
@@ -161,10 +159,11 @@ function ExternalDocumentOpenDialog() {
         dismissCurrentRequest();
       }
       if (result.failures.length) {
-        toast.error(`${t('memo.externalOpen.failed')}: ${result.failures.map(({ path, error }) => `${filenameFromPath(path)}: ${String(error)}`).join('；')}`);
+        console.warn('Opening files failed', result.failures);
+        toast.error(t(result.failures.length < request.items.length ? 'errors.friendly.fileOpenPartial' : 'errors.friendly.fileOpen'));
       }
     } catch (error) {
-      toast.error(`${t('memo.externalOpen.failed')}: ${String(error)}`);
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.fileOpen'));
     } finally {
       setOperation(null);
     }
@@ -275,146 +274,9 @@ export function MemoListServicesHost({
   const [originalEditCloudSync, setOriginalEditCloudSync] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [cloudSyncAvailable, setCloudSyncAvailable] = useState(false);
-  const notebookSetupJob = useNotebookSetupJob(selectedNotebook?.id);
-  const [notebookSetupNotice, setNotebookSetupNotice] = useState<NotebookSetupReport | null>(null);
-  const [dismissedNotebookSetupKey, setDismissedNotebookSetupKey] = useState<string | null>(null);
-  const previousNotebookSetupJobRef = useRef(notebookSetupJob);
-  const activeSetupNoticeIdRef = useRef<string | null>(null);
-
   const { creationState, createNotebook } = useCreateNotebookFlow({
     onMemoListReloadNeeded: onRefresh,
   });
-
-  useEffect(() => {
-    let dismissedSetupKey: string | null = null;
-    if (selectedNotebook?.id) {
-      try {
-        dismissedSetupKey = window.localStorage.getItem(
-          `flowix:notebook-setup-dismissed:${selectedNotebook.id}`,
-        );
-      } catch {
-        // Dismissal still works for the current session without persistent storage.
-      }
-    }
-    setDismissedNotebookSetupKey(dismissedSetupKey);
-  }, [selectedNotebook?.id]);
-
-  useEffect(() => {
-    const previous = previousNotebookSetupJobRef.current;
-    if (previous?.notebookId !== notebookSetupJob?.notebookId) setNotebookSetupNotice(null);
-    if (previous && notebookSetupJob
-      && previous.notebookId === notebookSetupJob.notebookId
-      && previous.jobId === notebookSetupJob.jobId
-      && previous.runId === notebookSetupJob.runId
-      && previous.status === 'running'
-      && notebookSetupJob.status === 'completed'
-      && (notebookSetupJob.report?.skippedExistingFiles ?? 0) > 0) {
-      setNotebookSetupNotice(notebookSetupJob.report);
-    }
-    previousNotebookSetupJobRef.current = notebookSetupJob;
-  }, [notebookSetupJob]);
-
-  const retryNotebookSetup = useCallback(async (notebookId: string) => {
-    try {
-      const job = await notebooksClient.startTemplateSetup(notebookId, true);
-      if (job && useNoteStore.getState().selectedNotebook?.id === notebookId) {
-        upsertNotebookSetupJob(job);
-      }
-    } catch (error) {
-      throw new Error(notebookCreateErrorMessage(error, t));
-    }
-  }, [t]);
-
-  const setupJobNoticeKey = notebookSetupJob
-    ? `${notebookSetupJob.jobId}:${notebookSetupJob.runId || notebookSetupJob.revision}:${notebookSetupJob.status}`
-    : null;
-  const notebookSetupNoticeDismissed = setupJobNoticeKey !== null
-    && dismissedNotebookSetupKey === setupJobNoticeKey;
-  const dismissNotebookSetupNotice = useCallback(() => {
-    if (!setupJobNoticeKey || !notebookSetupJob) return;
-    setDismissedNotebookSetupKey(setupJobNoticeKey);
-    try {
-      window.localStorage.setItem(
-        `flowix:notebook-setup-dismissed:${notebookSetupJob.notebookId}`,
-        setupJobNoticeKey,
-      );
-    } catch {
-      // Keep the notice dismissible for this session when persistent storage is unavailable.
-    }
-  }, [notebookSetupJob, setupJobNoticeKey]);
-
-  useEffect(() => {
-    const job = notebookSetupJob;
-    const previousId = activeSetupNoticeIdRef.current;
-    if (job?.status !== 'partial' && job?.status !== 'failed') {
-      if (previousId) clearActionableNotice(previousId);
-      activeSetupNoticeIdRef.current = null;
-      return;
-    }
-    const noticeId = `notebook-setup:${job.notebookId}`;
-    if (previousId && previousId !== noticeId) clearActionableNotice(previousId);
-    activeSetupNoticeIdRef.current = noticeId;
-    if (notebookSetupNoticeDismissed) return;
-
-    const failedFiles = job.report?.failedFiles ?? 0;
-    const summary = failedFiles > 0
-      ? t('notebook.setup.partialSummary', {
-        written: job.report?.writtenFiles ?? 0,
-        existing: job.report?.skippedExistingFiles ?? 0,
-        failed: failedFiles,
-        path: job.report?.firstFailurePath ?? '',
-        reason: job.report?.firstFailureReason ?? '',
-      })
-      : null;
-    const details = [
-      summary,
-      job.message ? notebookCreateErrorMessage(job.message, t) : null,
-    ].filter(Boolean).join('\n');
-    upsertActionableNotice({
-      id: noticeId,
-      priority: 50,
-      tone: 'error',
-      title: `${selectedNotebook?.name ?? t('notebook.create.title')} · ${t(job.status === 'partial' ? 'notebook.setup.partial' : 'notebook.setup.failed')}`,
-      message: details || undefined,
-      revision: `${job.updatedAt}:${job.status}:${failedFiles}:${job.message ?? ''}`,
-      dismissible: true,
-      onDismiss: dismissNotebookSetupNotice,
-      actions: [{
-        id: 'retry',
-        label: t('notebook.setup.retry'),
-        variant: 'default',
-        run: () => retryNotebookSetup(job.notebookId),
-      }],
-    });
-  }, [dismissNotebookSetupNotice, notebookSetupJob, notebookSetupNoticeDismissed, retryNotebookSetup, selectedNotebook?.name, t]);
-
-  useEffect(() => {
-    const job = notebookSetupJob;
-    if (!job || job.status !== 'completed' || !notebookSetupNotice
-      || notebookSetupNotice.skippedExistingFiles <= 0) return;
-    const noticeId = `notebook-setup-result:${job.notebookId}`;
-    upsertActionableNotice({
-      id: noticeId,
-      priority: 40,
-      tone: 'neutral',
-      title: t('notebook.setup.completedWithSkips', {
-        written: notebookSetupNotice.writtenFiles,
-        existing: notebookSetupNotice.skippedExistingFiles,
-      }),
-      revision: `${job.updatedAt}:${notebookSetupNotice.writtenFiles}:${notebookSetupNotice.skippedExistingFiles}`,
-      actions: [{
-        id: 'hide',
-        label: t('notebook.setup.hide'),
-        variant: 'outline',
-        run: () => dismissActionableNotice(noticeId),
-      }],
-    });
-    return () => clearActionableNotice(noticeId);
-  }, [notebookSetupJob, notebookSetupNotice, t]);
-
-  useEffect(() => () => {
-    if (activeSetupNoticeIdRef.current) clearActionableNotice(activeSetupNoticeIdRef.current);
-  }, []);
 
   const resetCreateState = useCallback(() => {
     setCreateOpen(false);
@@ -593,6 +455,7 @@ export function MemoListServicesHost({
       const outcome = await noteRepository.delete(path);
       // MemoEvent or the path-deleted fallback owns list and workspace cleanup.
       if (outcome === 'missingCleaned') toast.success(t('memo.delete.missingCleaned'));
+      else toast.success(t('status.deleteCompleted'));
     })().catch((error) => {
       toast.error(error instanceof Error ? error.message : String(error));
     });
@@ -610,7 +473,7 @@ export function MemoListServicesHost({
       }
       await clearWorkspaceDocument();
       triggerRefresh();
-      toast.success(t('media.fileTree.deleted', { name: filenameFromPath(request.filePath) }));
+      toast.success(t('status.deleteCompleted'));
     })().catch((error) => {
       toast.error(error instanceof Error ? error.message : String(error));
     });
@@ -670,7 +533,7 @@ export function MemoListServicesHost({
       }
       if (!local) return;
       if (useNoteStore.getState().selectedNotebook?.id !== local.id) {
-        await selectNotebook(local, { workColumnTarget: 'clear' });
+        await selectNotebook(local);
         if (useNoteStore.getState().selectedNotebook?.id !== local.id) {
           throw new Error(t('memo.navigation.workspacePreparationFailed'));
         }
@@ -742,6 +605,7 @@ export function MemoListServicesHost({
 
   return (
     <>
+      <NotebookSetupResultNotices />
       <ExternalDocumentOpenDialog />
 
       {cloudImporting && (
@@ -833,7 +697,7 @@ export function MemoListServicesHost({
             onEditNotebookCloudSyncChange={setEditCloudSync}
             onEditNotebookCloudSyncUnavailable={() => {
               void tauriWindows.openPreferences('cloudSync').catch((error) => {
-                toast.error(`${t('notebook.cloudSync.failed')}: ${String(error)}`);
+                toast.error(friendlyErrorMessage(error, t, 'errors.friendly.cloudSync'));
               });
             }}
             editSaving={editSaving}

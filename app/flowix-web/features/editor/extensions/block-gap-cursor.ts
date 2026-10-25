@@ -123,7 +123,16 @@ export const BlockGapCursor = Extension.create({
   extendNodeSchema(extension) {
     // GapCursor still checks that both sides are closed blocks. Override only
     // the defaultType test, which can otherwise pick the frontmatter node.
-    return extension.name === 'doc' ? { allowGapCursor: true } : {};
+    if (extension.name === 'doc') return { allowGapCursor: true };
+    // Code blocks need a gap point on both sides too, but they can never be a
+    // leaf: unlike the card (`content: ''` → isLeaf → isAtom) or the image,
+    // math and web-card nodes (`atom: true`), a code block must hold text, so
+    // `closedBefore`/`closedAfter` see inline content and reject every position
+    // next to it. `createGapCursor` is the same `needsGap()` branch as `isAtom`,
+    // declared instead of structural — the upstream-sanctioned escape hatch for
+    // exactly this shape. Requires prosemirror-gapcursor >= 1.4.0; on an older
+    // version the field is ignored silently and the insertion points disappear.
+    return extension.name === 'codeBlock' ? { createGapCursor: true } : {};
   },
 
   addProseMirrorPlugins() {

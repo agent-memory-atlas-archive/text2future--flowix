@@ -1,8 +1,11 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent as ReactClipboardEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { PlusIcon } from '@phosphor-icons/react';
+import { MousePointerClick } from 'lucide-react';
 
 import { useI18n } from '@/lib/i18n';
 import { toast } from '@/lib/toast';
+import { Tooltip } from '@shared/ui/tooltip';
 import { ADDABLE_TABLE_PROPERTY_KINDS, getPropertyTypeDefinition } from '@/lib/property-types';
 import { createPropertyId, createPropertyOptionId } from '@/lib/property-identity';
 import { Popover, PopoverContent } from '@shared/ui/popover';
@@ -22,6 +25,7 @@ import { canonicalizePropertyKey } from '@features/properties/property-key';
 import { getPropertyPresets, usePropertyPresets } from '@features/properties/public-api';
 import { savePropertyPreset, usePropertyPresetStore } from '@features/properties/property-preset-store';
 import { SYSTEM_FRONTMATTER_KEYS } from '@features/document/properties/frontmatter-model';
+import type { WorkspaceHostId } from '@features/workspace/public/host-api';
 
 type EditorAddablePropertyType = Exclude<TableFieldType, 'primary' | 'Note'>;
 
@@ -30,6 +34,9 @@ interface MemoTitleEditorProps {
   filename: string;
   renameTitle: RenameDocumentTitle;
   editable: boolean;
+  propertyActionsEnabled?: boolean;
+  workspaceHost?: WorkspaceHostId;
+  onActivateProperties?: () => void;
   autoFocus?: boolean;
   /** Use a DOM selection surface when a host needs to avoid native textarea selection rendering. */
   useDocumentSelection?: boolean;
@@ -37,6 +44,8 @@ interface MemoTitleEditorProps {
   allowReadOnlyBoundaryNavigation?: boolean;
   /** Whether to render the title's properties affordance. */
   showPropertiesToggle?: boolean;
+  /** The associated property list is currently under the pointer. */
+  propertyAreaHovered?: boolean;
   onMoveToBody: (request: MemoTitleBodyNavigation) => void;
   onPasteToBody?: (snapshot: ClipboardSnapshot) => void;
 }
@@ -56,10 +65,14 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
   filename,
   renameTitle,
   editable,
+  propertyActionsEnabled = editable,
+  workspaceHost,
+  onActivateProperties,
   autoFocus = false,
   useDocumentSelection = false,
   allowReadOnlyBoundaryNavigation = false,
   showPropertiesToggle = true,
+  propertyAreaHovered = false,
   onMoveToBody,
   onPasteToBody,
 }: MemoTitleEditorProps, ref) {
@@ -67,6 +80,11 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
   const { fields: propertyFields } = usePropertyPresets();
   const propertiesVisible = useSettingsStore((state) => state.propertiesVisible);
   const togglePropertiesVisible = useSettingsStore((state) => state.togglePropertiesVisible);
+  const handleTogglePropertiesVisible = useCallback(() => {
+    const opening = !useSettingsStore.getState().propertiesVisible;
+    togglePropertiesVisible();
+    if (opening) toast.success(t('document.properties.openedToast'));
+  }, [t, togglePropertiesVisible]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const documentTitleRef = useRef<HTMLDivElement>(null);
   const documentTitleComposingRef = useRef(false);
@@ -85,6 +103,7 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
    */
   const [occupiedPropertyKeys, setOccupiedPropertyKeys] = useState<ReadonlySet<string>>(new Set());
   const session = useMemoTitleSession(displayId, filename, renameTitle);
+  const propertyTargetId = documentPropertyTargetId(displayId, workspaceHost);
   const documentPropertyPresets = useMemo(() => {
     const presets = getAllPresets(propertyFields, (key) => t(key));
     return {
@@ -109,7 +128,7 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
   const openPropertyPicker = useCallback((anchorRect: DOMRect) => {
     const keys: string[] = [];
     window.dispatchEvent(new CustomEvent('flowix:query-occupied-property-keys', {
-      detail: { propertyTargetId: documentPropertyTargetId(displayId), keys },
+      detail: { propertyTargetId, keys },
     }));
     setOccupiedPropertyKeys(new Set(keys));
     setPropertyPickerAnchorRect(anchorRect);
@@ -128,12 +147,12 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
   useEffect(() => {
     const handleOpenPropertyPicker = (event: Event) => {
       const detail = (event as CustomEvent<{ propertyTargetId?: string; anchorRect?: DOMRect }>).detail;
-      if (detail?.propertyTargetId !== documentPropertyTargetId(displayId) || !editable || !detail.anchorRect) return;
+      if (detail?.propertyTargetId !== propertyTargetId || !propertyActionsEnabled || !detail.anchorRect) return;
       openPropertyPicker(detail.anchorRect);
     };
     const handleOpenAddProperty = (event: Event) => {
       const detail = (event as CustomEvent<{ propertyTargetId?: string; anchorRect?: DOMRect }>).detail;
-      if (detail?.propertyTargetId !== documentPropertyTargetId(displayId) || !editable || !detail.anchorRect) return;
+      if (detail?.propertyTargetId !== propertyTargetId || !propertyActionsEnabled || !detail.anchorRect) return;
       openAddPropertyForm(detail.anchorRect);
     };
     window.addEventListener('flowix:open-property-picker', handleOpenPropertyPicker);
@@ -142,16 +161,7 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
       window.removeEventListener('flowix:open-property-picker', handleOpenPropertyPicker);
       window.removeEventListener('flowix:open-add-property', handleOpenAddProperty);
     };
-  }, [displayId, editable, openAddPropertyForm, openPropertyPicker]);
-
-  useEffect(() => {
-    window.dispatchEvent(new CustomEvent('flowix:property-actions-popup-state', {
-      detail: {
-        propertyTargetId: documentPropertyTargetId(displayId),
-        open: propertyPickerOpen || addPropertyOpen,
-      },
-    }));
-  }, [addPropertyOpen, displayId, propertyPickerOpen]);
+  }, [propertyTargetId, propertyActionsEnabled, openAddPropertyForm, openPropertyPicker]);
 
   const closePropertyPicker = useCallback((open: boolean) => {
     setPropertyPickerOpen(open);
@@ -200,14 +210,14 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
         ...(addPropertyType === 'Image' ? { multiple: true } : {}),
       }, null);
       window.dispatchEvent(new CustomEvent('flowix:add-property', {
-        detail: { propertyTargetId: documentPropertyTargetId(displayId), presetKey: key },
+        detail: { propertyTargetId, presetKey: key },
       }));
       setOccupiedPropertyKeys((current) => new Set(current).add(key));
       closeAddPropertyForm(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t('document.properties.add'));
     }
-  }, [addPropertyName, addPropertyOptions, addPropertyType, closeAddPropertyForm, displayId, occupiedPropertyKeys, t]);
+  }, [addPropertyName, addPropertyOptions, addPropertyType, closeAddPropertyForm, propertyTargetId, occupiedPropertyKeys, t]);
 
   const focusAt = useCallback((position: number) => {
     if (useDocumentSelection) {
@@ -421,25 +431,71 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
   return (
     <div className="memo-title-shell">
       {showPropertiesToggle && (
-        <button
-          type="button"
-          className="memo-title-properties-toggle"
-          aria-label={t(propertiesVisible ? 'document.properties.hide' : 'document.properties.show')}
-          title={t(propertiesVisible ? 'document.properties.hide' : 'document.properties.show')}
-          aria-pressed={propertiesVisible}
-          data-state={propertiesVisible ? 'visible' : 'hidden'}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={togglePropertiesVisible}
+        <div
+          className="memo-title-property-actions"
+          data-popup-open={String(propertyPickerOpen || addPropertyOpen)}
+          data-property-area-hovered={String(propertyAreaHovered)}
         >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="currentColor"
-            aria-hidden="true"
+          {propertyActionsEnabled && (
+            <>
+              <Tooltip content={t('document.properties.picker.triggerLabel')} side="bottom">
+                <button
+                  type="button"
+                  className="memo-title-property-action"
+                  aria-label={t('document.properties.picker.triggerLabel')}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={(event) => {
+                    onActivateProperties?.();
+                    window.dispatchEvent(new CustomEvent('flowix:open-property-picker', {
+                      detail: { propertyTargetId, anchorRect: event.currentTarget.getBoundingClientRect() },
+                    }));
+                  }}
+                >
+                  <MousePointerClick className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </Tooltip>
+              <Tooltip content={t('document.properties.add')} side="bottom">
+                <button
+                  type="button"
+                  className="memo-title-property-action"
+                  aria-label={t('document.properties.add')}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={(event) => {
+                    onActivateProperties?.();
+                    window.dispatchEvent(new CustomEvent('flowix:open-add-property', {
+                      detail: { propertyTargetId, anchorRect: event.currentTarget.getBoundingClientRect() },
+                    }));
+                  }}
+                >
+                  <PlusIcon size={16} weight="bold" aria-hidden="true" />
+                </button>
+              </Tooltip>
+            </>
+          )}
+          <Tooltip
+            content={t(propertiesVisible ? 'document.properties.hide' : 'document.properties.show')}
+            side="bottom"
           >
-            <path d="M3 6H21V18H3V6ZM2 4C1.44772 4 1 4.44772 1 5V19C1 19.5523 1 20 2 20H22C22.5523 20 23 19.5523 23 19V5C23 4.44772 23 4 22 4H2ZM13 9H19V11H13V9ZM18 13H13V15H18V13ZM6 13H7V16H9V11H6V13ZM9 8H7V10H9V8Z" />
-          </svg>
-        </button>
+            <button
+              type="button"
+              className="memo-title-property-action memo-title-properties-toggle"
+              aria-label={t(propertiesVisible ? 'document.properties.hide' : 'document.properties.show')}
+              aria-pressed={propertiesVisible}
+              data-state={propertiesVisible ? 'visible' : 'hidden'}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={handleTogglePropertiesVisible}
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d="M3 6H21V18H3V6ZM2 4C1.44772 4 1 4.44772 1 5V19C1 19.5523 1 20 2 20H22C2.55228 20 23 19.5523 23 19V5C23 4.44772 22.5523 4 22 4H2ZM13 9H19V11H13V9ZM18 13H13V15H18V13ZM6 13H7V16H9V11H6V13ZM9 8H7V10H9V8Z" />
+              </svg>
+            </button>
+          </Tooltip>
+        </div>
       )}
       <PropertyPresetMenu
         showTrigger={false}
@@ -455,14 +511,14 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
         t={t}
         onSelect={(preset) => {
           window.dispatchEvent(new CustomEvent('flowix:add-property', {
-            detail: { propertyTargetId: documentPropertyTargetId(displayId), presetKey: preset.key },
+            detail: { propertyTargetId, presetKey: preset.key },
           }));
           setOccupiedPropertyKeys((current) => new Set(current).add(canonicalizePropertyKey(preset.key)));
           closePropertyPicker(false);
         }}
         onRemove={(preset) => {
           window.dispatchEvent(new CustomEvent('flowix:remove-property', {
-            detail: { propertyTargetId: documentPropertyTargetId(displayId), propertyKey: preset.key },
+            detail: { propertyTargetId, propertyKey: preset.key },
           }));
           setOccupiedPropertyKeys((current) => {
             const next = new Set(current);

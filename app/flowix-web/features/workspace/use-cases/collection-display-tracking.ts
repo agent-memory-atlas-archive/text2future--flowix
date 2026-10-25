@@ -11,7 +11,7 @@ import { getWorkspaceMemoState } from '@features/memo/public/workspace-api';
 import { subscribeLocalCollectionChanges } from '@features/collection/events';
 import { findFileDisplayId } from '@/lib/file-display-registry';
 import { replaceWorkspaceDocumentPath } from '@features/document/public/workspace-api';
-import { useBrowserColumnStore } from '../store/browser-column-store';
+import { getBrowserColumnEntries, useBrowserColumnStore } from '../store/browser-column-store';
 
 interface CollectionChange extends Partial<CollectionChangedEvent> { notebookId: string; kind?: string; changeId?: string }
 const appliedSequences = new Map<string, number>();
@@ -55,9 +55,8 @@ function applyCollectionIndexItemAtRoot(
   }
   for (const oldPath of previousPaths) if (oldPath !== path) replaceLiveFilePath(oldPath, path);
   const browser = useBrowserColumnStore.getState();
-  const tabs = browser.tabs.map((tab) => tab.target.kind === 'file-browser' && tab.target.collectionDisplay?.notebookId === notebookId && tab.target.collectionDisplay.collectionId === item.collectionId
+  browser.updateEntries((tab) => tab.target.kind === 'file-browser' && tab.target.collectionDisplay?.notebookId === notebookId && tab.target.collectionDisplay.collectionId === item.collectionId
     ? { ...tab, title: item.name ?? tab.title, target: { ...tab.target, activeFilePath: path, scopePath: root, collectionType: item.collectionType, collectionUnavailableReason: item.identityConflict ? '集合身份冲突，请先修复副本' : item.parseState !== 'valid' ? '集合文件格式或版本暂不可用' : undefined } } : tab);
-  if (tabs.some((tab, index) => tab !== browser.tabs[index])) useBrowserColumnStore.setState({ tabs });
   const update = <T extends WorkColumnTarget | null>(target: T): T => {
     if (target?.kind !== 'collection' || target.notebookId !== notebookId || target.collectionId !== item.collectionId) return target;
     const { unavailableReason: _previousError, ...rest } = target;
@@ -86,9 +85,8 @@ export function applyCollectionIndexItem(notebookId: string, item: CollectionInd
 function setCollectionUnavailable(notebookId: string, collectionId: string, reason: string, viewId?: string | null): void {
   const matches = (descriptor: { notebookId: string; collectionId: string; viewId: string | null }) => descriptor.notebookId === notebookId && descriptor.collectionId === collectionId && (viewId === undefined || descriptor.viewId === viewId);
   const browser = useBrowserColumnStore.getState();
-  const tabs = browser.tabs.map((tab) => tab.target.kind === 'file-browser' && tab.target.collectionDisplay && matches(tab.target.collectionDisplay)
+  browser.updateEntries((tab) => tab.target.kind === 'file-browser' && tab.target.collectionDisplay && matches(tab.target.collectionDisplay)
     ? { ...tab, target: { ...tab.target, collectionUnavailableReason: reason } } : tab);
-  if (tabs.some((tab, index) => tab !== browser.tabs[index])) useBrowserColumnStore.setState({ tabs });
   const state = useWorkColumnStore.getState();
   const update = (target: WorkColumnTarget | null) => target?.kind === 'collection' && matches(target) ? { ...target, unavailableReason: reason } : target;
   useWorkColumnStore.setState({ navigation: { ...state.navigation, target: update(state.navigation.target)!, pendingTarget: update(state.navigation.pendingTarget), previousTarget: update(state.navigation.previousTarget) } });
@@ -113,7 +111,7 @@ export async function refreshCollectionDisplays(event: CollectionChange): Promis
       // Selected views belong to live targets, not the shared display identity.
       const navigation = useWorkColumnStore.getState().navigation;
       const selections = [navigation.target, navigation.pendingTarget, useWorkspaceRestoreStore.getState().desiredTarget,
-        ...useBrowserColumnStore.getState().tabs.map((tab) => tab.target.kind === 'file-browser' ? tab.target.collectionDisplay : null)]
+        ...getBrowserColumnEntries(useBrowserColumnStore.getState()).map((tab) => tab.target.kind === 'file-browser' ? tab.target.collectionDisplay : null)]
         .filter((target): target is NonNullable<typeof target> & { notebookId: string; collectionId: string; viewId: string | null } =>
           Boolean(target && 'collectionId' in target && target.notebookId === event.notebookId && target.collectionId === id));
       // Memo may not have loaded its notebook list yet during startup.
@@ -142,7 +140,7 @@ export function ensureCollectionDisplayTrackingStarted(): void {
   subscribeLocalCollectionChanges((change) => {
     applyCollectionIndexItem(change.notebookId, change.item, change.indexSequence, change.previousPath);
   });
-  for (const tab of useBrowserColumnStore.getState().tabs) {
+  for (const tab of getBrowserColumnEntries(useBrowserColumnStore.getState())) {
     if (tab.target.kind === 'file-browser' && tab.target.collectionDisplay) {
       const display = tab.target.collectionDisplay;
       void refreshCollectionDisplays({ notebookId: display.notebookId, collectionId: display.collectionId });

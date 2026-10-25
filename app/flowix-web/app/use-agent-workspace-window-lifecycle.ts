@@ -1,8 +1,12 @@
-import { ensureAgentPreferencesReady } from "@features/agent/store/agent-data-store";
-import { useAgentWorkspaceStore } from "@features/agent/store/agent-workspace-store";
+import { ensureAgentPreferencesReady } from '@features/agent/store/agent-data-store';
+import { useAgentWorkspaceStore } from '@features/agent/store/agent-workspace-store';
 import { useEffect } from 'react';
 import { listenToAgentWorkspaceChanges, boot } from '@platform/tauri/client';
 import { runStartupStage3Task, waitForStartupStage3 } from '@/lib/startup-stage3';
+import { createLogger } from '@/lib/logger';
+import { fireAndForget } from '@/lib/fire-and-forget';
+
+const logger = createLogger('app/use-agent-workspace-window-lifecycle');
 
 interface AgentWorkspaceWindowLifecycleOptions {
   /** Defer main-window Agent data until its shell paints; the preferences window loads on mount. */
@@ -12,7 +16,15 @@ interface AgentWorkspaceWindowLifecycleOptions {
 // Shared snapshot state outlives effect instances, just like the named task.
 let startupSnapshotRequested = false;
 
-/** Initialize per-Webview Agent data and keep its workspace snapshot in sync. */
+/**
+ * Initialize per-Webview Agent data and keep its workspace snapshot in sync.
+ *
+ * 注：这里保持对两个 agent store 的静态 import。曾试过改成 effect 内动态 import
+ * （目的是把 agent 数据图移出启动 chunk），实测对启动体积零影响——被多个懒加载块
+ * 共享的模块会被 Rollup 上提到入口块（`onlyExplicitManualChunks` 关闭了自动分块），
+ * 而且 `agent-window-effects` 本来就在 check-web-bundle 的启动根里。反而让 4 个
+ * 生命周期单测的时序变脆，因此回退。
+ */
 export function useAgentWorkspaceWindowLifecycle(
   { deferUntilStage3 = false }: AgentWorkspaceWindowLifecycleOptions = {},
 ) {
@@ -29,7 +41,7 @@ export function useAgentWorkspaceWindowLifecycle(
       reloadQueued = false;
       reloadInFlight = true;
       void loadInitial().catch((error) => {
-        console.warn('Workspace reload failed:', error);
+        logger.warn('Workspace reload failed', { error });
       }).finally(() => {
         reloadInFlight = false;
         runQueuedReload();
@@ -64,7 +76,7 @@ export function useAgentWorkspaceWindowLifecycle(
         runQueuedReload();
       };
       const initializeAgentPreferences = () => ensureAgentPreferencesReady().catch((error) => {
-        console.warn('Pi mode initialization failed:', error);
+        logger.warn('Pi mode initialization failed', { error });
       });
 
       const workspaceTask = deferUntilStage3
@@ -73,7 +85,10 @@ export function useAgentWorkspaceWindowLifecycle(
       const preferencesTask = deferUntilStage3
         ? runStartupStage3Task('agent-preferences-initialize', initializeAgentPreferences)
         : initializeAgentPreferences();
-      void workspaceTask.finally(markInitialLoadSettled);
+      fireAndForget(
+        workspaceTask.finally(markInitialLoadSettled),
+        'agent-workspace:initial-load',
+      );
 
       if (deferUntilStage3) await waitForStartupStage3();
       if (!active) return;
@@ -81,7 +96,7 @@ export function useAgentWorkspaceWindowLifecycle(
       if (deferUntilStage3) startupSnapshotRequested = true;
       await Promise.all([workspaceTask, preferencesTask]);
     };
-    void initialize().catch((error) => console.warn('Workspace initialization deferred:', error));
+    void initialize().catch((error) => logger.warn('Workspace initialization deferred', { error }));
     return () => { active = false; unlisten?.(); };
   }, [deferUntilStage3, loadInitial]);
 }

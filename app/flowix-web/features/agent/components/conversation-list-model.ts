@@ -32,18 +32,26 @@ export function isSyntheticOpenCodeHistoryInstance(instance: AgentConversationIn
     && instance.threadId.startsWith('ses_');
 }
 
+/** Empty cards and recovered placeholder threads are not conversation history. */
+export function isStartedConversation(instance: AgentConversationInstance): boolean {
+  return !!instance.title.trim() || instance.hasMessages === true;
+}
+
 /** Keep backend history even when no corresponding editor card is mounted. */
 export function selectVisibleConversations(
   page: ConversationPageState,
   liveInstances: Readonly<Record<string, AgentConversationInstance>>,
   notebookId: string | null,
   tombstones: Readonly<Record<string, true>>,
+  startedLiveThreads: Readonly<Record<string, true>> = {},
 ): AgentConversationInstance[] {
   const belongsToNotebook = (instance: AgentConversationInstance) => !notebookId || instance.source?.notebookId === notebookId;
   const merged = mergeConversationPage(page, Object.values(liveInstances).filter(belongsToNotebook));
   return merged.orderedIdentities
     .map((identity) => merged.itemsByIdentity[identity])
     .filter((instance): instance is AgentConversationInstance => !!instance
+      && (isStartedConversation(instance)
+        || !!(instance.threadId && startedLiveThreads[instance.threadId]))
       && belongsToNotebook(instance)
       && !isSyntheticOpenCodeHistoryInstance(instance)
       && (!instance.threadId || !tombstones[instance.threadId]));

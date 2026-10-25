@@ -282,7 +282,7 @@ export function createToolGroupElement(options: {
 
     for (const message of currentGroup.runningTools) {
       visibleIds.add(message.id);
-      let row = runningToolRows.get(message.id);
+      const row = runningToolRows.get(message.id);
       if (!row) {
         const element = createRunningTool(message);
         if (!element) continue;

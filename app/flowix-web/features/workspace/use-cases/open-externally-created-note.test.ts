@@ -23,7 +23,7 @@ describe('external note creation notifications', () => {
     work.commitNavigation(requestId, workTarget);
     await openExternallyCreatedNote('/notes/Note.md', '/notes', 'nb');
     expect(openWorkspaceSurface).not.toHaveBeenCalled();
-    expect(useBrowserColumnStore.getState().tabs).toHaveLength(0);
+    expect(useBrowserColumnStore.getState().current).toBeNull();
     expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('main-third');
   });
 
@@ -34,18 +34,18 @@ describe('external note creation notifications', () => {
     expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('main-third');
   });
 
-  it('does not reactivate an inactive Browser tab or reveal the hidden column', async () => {
+  it('treats a historical target as a new open rather than an already open background tab', async () => {
     const browser = useBrowserColumnStore.getState();
     for (const name of ['Note', 'Other']) {
-      browser.openTab({ id: name, title: name, icon: null, target: {
+      browser.openContent({ id: name, title: name, icon: null, target: {
         kind: 'file-browser', activeFilePath: `/notes/${name}.md`, notebookId: 'nb',
         folderPath: null, scopePath: '/notes', fileTreeVisible: false, fileTreeWidth: 220,
       } });
     }
     browser.setVisible(false);
     await openExternallyCreatedNote('/notes/Note.md', '/notes', 'nb');
-    expect(openWorkspaceSurface).not.toHaveBeenCalled();
-    expect(useBrowserColumnStore.getState()).toMatchObject({ activeTabId: 'Other', visible: false });
+    expect(openWorkspaceSurface).toHaveBeenCalledOnce();
+    expect(useBrowserColumnStore.getState()).toMatchObject({ current: { id: 'Other' }, visible: false });
     expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('main-third');
   });
 

@@ -1,0 +1,35 @@
+/* Editor-owned placement of the Agent NodeView. Agent internals must never
+ * depend on .markdown-editor or on the outer ProseMirror tree. */
+/* A leading card gets the same 0.8rem top offset as a leading paragraph.
+ *
+ * `:first-child` cannot identify the first real block: the document starts with
+ * nodes that are not content — .frontmatter-property-node (which stays mounted
+ * and collapses to 0 height when properties are hidden, so it is invisible but
+ * still a sibling), .editor-block-gap and .ProseMirror-gapcursor. Hence the
+ * Level 4 `:nth-child(An+B of S)` form, which counts only siblings matching S.
+ * The exclusion list must mirror the first-block rules in styles/editor.css;
+ * `.frontmatter-property-node` used to be missing here, which made a leading
+ * card the *second* eligible sibling whenever the note had any frontmatter:
+ * the card got margin-top: 0 and sat flush against the titlebar while a code
+ * block or paragraph in the same position kept its 0.8rem.
+ *
+ * Note the card itself must NOT be added to that list — `:nth-child(1 of S)`
+ * cannot match an element that S excludes.
+ *
+ * That syntax needs Safari 16.4 / Chromium 111. Do NOT "simplify" it to
+ * :first-child and do NOT add an @supports fallback: the desktop matrix is
+ * macOS 14+ (Safari 17) and Windows 10+ WebView2 (evergreen Chromium), and
+ * .build/web-dist is only ever loaded by Tauri — there is no browser-hosted
+ * build that could hit an older engine. A fallback here would be dead code. */
+.markdown-editor .ProseMirror:not(.agent-composer__input-content) > .agent-thread-card:nth-child(1 of :not(.frontmatter-property-node, .editor-block-gap, .ProseMirror-gapcursor)):not(.agent-thread-card--fullscreen) {
+  margin-top: var(--editor-first-block-offset, 0.8rem) !important;
+}
+
+/* The insertion caret and its hover hit zone are anchored to the gap's flow
+ * position, which for a leading card is the card's margin edge — one offset
+ * above its border edge, so they would float inside the empty margin (measured
+ * 18px above the card instead of 5px). That compensation is owned by
+ * styles/editor.css: it keys off "the document's first block" and therefore
+ * covers a card, a code block, a table or an image without naming any of them
+ * here. Keep the card's counting set in sync with it: never add
+ * `.agent-thread-card` to that `:not()` list, or the rule stops matching cards. */

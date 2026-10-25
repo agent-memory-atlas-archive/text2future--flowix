@@ -176,7 +176,7 @@ export function useCreateNotebookFlow({
           : [...existingNotebooks, created];
 
         memoStore.setNotebooks(nextNotebooks);
-        await selectNotebook(created, { workColumnTarget: 'clear' });
+        await selectNotebook(created);
         registeredNotebookRef.current = null;
 
         if (cloudNotebookId) {

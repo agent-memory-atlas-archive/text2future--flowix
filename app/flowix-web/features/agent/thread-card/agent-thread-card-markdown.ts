@@ -444,6 +444,19 @@ const cardMarked = new Marked({
         : "";
       return `<img width="120" height="120" src="${escapeAgentThreadCardHtmlAttr(safeHref)}" alt="${escapeAgentThreadCardHtmlAttr(text)}"${titleAttribute} data-agent-image-preview tabindex="0" role="button" aria-haspopup="dialog" aria-label="Preview image: ${escapeAgentThreadCardHtmlAttr(text || title || "image")}" loading="lazy" decoding="async" referrerpolicy="no-referrer">`;
     },
+    link({ href, title, tokens }) {
+      // Markdown 链接此前走 marked 默认渲染器：href 原样进入 DOM，只靠点击处理
+      // （link-navigation → sanitizeLinkHref）在打开时才拦截。这里补上 DOM 层护栏，
+      // 让 javascript:/data: 这类协议根本不落地。点击处理只认 `a[href]`，
+      // 因此被拦下的链接自然退化为不可点击文本。
+      const text = this.parser.parseInline(tokens);
+      const titleAttribute = title
+        ? ` title="${escapeAgentThreadCardHtmlAttr(title)}"`
+        : "";
+      const safeHref = sanitizeLinkHref(href);
+      if (!safeHref) return `<a${titleAttribute} data-unsafe-href="true">${text}</a>`;
+      return `<a href="${escapeAgentThreadCardHtmlAttr(safeHref)}"${titleAttribute}>${text}</a>`;
+    },
   },
 });
 

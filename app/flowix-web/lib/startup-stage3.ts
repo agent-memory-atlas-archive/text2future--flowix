@@ -1,3 +1,5 @@
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('startup:stage3');
 type StartupStage3Task = () => void | Promise<void>;
 
 let admitted = false;
@@ -29,7 +31,7 @@ export function runStartupStage3Task(
   const pending = admission
     .then(task)
     .catch((error) => {
-      console.warn(`[startup:stage3] ${taskId} failed`, error);
+      logger.warn(`${taskId} failed`, error);
     });
   tasks.set(taskId, pending);
   return pending;

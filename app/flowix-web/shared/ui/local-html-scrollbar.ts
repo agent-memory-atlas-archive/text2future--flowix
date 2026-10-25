@@ -1,28 +1,20 @@
-import overlayScrollbarCss from '@/styles/overlay-scrollbar.css?raw';
-
-// Reuse the editor's styles inside the preview's shadow root. Platform gating
-// belongs to the host; the sandboxed HTML does not inherit its data attributes.
-const frameCss = overlayScrollbarCss.split('html[data-platform="non-mac"] ').join('') + `
-  * { box-sizing: border-box; }
-  .overlay-scrollbar-frame { width: 16px; height: 100%; }
-  @media (prefers-reduced-motion: reduce) {
-    .overlay-scrollbar-thumb { transition: none; }
-  }
-`;
+import { localHtmlScrollbarCss } from './iframe-scrollbar';
 
 /** Connect only the local preview, without granting it same-origin access. */
 export function connectLocalHtmlScrollbar(iframe: HTMLIFrameElement): () => void {
   const ownerDocument = iframe.ownerDocument;
   const ownerWindow = ownerDocument.defaultView;
-  if (!ownerWindow || ownerDocument.documentElement.dataset.os !== 'windows') return () => {};
+  if (!ownerWindow) return () => {};
 
   const syncTheme = () => {
     const color = ownerWindow.getComputedStyle(ownerDocument.documentElement)
       .getPropertyValue('--muted-foreground').trim();
+    const mac = ownerDocument.documentElement.dataset.platform === 'mac' || ownerDocument.documentElement.dataset.os === 'mac';
     iframe.contentWindow?.postMessage({
       type: 'flowix:local-html-scrollbar',
       color,
-      css: frameCss,
+      mac,
+      css: localHtmlScrollbarCss(color, mac),
     }, '*'); // Sandboxed asset documents have opaque origins.
   };
   const onReady = (event: MessageEvent) => {

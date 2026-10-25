@@ -1,5 +1,7 @@
 'use client';
 
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import {
@@ -8,7 +10,6 @@ import {
   type PiProviderConfig,
 } from '@platform/tauri/client';
 import { cloudModelAccessErrorMessage } from '@platform/tauri/errors';
-import { errorMessage } from '@/lib/error-message';
 import { useI18n } from '@/lib/i18n';
 import { toast } from '@/lib/toast';
 import { refreshAgentModelCatalog } from '@features/agent/services/agent-catalog-service';
@@ -33,11 +34,11 @@ export function PiCloudModelsSection({ authenticated }: { authenticated: boolean
     try {
       setProviders(await piModels.list());
     } catch (value) {
-      setError(errorMessage(value));
+      setError(friendlyErrorMessage(value, t, 'errors.friendly.modelsRefresh'));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => { void reload(); }, [reload]);
 
@@ -57,18 +58,18 @@ export function PiCloudModelsSection({ authenticated }: { authenticated: boolean
       setBalanceError(null);
     } catch (value) {
       if (request !== balanceRequest.current) return;
-      const message = errorMessage(value);
+      const message = friendlyErrorMessage(value, t, 'errors.friendly.balanceLoad');
       setBalanceError(message);
       if (notifyError) toast.error(message);
     } finally {
       if (request === balanceRequest.current) setBalanceLoading(false);
     }
-  }, [authenticated]);
+  }, [authenticated, t]);
 
   useEffect(() => {
     void refreshBalance();
     return () => { balanceRequest.current += 1; };
-  }, [refreshBalance]);
+  }, [refreshBalance, t]);
 
   const refreshBalanceAndModels = useCallback(async () => {
     setModelCatalogLoading(true);
@@ -82,12 +83,12 @@ export function PiCloudModelsSection({ authenticated }: { authenticated: boolean
         refreshModels(),
       ]);
       if (modelCatalogResult.status === 'rejected') {
-        toast.error(errorMessage(modelCatalogResult.reason));
+        toast.error(friendlyErrorMessage(modelCatalogResult.reason, t, 'errors.friendly.modelsRefresh'));
       }
     } finally {
       setModelCatalogLoading(false);
     }
-  }, [refreshBalance]);
+  }, [refreshBalance, t]);
 
   const provider = providers.find((item) => item.source === FLOWIX_CLOUD_SOURCE);
   const connect = async () => {
@@ -98,7 +99,7 @@ export function PiCloudModelsSection({ authenticated }: { authenticated: boolean
       await refreshAgentModelCatalog('pi');
       toast.success(t('preferences.pi.cloudConnected'));
     } catch (value) {
-      toast.error(cloudModelAccessErrorMessage(value, t));
+      toast.error(cloudModelAccessErrorMessage(value, t, 'errors.friendly.cloudConnect'));
     } finally {
       setBusy(false);
     }

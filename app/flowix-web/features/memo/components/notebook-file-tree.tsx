@@ -1,5 +1,9 @@
 'use client';
 
+import type { ContentKind } from '@features/content/public/content-api';
+import { noteRepository } from '@features/memo/services/note-repository';
+import { documentIdentityFromFile, saveWorkspaceDocumentPath } from '@features/document/public/workspace-api';
+import { ensureFileDisplayIdentity } from '@/lib/file-display-registry';
 import { useNotebookViewActions } from './use-notebook-view-actions';
 import { useNotebookTreeRename } from './use-notebook-tree-rename';
 
@@ -30,6 +34,7 @@ import {
   canonicalDirectoryPath,
   canonicalPath,
   joinNotebookMemoPath,
+  notebookRelativeDirectoryPath,
   parentDirectoryPath,
   samePath,
 } from '@/lib/path';
@@ -61,7 +66,9 @@ import { getWorkspaceAgentRepositories, type WorkspaceAgentRepository } from '@f
 import { useAgentWorkspaceStore } from '@features/agent/store/agent-workspace-store';
 import {
   files,
+  collections,
   dialogs,
+  type CollectionIndexItem,
   type DocTreeItem,
   type MediaLibraryListItem,
   type TableDocumentListItem,
@@ -130,6 +137,23 @@ function mediaLibraryTreeItem(library: MediaLibraryListItem, fullPath: string): 
 }
 
 
+function workDocumentsTreeItem(collection: CollectionIndexItem, fullPath: string): DocTreeItem {
+  return {
+    id: `work-documents-path:${collection.relativePath}`,
+    fullPath,
+    name: collection.relativePath.split(/[\\/]/).pop() ?? `${collection.name}.workdocs.yaml`,
+    type: 'document',
+    parentId: null,
+    children: null,
+    sizeBytes: collection.sizeBytes,
+    modifiedMs: collection.modifiedMs,
+    createdMs: null,
+    memoCreatedMs: null,
+    resourceKind: 'other',
+  };
+}
+
+
 export interface NotebookFolderCreateRequest {
   id: number;
   parentPath: string;
@@ -157,7 +181,7 @@ interface NotebookFileTreeProps {
     targetDirectoryPath: string,
   ) => Promise<NotebookMoveResult>;
   onDeleteFolder?: (folderPath: string) => Promise<void>;
-  onDeleteFile?: (item: DocTreeItem) => Promise<void>;
+  onDeleteFile?: (item: DocTreeItem, options?: { silent?: boolean }) => Promise<boolean | void>;
   defaultCreateFolder?: string | null;
   onSetDefaultCreateFolder?: (folderPath: string) => void;
 }
@@ -296,6 +320,13 @@ export function NotebookFileTree({
   }, [tree.loading]);
   const selectedFolderPath = useWorkColumnStore((state) => {
     const target = state.navigation.target;
+    if (
+      target.kind === 'folder-collection'
+      && samePath(target.notebookPath, notebookPath)
+      && notebookRelativeDirectoryPath(notebookPath, target.folderPath) !== null
+    ) {
+      return target.folderPath;
+    }
     if ((target.kind === 'collection' || target.kind === 'table' || target.kind === 'media-library') && canonicalPath(target.filePath).endsWith('/.index.yaml')) {
       return parentDirectoryPath(target.filePath, target.notebookPath ?? '');
     }
@@ -371,8 +402,10 @@ export function NotebookFileTree({
   const {
     tableDocuments,
     mediaLibraries,
+    workDocumentCollections,
     refreshTables,
     refreshMediaLibraries,
+    refreshWorkDocumentCollections,
     updateTableIdentity,
     updateMediaLibraryIdentity,
   } = useNotebookViewData({
@@ -385,7 +418,7 @@ export function NotebookFileTree({
   const {
     openNewTableDialog, openNewMediaLibraryDialog, handleCreateMediaLibraryAtPath,
     openNewWorkDocumentsDialog, creationDialog,
-  } = useNotebookTreeCreation({ notebookId, notebookPath, defaultCreateFolder, refreshTables, refreshMediaLibraries });
+  } = useNotebookTreeCreation({ notebookId, notebookPath, defaultCreateFolder, refreshTables, refreshMediaLibraries, refreshWorkDocumentCollections });
   const viewTableDocuments = useMemo(() => tableDocuments.filter((table) => table.inViews), [tableDocuments]);
   const viewMediaLibraries = useMemo(() => mediaLibraries.filter((library) => library.inViews), [mediaLibraries]);
   const tableDocumentByPath = useMemo(() => {
@@ -404,6 +437,36 @@ export function NotebookFileTree({
     }
     return byPath;
   }, [mediaLibraries, notebookPath]);
+  const workDocumentCollectionByPath = useMemo(() => new Map(workDocumentCollections.flatMap((collection) => {
+    const fullPath = joinNotebookMemoPath(notebookPath, collection.relativePath);
+    return fullPath ? [[canonicalPath(fullPath), collection] as const] : [];
+  })), [notebookPath, workDocumentCollections]);
+  const selectionContentKinds = useMemo(() => new Map<string, ContentKind>([
+    ...Array.from(tableDocumentByPath.keys(), (path) => [path, 'multidimensional-table'] as const),
+    ...Array.from(mediaLibraryByPath.keys(), (path) => [path, 'media-library'] as const),
+    ...Array.from(workDocumentCollectionByPath.keys(), (path) => [path, 'work-documents'] as const),
+  ]), [tableDocumentByPath, mediaLibraryByPath, workDocumentCollectionByPath]);
+  const viewWorkDocuments = useMemo(() => workDocumentCollections.filter((collection) =>
+    collection.inViews && collection.parseState === 'valid' && !collection.identityConflict && collection.collectionId,
+  ), [workDocumentCollections]);
+  const setWorkDocumentsInViews = useCallback(async (collectionId: string, inViews: boolean) => {
+    if (!notebookId) return;
+    try {
+      await collections.setInViews(notebookId, collectionId, inViews);
+      await refreshWorkDocumentCollections();
+    } catch (error) {
+      logger.warn('failed to update work documents view membership', { error, notebookId, collectionId });
+      toast.error(t('multidimensionalTable.viewMembership.saveFailed'));
+    }
+  }, [notebookId, refreshWorkDocumentCollections, t]);
+  const workDocumentsViewVisibilityByPath = useMemo(() => new Map([...workDocumentCollectionByPath].flatMap(([path, collection]) => {
+    const collectionId = collection.collectionId;
+    return collectionId ? [[path, {
+      inViews: collection.inViews,
+      disabled: collection.identityConflict || collection.parseState !== 'valid',
+      onChange: (inViews: boolean) => { void setWorkDocumentsInViews(collectionId, inViews); },
+    }] as const] : [];
+  })), [setWorkDocumentsInViews, workDocumentCollectionByPath]);
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
   const [viewsCollapsed, setViewsCollapsed] = useState(false);
   const [filesCollapsed, setFilesCollapsed] = useState(false);
@@ -494,10 +557,36 @@ export function NotebookFileTree({
       : []),
   ), [renderRows]);
   const treeItemByPath = useMemo(
-    () => new Map(loadedTreeItems.map((item) => [canonicalPath(item.fullPath), item] as const)),
-    [loadedTreeItems],
+    () => new Map([...pinnedItems, ...loadedTreeItems].map((item) => [canonicalPath(item.fullPath), item] as const)),
+    [loadedTreeItems, pinnedItems],
   );
   const treeItemPaths = useMemo(() => new Set(treeItemByPath.keys()), [treeItemByPath]);
+  const openMediaLibraryPath = useCallback((
+    path: string,
+    host: 'main-third' | 'browser-column',
+  ) => {
+    const mediaLibrary = mediaLibraryByPath.get(canonicalPath(path));
+    if (!mediaLibrary || !notebookId) return false;
+    void openWorkspaceSurface({
+      host,
+      target: {
+        kind: 'collection-reference',
+        notebookId,
+        collectionId: mediaLibrary.collectionId,
+        collectionKind: 'media_library',
+        relativePathHint: mediaLibrary.relativePath,
+      },
+    }).catch((error) => {
+      logger.warn('failed to open media library', { error, path, host });
+      toast.error(t('memo.fileTree.openFailed'));
+    });
+    return true;
+  }, [mediaLibraryByPath, notebookId, t]);
+  // Every file-tree selection navigates through this content-aware opener.
+  // Selection/anchor/policy remain exclusively owned by the interaction controller.
+  const openSelectedDocument = useCallback((path: string) => {
+    if (!openMediaLibraryPath(path, 'main-third')) onNoteSelect(path);
+  }, [openMediaLibraryPath, onNoteSelect]);
   const {
     focusedTreePath,
     setFocusedTreePath,
@@ -515,6 +604,8 @@ export function NotebookFileTree({
     activeFilePath,
     visibleTreeItems,
     treeItemPaths,
+    contentKinds: selectionContentKinds,
+    pinnedDocumentPaths: pinnedItems.map((item) => item.fullPath),
     tree,
     treeRootRef,
     treeScrollerRef,
@@ -522,7 +613,7 @@ export function NotebookFileTree({
     treeContentOffset,
     isActive,
     activeFileRevealRatio,
-    onNoteSelect,
+    onNoteSelect: openSelectedDocument,
   });
   const {
     dragOverFolderPath,
@@ -689,41 +780,45 @@ export function NotebookFileTree({
     if (shouldSuppressOpenPath(path)) return;
     tree.toggle(path);
   }, [shouldSuppressOpenPath, tree.toggle]);
-  const openMediaLibraryPath = useCallback((
-    path: string,
-    host: 'main-third' | 'browser-column',
-    navigationPolicy: 'reveal' | 'preserve' = 'reveal',
-  ) => {
-    const mediaLibrary = mediaLibraryByPath.get(canonicalPath(path));
-    if (!mediaLibrary || !notebookId) return false;
-    if (host === 'main-third') setNavigationPolicy(path, navigationPolicy);
-    void openWorkspaceSurface({
-      ...(host === 'browser-column'
-        ? { host, options: { browserDisposition: 'open-in-column' as const } }
-        : { host }),
-      target: {
-        kind: 'collection-reference',
-        notebookId,
-        collectionId: mediaLibrary.collectionId,
-        collectionKind: 'media_library',
-        relativePathHint: mediaLibrary.relativePath,
-      },
-    }).catch((error) => {
-      logger.warn('failed to open media library', { error, path, host });
-      toast.error(t('memo.fileTree.openFailed'));
-    });
-    return true;
-  }, [mediaLibraryByPath, notebookId, setNavigationPolicy, t]);
   const handleOpenPath = useCallback((path: string, event?: ReactMouseEvent<HTMLDivElement>) => {
     if (shouldSuppressOpenPath(path)) return;
-    if (openMediaLibraryPath(path, 'main-third', 'reveal')) return;
     selectNote(path, event);
-  }, [openMediaLibraryPath, selectNote, shouldSuppressOpenPath]);
-  const handleOpenPinnedPath = useCallback((path: string) => {
+  }, [selectNote, shouldSuppressOpenPath]);
+  const handleOpenPinnedPath = useCallback((path: string, event?: ReactMouseEvent<HTMLDivElement>) => {
     if (shouldSuppressOpenPath(path)) return;
-    updateSelection([], null);
-    navigateToNote(path, 'preserve');
-  }, [navigateToNote, shouldSuppressOpenPath, updateSelection]);
+    selectNote(path, event, 'pinned');
+  }, [selectNote, shouldSuppressOpenPath]);
+  const handleDeleteSelected = useCallback(async () => {
+    const failedPaths: string[] = [];
+    for (const path of selectedFilePaths) {
+      try {
+        const item = treeItemByPath.get(canonicalPath(path));
+        if (!item) throw new Error('Selected document is no longer loaded');
+        if (item.resourceKind === 'note' || /\.(md|markdown)$/i.test(item.name)) {
+          const saved = await saveWorkspaceDocumentPath(
+            documentIdentityFromFile(ensureFileDisplayIdentity(path)), path, notebookPath,
+          );
+          if (!saved) throw new Error('Could not save selected document');
+          await noteRepository.delete(path);
+        } else {
+          if (!onDeleteFile || await onDeleteFile(item, { silent: true }) === false) {
+            throw new Error('Could not delete selected document');
+          }
+        }
+      } catch (error) {
+        failedPaths.push(path);
+        logger.warn('batch document deletion failed', { error, path });
+      }
+    }
+    updateSelection(failedPaths, failedPaths[0] ?? null);
+    useNoteStore.getState().triggerRefresh();
+    const message = t('memo.fileTree.deleteSelectedResult', {
+      deleted: selectedFilePaths.length - failedPaths.length, failed: failedPaths.length,
+    });
+    if (failedPaths.length > 0) toast.error(message);
+    else toast.success(message);
+  }, [selectedFilePaths, treeItemByPath, notebookPath, onDeleteFile, t, updateSelection]);
+
   const handleOpenRepositoryFile = useCallback((path: string, scopePath: string) => {
     void openWorkspaceSurface({
       host: 'main-third',
@@ -747,9 +842,21 @@ export function NotebookFileTree({
     });
   }, [notebookId, notebookPath, setNavigationPolicy, t]);
   const handleOpenMediaLibraryFromViews = useCallback((path: string) => {
-    if (openMediaLibraryPath(path, 'main-third', 'preserve')) return;
-    selectNote(path);
-  }, [openMediaLibraryPath, selectNote]);
+    updateSelection([], null);
+    navigateToNote(path, 'preserve');
+  }, [navigateToNote, updateSelection]);
+  const handleOpenWorkDocumentsFromViews = useCallback((path: string) => {
+    if (!notebookId) return;
+    setNavigationPolicy(path, 'preserve');
+    void openWorkspaceSurface({
+      host: 'main-third',
+      target: { kind: 'external', path, scopePath: notebookPath, transitionId: null },
+      options: { notebookId },
+    }).catch((error) => {
+      logger.warn('failed to open work documents from Views', { error, path });
+      toast.error(t('memo.fileTree.openFailed'));
+    });
+  }, [notebookId, notebookPath, setNavigationPolicy, t]);
   const handleRetryDirectory = useCallback((path: string) => {
     void tree.retryDirectory?.(path);
   }, [tree.retryDirectory]);
@@ -918,6 +1025,7 @@ export function NotebookFileTree({
             ? Boolean(selectedFolderPath) && canonicalPath(item.fullPath) === canonicalPath(selectedFolderPath!)
             : !selectedFolderPath && Boolean(activeFilePath) && canonicalPath(item.fullPath) === canonicalPath(activeFilePath!)}
           selected={item.type === 'document' && selectedFilePathSet.has(canonicalPath(item.fullPath))}
+          onDeleteSelected={item.type === 'document' && selectedFilePaths.length > 1 && selectedFilePathSet.has(canonicalPath(item.fullPath)) ? handleDeleteSelected : undefined}
           moveStatus={moveStatus}
           onToggle={handleTogglePath}
           onSelectFolder={onFolderSelect}
@@ -932,6 +1040,8 @@ export function NotebookFileTree({
           onCreateWorkDocuments={openNewWorkDocumentsDialog}
           tableViewVisibility={tableViewVisibility}
           mediaLibraryViewVisibility={mediaLibraryViewVisibility}
+          workDocumentsCollection={workDocumentCollectionByPath.has(itemPath)}
+          workDocumentsViewVisibility={workDocumentsViewVisibilityByPath.get(itemPath)}
           onRename={handleRename}
           tabIndex={treeFocusPath && samePath(treeFocusPath, item.fullPath) ? 0 : -1}
           onFocus={handleFocusPath}
@@ -977,6 +1087,9 @@ export function NotebookFileTree({
 
   return (
     <div
+      onPointerMove={handleTreePointerMove}
+      onPointerUp={handleTreePointerUp}
+      onPointerCancel={handleTreePointerCancel}
       ref={externalDropSurfaceRef}
       data-notebook-external-drop-target="true"
       className={cn(
@@ -1046,6 +1159,7 @@ export function NotebookFileTree({
                   expanded={false}
                   active={!selectedFolderPath && Boolean(activeFilePath) && samePath(item.fullPath, activeFilePath!)}
                   selected={selectedFilePathSet.has(canonicalPath(item.fullPath))}
+                  onDeleteSelected={selectedFilePaths.length > 1 && selectedFilePathSet.has(canonicalPath(item.fullPath)) ? handleDeleteSelected : undefined}
                   onToggle={handleTogglePath}
                   onOpen={handleOpenPinnedPath}
                   onOpenInNewTab={onNoteOpenInNewTab ? handleOpenPathInNewTab : undefined}
@@ -1058,8 +1172,10 @@ export function NotebookFileTree({
                   onCreateWorkDocuments={(parentPath) => openNewWorkDocumentsDialog(parentPath)}
                   onRename={handleRename}
                   onDeleteFile={onDeleteFile}
-                  onPointerDown={() => {}}
+                  onPointerDown={handlePointerDownItem}
                   onKeepAliveChange={handleRowKeepAliveChange}
+                  workDocumentsCollection={workDocumentCollectionByPath.has(canonicalPath(item.fullPath))}
+                  workDocumentsViewVisibility={workDocumentsViewVisibilityByPath.get(canonicalPath(item.fullPath))}
                   favoritePath={item.fullPath}
                   onFavoriteChanged={(itemId, favorited) => {
                     if (!favorited) removePinnedItem(itemId);
@@ -1074,6 +1190,7 @@ export function NotebookFileTree({
               order={sectionOrder.indexOf('views') + 1}
               tables={viewTableDocuments}
               mediaLibraries={viewMediaLibraries}
+              workDocuments={viewWorkDocuments}
               collapsed={viewsCollapsed}
               onToggleCollapsed={() => setViewsCollapsed((collapsed) => !collapsed)}
               sectionActions={(
@@ -1115,7 +1232,39 @@ export function NotebookFileTree({
                     tableViewVisibility={tableViewVisibilityByPath.get(canonicalPath(tablePath))}
                     onRename={handleRenameTableDocument}
                     onDeleteFile={handleDeleteTableDocument}
-                    onPointerDown={() => {}}
+                    onPointerDown={handlePointerDownItem}
+                    onFocus={handleFocusPath}
+                    tabIndex={0}
+                  />
+                );
+              }}
+              renderWorkDocuments={(collection) => {
+                const collectionPath = joinNotebookMemoPath(notebookPath, collection.relativePath);
+                if (!collectionPath) return null;
+                const active = Boolean(!selectedFolderPath && activeFilePath && samePath(activeFilePath, collectionPath));
+                return (
+                  <NotebookTreeRow
+                    key={collection.relativePath}
+                    item={workDocumentsTreeItem(collection, collectionPath)}
+                    notebookPath={notebookPath}
+                    parentPath={parentDirectoryPath(collectionPath, notebookPath)}
+                    depth={0}
+                    expanded={false}
+                    active={active}
+                    selected={active}
+                    onToggle={() => {}}
+                    onOpen={() => handleOpenWorkDocumentsFromViews(collectionPath)}
+                    onOpenInNewTab={onNoteOpenInNewTab ? handleOpenPathInNewTab : undefined}
+                    onCreateNote={handleCreateNoteAtPath}
+                    onCreateFolder={handleCreateFolderAtPath}
+                    onCreateView={(parentPath, viewType) => openNewTableDialog(true, parentPath, viewType)}
+                    onCreateMediaLibrary={(parentPath) => openNewMediaLibraryDialog(true, parentPath)}
+                    onCreateWorkDocuments={(parentPath) => openNewWorkDocumentsDialog(parentPath)}
+                    workDocumentsCollection
+                    workDocumentsViewVisibility={workDocumentsViewVisibilityByPath.get(canonicalPath(collectionPath))}
+                    onRename={handleRename}
+                    onDeleteFile={onDeleteFile}
+                    onPointerDown={handlePointerDownItem}
                     onFocus={handleFocusPath}
                     tabIndex={0}
                   />
@@ -1147,7 +1296,7 @@ export function NotebookFileTree({
                     mediaLibraryViewVisibility={mediaLibraryViewVisibilityByPath.get(canonicalPath(libraryPath))}
                     onRename={handleRename}
                     onDeleteFile={handleDeleteMediaLibrary}
-                    onPointerDown={() => {}}
+                    onPointerDown={handlePointerDownItem}
                     onFocus={handleFocusPath}
                     tabIndex={0}
                   />
@@ -1216,9 +1365,6 @@ export function NotebookFileTree({
               'relative min-h-0 flex-1 rounded-lg transition-colors duration-150',
               isRootDropTarget && 'bg-[color-mix(in_oklch,var(--brand)_10%,transparent)]',
             )}
-            onPointerMove={handleTreePointerMove}
-            onPointerUp={handleTreePointerUp}
-            onPointerCancel={handleTreePointerCancel}
           >
             {tree.error && (
               <div className="flex items-center justify-center gap-2 px-4 py-4 text-center text-xs text-[var(--muted-foreground)]" role="alert">

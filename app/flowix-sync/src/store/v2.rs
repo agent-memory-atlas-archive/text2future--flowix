@@ -18,7 +18,7 @@ impl SyncStore {
                 singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
                 user_id TEXT NOT NULL,
                 payload_json TEXT NOT NULL,
-                protocol_epoch INTEGER NOT NULL CHECK(protocol_epoch = 2),
+                protocol_epoch INTEGER NOT NULL CHECK(protocol_epoch = 3),
                 updated_at INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS v2_sync_state (
@@ -103,6 +103,37 @@ impl SyncStore {
             );
             "#,
         )?;
+        let account_schema = connection
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'v2_cloud_account'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if account_schema.is_some_and(|schema| schema.contains("protocol_epoch = 2")) {
+            connection.execute_batch(
+                r#"
+                ALTER TABLE v2_cloud_account RENAME TO v2_cloud_account_epoch2;
+                CREATE TABLE v2_cloud_account (
+                    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                    user_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    protocol_epoch INTEGER NOT NULL CHECK(protocol_epoch = 3),
+                    updated_at INTEGER NOT NULL
+                );
+                DROP TABLE v2_cloud_account_epoch2;
+                UPDATE v2_sync_state SET cursor = 0, last_success_at = NULL, updated_at = 0 WHERE singleton = 1;
+                UPDATE v2_notebook_sync_state SET cursor = 0, last_success_at = NULL, updated_at = 0;
+                DELETE FROM v2_retry_state;
+                DELETE FROM v2_inflight_operations;
+                DELETE FROM v2_dirty_entities;
+                DELETE FROM v2_pending_moves;
+                DELETE FROM v2_note_states;
+                DELETE FROM v2_notebook_states;
+                UPDATE v2_synced_notebooks SET bootstrap_required = 1 WHERE enabled = 1;
+                "#,
+            )?;
+        }
         let has_fingerprint = connection
             .query_row(
                 "SELECT 1 FROM pragma_table_info('v2_dirty_entities') WHERE name = 'fingerprint'",
@@ -636,7 +667,7 @@ impl SyncStore {
                 filename: remote.filename.clone(),
                 deleted: remote.deleted,
                 last_seq: remote.sync_seq,
-                attachments: remote.attachments.clone(),
+                attachments: Vec::new(),
             },
         )?;
         transaction.execute(
@@ -673,7 +704,7 @@ impl SyncStore {
                     filename: remote.filename.clone(),
                     deleted: remote.deleted,
                     last_seq: remote.sync_seq,
-                    attachments: remote.attachments.clone(),
+                    attachments: Vec::new(),
                 },
             )?;
         }
@@ -809,7 +840,7 @@ impl SyncStore {
                         filename: note.filename.clone(),
                         deleted: data.deleted,
                         last_seq: data.sync_seq,
-                        attachments: note.attachments.clone(),
+                        attachments: Vec::new(),
                     },
                 )?;
             }

@@ -1,0 +1,93 @@
+.work-column-selection-view {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 32px 16px;
+}
+
+.work-column-selection-summary {
+  container: selection-fan / inline-size;
+  width: min(100%, 760px);
+  margin-block: auto;
+  text-align: center;
+}
+
+.work-column-selection-fan {
+  /* Leave room for rotated corners; the remaining width determines overlap. */
+  --fan-card-width: clamp(96px, 32cqw, 176px);
+  --fan-edge-room: 80px;
+  --fan-angle-scale: 1;
+  --fan-radius: max(0px, calc((100cqw - var(--fan-card-width)) / 2 - var(--fan-edge-room)));
+  position: relative;
+  isolation: isolate;
+  height: calc(var(--fan-card-width) * 4 / 3 + 72px);
+  margin: 0 0 28px;
+  padding: 0;
+  list-style: none;
+}
+
+.work-column-selection-slot {
+  position: absolute;
+  top: 30px;
+  left: calc(50% + var(--fan-position) * var(--fan-radius));
+  width: var(--fan-card-width);
+  aspect-ratio: 3 / 4;
+  transform: translateX(-50%) translateY(var(--fan-drop)) rotate(calc(var(--fan-angle) * var(--fan-angle-scale)));
+  transform-origin: 50% 90%;
+  transition: left 280ms ease, transform 280ms ease, width 280ms ease;
+}
+
+.work-column-selection-card {
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 20px;
+  padding: clamp(12px, 4cqw, 20px);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 8%), 0 2px 6px rgb(0 0 0 / 4%);
+  text-align: left;
+  animation: work-column-selection-card-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* Respond to the work column itself, including manual column resizing. */
+@container selection-fan (max-width: 480px) {
+  .work-column-selection-fan {
+    --fan-edge-room: 60px;
+    --fan-angle-scale: 0.8;
+  }
+}
+
+@container selection-fan (max-width: 360px) {
+  .work-column-selection-fan {
+    --fan-edge-room: 40px;
+    --fan-angle-scale: 0.55;
+  }
+}
+
+@keyframes work-column-selection-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .work-column-selection-slot {
+    transition: none;
+  }
+
+  .work-column-selection-card {
+    animation: none;
+  }
+}

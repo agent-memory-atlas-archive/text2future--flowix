@@ -1,6 +1,36 @@
 use serde::Serialize;
 use tauri::Emitter;
 
+/// A saved note's indexed metadata, shared by tree rows, pinned lists and headers.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotebookPathUpdated {
+    pub change_id: String,
+    pub notebook_id: String,
+    pub relative_path: String,
+    pub entry: flowix_core::memo_file::NoteEntry,
+    pub origin_window_label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_favorited: Option<bool>,
+}
+
+impl NotebookPathUpdated {
+    pub fn from_window(
+        notebook_id: String,
+        relative_path: String,
+        entry: flowix_core::memo_file::NoteEntry,
+        origin_window_label: String,
+        previous_favorited: Option<bool>,
+    ) -> Self {
+        Self { change_id: uuid::Uuid::new_v4().to_string(), notebook_id,
+            relative_path, entry, origin_window_label, previous_favorited }
+    }
+
+    pub fn emit(&self, app: &tauri::AppHandle) {
+        let _ = app.emit("flowix:path-note-changed", self);
+    }
+}
+
 /// The same confirmed fact is returned by a command and broadcast to windows.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

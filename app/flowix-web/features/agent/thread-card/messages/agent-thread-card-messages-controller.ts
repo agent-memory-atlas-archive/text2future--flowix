@@ -16,6 +16,7 @@ export interface AgentThreadCardMessagesControllerOptions {
   bottomFollowThresholdPx: number;
   topHistoryLoadThresholdPx: number;
   scrollDeltaEpsilonPx: number;
+  onAtBottomChange?: (atBottom: boolean) => void;
   isDestroyed: () => boolean;
   isCollapsed: () => boolean;
   isFullscreen: () => boolean;
@@ -59,6 +60,7 @@ export class AgentThreadCardMessagesController {
       bottomFollowThresholdPx: options.bottomFollowThresholdPx,
       topHistoryLoadThresholdPx: options.topHistoryLoadThresholdPx,
       scrollDeltaEpsilonPx: options.scrollDeltaEpsilonPx,
+      onAtBottomChange: options.onAtBottomChange,
       isCollapsed: options.isCollapsed,
       isFullscreen: options.isFullscreen,
       getRuntimeThreadId: options.getRuntimeThreadId,
@@ -107,6 +109,10 @@ export class AgentThreadCardMessagesController {
 
   scrollToBottom(): void {
     this.viewport.scrollToBottom();
+  }
+
+  scrollToBottomSmooth(): void {
+    this.viewport.scrollToBottomSmooth();
   }
 
   render(input: AgentThreadCardMessagesRenderInput): void {

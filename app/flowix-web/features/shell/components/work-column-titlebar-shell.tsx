@@ -2,9 +2,9 @@
 
 import type { ComponentPropsWithRef, CSSProperties, ReactNode } from 'react';
 
-/** Shared titlebar fade used by the work column and browser-column tabs. */
+/** Shared titlebar fade used by the work column and browser column. */
 export const WORK_COLUMN_TITLEBAR_GRADIENT =
-  'linear-gradient(to bottom, var(--bg-titlebar), transparent)';
+  'var(--titlebar-gradient)';
 
 export interface WorkColumnTitlebarShellProps extends ComponentPropsWithRef<'div'> {
   isWindows: boolean;

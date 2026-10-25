@@ -201,6 +201,8 @@ export interface AgentConversationInstance {
   agentType: AgentTypeKey;
   /** Product title projected from threads.title; null before a thread exists. */
   threadTitle: string | null;
+  /** Backend-derived evidence that an untitled conversation has started. */
+  readonly hasMessages?: boolean;
   threadId: string | null;
   /** Provider-owned session id read from the durable provider binding. */
   sessionId?: string | null;
@@ -212,7 +214,7 @@ export interface AgentConversationInstance {
   updatedAt: number;
 }
 
-export type AgentConversationInstanceUpsert = Omit<AgentConversationInstance, 'threadTitle' | 'sessionId' | 'runtimeConfig'> & {
+export type AgentConversationInstanceUpsert = Omit<AgentConversationInstance, 'threadTitle' | 'sessionId' | 'runtimeConfig' | 'hasMessages'> & {
   /** Initial title used when the upsert creates the product thread. */
   initialTitle: string;
   runtimeConfig?: string | null;

@@ -5,6 +5,9 @@ import { chordMatches, isInEditableField, scopeAllows } from './matcher';
 import { getPlatform } from './platform';
 import { listActions, resolveBindings } from './registry';
 import type { ActionContext, Scope, ShortcutOverrides } from './types';
+import { createLogger } from '@/lib/logger';
+
+const logger = createLogger('shortcuts');
 
 /**
  * <ShortcutsProvider> — 顶层组件, 维护:
@@ -130,14 +133,14 @@ export function ShortcutsProvider({ overrides, children, enabled = true }: Short
         try {
           result = action.run(ctx);
         } catch (err) {
-          console.error(`[shortcuts] action "${action.id}" threw:`, err);
+          logger.error(`action "${action.id}" threw`, { error: err });
           result = false;
         }
         if (result instanceof Promise) {
           // 异步 action 视作已处理 (preventDefault + stopPropagation 立即执行),
           // 失败用 .catch 兜底。Provider 不等 Promise 解决 — 同步键盘响应优先。
           result.catch(err => {
-            console.error(`[shortcuts] action "${action.id}" rejected:`, err);
+            logger.error(`action "${action.id}" rejected:`, err);
           });
           e.preventDefault();
           e.stopPropagation();

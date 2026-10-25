@@ -10,10 +10,21 @@
 //
 // 设计: 与 CI "先保证绿灯, 再逐步收紧" 哲学一致。无新依赖, 纯静态扫描。
 // 防"9 处反向依赖"类问题回退 ── 见 Flowix 技术债务清单 P0 前端结构。
+//
+// 与 `scripts/check-architecture.mjs` 的分工（两边都跑，不要互相替代）：
+//   - 新脚本是配置驱动的三条铁律：低层不得反向依赖、跨 feature 必须走 public/、
+//     `@tauri-apps` 只能出现在 platform。那三条本文件不再重复实现。
+//   - 本文件保留新脚本**没有**的东西：具体接缝（workspace 导航、editor→memo、
+//     agent→document、preferences runtime-api、shell 展示协调层文件清单）、
+//     `features/workspace/model` 的零依赖约束，以及 4 条不变量
+//     （session store 行数/partialize/create 数量/app-api 不得导出 Store）。
+//   - 唯一的重复是下面 Rule A：新脚本跳过测试文件，Rule A 连测试一起管，
+//     所以刻意保留。
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isPrivateWorkspaceNavigationImport } from './workspace-navigation-boundary.mjs';
 
 const ROOT = fileURLToPath(new URL('../app/flowix-web', import.meta.url));
 
@@ -53,6 +64,9 @@ for (const file of files) {
   }
 
   for (const spec of specs) {
+    if (!isTest(file) && isPrivateWorkspaceNavigationImport(r, spec)) {
+      violations.push(`${r}: 导航必须走 Workspace public 入口，禁止 import ${spec}`);
+    }
     // Public surface models must remain usable without host stores or React renderers.
     if (
       !isTest(file)
@@ -61,24 +75,11 @@ for (const file of files) {
     ) {
       violations.push(`${r}: 公共 surface 模型不得依赖宿主状态或渲染实现 ${spec}`);
     }
-    // Rule A: 低层不得反向依赖 features / app
+    // Rule A: 低层不得反向依赖 features / app。
+    // 与 check-architecture.mjs 的 reverse-dependency 重叠，但这里**不跳过测试
+    // 文件**（新脚本跳过），所以保留。
     if (isLowLayer(layer) && (spec.startsWith('@features/') || spec.startsWith('@app/'))) {
       violations.push(`${r}: 反向依赖 ${spec}  (低层 ${layer} 不得 import features/app)`);
-    }
-    // Rule B: features/shared/lib 不得直接 import @tauri-apps/* (非测试)
-    if (!isTest(file) && isMidLayer(layer) && spec.startsWith('@tauri-apps/')) {
-      violations.push(`${r}: 直接 import ${spec}  (须走 @platform/tauri/* 封装)`);
-    }
-    // Rule C: migrated cross-feature seams use the owning module's public
-    // entrypoint. Add files here only after their deep imports are removed;
-    // this keeps the migration incremental without grandfathering new debt.
-    if (
-      !isTest(file)
-      && r.startsWith('features/workspace/')
-      && /^@features\/(agent|document|editor|memo|plugin|preferences|shell|surface)\//.test(spec)
-      && !/^@features\/(agent|document|editor|memo|plugin|preferences|shell|surface)\/public\//.test(spec)
-    ) {
-      violations.push(`${r}: 跨模块依赖必须走公开入口，禁止 import ${spec}`);
     }
     // Workspace host identity is a UI contract. Consumers may still use the
     // focus store for reactive focus state, but must not import that Store

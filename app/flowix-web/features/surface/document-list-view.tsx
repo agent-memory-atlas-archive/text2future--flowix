@@ -31,6 +31,7 @@ import excelCardPlaceholder from '@/assets/placeholder-excel-card.jpg';
 import otherCardPlaceholder from '@/assets/placeholder-other-card.jpg';
 import folderCardPlaceholder from '@/assets/placeholder-folder-card.png';
 import { WorkDocumentsLoadingSkeleton } from '@shared/ui/work-documents-loading-skeleton';
+import { CollectionTitle } from '@features/collection/public/title-api';
 
 // Keep the loading effect stable when ordinary folders omit media records.
 const EMPTY_MEDIA_LIBRARY_RECORDS: MediaLibraryRecord[] = [];
@@ -333,14 +334,14 @@ export function DocumentListView({ listContext, mediaLibrary = false, workDocume
     setEditingLibraryTitle(true);
   }, [libraryName, onRenameLibrary, renamingLibraryTitle]);
   useEffect(() => {
-    if (!editingLibraryTitle) return;
+    if (!editingLibraryTitle || !mediaLibrary) return;
     const blurOnOutsidePointer = (event: PointerEvent) => {
       const input = libraryTitleInputRef.current;
       if (input && !event.composedPath().includes(input)) input.blur();
     };
     document.addEventListener('pointerdown', blurOnOutsidePointer, true);
     return () => document.removeEventListener('pointerdown', blurOnOutsidePointer, true);
-  }, [editingLibraryTitle]);
+  }, [editingLibraryTitle, mediaLibrary]);
   const [viewport, setViewport] = useState({ top: 0, height: 600, width: 600 });
   const scrollRef = useRef<HTMLDivElement>(null);
   const headerRef = useRef<HTMLDivElement>(null);
@@ -628,7 +629,12 @@ export function DocumentListView({ listContext, mediaLibrary = false, workDocume
   const openItem = useCallback(async (item: DocumentPageItem) => {
     try {
       if (workDocuments) {
-        await openPath(item.fullPath);
+        const { openWorkspaceSurface } = await import('@features/workspace/public/open-surface-api');
+        await openWorkspaceSurface({
+          host: 'browser-column',
+          target: { kind: 'external', path: item.fullPath, scopePath: listContext.notebookPath, transitionId: null },
+          options: { notebookId: listContext.notebookId },
+        });
         return;
       }
       if (item.resourceKind === 'folder') {
@@ -647,11 +653,11 @@ export function DocumentListView({ listContext, mediaLibrary = false, workDocume
         await openWorkspaceSurface({ host: 'browser-column', target: {
           kind: 'media', filePath: item.fullPath, notebookId: listContext.notebookId,
           notebookPath: listContext.notebookPath, resourceKind: kind,
-        }, options: { browserDisposition: 'focus-existing' } });
+        } });
       } else {
         const target = { kind: 'external' as const, path: item.fullPath, scopePath: listContext.notebookPath, transitionId: null };
         if (workspaceHost === 'browser-column') {
-          await openWorkspaceSurface({ host: workspaceHost, target, options: { browserDisposition: 'focus-existing' } });
+          await openWorkspaceSurface({ host: workspaceHost, target });
         } else {
           await openWorkspaceSurface({ host: workspaceHost, target });
         }
@@ -785,31 +791,23 @@ export function DocumentListView({ listContext, mediaLibrary = false, workDocume
         </div>
       </> : workDocuments ? <>
         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1">
-          <div className="flex h-7 min-w-0 max-w-full flex-[0_1_auto] items-center gap-1.5" title={libraryName}>
-            <NotebookTreeResourceIcon path={libraryFilePath ?? 'work-documents.index.yaml'} collectionType="work_documents" className="h-5 w-5 shrink-0" />
-            {editingLibraryTitle ? <input
-              ref={libraryTitleInputRef}
-              aria-label={t('workDocuments.titleLabel')}
-              value={libraryTitleDraft}
-              disabled={renamingLibraryTitle}
-              onChange={(event) => setLibraryTitleDraft(event.currentTarget.value)}
-              onBlur={(event) => { void commitLibraryTitle(event.currentTarget.value); }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); }
-                else if (event.key === 'Escape') { event.preventDefault(); setLibraryTitleDraft(libraryName); setEditingLibraryTitle(false); }
-              }}
-              className="box-border h-[22px] min-w-[2em] max-w-full flex-[0_1_auto] rounded border-0 bg-[var(--muted)] px-0.5 py-1 text-sm font-medium leading-none text-[var(--foreground)] outline-none"
-            /> : <button
-              type="button"
-              onDoubleClick={(event) => { if (!onRenameLibrary || renamingLibraryTitle) return; event.preventDefault(); captureLibraryTitleCaret(event.currentTarget, event.clientX, event.clientY); beginLibraryTitleEdit(); }}
-              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === 'F2') { event.preventDefault(); beginLibraryTitleEdit(); } }}
-              aria-label={`${t('workDocuments.renameLabel')}: ${libraryName}`}
-              title={onRenameLibrary ? `${t('workDocuments.renameHint')}: ${libraryName}` : libraryName}
-              disabled={!onRenameLibrary || renamingLibraryTitle}
-              className="inline-flex min-w-[2em] max-w-full flex-[0_1_auto] items-center truncate rounded border-0 bg-transparent px-0.5 py-1 text-left text-sm font-medium leading-none text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:opacity-100"
-            >{libraryName}</button>}
-            {renamingLibraryTitle && <span role="status" aria-label={t('memo.fileTree.renaming')} className="inline-flex shrink-0 items-center text-[var(--muted-foreground)]"><LoaderCircle className="h-3.5 w-3.5 flowix-spin" aria-hidden="true" /></span>}
-          </div>
+          <CollectionTitle
+            kind="work_documents"
+            title={libraryName}
+            inputLabel={t('workDocuments.titleLabel')}
+            renameLabel={t('workDocuments.renameLabel')}
+            renameHint={t('workDocuments.renameHint')}
+            editing={editingLibraryTitle}
+            draft={libraryTitleDraft}
+            setDraft={setLibraryTitleDraft}
+            inputRef={libraryTitleInputRef}
+            captureCaret={captureLibraryTitleCaret}
+            beginEdit={beginLibraryTitleEdit}
+            commit={commitLibraryTitle}
+            cancel={() => { setLibraryTitleDraft(libraryName); setEditingLibraryTitle(false); }}
+            disabled={!onRenameLibrary || libraryActionsDisabled}
+            busy={renamingLibraryTitle}
+          />
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <span className="text-sm text-[var(--muted-foreground)]">{t('memo.documentList.workDocumentsCount', { count: visibleItems.length, more: hasMore ? '+' : '' })}</span>

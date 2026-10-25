@@ -1,3 +1,9 @@
+'use client';
+
+import { resolveTableView } from './view-selection';
+import { useTableViewManagement } from './use-table-view-management';
+import { useTableTitle } from './use-table-title';
+import { valueMatchesFieldType, renameNoteProperty, notePropertyEditorValue, calendarCreatePropertyValue, isCalendarCreateWritableField } from './table-note-properties';
 import { normalizeNoteFilterCondition } from '@features/collection/public/note-filter-api';
 import { resolveDatasetFilterForLocation } from '@features/collection/dataset-filter-location';
 import { NotePropertyImageValue, propertyImagePaths as imagePaths, selectPropertyImage } from '@features/document/properties/image-value-input';
@@ -14,11 +20,11 @@ import { PROPERTY_TYPES_KEY, readPropertyTypes } from '@features/document/proper
 import { NoteCreatePicker } from './note-create-picker';
 import { collectionSessionKey } from '@/lib/collection-session-key';
 import { MultidimensionalTableLoadingSkeleton } from '@shared/ui/multidimensional-table-loading-skeleton';
-'use client';
+
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
 
 import type { SurfaceLifecycle, SurfacePresentationUpdate } from '@features/workspace/public/surface-api';
 
-import { mutateCollectionFile } from '@features/collection/mutations';
 import { FolderCollectionSwitchConfirmDialog } from '@features/collection/public/folder-api';
 import { reviseCollection, type CollectionSource } from '@features/collection/model';
 import { resolveCollectionSaveDirectory } from '@features/collection/save-location';
@@ -33,21 +39,19 @@ import { toast } from '@/lib/toast';
 import { canonicalizePropertyKey, isSystemPropertyKey } from '@features/properties/property-key';
 import type { PropertyFieldConfig } from '@/lib/constants';
 import { compareAndPatchDocumentProperties, removeDocumentProperty, setDocumentProperties } from '@features/document/public/path-properties';
-import { PROPERTY_URL_RE } from '@features/document/properties/property-type';
 import { assetUrl, decodeStorageKey } from '@features/editor/extensions/attachment-link/utils';
 import { getAllPresets, resolvePropertyPreset, resolvePropertyDisplayName, type PropertyPreset } from '@features/document/properties/presets';
 import { usePropertyPresets } from '@features/properties/public-api';
 import { createFileBrowserTarget } from '@features/workspace/public/browser-column-api';
 import { openWorkspaceSurface } from '@features/workspace/public/open-surface-api';
-import { replaceExternalDocumentPath } from '@features/workspace/use-cases/workspace-navigation';
-import { NotebookTreeResourceIcon } from '@features/memo/components/file-type-icon';
+import { replaceExternalDocumentPath } from '@features/workspace/public/note-navigation-api';
+import { CollectionTitle } from '@features/collection/public/title-api';
 import { renameMarkdownTitle } from '@features/document/use-cases/local-document-operations';
 import { ensureFileDisplayIdentity, type FileDisplayIdentity } from '@/lib/file-display-registry';
 import { displayTitleFromFilename } from '@/lib/utils';
 import { collectionDisplayName } from '@features/collection/model';
 import { Button } from '@shared/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@shared/ui/dialog';
-import { useTitleEditCaret } from '@shared/hooks/use-title-edit-caret';
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/ui/popover';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@shared/ui/context-menu';
@@ -61,7 +65,6 @@ import {
   findKanbanStatusField,
   type MultidimensionalTableDocument,
   type TableField,
-  type TableView,
   type TableRecord,
   type TableFieldType,
   type TableFieldOption,
@@ -73,8 +76,6 @@ import {
 } from './model';
 import {
   BUILTIN_TABLE_FIELDS,
-  NOTE_CREATED_AT_FIELD_ID,
-  NOTE_UPDATED_AT_FIELD_ID,
   NOTE_CALENDAR_DATE_FIELD_ID,
   builtinPresetValue,
   builtinPresetTableField,
@@ -108,12 +109,9 @@ import { TableFieldEditorForm, TableFieldHeader, TablePresetMenu } from './table
 import { useTableSession } from './use-table-session';
 import { useTableCellWriter, type TableCellSaveStatus } from './use-table-cell-writer';
 import { useTableViewSelection } from './use-table-view-selection';
-import { removeTableView, resolveTableView } from './view-selection';
 import { isMarkdownNoteDragResource, type NotebookNoteDragResource } from '@features/memo/public/drag-resource-api';
 import { addPresetField, addTableField, toggleDatasetTableFieldVisibility, changeFieldType as changeFieldTypeInDocument, removeBuiltinField as removeBuiltinTableField, removeField, removePresetField, viewsRequiringField } from './table-commands';
 
-const TABLE_TITLE_VISIBILITY_STORAGE_KEY = 'flowix:multidimensional-table:title-visible';
-const TABLE_TITLE_VISIBILITY_EVENT = 'flowix:multidimensional-table:title-visibility-changed';
 
 export interface TableDocumentViewProps {
   onSurfaceLifecycleReady?: (lifecycle: SurfaceLifecycle | null) => void;
@@ -207,23 +205,6 @@ function IncompatibleViewEmptyState({ title, description, titleAction }: { title
   </div>;
 }
 
-function valueMatchesFieldType(value: unknown, type: TableFieldType, options: TableField['options'] = [], multiple = false): boolean {
-  if (value == null || value === '') return true;
-  switch (type) {
-    case 'primary': case 'Text': case 'Icon': return typeof value === 'string';
-    case 'URL': return typeof value === 'string' && PROPERTY_URL_RE.test(value);
-    case 'Boolean': return typeof value === 'boolean';
-    case 'Number': return typeof value === 'number' && Number.isFinite(value);
-    case 'Date': return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
-    case 'Select': return typeof value === 'string' && options.some((option) => option.id === value || option.label === value);
-    case 'MultiSelect': return Array.isArray(value) && value.every((item) => typeof item === 'string' && options.some((option) => option.id === item || option.label === item));
-    case 'Tag': case 'Color': return Array.isArray(value) && value.every((item) => typeof item === 'string');
-    case 'Image': return multiple
-      ? Array.isArray(value) && value.every((item) => typeof item === 'string')
-      : typeof value === 'string';
-  }
-  return false;
-}
 
 function fieldTypeLabel(type: PropertyKind | 'primary', t: (key: I18nKey) => string): string {
   return t(getPropertyTypeDefinition(type === 'primary' ? 'Note' : type).labelKey);
@@ -244,32 +225,6 @@ function fieldLabel(
   return resolvePropertyDisplayName(field.property_key ?? '', propertyFields, t);
 }
 
-/** Move a property key in an in-memory note (rename keeps values and its type declaration). */
-function renameNoteProperty(
-  note: NoteEntry,
-  previousKey: string,
-  nextKey: string,
-  field: TableField,
-  nextOptions: TableFieldOption[] | undefined,
-  propertyFields: readonly PropertyFieldConfig[],
-): NoteEntry {
-  if (!Object.prototype.hasOwnProperty.call(note.properties, previousKey)) return note;
-  const previousValue = note.properties[previousKey];
-  const update = nextOptions ? migratedOptionValue(field, nextOptions, previousValue) : null;
-  const properties = { ...note.properties };
-  delete properties[previousKey];
-  if (!update || !update.remove) properties[nextKey] = update ? update.value : previousValue;
-  const types = readPropertyTypes(properties[PROPERTY_TYPES_KEY]);
-  if (Object.prototype.hasOwnProperty.call(types, previousKey)) {
-    types[nextKey] = types[previousKey];
-    delete types[previousKey];
-  }
-  if (update?.remove || resolvePropertyPreset(nextKey, propertyFields)) delete types[nextKey];
-  else if (field.type !== 'primary') types[nextKey] = field.type;
-  if (Object.keys(types).length) properties[PROPERTY_TYPES_KEY] = types;
-  else delete properties[PROPERTY_TYPES_KEY];
-  return { ...note, properties };
-}
 
 function noteThumbnailUrl(thumbnail: string | null | undefined): string | null {
   if (!thumbnail) return null;
@@ -302,56 +257,8 @@ function upsertTableRecord(records: TableRecord[], nextRecord: TableRecord): Tab
   return records.map((record) => record.id === nextRecord.id ? nextRecord : record);
 }
 
-function notePropertyEditorValue(note: NoteEntry | undefined, field: TableField): unknown {
-  if (field.type === 'primary') return note?.relativePath ?? null;
-  const propertyKey = field.property_key ?? '';
-  const value = note && Object.prototype.hasOwnProperty.call(note.properties, propertyKey)
-    ? note.properties[propertyKey]
-    : null;
-  if (field.type === 'Select') {
-    return field.options?.find((option) => option.label === value)?.id
-      ?? field.options?.find((option) => option.id === value)?.id
-      ?? value
-      ?? '';
-  }
-  if (field.type === 'MultiSelect' && Array.isArray(value)) {
-    return value.map((entry) => field.options?.find((option) => option.label === entry)?.id
-      ?? field.options?.find((option) => option.id === entry)?.id
-      ?? String(entry));
-  }
-  return value;
-}
 
-function calendarCreatePropertyValue(field: TableField, value: unknown): { include: boolean; value: unknown } {
-  if (field.type === 'Boolean') return { include: true, value: Boolean(value) };
-  if (field.type === 'Number') {
-    const number = typeof value === 'number' ? value : Number(String(value ?? '').trim());
-    return { include: Number.isFinite(number) && String(value ?? '').trim() !== '', value: number };
-  }
-  if (field.type === 'Select') {
-    const option = field.options?.find((item) => item.id === value);
-    return { include: Boolean(option), value: option?.label ?? null };
-  }
-  if (field.type === 'MultiSelect') {
-    const ids = Array.isArray(value) ? value.map(String) : [];
-    const labels = ids.map((id) => field.options?.find((item) => item.id === id)?.label ?? id);
-    return { include: labels.length > 0, value: labels };
-  }
-  if (field.type === 'Tag' || field.type === 'Color' || (field.type === 'Image' && field.multiple)) {
-    const values = Array.isArray(value) ? value.map(String) : String(value ?? '').split(',');
-    const normalized = values.map((item) => item.trim()).filter(Boolean);
-    return { include: normalized.length > 0, value: normalized };
-  }
-  const normalized = String(value ?? '').trim();
-  return { include: Boolean(normalized), value: normalized || null };
-}
 
-function isCalendarCreateWritableField(field: TableField): boolean {
-  return field.type !== 'primary'
-    && Boolean(field.property_key)
-    && field.id !== NOTE_CREATED_AT_FIELD_ID
-    && field.id !== NOTE_UPDATED_AT_FIELD_ID;
-}
 
 const EMPTY_CELL_STATUSES: ReadonlyMap<string, TableCellSaveStatus> = new Map();
 
@@ -377,10 +284,11 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       system: presets.filter((preset) => preset.source === 'builtin'),
     };
   }, [propertyFields, t]);
+  const tableSession = useTableSession({ filePath: currentFilePath, fileIdentity, notebookPath, notebookId, expectedCollectionId });
   const {
     document, loadError, saving, saveFailed, setSaving, reportSaveFailure, notes, setNotes, resolvedNotebookId,
-    notesLoadError, load, acceptContent, save: saveSession, flush: flushSession, loadSequenceRef, loadGeneration, isCurrentSession, pendingNotePropertiesRef,
-  } = useTableSession({ filePath: currentFilePath, fileIdentity, notebookPath, notebookId, expectedCollectionId });
+    notesLoadError, load, save: saveSession, flush: flushSession, loadSequenceRef, loadGeneration, isCurrentSession, pendingNotePropertiesRef,
+  } = tableSession;
   const collectionFilterFields = useMemo(() => [
     ...(document?.dataset.schema.fields ?? []),
     ...[...tablePresets.system, ...tablePresets.custom].map((preset) => ({
@@ -415,88 +323,18 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
   const { activeViewId, activeView, activateView, selectView } = useTableViewSelection({
     document, initialViewId, editable, saving, save, onActiveViewChange,
   });
-  const [editingViewId, setEditingViewId] = useState<string | null>(null);
-  const [editingViewName, setEditingViewName] = useState('');
-  const [editingViewWidth, setEditingViewWidth] = useState(48);
-  const [managingViewId, setManagingViewId] = useState<string | null>(null);
-  const [managingViewName, setManagingViewName] = useState('');
-  const [viewPendingDelete, setViewPendingDelete] = useState<TableView | null>(null);
-  const [showTableTitle, setShowTableTitle] = useState(true);
-  const manageRenameCancelledRef = useRef(false);
-  const deletingViewRef = useRef(false);
-  useEffect(() => {
-    const readVisibility = () => {
-      try {
-        setShowTableTitle(window.localStorage.getItem(TABLE_TITLE_VISIBILITY_STORAGE_KEY) !== 'false');
-      } catch {
-        setShowTableTitle(true);
-      }
-    };
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key === TABLE_TITLE_VISIBILITY_STORAGE_KEY || event.key === null) readVisibility();
-    };
-    readVisibility();
-    window.addEventListener('storage', handleStorage);
-    window.addEventListener(TABLE_TITLE_VISIBILITY_EVENT, readVisibility);
-    return () => {
-      window.removeEventListener('storage', handleStorage);
-      window.removeEventListener(TABLE_TITLE_VISIBILITY_EVENT, readVisibility);
-    };
-  }, []);
-  const toggleTableTitleVisibility = useCallback(() => {
-    const next = !showTableTitle;
-    setShowTableTitle(next);
-    try {
-      window.localStorage.setItem(TABLE_TITLE_VISIBILITY_STORAGE_KEY, String(next));
-      window.dispatchEvent(new Event(TABLE_TITLE_VISIBILITY_EVENT));
-    } catch {
-      // Keep the visibility toggle usable when local storage is unavailable.
-    }
-  }, [showTableTitle]);
-  const [editingTableName, setEditingTableName] = useState(false);
-  const [tableNameDraft, setTableNameDraft] = useState('');
-  const [renamingTable, setRenamingTable] = useState(false);
-  const { inputRef: tableNameInputRef, captureCaret: captureTableTitleCaret } = useTitleEditCaret(editingTableName);
-  const commitTableTitle = useCallback(async (rawTitle: string) => {
-    setEditingTableName(false);
-    const title = rawTitle.trim();
-    const currentTitle = document ? collectionDisplayName(currentFilePath, document.collection.placement) : displayTitleFromFilename(currentFilePath);
-    if (!editable || saving || renamingTable || !notebookPath || !title || title === currentTitle) return;
-    if (/[\\/]/.test(title)) {
-      toast.error('文件名不能包含路径分隔符');
-      return;
-    }
-    const sequence = loadSequenceRef.current;
-    setSaving(true);
-    setRenamingTable(true);
-    try {
-      if (!document || !resolvedNotebookId) throw new Error('集合尚未加载完成');
-      const result = await mutateCollectionFile({
-        notebookId: resolvedNotebookId, notebookPath, collectionId: document.collection.id,
-        expectedRevision: document.collection.revision, newName: title,
-      });
-      if (!isCurrentSession(sequence) || !acceptContent(result.content)) return;
-      if (result.directoryMove) {
-        const oldPrefix = `${result.directoryMove.previousRelativePath}/`;
-        const nextPrefix = `${result.directoryMove.relativePath}/`;
-        setNotes((current) => current.map((note) => {
-          const path = note.relativePath.replace(/\\/g, '/');
-          return path.startsWith(oldPrefix) ? { ...note, relativePath: nextPrefix + path.slice(oldPrefix.length) } : note;
-        }));
-      }
-      setCurrentFilePath(result.filePath);
-      onFilePathChange?.(result.filePath);
-      if (result.errorCode) toast.error(`集合已更新，后续操作待恢复：${result.errorCode}`);
-    } catch (error) {
-      reportSaveFailure(sequence);
-      toast.error(error instanceof Error ? error.message : '重命名多维表格失败');
-    } finally {
-      setRenamingTable(false);
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [acceptContent, currentFilePath, document, editable, notebookPath, onFilePathChange, renamingTable, resolvedNotebookId, saving, reportSaveFailure, setNotes, setSaving, isCurrentSession, loadSequenceRef]);
-  const editingViewInputRef = useRef<HTMLInputElement | null>(null);
-  const editingViewMeasureRef = useRef<HTMLSpanElement | null>(null);
+  const {
+    editingViewId, editingViewName, setEditingViewName, editingViewWidth,
+    editingViewInputRef, editingViewMeasureRef, managingViewId, cancelManageViewRename,
+    managingViewName, setManagingViewName, manageViewRenameInputRef, closeViewManagement,
+    viewPendingDelete, cancelDeleteView, beginRenameView, renameView,
+    beginManageViewRename, finishManageViewRename, requestDeleteView, confirmDeleteView,
+  } = useTableViewManagement({ session: tableSession,
+    save, editable, canDeleteViews, activeViewId, activateView });
+  const { showTableTitle, toggleTableTitleVisibility, editingTableName, setEditingTableName,
+    tableNameDraft, setTableNameDraft, renamingTable, tableNameInputRef, captureTableTitleCaret,
+    commitTableTitle, beginEditTableTitle } = useTableTitle({ session: tableSession, filePath: currentFilePath,
+      setFilePath: setCurrentFilePath, notebookPath, editable, onFilePathChange });
   const [viewAddOpen, setViewAddOpen] = useState(false);
   const viewTabsScrollerRef = useRef<HTMLDivElement | null>(null);
   const [viewTabsOverflow, setViewTabsOverflow] = useState({ left: false, right: false });
@@ -579,7 +417,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       ];
       reportPresentation({ title, state: {
         status: 'error',
-        message: { key: 'error.unexpected', fallbackText: loadError },
+        message: { key: 'errors.friendly.tableLoad' },
         actions,
       } });
     } else if (!document) {
@@ -625,20 +463,6 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     setTablePage(0);
     setGalleryPage(0);
   }, [loadGeneration]);
-
-  useLayoutEffect(() => {
-    if (!editingViewId) return;
-    const input = editingViewInputRef.current;
-    if (!input) return;
-    input.focus();
-    input.setSelectionRange(input.value.length, input.value.length);
-  }, [editingViewId]);
-
-  useLayoutEffect(() => {
-    if (!editingViewId) return;
-    const measuredWidth = editingViewMeasureRef.current?.getBoundingClientRect().width;
-    if (measuredWidth) setEditingViewWidth(Math.max(40, Math.ceil(measuredWidth + 2)));
-  }, [editingViewId, editingViewName, activeViewId]);
 
   const noteField = document?.dataset.schema.fields[0];
   const noteByKey = useMemo(() => new Map(notes.map((note) => [note.relativePath.replace(/\\/g, '/'), note])), [notes]);
@@ -1021,7 +845,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       setAutoOpenPrimaryRecordId(record.id);
     } catch (error) {
       reportSaveFailure(sequence);
-      toast.error(error instanceof Error ? error.message : '新增空行失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableAddRow'));
     } finally {
       if (isCurrentSession(sequence)) setSaving(false);
     }
@@ -1073,7 +897,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
         setViewFieldPickerAnchorRect(null);
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '创建视图失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableView'));
     }
   }, [document, isCurrentSession, loadSequenceRef, activateView, pendingViewType, save, saving]);
 
@@ -1116,7 +940,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
         setViewFieldPickerAnchorRect(null);
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '更新视图字段失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableViewSave'));
     }
   }, [configuringViewId, createViewForField, document, pendingViewType, saveConfiguredViewField, saving]);
 
@@ -1133,7 +957,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
         setViewFieldPickerAnchorRect(null);
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '创建看板失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableView'));
     }
   }, [document, isCurrentSession, loadSequenceRef, activateView, pendingViewType, save, saving]);
 
@@ -1150,7 +974,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
         setViewFieldPickerAnchorRect(null);
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '更新看板分组字段失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableViewSave'));
     }
   }, [configuringViewId, createKanbanViewForStatus, document, saveConfiguredViewField, saving]);
 
@@ -1202,78 +1026,6 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     if (await save(next)) setTablePage(0);
   }, [activeViewId, document, editable, save, saving]);
 
-  const beginRenameView = useCallback((view: TableView) => {
-    setEditingViewName(view.name);
-    setEditingViewId(view.id);
-  }, []);
-
-  const renameView = useCallback(async (view: TableView, rawName: string) => {
-    setEditingViewId(null);
-    if (!document || saving) return;
-    const trimmedName = rawName.trim();
-    if (!trimmedName) {
-      toast.error(t('multidimensionalTable.view.nameRequired'));
-      return;
-    }
-    if (trimmedName === view.name) return;
-    if (document.views.items.some((item) => item.id !== view.id && item.name === trimmedName)) {
-      toast.error(t('multidimensionalTable.view.nameExists'));
-      return;
-    }
-    const next: MultidimensionalTableDocument = {
-      ...document,
-      collection: reviseCollection(document.collection),
-      views: { ...document.views, items: document.views.items.map((item) => item.id === view.id ? { ...item, name: trimmedName } : item) },
-    };
-    await save(next, false, loadSequenceRef.current);
-  }, [document, loadSequenceRef, save, saving, t]);
-
-  const manageViewRenameInputRef = useRef<HTMLInputElement | null>(null);
-  useLayoutEffect(() => {
-    if (!managingViewId) return;
-    manageViewRenameInputRef.current?.focus();
-    manageViewRenameInputRef.current?.select();
-  }, [managingViewId]);
-
-  const beginManageViewRename = useCallback((view: TableView) => {
-    manageRenameCancelledRef.current = false;
-    setManagingViewName(view.name);
-    setManagingViewId(view.id);
-  }, []);
-
-  const finishManageViewRename = useCallback((view: TableView, rawName: string) => {
-    setManagingViewId(null);
-    void renameView(view, rawName);
-  }, [renameView]);
-
-  const deleteView = useCallback(async (view: TableView) => {
-    if (!editable || !canDeleteViews || !document || saving || document.views.items.length <= 1 || deletingViewRef.current) return;
-    deletingViewRef.current = true;
-    try {
-      const sequence = loadSequenceRef.current;
-      const next = removeTableView(document, view.id);
-      if (next === document) return;
-      if (await save(next, false, sequence) && isCurrentSession(sequence) && activeViewId === view.id) {
-        const fallback = resolveTableView(next);
-        if (fallback) activateView(fallback.id);
-      }
-    } finally {
-      deletingViewRef.current = false;
-    }
-  }, [activeViewId, activateView, canDeleteViews, document, editable, isCurrentSession, loadSequenceRef, save, saving]);
-
-  const requestDeleteView = useCallback((view: TableView) => {
-    if (!editable || !canDeleteViews || !document || saving || document.views.items.length <= 1 || deletingViewRef.current) return;
-    setViewPendingDelete(view);
-  }, [canDeleteViews, document, editable, saving]);
-
-  const confirmDeleteView = useCallback(() => {
-    if (!viewPendingDelete || deletingViewRef.current) return;
-    const view = viewPendingDelete;
-    setViewPendingDelete(null);
-    void deleteView(view);
-  }, [deleteView, viewPendingDelete]);
-
   const linkSelectedNote = useCallback(async (selectedNoteKey: string) => {
     if (!editable || !document || document.collection.placement === 'folder' || !noteField || !selectedNoteKey || saving) return;
     const sequence = loadSequenceRef.current;
@@ -1304,7 +1056,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       if (!saved && updatedNote && notePickerCalendarDate) toast.error('笔记日期已修改，但表格关联未保存，请重试关联');
     } catch (error) {
       reportSaveFailure(sequence);
-      toast.error(error instanceof Error ? error.message : '关联笔记失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableLink'));
     } finally {
       if (isCurrentSession(sequence)) setSaving(false);
     }
@@ -1342,7 +1094,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       return saved && isCurrentSession(sequence);
     } catch (error) {
       reportSaveFailure(sequence);
-      toast.error(error instanceof Error ? error.message : '新建并关联笔记失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableCreateLink'));
       return false;
     } finally {
       if (isCurrentSession(sequence)) setSaving(false);
@@ -1376,7 +1128,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       if (saved && isCurrentSession(sequence) && activeView?.layout === 'table' && (!targetRecord || !targetRecord.note_path)) setPendingTablePageRecordId(linkedRecord.id);
     } catch (error) {
       reportSaveFailure(sequence);
-      toast.error(error instanceof Error ? error.message : '新建并关联笔记失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableCreateLink'));
     } finally {
       if (isCurrentSession(sequence)) setSaving(false);
     }
@@ -1489,7 +1241,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
         ? Math.floor(index / pageSize)
         : Math.max(page, Math.floor(index / pageSize)));
     } catch (error) {
-      if (isCurrentSession(sequence)) toast.error(error instanceof Error ? error.message : t(failedMessage));
+      if (isCurrentSession(sequence)) toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteMove'));
     } finally {
       if (isCurrentSession(sequence)) setSaving(false);
     }
@@ -1572,7 +1324,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     onPreview: onTableDropPreview,
     onDrop: (notes, location) => addExternalNotesToTable(notes, location.beforeRecordId),
     onReject: onTableDropReject,
-    onError: (error) => toast.error(error instanceof Error ? error.message : t('multidimensionalTable.tableDropFailed')),
+    onError: (error) => toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteMove')),
   });
 
   const addExternalNotesToCalendar = useCallback(async (
@@ -1626,7 +1378,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
         return;
       }
     } catch (error) {
-      if (isCurrentSession(sequence)) toast.error(error instanceof Error ? error.message : '加入日历失败');
+      if (isCurrentSession(sequence)) toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableLink'));
     } finally {
       if (isCurrentSession(sequence)) setSaving(false);
     }
@@ -1667,7 +1419,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       }
     } catch (error) {
       reportSaveFailure(sequence);
-      toast.error(error instanceof Error ? error.message : '新建并关联笔记失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableCreateLink'));
     } finally {
       if (isCurrentSession(sequence)) setSaving(false);
     }
@@ -1704,10 +1456,10 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       if (!await save(addTableField(document, field))) return;
       if (!existing) {
         try { await ensureTableFieldPreset(field); }
-        catch (error) { toast.error(`当前表格已保存，预设待同步：${error instanceof Error ? error.message : '请稍后重试'}`); }
+        catch (error) { console.warn('Preset sync failed after saving table', error); toast.error(t('errors.friendly.presetSync')); }
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '添加属性失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.propertySave'));
       return;
     }
     setNewFieldOpen(false);
@@ -1720,7 +1472,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     try {
       void save(removePresetField(document, preset));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '移除预设属性失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.propertyDelete'));
     }
   }, [document, save, saving]);
 
@@ -1729,7 +1481,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     try {
       return await save(removeBuiltinTableField(document, field.id));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '移除只读属性失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.propertyDelete'));
       return false;
     }
   }, [document, save, saving]);
@@ -1803,7 +1555,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
         }
         try { await updatePresetFromTable(nextField, presetFromTableField(nextField)); }
         catch (error) {
-          toast.error(`当前表格已保存，预设待同步：${error instanceof Error ? error.message : '请稍后重试'}`);
+          console.warn('Preset sync failed after saving table', error); toast.error(t('errors.friendly.presetSync'));
           return true;
         }
         const transform = optionsChanged && nextOptions
@@ -1811,7 +1563,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
           : undefined;
         let keyResult: { moved: number; failed: number } = { moved: 0, failed: 0 };
         try { keyResult = await migrateNotePropertyKey(propertyKey, nextKey, transform); }
-        catch (error) { toast.error(error instanceof Error ? error.message : '笔记属性改名失败'); }
+        catch (error) { toast.error(friendlyErrorMessage(error, t, 'errors.friendly.propertySave')); }
         if (keyResult.failed) toast.error(`${keyResult.failed} 个笔记未改名（目标属性名已存在），已保留原值`);
         if (isCurrentSession(sequence)) {
           setNotes((current) => current.map((note) => renameNoteProperty(note, propertyKey, nextKey, field, optionsChanged ? nextOptions : undefined, propertyFields)));
@@ -1831,7 +1583,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
         }), field, propertyKey, optionsChanged ? nextOptions : undefined,
       );
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '属性迁移失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.propertySave'));
       return false;
     }
     if (migrations.some(({ noteKey }) => {
@@ -1859,7 +1611,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       }, () => save(nextDocument, true, sequence));
       if (result.saved) {
         try { await updatePresetFromTable(nextField, presetFromTableField(nextField)); }
-        catch (error) { toast.error(error instanceof Error ? error.message : '同步用户预设失败'); }
+        catch (error) { toast.error(friendlyErrorMessage(error, t, 'errors.friendly.propertySave')); }
       }
       if (result.failed.length) toast.error(`当前表格已保存，${result.failed.length} 个笔记未同步，已保留原值`);
       if (!isCurrentSession(sequence)) return result.saved;
@@ -1908,7 +1660,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     if (!await save(pendingDocument)) return false;
     const persistedField = pendingDocument.dataset.schema.fields.find((item) => item.id === field.id)!;
     try { await updatePresetFromTable(persistedField, presetFromTableField(persistedField)); }
-    catch (error) { toast.error(`当前表格已保存，预设待同步：${error instanceof Error ? error.message : '请稍后重试'}`); }
+    catch (error) { console.warn('Preset sync failed after saving table', error); toast.error(t('errors.friendly.presetSync')); }
     return true;
   }, [save]);
 
@@ -2006,7 +1758,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       if (result.failed) toast.error(`${result.failed} 个笔记未同步删除，稍后可重试`);
       setPendingDeleteTarget(null);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '删除属性失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.propertyDelete'));
     } finally {
       setDeletingFieldBusy(false);
     }
@@ -2096,7 +1848,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       return updatedNote;
     } catch (error) {
       reportSaveFailure(sequence);
-      toast.error(error instanceof Error ? error.message : '重命名笔记失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteRename'));
       return null;
     } finally {
       if (isCurrentSession(sequence)) setSaving(false);
@@ -2181,7 +1933,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       closeCalendarNoteDialog();
     } catch (error) {
       reportSaveFailure(sequence);
-      toast.error(error instanceof Error ? error.message : '编辑笔记失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteEdit'));
     } finally {
       if (isCurrentSession(sequence)) setSaving(false);
     }
@@ -2201,7 +1953,6 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     if (path) void openWorkspaceSurface({
       host: 'browser-column',
       target: { ...createFileBrowserTarget(path, notebookPath), notebookId: resolvedNotebookId },
-      options: { browserDisposition: 'open-in-column' },
     });
   }, [notebookPath, notebookId, resolvedNotebookId]);
   const openLinkedRecord = useCallback((recordId: string) => {
@@ -2241,7 +1992,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       }
     } catch (error) {
       reportSaveFailure(sequence);
-      toast.error(error instanceof Error ? error.message : '新建并关联笔记失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableCreateLink'));
     } finally {
       if (isCurrentSession(sequence)) setSaving(false);
     }
@@ -2363,7 +2114,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       }, true, sequence);
     } catch (error) {
       reportSaveFailure(sequence);
-      toast.error(error instanceof Error ? error.message : '新建任务失败');
+      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.taskCreate'));
     } finally {
       if (isCurrentSession(sequence)) setSaving(false);
     }
@@ -2460,7 +2211,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
         toast.error(t('multidimensionalTable.kanbanDropFailed'));
       }
     } catch (error) {
-      if (isCurrentSession(sequence)) toast.error(error instanceof Error ? error.message : t('multidimensionalTable.kanbanDropFailed'));
+      if (isCurrentSession(sequence)) toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteMove'));
     } finally {
       if (isCurrentSession(sequence)) setSaving(false);
     }
@@ -2506,7 +2257,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
         updateLocalNoteGroupValue(recordNoteKey);
       } catch (error) {
         reportSaveFailure(sequence);
-        if (isCurrentSession(sequence)) toast.error(error instanceof Error ? error.message : '移动笔记失败');
+        if (isCurrentSession(sequence)) toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteMove'));
       } finally {
         if (isCurrentSession(sequence)) setSaving(false);
       }
@@ -2549,7 +2300,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       if (orderChanged) await save({ ...document, collection: reviseCollection(document.collection), dataset: { ...document.dataset, records: { ...document.dataset.records, include: records } } }, true, sequence);
     } catch (error) {
       reportSaveFailure(sequence);
-      if (isCurrentSession(sequence)) toast.error(error instanceof Error ? error.message : '移动笔记失败');
+      if (isCurrentSession(sequence)) toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteMove'));
     } finally {
       if (isCurrentSession(sequence)) setSaving(false);
     }
@@ -2568,7 +2319,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     return <div className={`flex h-full min-h-0 flex-col items-center justify-center gap-3 p-8 text-center ${embeddedInEditor ? 'rounded-lg border border-[var(--border)] bg-[var(--editor-block-bg)]' : ''}`}>
       <Table2 className="h-8 w-8 text-[var(--muted-foreground)] opacity-70" aria-hidden="true" />
       <div className="text-sm">无法显示多维表格</div>
-      {loadError !== '不支持的多维表格文件格式' && <div className="max-w-lg text-xs text-[var(--muted-foreground)]">{loadError}</div>}
+      {loadError !== '不支持的多维表格文件格式' && <div className="max-w-lg text-xs text-[var(--muted-foreground)]">{t('errors.friendly.tableLoad')}</div>}
       <div className="flex items-center gap-2">
         <Button type="button" variant="outline" size="sm" className="rounded-lg" onClick={() => void load()}>重新加载</Button>
         {embeddedInEditor
@@ -2826,11 +2577,6 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       </div>}
     />
   </div>;
-  const beginEditTableTitle = () => {
-    if (!editable || saving || renamingTable || !notebookPath) return;
-    setTableNameDraft(tableDisplayName);
-    setEditingTableName(true);
-  };
   const tableColumnCount = tableViewFields.length + visibleBuiltinFields.length + 1;
   const tableFieldWidths = tableViewFields.map((field) => ({
     fieldId: field.id,
@@ -2856,49 +2602,23 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     />
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <nav data-title-visible={showTableTitle} className="multidimensional-table__view-nav sticky top-0 z-10 flex min-w-0 shrink-0 items-center gap-1 px-4 py-1" aria-label="表格视图">
-        <div
-          className="multidimensional-table__view-title flex min-w-0 max-w-[40%] shrink-0 -translate-x-[2px] items-center gap-1.5"
+        <CollectionTitle
+          kind="table"
           title={tableDisplayName}
-        >
-            <NotebookTreeResourceIcon path={currentFilePath} collectionType="table" className="h-5 w-5 shrink-0" />
-            {editingTableName ? <input
-              ref={tableNameInputRef}
-              aria-label="多维表格名称"
-              value={tableNameDraft}
-              disabled={renamingTable || saving}
-              onChange={(event) => setTableNameDraft(event.currentTarget.value)}
-              onBlur={(event) => void commitTableTitle(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  event.currentTarget.blur();
-                } else if (event.key === 'Escape') {
-                  event.preventDefault();
-                  setEditingTableName(false);
-                  setTableNameDraft(tableDisplayName);
-                }
-              }}
-              className="box-border h-[22px] min-w-[2em] max-w-full flex-[0_1_auto] rounded px-0.5 py-1 [field-sizing:content] border-0 bg-[var(--muted)] text-sm font-medium leading-none text-[var(--foreground)] outline-none"
-            /> : <button
-              type="button"
-              onDoubleClick={(event) => { event.preventDefault(); captureTableTitleCaret(event.currentTarget, event.clientX, event.clientY); beginEditTableTitle(); }}
-              aria-label={`重命名多维表格：${tableDisplayName}`}
-              title={`双击重命名：${tableDisplayName}`}
-              disabled={!editable || saving || renamingTable || !notebookPath}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === 'F2') {
-                  event.preventDefault();
-                  beginEditTableTitle();
-                }
-              }}
-              className="min-w-[2em] flex-[0_1_auto] truncate rounded px-0.5 py-1 text-left text-sm font-medium leading-none text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:opacity-100"
-            >
-              {tableDisplayName}
-            </button>}
-            {renamingTable && <span role="status" aria-label={t('memo.fileTree.renaming')} className="inline-flex shrink-0 items-center text-[var(--muted-foreground)]">
-              <LoaderCircle className="h-3.5 w-3.5 flowix-spin" aria-hidden="true" />
-            </span>}
-        </div>
+          inputLabel="多维表格名称"
+          renameLabel="重命名多维表格"
+          renameHint="双击重命名"
+          editing={editingTableName}
+          draft={tableNameDraft}
+          setDraft={setTableNameDraft}
+          inputRef={tableNameInputRef}
+          captureCaret={captureTableTitleCaret}
+          beginEdit={beginEditTableTitle}
+          commit={commitTableTitle}
+          cancel={() => { setEditingTableName(false); setTableNameDraft(tableDisplayName); }}
+          disabled={!editable || saving || !notebookPath}
+          busy={renamingTable}
+        />
         <span role="separator" aria-orientation="vertical" className="multidimensional-table__view-nav-separator" />
         <div
           className="multidimensional-table__view-tabs-scroller relative h-7 min-w-0 flex-1 overflow-hidden"
@@ -2948,21 +2668,11 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
             <Popover open={viewAddOpen} anchorRect={viewFieldPickerAnchorRect} onOpenChange={(open) => {
               setViewAddOpen(open);
               if (!open) {
-                if (managingViewId) {
-                  const viewBeingRenamed = document?.views.items.find((view) => view.id === managingViewId);
-                  if (viewBeingRenamed) {
-                    manageRenameCancelledRef.current = true;
-                    void renameView(viewBeingRenamed, managingViewName);
-                  }
-                } else {
-                  manageRenameCancelledRef.current = false;
-                }
+                void closeViewManagement();
                 setViewAddStep('kind');
                 setPendingViewType(null);
                 setConfiguringViewId(null);
                 setViewFieldPickerAnchorRect(null);
-                setManagingViewId(null);
-                setManagingViewName('');
               }
             }}>
               <PopoverTrigger asChild>
@@ -3018,21 +2728,14 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
                         value={managingViewName}
                         disabled={!editable || saving}
                         onChange={(event) => setManagingViewName(event.currentTarget.value)}
-                        onBlur={(event) => {
-                          if (manageRenameCancelledRef.current) {
-                            manageRenameCancelledRef.current = false;
-                            return;
-                          }
-                          if (managingViewId === view.id) finishManageViewRename(view, event.currentTarget.value);
-                        }}
+                        onBlur={(event) => void finishManageViewRename(view, event.currentTarget.value)}
                         onKeyDown={(event) => {
                           if (event.key === 'Enter') {
                             event.preventDefault();
                             event.currentTarget.blur();
                           } else if (event.key === 'Escape') {
                             event.preventDefault();
-                            manageRenameCancelledRef.current = true;
-                            setManagingViewId(null);
+                            cancelManageViewRename();
                           }
                         }}
                         className="h-7 min-w-0 flex-1 rounded-md border border-[var(--primary)] bg-[var(--background)] px-2 text-sm text-[var(--foreground)] outline-none"
@@ -3617,7 +3320,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
         />
       </PopoverContent>
     </Popover>
-    <Dialog open={viewPendingDelete !== null} onOpenChange={(open) => { if (!open) setViewPendingDelete(null); }}>
+    <Dialog open={viewPendingDelete !== null} onOpenChange={(open) => { if (!open) cancelDeleteView(); }}>
       <DialogContent className="rounded-xl border border-[var(--border-popup)] bg-[var(--card)] shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
         <DialogHeader>
           <DialogTitle>{t('multidimensionalTable.view.delete')}</DialogTitle>
@@ -3626,7 +3329,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
           </DialogDescription>
         </DialogHeader>
         <div className="mt-4 flex justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={() => setViewPendingDelete(null)}>{t('dialog.cancel')}</Button>
+          <Button type="button" variant="ghost" onClick={cancelDeleteView}>{t('dialog.cancel')}</Button>
           <Button type="button" variant="destructive" onClick={confirmDeleteView}>{t('dialog.delete')}</Button>
         </div>
       </DialogContent>

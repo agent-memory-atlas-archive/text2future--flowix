@@ -1,16 +1,15 @@
 import type { MemoEvent } from '@/types/memo';
 import type { MemoItem } from '@/types/memo-item';
-import { useUserSettingsStore } from '@features/preferences/store/user-settings-store';
 
 export interface MainWindowMemoEventActions {
   getSelectedNotebookId: () => string | null;
   invalidateMentionCaches: () => void;
-  openPathInBrowserColumn: (notebookId: string, relativePath: string) => Promise<void>;
-  reportOpenFailure: (error: unknown) => void;
+  notifyCreatedNote: (notebookId: string, relativePath: string) => Promise<void>;
+  reportNotificationFailure: (error: unknown) => void;
   handleMemoCreated: (memo: MemoItem) => void;
   handleMemoUpdated: (event: Extract<MemoEvent, { kind: 'updated' }>) => void;
   handleMemoDeleted: () => void;
-  removeBrowserColumnTabsByPath: (path: string) => void;
+  removeBrowserColumnContentByPath: (path: string) => void;
   clearWorkspaceTargetByPath?: (path: string) => void;
   handleTagsRenamed: (event: Extract<MemoEvent, { kind: 'tags_renamed' }>) => void;
   handleTagsDeleted: (event: Extract<MemoEvent, { kind: 'tags_deleted' }>) => void;
@@ -22,9 +21,9 @@ export interface MainWindowMemoEventActions {
  * Route one memo event inside the main Webview.
  *
  * Legacy Memo events for externally created notes and notes created in a
- * background notebook may auto-open according to the user preference.
+ * background notebook produce persistent created-document cards.
  * Path-first external creates are handled by the notebook path event instead.
- * Template notes skip auto-open. List and tag metadata updates remain scoped
+ * Template notes skip notifications. List and tag metadata updates remain scoped
  * to the selected notebook, while notebook-keyed todo counts refresh in background.
  *
  * `tags_renamed` / `tags_deleted` 都是 tag 子树操作的收口事件, 后端已经
@@ -59,22 +58,21 @@ export function handleMainWindowMemoEvent(
   // Keep their identity/path projection in sync even for background notebook
   // events, otherwise a later tab activation can resurrect the old filename.
   if (event.kind === 'deleted') {
-    actions.removeBrowserColumnTabsByPath(event.path);
+    actions.removeBrowserColumnContentByPath(event.path);
     actions.clearWorkspaceTargetByPath?.(event.path);
   }
 
   const selectedNotebookId = actions.getSelectedNotebookId();
-  const shouldOpenCreatedNote = event.kind === 'created'
+  const shouldNotifyCreatedNote = event.kind === 'created'
     && event.memo.filename !== 'AGENTS.md'
     && (
       event.source === 'external_tool'
       || (!!selectedNotebookId && selectedNotebookId !== event.notebookId)
     )
-    && event.source !== 'notebook_template'
-    && useUserSettingsStore.getState().settings.autoOpenCreatedNotesInBrowser;
-  if (shouldOpenCreatedNote) {
-    void actions.openPathInBrowserColumn(event.notebookId, event.memo.relativePath || event.memo.filename)
-      .catch(actions.reportOpenFailure);
+    && event.source !== 'notebook_template';
+  if (shouldNotifyCreatedNote) {
+    void actions.notifyCreatedNote(event.notebookId, event.memo.relativePath || event.memo.filename)
+      .catch(actions.reportNotificationFailure);
   }
 
   if (!selectedNotebookId || selectedNotebookId !== event.notebookId) {

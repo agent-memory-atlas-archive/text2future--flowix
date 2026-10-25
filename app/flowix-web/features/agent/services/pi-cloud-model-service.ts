@@ -3,6 +3,8 @@ import { isFlowixCloudModel } from "@features/agent/config/agent-model-source";
 import { useAgentDataStore, type AgentModelCatalog } from "@features/agent/store/agent-data-store";
 import { loadAgentModelCatalog, refreshAgentModelCatalog } from "./agent-catalog-service";
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('agent/services/pi-cloud-model-service');
 const pending = new Map<number, Promise<AgentModelCatalog>>();
 
 function applyCloudState(state: CloudState): boolean {
@@ -37,7 +39,7 @@ export async function loadPiCloudModelCatalog(options: { force?: boolean } = {})
     const state = await cloud.getState();
     applyCloudState(state);
   } catch (error) {
-    console.warn("Failed to reconcile Cloud session before loading Pi models", error);
+    logger.warn('Failed to reconcile Cloud session before loading Pi models', { error });
   }
   return ensurePiCloudModelCatalog(options);
 }

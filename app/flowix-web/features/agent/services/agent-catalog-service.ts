@@ -11,6 +11,8 @@ import {
 } from "@features/agent/store/agent-data-store";
 import { agent, deepseekHarness, piModels } from "@platform/tauri/client";
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('agent-catalog');
 const SUPPORTED_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
 
 /** Loads a provider catalog through the shared persistent cache. */
@@ -40,7 +42,7 @@ export function prefetchAvailableAgentModels(
   for (const [agentType, isAvailable] of Object.entries(available) as [AgentTypeKey, boolean][]) {
     if (!isAvailable) continue;
     void loadAgentModelCatalog(agentType).catch((error) => {
-      console.warn(`[agent-catalog] failed to load ${agentType} models`, error);
+      logger.warn(`failed to load ${agentType} models`, error);
     });
   }
 }
@@ -52,7 +54,7 @@ export function prefetchNotebookSkills(
   notebookPath: string,
 ): void {
   void loadNotebookSkillCatalog(agentType, notebookId, notebookPath).catch((error) => {
-    console.warn(`[agent-catalog] failed to load ${agentType} skills`, error);
+    logger.warn(`failed to load ${agentType} skills`, error);
   });
 }
 

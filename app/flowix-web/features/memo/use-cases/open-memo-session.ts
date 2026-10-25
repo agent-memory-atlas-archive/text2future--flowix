@@ -2,7 +2,7 @@ import { joinNotebookMemoPath } from '@/lib/path';
 import type { Notebook } from '@features/memo/store/note-store';
 import type { NoteListItem } from '@/types/note-item';
 import { createLogger } from '@/lib/logger';
-import type { WorkspaceContentLocation } from '@features/workspace/use-cases/workspace-content-activation';
+import type { WorkspaceContentLocation } from '@features/workspace/public/open-surface-api';
 import { openNotebookNote } from './open-notebook-note';
 import { normalizePluginId } from '@features/plugin/plugin-note';
 

@@ -1,5 +1,7 @@
 export { useNewConversationAgentSelection } from '@features/agent/hooks/use-new-conversation-agent-selection';
 export { AgentConversationTitlebar } from '@features/agent/components/agent-conversation-titlebar';
+export { AgentConversationIdentity } from '@features/agent/components/agent-conversation-identity';
+export { AgentConversationMoreMenu } from '@features/agent/components/agent-conversation-more-menu';
 export { AgentConversationList } from '@features/agent/components/agent-conversation-list';
 export { AgentConversationStatusBar } from '@features/agent/components/agent-conversation-status-bar';
 export { AgentIcon } from '@features/agent/components/agent-icon';
@@ -12,6 +14,7 @@ export {
   createAndOpenAgentConversation,
   createAndOpenPiConversation,
   createBrowserColumnAgentConversation,
+  discardUnopenedBrowserColumnAgentConversation,
   requestNewConversationAgentSelection,
 } from '@features/agent/use-cases/new-conversation';
 

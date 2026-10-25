@@ -9,7 +9,7 @@ use crate::models::{
     EntitlementData, MeData, RefreshData,
 };
 use crate::v2::{
-    V2BlobDownloadEnvelope, V2BlobReservationEnvelope, V2Bootstrap, V2ChangesPage, V2History,
+    V2BlobDownloadEnvelope, V2BlobReservationEnvelope, V2Bootstrap, V2ChangesPage,
     V2PushOperation, V2PushResult, V2SyncStatus, PROTOCOL_EPOCH,
 };
 
@@ -454,55 +454,12 @@ impl CloudClient {
         page_token: Option<&str>,
     ) -> Result<V2Bootstrap, SyncError> {
         let path = match page_token {
-            Some(token) => format!("/v2/sync/bootstrap?limit=10&pageToken={token}"),
-            None => "/v2/sync/bootstrap?limit=10".to_string(),
+            Some(token) => format!("/v2/sync/bootstrap?limit=100&pageToken={token}"),
+            None => "/v2/sync/bootstrap?limit=100".to_string(),
         };
         self.send::<DataEnvelope<V2Bootstrap>>(Method::GET, &path, Some(access_token), None)
             .await
             .map(|value| value.data)
-    }
-
-    pub async fn v2_history(
-        &self,
-        access_token: &str,
-        note_id: &str,
-    ) -> Result<V2History, SyncError> {
-        let mut history = self
-            .send::<DataEnvelope<V2History>>(
-                Method::GET,
-                &format!("/v2/sync/history?noteId={note_id}&limit=200"),
-                Some(access_token),
-                None,
-            )
-            .await?
-            .data;
-        let mut pages = 0;
-        while let Some(before) = history.next_before_seq.take() {
-            pages += 1;
-            if pages > 10_000 {
-                return Err(SyncError::InvalidState(
-                    "history exceeded page limit".into(),
-                ));
-            }
-            let page = self
-                .send::<DataEnvelope<V2History>>(
-                    Method::GET,
-                    &format!("/v2/sync/history?noteId={note_id}&limit=200&beforeSeq={before}"),
-                    Some(access_token),
-                    None,
-                )
-                .await?
-                .data;
-            if page.note_id != history.note_id || page.current_revision != history.current_revision
-            {
-                return Err(SyncError::InvalidState(
-                    "history head changed during pagination".into(),
-                ));
-            }
-            history.revisions.extend(page.revisions);
-            history.next_before_seq = page.next_before_seq;
-        }
-        Ok(history)
     }
 
     pub async fn v2_reserve_blob(
@@ -620,12 +577,12 @@ impl CloudClient {
     pub async fn v2_download_blob(
         &self,
         access_token: &str,
-        content_hash: &str,
+        blob_id: &str,
     ) -> Result<Vec<u8>, SyncError> {
         let capability = self
             .send::<V2BlobDownloadEnvelope>(
                 Method::GET,
-                &format!("/v2/blobs/{content_hash}/access"),
+                &format!("/v2/blobs/{blob_id}/access"),
                 Some(access_token),
                 None,
             )
@@ -665,7 +622,7 @@ impl CloudClient {
             }
             Err(SyncError::Api { status: 404, .. }) => {
                 self.http
-                    .get(format!("{}/v2/blobs/{content_hash}", self.base_url))
+                    .get(format!("{}/v2/blobs/{blob_id}", self.base_url))
                     .bearer_auth(access_token)
                     .send()
                     .await?
@@ -750,6 +707,7 @@ mod tests {
         let proxy: V2BlobReservationEnvelope = serde_json::from_value(json!({
             "data": {
                 "reservationId": "res_proxy",
+                "blobId": "res_proxy",
                 "contentHash": "A".repeat(43),
                 "sizeBytes": 10,
                 "expiresAt": 1000
@@ -766,6 +724,7 @@ mod tests {
         let direct: V2BlobReservationEnvelope = serde_json::from_value(json!({
             "data": {
                 "reservationId": "res_direct",
+                "blobId": "res_direct",
                 "contentHash": "A".repeat(43),
                 "sizeBytes": 10,
                 "expiresAt": 1000

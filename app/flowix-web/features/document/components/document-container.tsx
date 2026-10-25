@@ -60,7 +60,7 @@ import {
 } from '@features/document/store/external-document-operation';
 import { rebaseActiveDocumentPath } from '@features/document/store/document-session-service';
 import type { Editor, JSONContent } from '@tiptap/core';
-import { replaceExternalDocumentPath } from '@features/workspace/use-cases/workspace-navigation';
+import { replaceExternalDocumentPath } from '@features/workspace/public/note-navigation-api';
 import { openDocumentLocalLink } from '@features/document/use-cases/open-document-local-link';
 import {
   cancelAgentLocationRequest,
@@ -106,6 +106,12 @@ export function DocumentContainer({
   const locationViewId = navigationViewId ?? hostId;
   const focusedHostId = useWorkspaceFocusStore((store) => store.focusedHostId);
   const readOnly = forcedReadOnly || focusedHostId !== hostId;
+  // Property actions may activate this host on demand. Keep them available
+  // while another host owns edit focus, but honor explicit/path-based read-only.
+  const propertyActionsEnabled = !forcedReadOnly && (!isExternalDocument || Boolean(externalScopePath));
+  const activatePropertyEditor = useCallback(() => {
+    if (propertyActionsEnabled) useWorkspaceFocusStore.getState().focusHost(hostId);
+  }, [hostId, propertyActionsEnabled]);
   const containerRef = useRef<HTMLDivElement>(null);
   const resolvedExternalDisplayId = isExternalDocument ? displayId : null;
   const documentInstanceKey = useMemo(
@@ -115,7 +121,15 @@ export function DocumentContainer({
   const documentIdentity = getDocumentSession(
     documentIdentityFromFile({ path: filePath, displayId }),
   ).identity;
-  const propertyTargetId = documentPropertyTargetId(displayId);
+  const propertyTargetId = documentPropertyTargetId(displayId, hostId);
+  const [propertyAreaHoverTargetId, setPropertyAreaHoverTargetId] = useState<string | null>(null);
+  const propertyAreaHovered = propertyAreaHoverTargetId === propertyTargetId;
+  const handlePropertyAreaHoverChange = useCallback((hovered: boolean) => {
+    setPropertyAreaHoverTargetId((current) => {
+      if (hovered) return propertyTargetId;
+      return current === propertyTargetId ? null : current;
+    });
+  }, [propertyTargetId]);
   const editorMode = useDocumentEditorMode(hostId, documentIdentity);
   // Rich/source mode belongs to the open Markdown file identity. Non-Markdown
   // external files retain their independent CodeMirror presentation setting.
@@ -594,9 +608,13 @@ export function DocumentContainer({
         !readOnly
         && (!isExternalDocument || Boolean(externalScopePath))
       }
+      propertyActionsEnabled={propertyActionsEnabled}
+      workspaceHost={hostId}
+      onActivateProperties={activatePropertyEditor}
       autoFocus={initialFocus === 'title'}
       sourceMode={usesCodeEditor}
       showPropertiesToggle
+      propertyAreaHovered={propertyAreaHovered}
       allowReadOnlyBoundaryNavigation
       onMoveToBody={handleMoveTitleToBody}
       onPasteToBody={handlePasteTitleContentToBody}
@@ -643,6 +661,7 @@ export function DocumentContainer({
             getAttachmentNotebookId={getAttachmentNotebookId}
             workspaceHost={hostId}
             propertyTargetId={propertyTargetId}
+            onPropertyAreaHoverChange={handlePropertyAreaHoverChange}
             onViewSourceMode={handleToggleEditorMode}
             transitionId={transitionId}
             ref={editorHandleRef}
@@ -711,7 +730,7 @@ export function UnavailableFileView({
   }, [filePath, t]);
   const openDefault = useCallback(async () => {
     try { await externalDocuments.openWithDefaultApp(filePath, scopePath); }
-    catch { toast.error(t('memo.fileTree.openFailed')); }
+    catch { toast.error(t('errors.friendly.externalOpen')); }
   }, [filePath, scopePath, t]);
   useEffect(() => {
     const actions = [{ id: 'reveal', label: { key: openContainingFolder ? 'document.file.openContainingFolder' : 'document.file.reveal' }, enabled: true, run: reveal }];

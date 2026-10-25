@@ -22,7 +22,7 @@ const {
     authStatus: "authenticated" as const,
     account: {
       user: { id: "user-1", email: "member@example.com", displayName: "Member" },
-      protocolEpoch: 2 as const,
+      protocolEpoch: 3 as const,
     },
     membership: {
       active: false,
@@ -146,7 +146,7 @@ describe("Pi composer model dropdown Cloud session updates", () => {
       authStatus: "authenticated",
       account: {
         user: { id: "user-1", email: "member@example.com", displayName: "Member" },
-        protocolEpoch: 2,
+        protocolEpoch: 3,
       },
       membership: {
         active: false,
@@ -223,7 +223,7 @@ describe("Pi composer model dropdown Cloud session updates", () => {
     modelButton?.click();
 
     await vi.waitFor(() => {
-      expect(popover.querySelector(".pi-model-picker__item")?.textContent)
+      expect(popover.querySelector(".agent-pi-model-picker__item")?.textContent)
         .toContain("Member model");
     });
     return { store, popover, toast };
@@ -235,9 +235,9 @@ describe("Pi composer model dropdown Cloud session updates", () => {
     expect(refreshPiModelProviderAtStartup).toHaveBeenCalledOnce();
     expect(refreshAgentModelCatalog).toHaveBeenCalledWith("pi");
     expect(getAiCreditBalance).not.toHaveBeenCalled();
-    expect(popover.querySelector(".pi-model-picker__category-label")?.textContent)
+    expect(popover.querySelector(".agent-pi-model-picker__category-label")?.textContent)
       .toBe("会员模型");
-    const memberModelButton = popover.querySelector<HTMLButtonElement>(".pi-model-picker__item");
+    const memberModelButton = popover.querySelector<HTMLButtonElement>(".agent-pi-model-picker__item");
     expect(memberModelButton?.textContent).toContain("Member model");
     expect(controller?.isOpen).toBe(true);
 
@@ -245,8 +245,8 @@ describe("Pi composer model dropdown Cloud session updates", () => {
     // Pi dropdown must drop the member directory immediately.
     store.setPiCloudAccount(null);
     await vi.waitFor(() => {
-      expect(popover.querySelector(".pi-model-picker__category-label")).toBeNull();
-      expect(Array.from(popover.querySelectorAll(".pi-model-picker__item"))
+      expect(popover.querySelector(".agent-pi-model-picker__category-label")).toBeNull();
+      expect(Array.from(popover.querySelectorAll(".agent-pi-model-picker__item"))
         .some((item) => item.textContent?.includes("Member model"))).toBe(false);
     });
   });
@@ -257,7 +257,7 @@ describe("Pi composer model dropdown Cloud session updates", () => {
       authStatus: "authenticated",
       account: {
         user: { id: "user-1", email: "member@example.com", displayName: "Member" },
-        protocolEpoch: 2,
+        protocolEpoch: 3,
       },
       membership: {
         active: false,
@@ -269,7 +269,7 @@ describe("Pi composer model dropdown Cloud session updates", () => {
       },
     });
     const { popover } = await openPicker();
-    popover.querySelector<HTMLButtonElement>(".pi-model-picker__item")!.click();
+    popover.querySelector<HTMLButtonElement>(".agent-pi-model-picker__item")!.click();
     expect(refreshMembership).not.toHaveBeenCalled();
     expect(popover.hidden).toBe(true);
     expect(useAgentDataStore.getState().agents.pi.user.model).toEqual({
@@ -279,7 +279,7 @@ describe("Pi composer model dropdown Cloud session updates", () => {
 
   it("does not select a stale member item after logout clears the local entitlement", async () => {
     const { store, popover } = await openPicker();
-    const staleMemberButton = popover.querySelector<HTMLButtonElement>(".pi-model-picker__item")!;
+    const staleMemberButton = popover.querySelector<HTMLButtonElement>(".agent-pi-model-picker__item")!;
     const previousModel = useAgentDataStore.getState().agents.pi.user.model;
     store.setPiCloudAccount(null, 2);
     staleMemberButton.click();
@@ -293,7 +293,7 @@ describe("Pi composer model dropdown Cloud session updates", () => {
     const opening = loadPiCloudModelCatalog();
     await syncPiCloudModelCatalog({
       revision: 2, authenticated: true, authStatus: "authenticated",
-      account: { user: { id: "user-1", email: "member@example.com", displayName: "Member" }, protocolEpoch: 2 },
+      account: { user: { id: "user-1", email: "member@example.com", displayName: "Member" }, protocolEpoch: 3 },
     });
     finish({ revision: 1, authenticated: false, authStatus: "signed_out" });
     await opening;

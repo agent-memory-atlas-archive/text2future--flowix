@@ -10,9 +10,8 @@ import { useWorkspaceFocusStore } from './workspace-focus-store';
 import { browserColumnPersistence, restoreBrowserColumnSession } from './browser-column-persistence';
 import { BROWSER_COLUMN_DEFAULT_SPLIT_RATIO, clampFileTreeWidth, clampSplitRatio } from '../model/browser-column-layout';
 import { browserColumnTargetKey, type BrowserColumnTarget } from '../model/browser-column-target';
-import type { BrowserColumnTab, BrowserColumnSessionState } from '../model/browser-column-tab';
+import type { BrowserColumnEntry, BrowserColumnSessionState } from '../model/browser-column-session';
 import type { WorkspaceWebRuntime as BrowserColumnWebRuntime } from '../model/surface-contract';
-import type { BrowserSurfaceOpenDisposition } from '../model/surface-opening';
 
 export { BROWSER_COLUMN_MIN_WIDTH, BROWSER_COLUMN_DEFAULT_SPLIT_RATIO, BROWSER_COLUMN_FILE_TREE_DEFAULT_WIDTH,
   BROWSER_COLUMN_FILE_TREE_MIN_WIDTH, BROWSER_COLUMN_FILE_TREE_MAX_WIDTH } from '../model/browser-column-layout';
@@ -34,502 +33,229 @@ export function canOpenBrowserColumnTargetInWorkColumn(target: BrowserColumnTarg
     : target.kind === 'folder-collection' ? 'collection' : target.kind, 'main-third');
 }
 
-/** Compatibility name for callers from before dual-host views were supported. */
-export const canMoveBrowserColumnTargetToWorkColumn = canOpenBrowserColumnTargetInWorkColumn;
-
-export type { BrowserColumnTab } from '../model/browser-column-tab';
-
-/** Runtime-only state for a web tab. It is intentionally not persisted with tabs. */
+export type { BrowserColumnEntry } from '../model/browser-column-session';
 export type { WorkspaceWebRuntime as BrowserColumnWebRuntime } from '../model/surface-contract';
 
-export type BrowserColumnOpenDisposition = BrowserSurfaceOpenDisposition;
-
 interface BrowserColumnState extends BrowserColumnSessionState {
-  webRuntimes: Record<string, BrowserColumnWebRuntime>;
+  webRuntime: BrowserColumnWebRuntime | null;
+  updateEntries: (transform: (entry: BrowserColumnEntry) => BrowserColumnEntry | null) => void;
   setVisible: (visible: boolean) => void;
   setSplitRatio: (ratio: number) => void;
-  updateFileBrowserContext: (tabId: string, patch: Partial<FileBrowserContext>) => void;
-  selectFileBrowserFile: (tabId: string, filePath: string | null, collectionDisplay?: FileBrowserTarget['collectionDisplay'], collectionType?: FileBrowserTarget['collectionType'], collectionUnavailableReason?: string) => void;
-  switchFileBrowserFolder: (tabId: string, folderPath: string) => void;
-  setFileBrowserTreeVisible: (tabId: string, visible: boolean) => void;
-  setFileBrowserTreeWidth: (tabId: string, width: number) => void;
-  openTab: (tab: BrowserColumnTab, disposition?: BrowserColumnOpenDisposition) => string;
-  commitTab: (tabId: string) => void;
-  closeTab: (tabId: string) => string | null;
-  closeOtherTabs: (tabId: string) => string | null;
-  closeTabsToRight: (tabId: string) => string | null;
-  closeAllTabs: () => void;
+  openContent: (entry: BrowserColumnEntry) => string;
+  focusContent: (surfaceId: string) => void;
+  clearContent: () => void;
+  clearSession: () => void;
+  restoreHistoryEntry: (entry: BrowserColumnEntry, direction: 'back' | 'forward') => void;
+  updateFileBrowserContext: (surfaceId: string, patch: Partial<FileBrowserContext>) => void;
+  selectFileBrowserFile: (surfaceId: string, path: string | null, display?: FileBrowserTarget['collectionDisplay'], type?: FileBrowserTarget['collectionType'], reason?: string) => void;
+  setFileBrowserTreeVisible: (surfaceId: string, visible: boolean) => void;
+  setFileBrowserTreeWidth: (surfaceId: string, width: number) => void;
   replaceExternalPath: (previousPath: string, path: string) => void;
   clearExternalPath: (path: string) => void;
-  clearTargetsUnderDirectory: (directoryPath: string) => void;
-  removeTabsByFilePath: (path: string) => string[];
-  reorderTab: (tabId: string, beforeTabId: string | null) => void;
-  updateTabMetadata: (tabId: string, metadata: Partial<Pick<BrowserColumnTab, 'title' | 'icon'>>) => void;
-  setWebRuntime: (tabId: string, runtime: BrowserColumnWebRuntime) => void;
-  navigateWebTab: (tabId: string, url: string) => boolean;
-  goBackWebTab: (tabId: string) => boolean;
-  goForwardWebTab: (tabId: string) => boolean;
-  reloadWebTab: (tabId: string) => boolean;
+  clearTargetsUnderDirectory: (path: string) => void;
+  removeContentByFilePath: (path: string) => string[];
+  updateContentMetadata: (surfaceId: string, metadata: Partial<Pick<BrowserColumnEntry, 'title' | 'icon'>>) => void;
+  setWebRuntime: (surfaceId: string, runtime: BrowserColumnWebRuntime) => void;
+  navigateWeb: (surfaceId: string, url: string) => boolean;
+  goBackWeb: (surfaceId: string) => boolean;
+  goForwardWeb: (surfaceId: string) => boolean;
+  reloadWeb: (surfaceId: string) => boolean;
   reset: () => void;
 }
 
-function adjacentTabId(tabs: BrowserColumnTab[], closingTabId: string): string | null {
-  const index = tabs.findIndex((tab) => tab.id === closingTabId);
-  if (index < 0) return null;
-  return tabs[index - 1]?.id ?? tabs[index + 1]?.id ?? null;
+function targetPaths(target: BrowserColumnTarget): string[] {
+  if (target.kind === 'file-browser') return [target.activeFilePath, target.folderPath].filter((path): path is string => !!path);
+  if (target.kind === 'media') return [target.filePath];
+  if (target.kind === 'folder-collection') return [target.folderPath];
+  return [];
 }
 
-function isWebTab(tab: BrowserColumnTab | undefined): tab is BrowserColumnTab & {
-  target: Extract<BrowserColumnTarget, { kind: 'web' }>;
-} {
-  return tab?.target.kind === 'web';
+function usesPath(entry: BrowserColumnEntry, path: string): boolean {
+  return targetPaths(entry.target).some((candidate) => canonicalPath(candidate) === path);
 }
 
-function withWebRuntime(
-  runtimes: Record<string, BrowserColumnWebRuntime>,
-  tab: BrowserColumnTab | undefined,
-): BrowserColumnWebRuntime | null {
-  if (!isWebTab(tab)) return null;
-  return runtimes[tab.id] ?? createWorkspaceWebRuntime(tab.target.url);
-}
-
-function updateWebTabTarget(
-  tabs: BrowserColumnTab[],
-  tabId: string,
-  url: string,
-): BrowserColumnTab[] {
-  if (!tabs.some((tab) => tab.id === tabId && isWebTab(tab) && tab.target.url !== url)) return tabs;
-  return tabs.map((tab) => tab.id === tabId && isWebTab(tab)
-    ? { ...tab, target: { ...tab.target, url } }
-    : tab);
-}
-
-function updateFileBrowserTabTarget(
-  tabs: BrowserColumnTab[],
-  tabId: string,
-  filePath: string | null,
-  collectionDisplay?: FileBrowserTarget['collectionDisplay'],
-  collectionType?: FileBrowserTarget['collectionType'],
-  collectionUnavailableReason?: string,
-): BrowserColumnTab[] {
-  return tabs.map((tab) => {
-    if (tab.id !== tabId || tab.target.kind !== 'file-browser') return tab;
-    const folderName = tab.target.folderPath?.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
-    const title = filePath
-      ? displayTitleFromFilename(filePath.split(/[\\/]/).pop() ?? filePath)
-      : folderName || tab.title;
-    return { ...tab, title, target: { ...tab.target, activeFilePath: filePath,
-      collectionDisplay, collectionType, collectionUnavailableReason } };
-  });
-}
-
-function updateFileBrowserTabFolder(
-  tabs: BrowserColumnTab[],
-  tabId: string,
-  folderPath: string,
-): BrowserColumnTab[] {
-  const folderName = folderPath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? folderPath;
-  return tabs.map((tab) => tab.id === tabId && tab.target.kind === 'file-browser'
-    ? {
-        ...tab,
-        title: folderName || tab.title,
-        target: {
-          ...tab.target,
-          folderPath,
-          scopePath: folderPath,
-          activeFilePath: null,
-          collectionDisplay: undefined,
-          collectionType: undefined,
-          collectionUnavailableReason: undefined,
-        },
-      }
-    : tab);
-}
-
-function updateFileBrowserTabTree(
-  tabs: BrowserColumnTab[],
-  tabId: string,
-  patch: Partial<Extract<BrowserColumnTarget, { kind: 'file-browser' }>>,
-): BrowserColumnTab[] {
-  return tabs.map((tab) => tab.id === tabId && tab.target.kind === 'file-browser'
-    ? { ...tab, target: { ...tab.target, ...patch } }
-    : tab);
-}
-
-function releaseBrowserFocusWhenEmpty(tabCount: number): void {
+function releaseBrowserFocus(): void {
   const focus = useWorkspaceFocusStore.getState();
-  if (tabCount === 0 && focus.focusedHostId === 'browser-column') focus.focusHost('main-third');
+  if (focus.focusedHostId === 'browser-column') focus.focusHost('main-third');
 }
+
+export function getBrowserColumnEntries(state: BrowserColumnSessionState): BrowserColumnEntry[] {
+  return [...(state.current ? [state.current] : []), ...state.backStack, ...state.forwardStack];
+}
+
+/** Transform current content and both histories in one atomic store update. */
+function transformEntries(
+  state: BrowserColumnState,
+  transform: (entry: BrowserColumnEntry) => BrowserColumnEntry | null,
+): Partial<BrowserColumnState> {
+  const current = state.current ? transform(state.current) : null;
+  if (state.current && !current) releaseBrowserFocus();
+  const mapStack = (stack: BrowserColumnEntry[]) => {
+    const next = stack.flatMap((entry) => { const value = transform(entry); return value ? [value] : []; });
+    return next.length === stack.length && next.every((entry, index) => entry === stack[index]) ? stack : next;
+  };
+  const backStack = mapStack(state.backStack);
+  const forwardStack = mapStack(state.forwardStack);
+  if (current === state.current && backStack === state.backStack && forwardStack === state.forwardStack) return state;
+  return {
+    current, backStack, forwardStack,
+    visible: state.visible && current !== null,
+    webRuntime: current?.target.kind === 'web' ? state.webRuntime : null,
+  };
+}
+
+const emptySession = (): BrowserColumnSessionState => ({
+  visible: false, splitRatio: BROWSER_COLUMN_DEFAULT_SPLIT_RATIO,
+  current: null, backStack: [], forwardStack: [],
+});
 
 export const useBrowserColumnStore = create<BrowserColumnState>()(
-  persist<BrowserColumnState, [], [], BrowserColumnSessionState>(
-  (set, get) => ({
-      visible: false,
-      splitRatio: BROWSER_COLUMN_DEFAULT_SPLIT_RATIO,
-      tabs: [],
-      activeTabId: null,
-      webRuntimes: {},
+  persist<BrowserColumnState, [], [], BrowserColumnSessionState>((set, get) => {
+    const updateEntries = (transform: (entry: BrowserColumnEntry) => BrowserColumnEntry | null) => set((state) => transformEntries(state, transform));
+    const updateContext = (surfaceId: string, patch: Partial<FileBrowserContext>) => set((state) => {
+      const entry = state.current;
+      if (entry?.id !== surfaceId || entry.target.kind !== 'file-browser') return state;
+      return { current: { ...entry, target: { ...entry.target, ...patch } } };
+    });
+    const changeWeb = (surfaceId: string, change: (runtime: BrowserColumnWebRuntime) => BrowserColumnWebRuntime | null): boolean => {
+      const state = get();
+      const entry = state.current;
+      if (entry?.id !== surfaceId || entry.target.kind !== 'web') return false;
+      const runtime = change(state.webRuntime ?? createWorkspaceWebRuntime(entry.target.url));
+      if (!runtime) return false;
+      set({ current: runtime.currentUrl === entry.target.url ? entry : { ...entry, target: { ...entry.target, url: runtime.currentUrl } }, webRuntime: runtime });
+      return true;
+    };
+    return {
+      ...emptySession(),
+      webRuntime: null,
+      updateEntries,
       setVisible: (visible) => {
-        const focus = useWorkspaceFocusStore.getState();
-        if (visible) focus.focusHost('browser-column');
-        else if (focus.focusedHostId === 'browser-column') focus.focusHost('main-third');
+        if (visible) useWorkspaceFocusStore.getState().focusHost('browser-column');
+        else releaseBrowserFocus();
         set({ visible });
       },
-      setSplitRatio: (splitRatio) => set({ splitRatio: clampSplitRatio(splitRatio) }),
-      updateFileBrowserContext: (tabId, patch) => {
-        set({ tabs: updateFileBrowserTabTree(get().tabs, tabId, patch) });
-      },
-      selectFileBrowserFile: (tabId, filePath, collectionDisplay, collectionType, collectionUnavailableReason) => {
-        const tab = get().tabs.find((candidate) => candidate.id === tabId);
-        if (!tab || tab.target.kind !== 'file-browser') return;
-        set({ tabs: updateFileBrowserTabTarget(get().tabs, tabId, filePath, collectionDisplay, collectionType, collectionUnavailableReason) });
-      },
-      switchFileBrowserFolder: (tabId, folderPath) => {
-        if (!folderPath.trim()) return;
-        const tab = get().tabs.find((candidate) => candidate.id === tabId);
-        if (!tab || tab.target.kind !== 'file-browser') return;
-        set({ tabs: updateFileBrowserTabFolder(get().tabs, tabId, folderPath) });
-      },
-      setFileBrowserTreeVisible: (tabId, visible) => {
-        set({ tabs: updateFileBrowserTabTree(get().tabs, tabId, { fileTreeVisible: visible }) });
-      },
-      setFileBrowserTreeWidth: (tabId, width) => {
-        set({ tabs: updateFileBrowserTabTree(get().tabs, tabId, { fileTreeWidth: clampFileTreeWidth(width) }) });
-      },
-      openTab: (incoming, disposition = 'focus-existing') => {
+      setSplitRatio: (ratio) => set({ splitRatio: clampSplitRatio(ratio) }),
+      openContent: (incoming) => {
         const state = get();
-        const incomingKey = browserColumnTargetKey(incoming.target);
-        const existing = incomingKey
-          ? state.tabs.find((tab) => browserColumnTargetKey(tab.target) === incomingKey)
-          : undefined;
-        if (existing) {
-          const updatedTabs = state.tabs.map((candidate) => candidate.id === existing.id
-            ? { ...candidate, ...incoming, id: existing.id }
-            : candidate);
-          const tabs = disposition === 'replace-active'
-            && state.activeTabId
-            && state.activeTabId !== existing.id
-            ? updatedTabs.filter((tab) => tab.id !== state.activeTabId)
-            : updatedTabs;
-          const webRuntimes = { ...state.webRuntimes };
-          if (isWebTab(existing)) {
-            webRuntimes[existing.id] ??= createWorkspaceWebRuntime(existing.target.url);
-          } else {
-            delete webRuntimes[existing.id];
-          }
-          useWorkspaceFocusStore.getState().focusHost('browser-column');
-          set({ visible: true, tabs, activeTabId: existing.id, webRuntimes });
-          return existing.id;
-        }
-
-        // A tab keeps its ID when its selected file changes. A later open of
-        // the original file must not reuse that occupied ID.
-        const id = state.tabs.some((tab) => tab.id === incoming.id)
-          ? `${incoming.id}:${crypto.randomUUID()}`
-          : incoming.id;
-        const tab = { ...incoming, id };
-        const tabs = disposition === 'replace-active' && state.activeTabId
-          ? state.tabs.map((candidate) => candidate.id === state.activeTabId ? tab : candidate)
-          : [...state.tabs, tab];
-        const webRuntimes = { ...state.webRuntimes };
-        if (state.activeTabId && disposition === 'replace-active') {
-          delete webRuntimes[state.activeTabId];
-        }
-        if (isWebTab(tab)) {
-          webRuntimes[id] = createWorkspaceWebRuntime(tab.target.url);
-        }
+        const current = state.current;
+        const same = current && browserColumnTargetKey(current.target) === browserColumnTargetKey(incoming.target);
+        const target = same && current.target.kind === 'file-browser' && incoming.target.kind === 'file-browser'
+          ? { ...incoming.target, fileTreeVisible: current.target.fileTreeVisible, fileTreeWidth: current.target.fileTreeWidth }
+          : incoming.target;
+        const occupied = [current, ...state.backStack, ...state.forwardStack].some((entry) => entry?.id === incoming.id);
+        const entry = { ...incoming, target, id: same ? current.id : occupied ? `browser:${crypto.randomUUID()}` : incoming.id };
+        set({ current: entry, visible: true,
+          backStack: same || !current ? state.backStack : [...state.backStack, current].slice(-100),
+          forwardStack: same ? state.forwardStack : [], webRuntime: same ? state.webRuntime : null });
         useWorkspaceFocusStore.getState().focusHost('browser-column');
-        set({
-          visible: true,
-          tabs,
-          activeTabId: id,
-          webRuntimes,
-        });
-        return id;
+        return entry.id;
       },
-      commitTab: (tabId) => {
-        if (!get().tabs.some((tab) => tab.id === tabId)) return;
+      focusContent: (surfaceId) => {
+        if (get().current?.id !== surfaceId) return;
+        set({ visible: true });
         useWorkspaceFocusStore.getState().focusHost('browser-column');
-        set({ visible: true, activeTabId: tabId });
       },
-      closeTab: (tabId) => {
+      clearContent: () => {
+        set({ current: null, visible: false, webRuntime: null });
+        releaseBrowserFocus();
+      },
+      clearSession: () => {
+        set({ current: null, backStack: [], forwardStack: [], visible: false, webRuntime: null });
+        releaseBrowserFocus();
+      },
+      restoreHistoryEntry: (entry, direction) => {
         const state = get();
-        if (!state.tabs.some((tab) => tab.id === tabId)) return state.activeTabId;
-        const nextActiveTabId = state.activeTabId === tabId
-          ? adjacentTabId(state.tabs, tabId)
-          : state.activeTabId;
-        const tabs = state.tabs.filter((tab) => tab.id !== tabId);
-        const webRuntimes = { ...state.webRuntimes };
-        delete webRuntimes[tabId];
-        releaseBrowserFocusWhenEmpty(tabs.length);
-        set({
-          tabs,
-          activeTabId: nextActiveTabId,
-          visible: state.visible && tabs.length > 0,
-          webRuntimes,
-        });
-        return nextActiveTabId;
+        const current = state.current;
+        set({ current: { ...entry, id: `browser:${crypto.randomUUID()}` }, visible: true, webRuntime: null,
+          backStack: direction === 'back' ? state.backStack.slice(0, -1) : current ? [...state.backStack, current].slice(-100) : state.backStack,
+          forwardStack: direction === 'forward' ? state.forwardStack.slice(0, -1) : current ? [...state.forwardStack, current].slice(-100) : state.forwardStack });
+        useWorkspaceFocusStore.getState().focusHost('browser-column');
       },
-      closeOtherTabs: (tabId) => {
-        const state = get();
-        if (!state.tabs.some((tab) => tab.id === tabId)) return state.activeTabId;
-        const tabs = state.tabs.filter((tab) => tab.id === tabId);
-        const webRuntimes = state.webRuntimes[tabId]
-          ? { [tabId]: state.webRuntimes[tabId] }
-          : {};
-        set({
-          tabs,
-          activeTabId: tabId,
-          visible: state.visible,
-          webRuntimes,
-        });
-        return tabId;
-      },
-      closeTabsToRight: (tabId) => {
-        const state = get();
-        const tabIndex = state.tabs.findIndex((tab) => tab.id === tabId);
-        if (tabIndex < 0) return state.activeTabId;
-        const tabs = state.tabs.slice(0, tabIndex + 1);
-        const activeTabIndex = state.tabs.findIndex((tab) => tab.id === state.activeTabId);
-        const activeTabId = activeTabIndex < 0 || activeTabIndex > tabIndex
-          ? tabId
-          : state.activeTabId;
-        const webRuntimes = Object.fromEntries(
-          tabs
-            .filter((tab) => state.webRuntimes[tab.id])
-            .map((tab) => [tab.id, state.webRuntimes[tab.id]]),
-        );
-        set({
-          tabs,
-          activeTabId,
-          visible: state.visible,
-          webRuntimes,
-        });
-        return activeTabId;
-      },
-      closeAllTabs: () => {
-        releaseBrowserFocusWhenEmpty(0);
-        set({
-          tabs: [],
-          activeTabId: null,
-          visible: false,
-          webRuntimes: {},
-        });
+      updateFileBrowserContext: updateContext,
+      setFileBrowserTreeVisible: (id, visible) => updateContext(id, { fileTreeVisible: visible }),
+      setFileBrowserTreeWidth: (id, width) => updateContext(id, { fileTreeWidth: clampFileTreeWidth(width) }),
+      selectFileBrowserFile: (id, path, display, type, reason) => {
+        const entry = get().current;
+        if (entry?.id !== id || entry.target.kind !== 'file-browser') return;
+        const name = (path ?? entry.target.folderPath)?.split(/[\\/]/).filter(Boolean).pop() ?? '';
+        get().openContent({ ...entry, title: displayTitleFromFilename(name), target: { ...entry.target,
+          activeFilePath: path, collectionDisplay: display, collectionType: type, collectionUnavailableReason: reason } });
       },
       replaceExternalPath: (previousPath, path) => {
         const previous = canonicalPath(previousPath);
         const next = canonicalPath(path);
         const previousParent = previous.replace(/\/[^/]*$/, '');
         const nextParent = next.replace(/\/[^/]*$/, '');
-        const filename = next.split(/[\\/]/).pop() ?? next;
-        set((state) => ({
-          tabs: state.tabs.map((tab) => tab.target.kind === 'file-browser'
-            && tab.target.activeFilePath
-            && canonicalPath(tab.target.activeFilePath) === previous
-            ? {
-                ...tab,
-                title: displayTitleFromFilename(filename),
-                target: { ...tab.target, activeFilePath: next,
-                  folderPath: tab.target.folderPath && canonicalPath(tab.target.folderPath) === previousParent
-                    ? nextParent : tab.target.folderPath },
-              }
-            : tab),
+        set((state) => transformEntries(state, (entry) => {
+          const target = entry.target;
+          if (target.kind === 'file-browser' && target.activeFilePath && canonicalPath(target.activeFilePath) === previous) {
+            return { ...entry, title: displayTitleFromFilename(next.split('/').pop() ?? next), target: { ...target, activeFilePath: next,
+              folderPath: target.folderPath && canonicalPath(target.folderPath) === previousParent ? nextParent : target.folderPath } };
+          }
+          if (target.kind === 'media' && canonicalPath(target.filePath) === previous) {
+            return { ...entry, title: next.split('/').pop() ?? next, target: { ...target, filePath: next } };
+          }
+          return entry;
         }));
       },
       clearExternalPath: (path) => {
-        const targetPath = canonicalPath(path);
+        const wanted = canonicalPath(path);
         set((state) => ({
-          tabs: state.tabs.map((tab) => tab.target.kind === 'file-browser'
-            && tab.target.activeFilePath
-            && canonicalPath(tab.target.activeFilePath) === targetPath
-            ? {
-                ...tab,
-                title: displayTitleFromFilename(
-                  tab.target.folderPath?.split(/[\\/]/).filter(Boolean).pop() ?? '',
-                ),
-                target: { ...tab.target, activeFilePath: null },
-              }
-            : tab),
+          ...transformEntries(state, (entry) => {
+            if (!usesPath(entry, wanted)) return entry;
+            const target = entry.target;
+            if (entry !== state.current || target.kind !== 'file-browser') return null;
+            return { ...entry, title: displayTitleFromFilename(target.folderPath?.split(/[\\/]/).filter(Boolean).pop() ?? ''), target: { ...target,
+              activeFilePath: null, collectionDisplay: undefined, collectionType: undefined, collectionUnavailableReason: undefined } };
+          }),
         }));
       },
       clearTargetsUnderDirectory: (directoryPath) => {
         const directory = canonicalDirectoryPath(directoryPath);
-        const state = get();
-        const removedIds = new Set<string>();
-        let changed = false;
-        const tabs = state.tabs.flatMap((tab) => {
-          const target = tab.target;
-          if (target.kind === 'media' && isPathInDirectory(target.filePath, directory)) {
-            changed = true;
-            removedIds.add(tab.id);
-            return [];
-          }
-          if (target.kind === 'folder-collection' && isPathInDirectory(target.folderPath, directory)) {
-            changed = true;
-            removedIds.add(tab.id);
-            return [];
-          }
-          if (target.kind !== 'file-browser') return [tab];
-
-          const activeFileRemoved = Boolean(
-            target.activeFilePath && isPathInDirectory(target.activeFilePath, directory),
-          );
-          const folderRemoved = Boolean(
-            target.folderPath && isPathInDirectory(target.folderPath, directory),
-          );
-          if (!activeFileRemoved && !folderRemoved) return [tab];
-
-          changed = true;
-          const folderPath = folderRemoved
-            ? parentDirectoryPath(directory, directory)
-            : target.folderPath;
-          const folderName = folderPath?.split(/[\\/]/).filter(Boolean).pop() ?? '';
-          return [{
-            ...tab,
-            title: displayTitleFromFilename(folderName),
-            target: {
-              ...target,
-              folderPath,
-              activeFilePath: activeFileRemoved ? null : target.activeFilePath,
-              collectionDisplay: activeFileRemoved ? undefined : target.collectionDisplay,
-              collectionType: activeFileRemoved ? undefined : target.collectionType,
-              collectionUnavailableReason: activeFileRemoved ? undefined : target.collectionUnavailableReason,
-            },
-          }];
-        });
-        if (!changed) return;
-
-        const activeWasRemoved = state.activeTabId !== null && removedIds.has(state.activeTabId);
-        const activeIndex = state.tabs.findIndex((tab) => tab.id === state.activeTabId);
-        const activeTabId = activeWasRemoved
-          ? tabs[activeIndex - 1]?.id ?? tabs[activeIndex]?.id ?? null
-          : state.activeTabId;
-        const webRuntimes = Object.fromEntries(
-          tabs
-            .filter((tab) => state.webRuntimes[tab.id])
-            .map((tab) => [tab.id, state.webRuntimes[tab.id]]),
-        );
-        if (activeWasRemoved) releaseBrowserFocusWhenEmpty(tabs.length);
-        set({ tabs, activeTabId, visible: tabs.length > 0 && state.visible, webRuntimes });
+        set((state) => transformEntries(state, (entry) => {
+          if (!targetPaths(entry.target).some((path) => isPathInDirectory(path, directory))) return entry;
+          const target = entry.target;
+          if (entry !== state.current || target.kind !== 'file-browser') return null;
+          const folderRemoved = !!target.folderPath && isPathInDirectory(target.folderPath, directory);
+          const fileRemoved = !!target.activeFilePath && isPathInDirectory(target.activeFilePath, directory);
+          const folderPath = folderRemoved ? parentDirectoryPath(directory, directory) : target.folderPath;
+          return { ...entry, title: displayTitleFromFilename(folderPath?.split(/[\\/]/).filter(Boolean).pop() ?? ''), target: { ...target,
+            folderPath, activeFilePath: fileRemoved ? null : target.activeFilePath,
+            collectionDisplay: fileRemoved ? undefined : target.collectionDisplay,
+            collectionType: fileRemoved ? undefined : target.collectionType,
+            collectionUnavailableReason: fileRemoved ? undefined : target.collectionUnavailableReason } };
+        }));
       },
-      removeTabsByFilePath: (path) => {
-        const targetPath = canonicalPath(path);
-        if (!targetPath) return [];
-        const state = get();
-        const removedIds = state.tabs
-          .filter((tab) => tab.target.kind === 'file-browser'
-            && tab.target.activeFilePath
-            && canonicalPath(tab.target.activeFilePath) === targetPath)
-          .map((tab) => tab.id);
-        if (removedIds.length === 0) return [];
-
-        const removed = new Set(removedIds);
-        const activeIndex = state.tabs.findIndex((tab) => tab.id === state.activeTabId);
-        const tabs = state.tabs.filter((tab) => !removed.has(tab.id));
-        const activeWasRemoved = state.activeTabId !== null && removed.has(state.activeTabId);
-        const activeTabId = activeWasRemoved
-          ? tabs[activeIndex - 1]?.id ?? tabs[activeIndex]?.id ?? null
-          : state.activeTabId;
-        const webRuntimes = Object.fromEntries(
-          tabs
-            .filter((tab) => state.webRuntimes[tab.id])
-            .map((tab) => [tab.id, state.webRuntimes[tab.id]]),
-        );
-        releaseBrowserFocusWhenEmpty(tabs.length);
-        set({
-          tabs,
-          activeTabId,
-          visible: state.visible && tabs.length > 0,
-          webRuntimes,
-        });
-        return removedIds;
+      removeContentByFilePath: (path) => {
+        const wanted = canonicalPath(path);
+        if (!wanted) return [];
+        const current = get().current;
+        const removed = current && usesPath(current, wanted) ? [current.id] : [];
+        set((state) => transformEntries(state, (entry) => usesPath(entry, wanted) ? null : entry));
+        return removed;
       },
-      reorderTab: (tabId, beforeTabId) => set((state) => {
-        const sourceIndex = state.tabs.findIndex((tab) => tab.id === tabId);
-        if (sourceIndex < 0 || beforeTabId === tabId) return state;
-        const tabs = [...state.tabs];
-        const [tab] = tabs.splice(sourceIndex, 1);
-        const targetIndex = beforeTabId
-          ? tabs.findIndex((candidate) => candidate.id === beforeTabId)
-          : tabs.length;
-        tabs.splice(targetIndex < 0 ? tabs.length : targetIndex, 0, tab);
-        return { tabs };
+      updateContentMetadata: (id, metadata) => set((state) => {
+        const entry = state.current;
+        if (entry?.id !== id || Object.entries(metadata).every(([key, value]) => entry[key as keyof typeof metadata] === value)) return state;
+        return { current: { ...entry, ...metadata } };
       }),
-      updateTabMetadata: (tabId, metadata) => set((state) => {
-        const tab = state.tabs.find((tab) => tab.id === tabId);
-        if (!tab || Object.entries(metadata).every(([key, value]) => tab[key as keyof typeof metadata] === value)) return state;
-        return {
-          tabs: state.tabs.map((tab) => tab.id === tabId ? { ...tab, ...metadata } : tab),
-        };
-      }),
-      setWebRuntime: (tabId, runtime) => set((state) => {
-        if (!isWebTab(state.tabs.find((tab) => tab.id === tabId))) return state;
-        return {
-          tabs: updateWebTabTarget(state.tabs, tabId, runtime.currentUrl),
-          webRuntimes: { ...state.webRuntimes, [tabId]: runtime },
-        };
-      }),
-      navigateWebTab: (tabId, url) => {
+      setWebRuntime: (id, runtime) => { changeWeb(id, () => runtime); },
+      navigateWeb: (id, url) => {
         const normalized = canonicalUrl(url);
-        if (!normalized) return false;
-        const state = get();
-        const tab = state.tabs.find((candidate) => candidate.id === tabId);
-        const current = withWebRuntime(state.webRuntimes, tab);
-        if (!current || !isWebTab(tab)) return false;
-        const runtime = navigateWorkspaceWebRuntime(current, normalized);
-        set({
-          tabs: updateWebTabTarget(state.tabs, tabId, runtime.currentUrl),
-          webRuntimes: { ...state.webRuntimes, [tabId]: runtime },
-        });
-        return true;
+        return normalized ? changeWeb(id, (runtime) => navigateWorkspaceWebRuntime(runtime, normalized)) : false;
       },
-      goBackWebTab: (tabId) => {
-        const state = get();
-        const tab = state.tabs.find((candidate) => candidate.id === tabId);
-        const current = withWebRuntime(state.webRuntimes, tab);
-        const runtime = current ? moveWorkspaceWebHistory(current, -1) : null;
-        if (!runtime) return false;
-        set({
-          tabs: updateWebTabTarget(state.tabs, tabId, runtime.currentUrl),
-          webRuntimes: { ...state.webRuntimes, [tabId]: runtime },
-        });
-        return true;
-      },
-      goForwardWebTab: (tabId) => {
-        const state = get();
-        const tab = state.tabs.find((candidate) => candidate.id === tabId);
-        const current = withWebRuntime(state.webRuntimes, tab);
-        const runtime = current ? moveWorkspaceWebHistory(current, 1) : null;
-        if (!runtime) return false;
-        set({
-          tabs: updateWebTabTarget(state.tabs, tabId, runtime.currentUrl),
-          webRuntimes: { ...state.webRuntimes, [tabId]: runtime },
-        });
-        return true;
-      },
-      reloadWebTab: (tabId) => {
-        const state = get();
-        const tab = state.tabs.find((candidate) => candidate.id === tabId);
-        const current = withWebRuntime(state.webRuntimes, tab);
-        if (!current) return false;
-        set({ webRuntimes: { ...state.webRuntimes, [tabId]: reloadWorkspaceWebRuntime(current) } });
-        return true;
-      },
+      goBackWeb: (id) => changeWeb(id, (runtime) => moveWorkspaceWebHistory(runtime, -1)),
+      goForwardWeb: (id) => changeWeb(id, (runtime) => moveWorkspaceWebHistory(runtime, 1)),
+      reloadWeb: (id) => changeWeb(id, reloadWorkspaceWebRuntime),
       reset: () => {
         useWorkspaceFocusStore.getState().reset();
-        set({
-          visible: false,
-          splitRatio: BROWSER_COLUMN_DEFAULT_SPLIT_RATIO,
-          tabs: [],
-          activeTabId: null,
-          webRuntimes: {},
-        });
+        set({ ...emptySession(), webRuntime: null });
       },
-    }),
-    {
-      ...browserColumnPersistence,
-      // Web history and live WebView state are process-local.
-      merge: (persisted, current) => ({ ...restoreBrowserColumnSession(persisted, current), webRuntimes: {} }),
-    },
-  ),
+    };
+  }, {
+    ...browserColumnPersistence,
+    // Live WebView state and its internal URL history are process-local.
+    merge: (persisted, current) => ({ ...restoreBrowserColumnSession(persisted, current), webRuntime: null }),
+  }),
 );

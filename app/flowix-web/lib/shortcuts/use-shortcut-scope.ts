@@ -19,8 +19,12 @@ export function useShortcutScope(scope: Scope): void {
   const ctx = useShortcutsContext();
   // 不在 Provider 内 ── 静默 no-op, 让 slash menu 这种 imperative root
   // 挂载的组件也能挂上而不会炸整条 layout effect。
-  if (!ctx) return;
+  //
+  // hook 必须无条件调用：把 ctx 判空放进 effect 内部。原先的 early return 会让
+  // ctx 在两次渲染间变化时改变 hook 顺序（Provider 外→内切换时会抛
+  // "Rendered more hooks than during the previous render"）。
   useEffect(() => {
+    if (!ctx) return;
     const pop = ctx.pushScope(scope);
     return pop;
   }, [ctx, scope]);

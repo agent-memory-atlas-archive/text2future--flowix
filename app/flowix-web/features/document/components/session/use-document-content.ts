@@ -208,7 +208,7 @@ export function useDocumentContent({
   const reloadDocument = useCallback(
     async (path: string, options?: LoadContentOptions) => {
       if (!path) return;
-      let readPath = findFileDisplayPath(identity.displayId) ?? path;
+      const readPath = findFileDisplayPath(identity.displayId) ?? path;
       const startedAt = performance.now();
       markDocumentOpenTrace(transitionId, 'content:load-start', {
         path: readPath,

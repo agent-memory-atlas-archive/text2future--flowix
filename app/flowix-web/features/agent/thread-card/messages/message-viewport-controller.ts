@@ -10,6 +10,7 @@ export interface MessageViewportControllerOptions {
   bottomFollowThresholdPx: number;
   topHistoryLoadThresholdPx: number;
   scrollDeltaEpsilonPx: number;
+  onAtBottomChange?: (atBottom: boolean) => void;
   isCollapsed: () => boolean;
   isFullscreen: () => boolean;
   getRuntimeThreadId: () => string | null;
@@ -31,6 +32,7 @@ export class MessageViewportController {
   private readonly bottomFollowThresholdPx: number;
   private readonly topHistoryLoadThresholdPx: number;
   private readonly scrollDeltaEpsilonPx: number;
+  private readonly onAtBottomChange?: (atBottom: boolean) => void;
   private readonly isCollapsed: () => boolean;
   private readonly isFullscreen: () => boolean;
   private readonly getRuntimeThreadId: () => string | null;
@@ -46,27 +48,32 @@ export class MessageViewportController {
     this.bottomFollowThresholdPx = options.bottomFollowThresholdPx;
     this.topHistoryLoadThresholdPx = options.topHistoryLoadThresholdPx;
     this.scrollDeltaEpsilonPx = options.scrollDeltaEpsilonPx;
+    this.onAtBottomChange = options.onAtBottomChange;
     this.isCollapsed = options.isCollapsed;
     this.isFullscreen = options.isFullscreen;
     this.getRuntimeThreadId = options.getRuntimeThreadId;
     this.getConversationMessageState = options.getConversationMessageState;
     this.loadMoreMessages = options.loadMoreMessages;
+    this.notifyAtBottom();
   }
 
   handleScroll(): void {
+    const bottomDistance = this.getBottomDistance();
+    const atBottom = bottomDistance <= this.scrollDeltaEpsilonPx;
     if (this.userDetachedFromBottom) {
       // Keep an explicit upward gesture detached even if the first scroll
       // event arrives before scrollTop has moved outside the follow margin.
       // Only reaching the actual bottom re-arms automatic following.
-      if (this.getBottomDistance() <= this.scrollDeltaEpsilonPx) {
+      if (atBottom) {
         this.userDetachedFromBottom = false;
         this.shouldFollowBottom = true;
       } else {
         this.shouldFollowBottom = false;
       }
     } else {
-      this.shouldFollowBottom = this.isNearBottom();
+      this.shouldFollowBottom = bottomDistance <= this.bottomFollowThresholdPx;
     }
+    this.onAtBottomChange?.(atBottom);
     this.requestMoreHistoryIfNeeded();
   }
 
@@ -103,16 +110,19 @@ export class MessageViewportController {
   resetForHiddenMessages(): void {
     this.userDetachedFromBottom = false;
     this.shouldFollowBottom = true;
+    this.notifyAtBottom();
   }
 
   resetForEmptyMessages(): void {
     this.userDetachedFromBottom = false;
     this.shouldFollowBottom = true;
+    this.notifyAtBottom();
   }
 
   applyAfterRender(options: MessageRenderScrollOptions): void {
     if (this.isCollapsed()) {
       this.prevCollapsed = this.isCollapsed();
+      this.notifyAtBottom();
       return;
     }
 
@@ -124,7 +134,9 @@ export class MessageViewportController {
       }
     } else if (this.prevCollapsed) {
       this.body.scrollTop = 0;
-      this.shouldFollowBottom = this.isNearBottom();
+      const bottomDistance = this.getBottomDistance();
+      this.shouldFollowBottom = bottomDistance <= this.bottomFollowThresholdPx;
+      this.onAtBottomChange?.(bottomDistance <= this.scrollDeltaEpsilonPx);
     } else if (options.shouldFollowStreaming) {
       // Keep following only when the user was already following the bottom.
       // If they scrolled up while the response was streaming, preserve that
@@ -150,6 +162,11 @@ export class MessageViewportController {
       this.userDetachedFromBottom = false;
       this.shouldFollowBottom = true;
     }
+    this.onAtBottomChange?.(true);
+  }
+
+  scrollToBottomSmooth(): void {
+    this.body.scrollTo({ top: this.body.scrollHeight, behavior: "smooth" });
   }
 
   private getBottomDistance(): number {
@@ -159,8 +176,8 @@ export class MessageViewportController {
     );
   }
 
-  private isNearBottom(): boolean {
-    return this.getBottomDistance() <= this.bottomFollowThresholdPx;
+  private notifyAtBottom(): void {
+    this.onAtBottomChange?.(this.getBottomDistance() <= this.scrollDeltaEpsilonPx);
   }
 
   private preserveScrollTop(scrollTop: number): void {
@@ -168,9 +185,11 @@ export class MessageViewportController {
     if (Math.abs(this.body.scrollTop - scrollTop) > this.scrollDeltaEpsilonPx) {
       this.body.scrollTop = scrollTop;
     }
+    const bottomDistance = this.getBottomDistance();
     this.shouldFollowBottom = this.userDetachedFromBottom
       ? false
-      : this.isNearBottom();
+      : bottomDistance <= this.bottomFollowThresholdPx;
+    this.onAtBottomChange?.(bottomDistance <= this.scrollDeltaEpsilonPx);
   }
 
   private requestMoreHistoryIfNeeded(): void {

@@ -13,6 +13,8 @@ import {
 import { messageRenderKey } from "@features/agent/message/render-identity";
 import { completedRunUserMessageId } from "@features/agent/events/message-identity";
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('agent/store/thread-history');
 /** Layer 4: 单页轮次数. External adapters return complete turns; the
  * resulting message count is intentionally variable. */
 export const HISTORY_PAGE_SIZE = 10;
@@ -197,7 +199,7 @@ export function hydrateToolDisplay(
       input: message.toolInput,
     });
   } catch (err) {
-    console.error("Failed to hydrate agent tool display:", err);
+    logger.error('Failed to hydrate agent tool display', { error: err });
   }
   return toolDisplay || toolAgentType
     ? {

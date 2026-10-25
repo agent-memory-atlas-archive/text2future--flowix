@@ -1,15 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { NoteEntry } from '@platform/tauri/client';
 import type { NotebookChange } from '@platform/tauri/notebook-change-events';
 
 const mocks = vi.hoisted(() => ({
   notify: null as null | ((change: NotebookChange) => void),
+  ready: null as null | (() => void),
+  metadata: vi.fn(),
   getIndexed: vi.fn(), batch: vi.fn(), apply: vi.fn(), refresh: vi.fn(), stale: vi.fn(), rebase: vi.fn(),
   notes: [] as { notebookId: string; relativePath: string }[],
 }));
 vi.mock('@platform/tauri/window', () => ({ getCurrentWindow: () => ({ label: 'main' }) }));
 vi.mock('@platform/tauri/event-bus', () => ({ subscribe: () => () => {} }));
 vi.mock('@platform/tauri/notebook-change-events', () => ({
-  subscribeNotebookChanges: (handler: (change: NotebookChange) => void) => {
+  subscribeNotebookChanges: (handler: (change: NotebookChange) => void, options: { onListenerReady: () => void }) => {
+    mocks.ready = options.onListenerReady;
     mocks.notify = handler;
     return () => { mocks.notify = null; };
   },
@@ -18,7 +22,7 @@ vi.mock('./note-repository', () => ({ noteRepository: { getIndexed: mocks.getInd
 vi.mock('@features/memo/store/note-store', () => ({
   useNoteStore: { getState: () => ({
     selectedNotebook: { id: 'book' }, notes: mocks.notes,
-    handleMemoListInvalidation: mocks.stale, rebaseNoteListPaths: mocks.rebase, triggerNotebookMetadataRefresh: vi.fn(),
+    handleMemoListInvalidation: mocks.stale, rebaseNoteListPaths: mocks.rebase, triggerNotebookMetadataRefresh: mocks.metadata,
     applyNoteListChange: mocks.apply, applyNoteListBatch: mocks.batch,
     triggerMemoListRefresh: mocks.refresh, triggerRefresh: mocks.refresh,
   }) },
@@ -41,6 +45,25 @@ describe('memo list path updates', () => {
   });
   afterEach(() => { dispose(); vi.useRealTimers(); });
   const settle = async () => { await Promise.resolve(); await Promise.resolve(); };
+
+  it('reconciles the selected notebook on listener recovery and discards stale queued events', async () => {
+    vi.useFakeTimers();
+    let finish!: (entry: unknown) => void;
+    mocks.getIndexed.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    mocks.notify?.(changed);
+    mocks.notify?.({ kind: 'resource-updated', notebookId: 'book', relativePath: 'other.md', entry: { relativePath: 'other.md' } as NoteEntry });
+    mocks.ready?.();
+    finish({ relativePath: 'note.md', preview: 'stale' });
+    await vi.advanceTimersByTimeAsync(24);
+    expect(mocks.apply).not.toHaveBeenCalled();
+    expect(mocks.batch).not.toHaveBeenCalled();
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+    expect(mocks.metadata).toHaveBeenCalledOnce();
+    dispose();
+    mocks.ready?.();
+    await vi.advanceTimersByTimeAsync(24);
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+  });
 
   it('patches a path invalidation without resetting the list query', async () => {
     const entry = { relativePath: 'note.md', preview: 'indexed' };

@@ -15,6 +15,33 @@ fn preview_truncates_to_200_chars() {
 }
 
 #[test]
+fn html_comments_are_removed_before_title_and_preview_extraction() {
+    for (content, expected) in [
+        ("<!-- hidden -->\nVisible text", "Visible text"),
+        ("<!-- hidden\nmetadata\n-->\nVisible text", "Visible text"),
+        ("Before <!-- hidden -->after", "Before after"),
+        ("<!-- first --><!-- second -->\nVisible text", "Visible text"),
+        ("&lt;!-- hidden --&gt;\nVisible text", "Visible text"),
+        ("&lt;!— hidden —&gt;\nVisible text", "Visible text"),
+        ("<!— hidden —>\nVisible text", "Visible text"),
+        ("<!-- hidden only -->", ""),
+        ("<!-- unfinished\nhidden metadata", ""),
+    ] {
+        let (title, preview) = extract_title_and_preview(content);
+        assert_eq!(title, expected, "content: {content}");
+        assert_eq!(preview, expected, "content: {content}");
+    }
+}
+
+#[test]
+fn indexed_preview_excludes_html_comment_metadata() {
+    let fields = derive_note_fields(
+        "---\ndesc: Example\n---\n<!-- flowix:agent-thread-card {\n\"version\":1\n} -->\nVisible text",
+    );
+    assert_eq!(fields.preview, "Visible text");
+}
+
+#[test]
 fn tag_only_lines_are_skipped_for_title_and_preview() {
     let md = "\
 #project/backend

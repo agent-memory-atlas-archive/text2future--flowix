@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { notes } from '@platform/tauri/client';
@@ -14,6 +14,8 @@ const initialWorkColumn = useWorkColumnStore.getState();
 const initialBrowserColumn = useBrowserColumnStore.getState();
 const initialFocus = useWorkspaceFocusStore.getState();
 let editor: Editor | null = null;
+
+beforeEach(() => { vi.spyOn(notes, 'pathStatus').mockResolvedValue('present'); });
 
 afterEach(() => {
   editor?.destroy();
@@ -65,13 +67,13 @@ it('opens the referenced note from its composer preview while a conversation is 
   card.click();
   const openButton = document.querySelector<HTMLButtonElement>('.agent-composer__note-reference-preview-open')!;
   await vi.waitFor(() => expect(openButton.disabled).toBe(false));
-  expect(useBrowserColumnStore.getState().tabs).toHaveLength(0);
+  expect(useBrowserColumnStore.getState().current).toBeNull();
 
   openButton.click();
   await vi.waitFor(() => {
     const browser = useBrowserColumnStore.getState();
-    expect(browser.tabs).toHaveLength(1);
-    expect(browser.tabs.find((tab) => tab.id === browser.activeTabId)?.target).toMatchObject({
+    expect(browser.current).not.toBeNull();
+    expect(browser.current?.target).toMatchObject({
       kind: 'file-browser', activeFilePath: '/notes/Projects/Plan.md', scopePath: '/notes',
     });
   });
@@ -82,7 +84,7 @@ it('opens the referenced note from its composer preview while a conversation is 
   await vi.waitFor(() => expect(openButton.disabled).toBe(false));
   openButton.click();
   await vi.waitFor(() => expect(document.querySelector<HTMLElement>('.agent-composer__note-reference-preview')?.hidden).toBe(true));
-  expect(useBrowserColumnStore.getState().tabs).toHaveLength(1);
+  expect(useBrowserColumnStore.getState().current).not.toBeNull();
   expect(useWorkColumnStore.getState().navigation.target).toEqual(conversation);
 });
 
@@ -131,7 +133,7 @@ it('keeps the current note (and its embedded conversation) in the work column', 
 
   openButton.click();
   await vi.waitFor(() => {
-    expect(useBrowserColumnStore.getState().tabs).toHaveLength(1);
+    expect(useBrowserColumnStore.getState().current).not.toBeNull();
   });
   // The work column must not be emptied by opening the same note on the right.
   expect(useWorkColumnStore.getState().navigation.target).toEqual(currentNote);

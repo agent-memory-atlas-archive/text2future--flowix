@@ -9,7 +9,7 @@ import {
   openWorkspaceSurface,
 } from '@features/workspace/public/note-navigation-api';
 import type { WorkspaceContentLocation } from '@features/workspace/public/note-navigation-api';
-import type { WorkspaceSurfaceOpenResult } from '@features/workspace/public/open-surface-api';
+import type { WorkspaceNavigationSource, WorkspaceSurfaceOpenResult } from '@features/workspace/public/open-surface-api';
 import { publishHeadingAnchorRequest } from '@features/document/public/heading-navigation-api';
 import { translate } from '@/lib/i18n';
 import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
@@ -20,6 +20,7 @@ import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api'
  * the work column already shows.
  */
 export interface OpenNoteDestinationOptions {
+  source?: WorkspaceNavigationSource;
   destination?: 'main-third' | 'browser-column';
 }
 
@@ -163,6 +164,7 @@ async function openNoteDestination(
   if (options?.destination === 'browser-column') {
     const opened = await openWorkspaceSurface({
       host: 'browser-column',
+      ...(options?.source ? { source: options.source } : {}),
       target: { kind: 'external', path, scopePath, transitionId: null },
       options: { notebookId: useNoteStore.getState().notebooks.find((notebook) => canonicalPath(notebook.path) === canonicalPath(scopePath ?? ''))?.id },
     });
@@ -170,6 +172,7 @@ async function openNoteDestination(
   }
   const opened = await openWorkspaceSurface({
     host: 'main-third',
+    ...(options?.source ? { source: options.source } : {}),
     target: { kind: 'external', path, scopePath, transitionId: null },
   });
   return locationFromOpenResult(opened);
@@ -203,6 +206,7 @@ export async function openNoteByNotebookPath(
     const opened = locationFromOpenResult(
       await openWorkspaceSurface({
         host: 'browser-column',
+        ...(options?.source ? { source: options.source } : {}),
         target: { kind: 'external', path, scopePath: notebook.path, transitionId: null },
         options: { notebookId },
       }),
@@ -212,6 +216,7 @@ export async function openNoteByNotebookPath(
   }
   const opened = await openWorkspaceSurface({
     host: 'main-third',
+    ...(options?.source ? { source: options.source } : {}),
     target: { kind: 'external', path, scopePath: notebook.path, transitionId: null },
   });
   const location = locationFromOpenResult(opened);

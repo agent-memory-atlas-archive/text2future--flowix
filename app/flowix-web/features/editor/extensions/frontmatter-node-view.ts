@@ -19,10 +19,7 @@ import {
   suggestFrontmatterRepair,
   updateVisibleFrontmatterProperty,
 } from '@features/document/properties/frontmatter-model';
-import {
-  resolvePropertyDisplayName,
-  type PropertyKind,
-} from '@features/document/properties/presets';
+import { resolvePropertyDisplayName } from '@features/document/properties/presets';
 import {
   resolvePropertyType,
   type PropertyDisplayKind,
@@ -33,20 +30,7 @@ import { canonicalizePropertyKey } from '@features/properties/property-key';
 import { createPropertySvgIcon } from '@features/document/properties/property-type-icon';
 import { observeFrontmatterView } from './frontmatter-view-lifecycle';
 import { syncFrontmatterEditability } from './frontmatter-interactions';
-import {
-  closeEmptyPropertyRowEditor,
-  createEmptyPropertyRow,
-  destroyEmptyPropertyRow,
-  flushEmptyPropertyRow,
-} from './frontmatter-empty-row';
-import {
-  createPropertyActions,
-  type PropertyActionsHandle,
-} from './frontmatter-property-actions';
-import {
-  commitFrontmatterDraft,
-  describeFrontmatterPropertyError,
-} from './frontmatter-draft-property';
+import { describeFrontmatterPropertyError } from './frontmatter-property-error';
 import { createPropertyItemMenu } from './frontmatter-property-menu';
 import { syncFrontmatterVisibility } from './frontmatter-visibility';
 import { useSettingsStore } from '@/lib/store/settings-store';
@@ -101,8 +85,6 @@ export class FrontmatterPropertyNodeView implements NodeView {
   private readonly propertyTargetId?: string;
   private validationError: string | null = null;
   private propertyRows = new Map<string, { signature: string; dom: HTMLElement }>();
-  private propertyActions: PropertyActionsHandle | null = null;
-  private propertyActionsPopupOpen = false;
   private propertyImageRoots = new Map<HTMLElement, { root: Root; render: () => void }>();
   private destroyed = false;
   private readonly propertyEditor: FrontmatterPropertyEditor;
@@ -139,15 +121,14 @@ export class FrontmatterPropertyNodeView implements NodeView {
   };
   private readonly handleFlushDrafts = () => {
     this.savePropertyEdit();
-    this.dom.querySelectorAll<HTMLElement>('.frontmatter-property__empty-row')
-      .forEach(flushEmptyPropertyRow);
   };
+  private propertyAreaHovered = false;
+  private readonly handlePropertyAreaPointerEnter = () => this.setPropertyAreaHovered(true);
+  private readonly handlePropertyAreaPointerLeave = () => this.setPropertyAreaHovered(false);
   private readonly handleEditabilityChange = () => {
     if (!this.view.editable) {
       this.closePropertyMenu();
       this.savePropertyEdit();
-      this.dom.querySelectorAll<HTMLElement>('.frontmatter-property__empty-row')
-        .forEach(flushEmptyPropertyRow);
       this.finishPropertyDrag(true);
     }
     this.syncPropertyEditability();
@@ -155,15 +136,8 @@ export class FrontmatterPropertyNodeView implements NodeView {
   private readonly handleAddPropertyRequest = (event: Event) => {
     const detail = (event as CustomEvent<{ propertyTargetId?: string; presetKey?: string }>).detail;
     if (detail?.propertyTargetId !== this.propertyTargetId || !this.view.editable) return;
-    this.addEmptyProperty(detail?.presetKey);
+    this.addPresetProperty(detail?.presetKey);
   };
-  private readonly handlePropertyActionsPopupState = (event: Event) => {
-    const detail = (event as CustomEvent<{ propertyTargetId?: string; open?: boolean }>).detail;
-    if (detail?.propertyTargetId !== this.propertyTargetId) return;
-    this.propertyActionsPopupOpen = Boolean(detail.open);
-    this.propertyActions?.setPopupOpen(this.propertyActionsPopupOpen);
-  };
-
   private readonly handleRemovePropertyRequest = (event: Event) => {
     const detail = (event as CustomEvent<{ propertyTargetId?: string; propertyKey?: string }>).detail;
     if (detail?.propertyTargetId !== this.propertyTargetId || !detail.propertyKey || !this.view.editable) return;
@@ -194,11 +168,14 @@ export class FrontmatterPropertyNodeView implements NodeView {
     propertyTargetId?: string,
     private readonly onViewSourceMode?: () => void,
     private readonly getAttachmentNotebookId?: () => string | undefined,
+    private readonly onPropertyAreaHoverChange?: (hovered: boolean) => void,
   ) {
     this.node = node;
     this.propertyTargetId = propertyTargetId;
     this.dom = createElement('div', 'frontmatter-property-node');
     this.dom.contentEditable = 'false';
+    this.dom.addEventListener('pointerenter', this.handlePropertyAreaPointerEnter);
+    this.dom.addEventListener('pointerleave', this.handlePropertyAreaPointerLeave);
     this.propertyEditor = new FrontmatterPropertyEditor({
       ownerDocument: this.dom.ownerDocument,
       isEditable: () => this.view.editable,
@@ -208,10 +185,6 @@ export class FrontmatterPropertyNodeView implements NodeView {
     });
     this.view.dom.addEventListener('flowix:editor-flush-drafts', this.handleFlushDrafts);
     this.view.dom.addEventListener(EDITOR_EDITABILITY_CHANGE_EVENT, this.handleEditabilityChange);
-    this.dom.ownerDocument.defaultView?.addEventListener(
-      'flowix:property-actions-popup-state',
-      this.handlePropertyActionsPopupState,
-    );
     this.disposeSubscriptions = observeFrontmatterView(this.dom.ownerDocument, {
       render: () => this.render(),
       pointerDown: this.handleDocumentPointerDown,
@@ -233,6 +206,12 @@ export class FrontmatterPropertyNodeView implements NodeView {
 
   private errorMessage(error: unknown): string {
     return describeFrontmatterPropertyError(error, this.t.bind(this));
+  }
+
+  private setPropertyAreaHovered(hovered: boolean) {
+    if (this.propertyAreaHovered === hovered) return;
+    this.propertyAreaHovered = hovered;
+    this.onPropertyAreaHoverChange?.(hovered);
   }
 
   private closePropertyEditor() {
@@ -278,7 +257,6 @@ export class FrontmatterPropertyNodeView implements NodeView {
 
   private syncPropertyEditability() {
     syncFrontmatterEditability(this.dom, this.view.editable);
-    this.propertyActions?.setEditable(this.view.editable);
     this.propertyImageRoots.forEach(({ render }) => render());
   }
 
@@ -288,24 +266,6 @@ export class FrontmatterPropertyNodeView implements NodeView {
       root.unmount();
       this.propertyImageRoots.delete(container);
     });
-  }
-
-  private disposePropertyActions() {
-    this.propertyActions?.dispose();
-    this.propertyActions = null;
-  }
-
-  /** Same bar the empty-properties widget mounts, so both entry points match. */
-  private createPropertyActionsBar(): HTMLElement | null {
-    this.disposePropertyActions();
-    this.propertyActions = createPropertyActions({
-      propertyTargetId: this.propertyTargetId,
-      isEditable: () => this.view.editable,
-      pickerLabel: this.t('document.properties.picker.triggerLabel'),
-      addLabel: this.t('document.properties.add'),
-    });
-    this.propertyActions?.setPopupOpen(this.propertyActionsPopupOpen);
-    return this.propertyActions?.element ?? null;
   }
 
   private updatePropertyStructure(
@@ -922,44 +882,28 @@ export class FrontmatterPropertyNodeView implements NodeView {
     return row;
   }
 
-  /**
-   * Append a property row. `presetKey` narrows the new row to a built-in /
-   * configured preset so the caller can add e.g. `tags` in one step; without
-   * it a fresh `keyN` Text row is created.
-   */
-  private addEmptyProperty(presetKey?: string) {
+  /** Add a selected preset as a saved property. */
+  private addPresetProperty(presetKey?: string) {
+    if (!presetKey) return;
     const yamlContent = String(this.node.attrs.yamlContent ?? '');
     const parsed = parseVisibleFrontmatter(yamlContent);
     const existingKeys = new Set(Object.keys(parsed.data));
 
-    const preset = presetKey ? resolveRuntimePropertyPreset(presetKey) : null;
-    let nextKey: string;
-    let nextKind: PropertyKind | 'Boolean';
-    if (preset) {
-      const presetKey = canonicalizePropertyKey(preset.key);
-      if ([...existingKeys].some((key) => canonicalizePropertyKey(key) === presetKey)) {
-        toast.error(this.t('document.properties.duplicateKey'));
-        return;
-      }
-      nextKey = preset.key;
-      nextKind = preset.kind;
-    } else {
-      let index = 1;
-      nextKey = `key${index}`;
-      while (existingKeys.has(nextKey)) {
-        index += 1;
-        nextKey = `key${index}`;
-      }
-      nextKind = 'Text';
+    const preset = resolveRuntimePropertyPreset(presetKey);
+    if (!preset) return;
+    const canonicalKey = canonicalizePropertyKey(preset.key);
+    if ([...existingKeys].some((key) => canonicalizePropertyKey(key) === canonicalKey)) {
+      toast.error(this.t('document.properties.duplicateKey'));
+      return;
     }
 
     try {
       const nextYamlContent = updateVisibleFrontmatterProperty(
         yamlContent,
         null,
-        nextKey,
+        preset.key,
         '',
-        nextKind,
+        preset.kind,
       );
       const pos = this.getPos();
       if (typeof pos !== 'number') return;
@@ -1002,59 +946,26 @@ export class FrontmatterPropertyNodeView implements NodeView {
     this.view.dispatch(transaction);
   }
 
-  private commitDraftProperty(key: string, value: string, kind?: PropertyKind, storageKind?: PropertyKind): boolean {
-    const pos = this.getPos();
-    if (typeof pos !== 'number') return false;
-    return commitFrontmatterDraft({
-      yamlContent: String(this.node.attrs.yamlContent ?? ''),
-      key,
-      value,
-      kind,
-      storageKind,
-      apply: (yamlContent) => {
-        this.view.dispatch(this.view.state.tr.setNodeMarkup(pos, undefined, {
-          ...this.node.attrs,
-          yamlContent,
-        }));
-      },
-      onError: (message) => {
-        this.validationError = message;
-      },
-    });
-  }
-
-  private createDraftPropertyRow(): HTMLElement {
-    return createEmptyPropertyRow(
-      () => this.view.editable,
-      (key, value, kind, storageKind) => this.commitDraftProperty(key, value, kind, storageKind),
-      this.getAttachmentNotebookId,
-    );
-  }
-
   private render(preserveRows = false) {
-    this.dom.querySelectorAll<HTMLElement>('.frontmatter-property__empty-row').forEach(closeEmptyPropertyRowEditor);
-    if (!preserveRows) {
-      this.propertyRows.clear();
-      this.disposePropertyActions();
-    }
+    if (!preserveRows) this.propertyRows.clear();
     this.closePropertyMenu();
     this.closePropertyEditor();
     const parsed = parseVisibleFrontmatter(String(this.node.attrs.yamlContent ?? ''));
-    // The draft row only exists while the note shows no property. Dropping it
-    // otherwise keeps the list free of stale drafts, while a re-render with zero
-    // properties reuses the same row so an in-progress draft survives.
-    if (parsed.parseError || parsed.properties.length > 0) {
-      this.dom.querySelectorAll<HTMLElement>('.frontmatter-property__empty-row').forEach(destroyEmptyPropertyRow);
-    }
     const propertiesVisible = useSettingsStore.getState().propertiesVisible;
     syncFrontmatterVisibility(this.dom, propertiesVisible);
     if (!propertiesVisible) {
+      this.setPropertyAreaHovered(false);
       return;
     }
-    // A list holding only the draft row is always reusable: rebuilding it would
-    // drop whatever the user has typed. A list holding saved rows is only
-    // reusable when the caller asked to preserve them.
-    const existingList = !parsed.parseError && (preserveRows || parsed.properties.length === 0)
+    if (!parsed.parseError && parsed.properties.length === 0) {
+      this.setPropertyAreaHovered(false);
+      this.propertyRows.clear();
+      this.dom.replaceChildren();
+      this.disposePropertyImageRoots();
+      return;
+    }
+
+    const existingList = !parsed.parseError && preserveRows
       ? this.dom.querySelector<HTMLElement>('.frontmatter-property__list')
       : null;
     const container = existingList?.parentElement ?? createElement('div', 'frontmatter-property');
@@ -1124,23 +1035,9 @@ export class FrontmatterPropertyNodeView implements NodeView {
         }
         if (list.parentElement !== container) container.append(list);
       } else {
-        const list = existingList ?? createElement('div', 'frontmatter-property__list');
-        // The last property may have just been deleted; drop the rows it left
-        // behind before the draft row becomes the only child.
-        list.querySelectorAll<HTMLElement>(
-          '.frontmatter-property__display:not(.frontmatter-property__empty-row), .frontmatter-property__validation',
-        ).forEach((stale) => stale.remove());
         this.propertyRows.clear();
-        if (!list.querySelector('.frontmatter-property__empty-row')) {
-          list.append(this.createDraftPropertyRow());
-        }
-        if (list.parentElement !== container) container.append(list);
       }
     }
-
-    const actions = container.querySelector<HTMLElement>('.frontmatter-property__actions')
-      ?? this.createPropertyActionsBar();
-    if (actions && actions.parentElement !== container) container.append(actions);
 
     if (container.parentElement !== this.dom) this.dom.replaceChildren(container);
     this.disposePropertyImageRoots();
@@ -1167,16 +1064,13 @@ export class FrontmatterPropertyNodeView implements NodeView {
   }
 
   destroy() {
-    this.dom.querySelectorAll<HTMLElement>('.frontmatter-property__empty-row').forEach(destroyEmptyPropertyRow);
+    this.setPropertyAreaHovered(false);
+    this.dom.removeEventListener('pointerenter', this.handlePropertyAreaPointerEnter);
+    this.dom.removeEventListener('pointerleave', this.handlePropertyAreaPointerLeave);
     this.destroyed = true;
     this.view.dom.removeEventListener('flowix:editor-flush-drafts', this.handleFlushDrafts);
     this.view.dom.removeEventListener(EDITOR_EDITABILITY_CHANGE_EVENT, this.handleEditabilityChange);
-    this.dom.ownerDocument.defaultView?.removeEventListener(
-      'flowix:property-actions-popup-state',
-      this.handlePropertyActionsPopupState,
-    );
     this.propertyRows.clear();
-    this.disposePropertyActions();
     this.disposePropertyImageRoots(true);
     this.finishPropertyDrag();
     if (this.suppressPropertyIconClickTimer !== null) {

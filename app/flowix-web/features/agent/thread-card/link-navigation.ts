@@ -126,10 +126,10 @@ export async function openAgentLink(
       // Notes and code share the same right-column destination. Opening a note
       // deep link must not replace the conversation already shown by the work
       // column (that is what the note card's “打开笔记” action does too).
-      await openNoteByDeepLink(target.url, null, { destination: 'browser-column' });
+      await openNoteByDeepLink(target.url, null, { destination: 'browser-column', source: 'agent-message' });
       return;
     case 'web':
-      await openWorkspaceSurface({ host: 'browser-column', target: { kind: 'web', url: target.url } });
+      await openWorkspaceSurface({ host: 'browser-column', source: 'agent-message', target: { kind: 'web', url: target.url } });
       return;
     case 'external':
       await openUrl(target.url);
@@ -150,11 +150,11 @@ export async function openAgentLink(
       try {
         opened = scopePath
           ? await openWorkspaceSurface({
-            host: 'browser-column',
+            host: 'browser-column', source: 'agent-message',
             target: createFileBrowserTarget(target.path, scopePath, scopePath),
           })
           : await openWorkspaceSurface({
-            host: 'browser-column',
+            host: 'browser-column', source: 'agent-message',
             target: { kind: 'external', path: target.path, scopePath: null, transitionId: null },
           });
       } catch (error) {

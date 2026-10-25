@@ -17,6 +17,7 @@ import {
 export interface WorkColumnStore {
   navigation: WorkColumnNavigationState;
   notebookSwitchesInFlight: number;
+  reserveNavigationIntent: () => number;
   beginNavigation: (
     pendingTarget: WorkColumnTarget,
     retryToken: string | null,
@@ -43,6 +44,18 @@ export const useWorkColumnStore = create<WorkColumnStore>()((set, get) => ({
     previousTarget: null,
     failure: null,
     retryToken: null,
+  },
+  // Reserve the same revision used by clear/switch/open transactions before
+  // asynchronous save or metadata work. A new intent retires any older loader.
+  reserveNavigationIntent: () => {
+    const navigation = get().navigation;
+    const requestId = navigation.requestId + 1;
+    set({ navigation: {
+      ...navigation, requestId,
+      phase: navigation.target.kind === 'empty' ? 'idle' : 'committed',
+      showWorkColumnLoading: false, pendingTarget: null, failure: null, retryToken: null,
+    } });
+    return requestId;
   },
   beginNavigation: (
     pendingTarget,

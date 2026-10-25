@@ -1,4 +1,7 @@
 import type { I18nKey, I18nParams } from '@/lib/i18n';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { notes as notesClient, files, externalDocuments } from '@platform/tauri/client';
 import { openNoteByNotebookPath } from '@features/memo/public/note-navigation-api';
 import { useNoteStore } from '@features/memo/store/note-store';
@@ -22,6 +25,7 @@ import {
 const FEATURED_NOTES_MOBILE_QUERY = "(max-width: 767px)";
 const FEATURED_NOTES_VIEW_PICKER_WIDTH_PX = 272;
 const FEATURED_NOTES_VIEW_PICKER_PADDING_PX = 8;
+const FEATURED_NOTES_SCROLLBAR_HIDE_DELAY_MS = 700;
 interface FeaturedNotesOptions {
   getNotebookId: () => string | null;
   t: (key: I18nKey, params?: I18nParams) => string;
@@ -33,6 +37,7 @@ interface FeaturedNotesOptions {
 export class FeaturedNotesController {
   private featuredNotesRequestId = 0;
   private featuredNotesViewportCleanup: (() => void) | null = null;
+  private scrollbarHideTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   constructor(private readonly options: FeaturedNotesOptions) {}
   private getCurrentNotebookId = () => this.options.getNotebookId();
@@ -115,11 +120,11 @@ export class FeaturedNotesController {
     const navigation = document.createElement("div");
     navigation.className = "agent-thread-card__featured-notes-navigation";
     const previousButton = this.createFeaturedNotesNavigationButton(
-      "‹",
+      "left",
       this.t("editor.threadCard.featuredNotes.previous"),
     );
     const nextButton = this.createFeaturedNotesNavigationButton(
-      "›",
+      "right",
       this.t("editor.threadCard.featuredNotes.next"),
     );
     navigation.append(previousButton, nextButton);
@@ -230,6 +235,10 @@ export class FeaturedNotesController {
       window.removeEventListener("resize", handleWindowResize);
       document.removeEventListener("pointerdown", handleOutsidePointer);
       document.removeEventListener("keydown", handleEscape);
+      if (this.scrollbarHideTimer !== null) {
+        clearTimeout(this.scrollbarHideTimer);
+        this.scrollbarHideTimer = null;
+      }
       // 弹层挂在 document.body 上, 不随 panel 一起被移除, 必须显式清理,
       // 否则每次刷新精选笔记都会在 body 里留下一个孤儿弹层。
       settingsPopover.remove();
@@ -260,6 +269,15 @@ export class FeaturedNotesController {
     items.className = "agent-thread-card__featured-notes-view-items";
     items.setAttribute("role", "listbox");
     items.setAttribute("aria-label", this.t("editor.threadCard.featuredNotes.settingsTitle"));
+    items.setAttribute("data-flowix-surface", "select");
+    items.addEventListener("scroll", () => {
+      items.dataset.scrolling = "true";
+      if (this.scrollbarHideTimer !== null) clearTimeout(this.scrollbarHideTimer);
+      this.scrollbarHideTimer = setTimeout(() => {
+        delete items.dataset.scrolling;
+        this.scrollbarHideTimer = null;
+      }, FEATURED_NOTES_SCROLLBAR_HIDE_DELAY_MS);
+    }, { passive: true });
     const status = document.createElement("div");
     status.className = "agent-thread-card__featured-notes-view-status";
     status.textContent = this.t("editor.threadCard.featuredNotes.loadingTables");
@@ -367,13 +385,22 @@ export class FeaturedNotesController {
   }
 
   private createFeaturedNotesNavigationButton(
-    text: string,
+    direction: "left" | "right",
     label: string,
   ): HTMLButtonElement {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "agent-thread-card__featured-notes-nav";
-    button.textContent = text;
+    const template = document.createElement("template");
+    template.innerHTML = renderToStaticMarkup(
+      createElement(direction === "left" ? ChevronLeft : ChevronRight, {
+        size: 16,
+        strokeWidth: 2,
+        "aria-hidden": true,
+      }),
+    );
+    const icon = template.content.firstElementChild;
+    if (icon) button.append(icon);
     button.setAttribute("aria-label", label);
     button.addEventListener("mousedown", (event) => event.stopPropagation());
     return button;

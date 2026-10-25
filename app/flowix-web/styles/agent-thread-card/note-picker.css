@@ -1,13 +1,11 @@
-.agent-conversation-surface.agent-thread-card--fullscreen .agent-thread-card__body,
-.agent-conversation-surface.agent-thread-card--fullscreen .agent-thread-card__body *,
-.agent-conversation-surface.agent-thread-card--fullscreen .agent-thread-card__message,
-.agent-conversation-surface.agent-thread-card--fullscreen .agent-thread-card__message *,
-.agent-conversation-surface.agent-thread-card--fullscreen
-  .agent-composer
-  .agent-composer__input {
-  -webkit-user-select: text;
-  user-select: text;
-}
+/* Note picker / badge hover card / context-ring styling.
+ *
+ * Text selection is NOT owned here. The message-body selection contract lives
+ * in messages.css and applies to every surface (standalone, fullscreen,
+ * inline); the composer input keeps its own `user-select: text` in
+ * composer.css. An earlier "everything inside fullscreen is selectable" rule
+ * lived here, which let fullscreen select chrome text that standalone could
+ * not, and left the rule in a file unrelated to selection. */
 
 /* ── Agent 徽章 HoverCard ──────────────────────────────────────
  * mount 默认 display: none (不占 agentWrap flex 流空间),由 controller 按 badge

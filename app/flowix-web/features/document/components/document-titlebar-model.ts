@@ -51,7 +51,7 @@ export interface DocumentTitlebarProps {
   surfaceChrome?: 'document' | 'media';
   /** Show Markdown editor typography controls in the More menu. */
   showEditorFontSwitcher?: boolean;
-  /** Show the Markdown source/rich mode toggle in the More menu. */
+  /** Show the document source/rich or HTML source/preview toggle in the More menu. */
   showEditorModeToggle?: boolean;
   editorMode?: DocumentEditorMode;
   onSetEditorMode?: (mode: DocumentEditorMode) => void;

@@ -78,7 +78,7 @@ pub fn prepare_database_directory(
                 format!("open database layout lock {}", lock_path.display()),
             )
         })?;
-    FileExt::lock_exclusive(&lock).map_err(|error| {
+    FileExt::try_lock_exclusive(&lock).map_err(|error| {
         with_io_context(
             error,
             format!("acquire database layout lock {}", lock_path.display()),

@@ -38,8 +38,7 @@ import { resumePendingNoteLinkUpdates } from '@features/memo/public/app-api';
 import { subscribeWorkspaceDocumentSaves } from '@features/document/public/workspace-api';
 import {
   syncAppAgentConversationRestore,
-  removeBrowserColumnTabsByPath,
-  openExternallyCreatedNote,
+  removeBrowserColumnContentByPath,
 } from '@features/workspace/public/app-api';
 import { clearWorkspaceTargetForDeletedFile } from '@features/workspace/public/shell-api';
 import {
@@ -51,6 +50,7 @@ import {
   clearActionableNotice,
   upsertActionableNotice,
 } from '@features/notifications/actionable-notice-store';
+import { notifyCreatedDocument, removeCreatedDocumentNotices } from './created-document-notices';
 import { mountMainWindowNotebookEvents } from './main-window-notebook-events';
 
 const logger = createLogger('main-window-effects');
@@ -144,20 +144,23 @@ export function MainWindowEffects() {
             invalidateMentionNotes();
             invalidateMentionTags();
           },
-          openPathInBrowserColumn: async (notebookId, relativePath) => {
+          notifyCreatedNote: async (notebookId, relativePath) => {
             const notebookPath = await getAppNotebookPath(notebookId);
             const path = notebookPath && joinNotebookMemoPath(notebookPath, relativePath);
             if (!path || !notebookPath) throw new Error('Created note path is unavailable');
-            await openExternallyCreatedNote(path, notebookPath, notebookId);
+            notifyCreatedDocument(path, notebookPath, notebookId);
           },
-          reportOpenFailure: (error) => {
-            logger.warn('open created note in browser column failed', { error });
+          reportNotificationFailure: (error) => {
+            logger.warn('queue created document notification failed', { error });
             toast.error(error instanceof Error ? error.message : String(error));
           },
           handleMemoCreated: applyAppMemoCreated,
           handleMemoUpdated: applyAppMemoUpdated,
           handleMemoDeleted: applyAppMemoDeleted,
-          removeBrowserColumnTabsByPath: (path) => removeBrowserColumnTabsByPath(path),
+          removeBrowserColumnContentByPath: (path) => {
+            removeCreatedDocumentNotices(path);
+            removeBrowserColumnContentByPath(path);
+          },
           clearWorkspaceTargetByPath: (path) => {
             void clearWorkspaceTargetForDeletedFile(path).catch((error) =>
               logger.warn('clear deleted document target failed', { error, path }));

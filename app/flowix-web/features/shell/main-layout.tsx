@@ -31,9 +31,21 @@ import {
   MemoListServicesHost,
   NoteNavigationDrawer,
   useShellMemoViewModel,
+  useAccessSpaceSelectionCount,
+  useAccessSpaceSelectedPaths,
+  useAccessSpaceSelectionContentKinds,
   type Notebook,
 } from '@features/memo/public/shell-api';
-import { AgentConversationTitlebar } from '@features/agent/public/shell-api';
+import { WorkColumnSelectionView } from './components/work-column-selection-view';
+import { WorkColumnTitlebar } from '@features/shell/components/work-column-titlebar';
+
+// Agent 标题栏按需加载：只在工作区当前目标是 Agent 会话时渲染，冷启动打开
+// 文档时用不到。它背后是 agent-session-store（约 220 文件 / 3.3 万行）。
+const AgentConversationTitlebar = lazy(() =>
+  import('@features/agent/public/titlebar-api').then((module) => ({
+    default: module.AgentConversationTitlebar,
+  })),
+);
 import { useSettingsStore } from '@/lib/store/settings-store';
 import { useWorkspaceStartupStore, isWorkspaceInteractive } from '@/lib/store/workspace-startup-store';
 import { useShallow } from 'zustand/react/shallow';
@@ -45,6 +57,7 @@ import {
 import { files } from '@platform/tauri/client/desktop';
 import { subscribe } from '@platform/tauri/event-bus';
 import { WindowsTitlebarControls } from '@shared/window-titlebar-controls';
+import { SurfaceBoundary } from '@shared/surface-boundary';
 import { NotebookDeleteDialog } from '@features/shell/components/notebook-delete-dialog';
 import { ExternalFileDropOverlay } from '@features/shell/components/drag-overlay/external-file-drop-overlay';
 import { useMainMiddleColumnController } from '@features/shell/hooks/use-main-middle-column-controller';
@@ -134,7 +147,7 @@ export function MainLayout({
   business: MainLayoutBusinessController;
   system: MainLayoutSystemController;
 }) {
-  const { t } = useI18n();
+  const { t, language } = useI18n();
   const [recentExportPath, setRecentExportPath] = useState<string | null>(null);
   const [productIntroOpen, setProductIntroOpen] = useState(false);
   const productIntroAutoShownRef = useRef(false);
@@ -308,6 +321,11 @@ export function MainLayout({
     )
   ));
   const [isSearchPanelOpen, setIsSearchPanelOpen] = useState(false);
+  const accessSpaceSelectionCount = useAccessSpaceSelectionCount();
+  const accessSpaceSelectedPaths = useAccessSpaceSelectedPaths();
+  const accessSpaceSelectionContentKinds = useAccessSpaceSelectionContentKinds();
+  const hasMultipleDocumentsSelected = accessSpaceSelectionCount > 1;
+  const selectionLabel = t('memo.fileTree.selectedDocumentCount', { count: accessSpaceSelectionCount });
   const workColumnTarget = navigationState.target;
   const mediaTarget = workColumnTarget.kind === 'media' ? workColumnTarget : null;
   const activePlugin = workColumnTarget.kind === 'plugin-workbench'
@@ -430,6 +448,7 @@ export function MainLayout({
           toast.error(t('document.external.deleteFileViewCleanupFailed'));
         }
       }
+      toast.success(t('status.deleteCompleted'));
     } catch (error) {
       logger.warn('[MainLayout] Failed to delete external file:', { error: error });
       toast.error(t('document.external.deleteFileFailed'));
@@ -639,7 +658,7 @@ export function MainLayout({
       && workCapabilities.includes('edit')
       && workColumnPresentation.content.surface.kind === 'md',
     showEditorModeToggle: workColumnPresentation.content.status === 'surface'
-      && workColumnPresentation.content.surface.kind === 'md',
+      && (workColumnPresentation.content.surface.kind === 'md' || workColumnPresentation.content.surface.kind === 'html-file'),
     editorMode: mainEditorMode,
     onSetEditorMode: handleSetMainEditorMode,
     document: {
@@ -770,6 +789,11 @@ export function MainLayout({
               focusWorkspaceHostFromEvent(event, 'main-third');
             }}
           >
+            <SurfaceBoundary
+              name="memo-list"
+              language={language}
+              resetKeys={[selectedNotebook?.id ?? null]}
+            >
             <ListColumnContent
               activeView={middleColumnView === 'conversations'
                 ? 'conversations'
@@ -794,6 +818,7 @@ export function MainLayout({
                 dataLoadingEnabled={!isAgentConversationView}
               />
             </ListColumnContent>
+            </SurfaceBoundary>
           </ListColumn>
           {/* List <-> Memo detail divider */}
           {!isMemoListHidden && (
@@ -846,18 +871,41 @@ export function MainLayout({
               </button>
             )}
             {/* Fixed top navigation bar */}
-            {workColumnPresentation.header.kind === 'agent' ? (
-              <AgentConversationTitlebar
-                instanceId={workColumnPresentation.header.instanceId}
+            {hasMultipleDocumentsSelected ? (
+              <WorkColumnTitlebar
+                isWindows={isWindowsPlatform()}
                 reserveWindowsControls={!browserColumnVisible}
-                isMiddleColumnCollapsed={isMemoListHidden}
-                isSidebarVisible={noteNavigationPhase !== 'closed'}
-                onExpandSidebar={handleToggleMemoList}
-                canNavigateBack={canNavigateBack}
-                canNavigateForward={canNavigateForward}
-                onNavigateBack={handleNavigateBack}
-                onNavigateForward={handleNavigateForward}
-              />
+                showTrafficLightSpacer={isMemoListHidden && noteNavigationPhase === 'closed'}
+              >
+                {null}
+              </WorkColumnTitlebar>
+            ) : workColumnPresentation.header.kind === 'agent' ? (
+              // 占位用同一套 titlebar 容器（含 Windows 控件预留与红绿灯 spacer），
+              // 保证 chunk 到达前后没有高度跳变；内容为空即可。
+              <Suspense
+                fallback={(
+                  <WorkColumnTitlebar
+                    isWindows={isWindowsPlatform()}
+                    reserveWindowsControls={!browserColumnVisible}
+                    showTrafficLightSpacer={isMemoListHidden && noteNavigationPhase === 'closed'}
+                    className="agent-conversation-titlebar"
+                  >
+                    {null}
+                  </WorkColumnTitlebar>
+                )}
+              >
+                <AgentConversationTitlebar
+                  instanceId={workColumnPresentation.header.instanceId}
+                  reserveWindowsControls={!browserColumnVisible}
+                  isMiddleColumnCollapsed={isMemoListHidden}
+                  isSidebarVisible={noteNavigationPhase !== 'closed'}
+                  onExpandSidebar={handleToggleMemoList}
+                  canNavigateBack={canNavigateBack}
+                  canNavigateForward={canNavigateForward}
+                  onNavigateBack={handleNavigateBack}
+                  onNavigateForward={handleNavigateForward}
+                />
+              </Suspense>
             ) : isWindowsPlatform() ? (
               <DocumentTitlebarWin {...documentTitlebarProps} />
             ) : (
@@ -865,7 +913,11 @@ export function MainLayout({
             )}
 
             {/* Content area */}
-            <div className="relative isolate flex-1 min-w-0 overflow-hidden">
+            {hasMultipleDocumentsSelected && (
+              <WorkColumnSelectionView paths={accessSpaceSelectedPaths} contentKinds={accessSpaceSelectionContentKinds} label={selectionLabel} />
+            )}
+            <div className="relative isolate flex-1 min-w-0 overflow-hidden" hidden={hasMultipleDocumentsSelected}
+              style={hasMultipleDocumentsSelected ? { display: 'none' } : undefined}>
               {recentExportPath && workColumnPresentation.header.kind === 'document' && (
                 <div className="absolute inset-x-0 top-0 z-50 flex h-[50px] items-center justify-center gap-2 border-b border-[var(--border)] bg-[color-mix(in_oklch,var(--card)_78%,transparent)] px-4 backdrop-blur-md">
                   <Button
@@ -907,11 +959,17 @@ export function MainLayout({
                   </Button>
                 </div>
               )}
-              <WorkColumnContentHost
-                content={workColumnPresentation.content}
-                focused={focusedHostId === 'main-third'}
-                startupIdentity={JSON.stringify(navigationState.target)}
-              />
+              <SurfaceBoundary
+                name="work-column"
+                language={language}
+                resetKeys={[JSON.stringify(navigationState.target)]}
+              >
+                <WorkColumnContentHost
+                  content={workColumnPresentation.content}
+                  focused={!hasMultipleDocumentsSelected && focusedHostId === 'main-third'}
+                  startupIdentity={JSON.stringify(navigationState.target)}
+                />
+              </SurfaceBoundary>
               {((isDocumentTransitioning && !workSurfaceFailed)
                 || workSurfaceBlockingLoading
                 || (navigationState.phase === 'loading' && navigationState.showWorkColumnLoading)) && (
@@ -924,30 +982,38 @@ export function MainLayout({
           </div>
           {browserColumnVisible && (
             <Suspense fallback={null}>
-              <BrowserColumn
-                width={browserColumnLayout.browserColumnWidth}
-                layoutKey={browserColumnLayoutKey}
-                onResize={handleBrowserColumnResize}
-                toolbarCollapsed={toolbarCollapsed}
-                onToolbarCollapsedChange={setToolbarCollapsed}
-              />
+              <SurfaceBoundary
+                name="browser-column"
+                language={language}
+                resetKeys={[browserColumnLayoutKey]}
+              >
+                <BrowserColumn
+                  width={browserColumnLayout.browserColumnWidth}
+                  layoutKey={browserColumnLayoutKey}
+                  onResize={handleBrowserColumnResize}
+                  toolbarCollapsed={toolbarCollapsed}
+                  onToolbarCollapsedChange={setToolbarCollapsed}
+                />
+              </SurfaceBoundary>
             </Suspense>
           )}
           </div>
           </div>
           </div>
           {/* Status bar */}
-          <MainStatusBarHost
-            onSelectNotebook={handleSelectNotebook}
-            onEditNotebook={handleEditNotebook}
-            onDeleteNotebook={handleDeleteNotebook}
-            onCreateNotebook={handleCreateNotebook}
-            onOpenTodos={handleOpenTodos}
-            onOpenTagPanel={handleOpenTagPanel}
-            productIntroOpen={productIntroOpen}
-            onProductIntroOpenChange={setProductIntroOpen}
-            updater={updater}
-          />
+          <SurfaceBoundary name="status-bar" language={language}>
+            <MainStatusBarHost
+              onSelectNotebook={handleSelectNotebook}
+              onEditNotebook={handleEditNotebook}
+              onDeleteNotebook={handleDeleteNotebook}
+              onCreateNotebook={handleCreateNotebook}
+              onOpenTodos={handleOpenTodos}
+              onOpenTagPanel={handleOpenTagPanel}
+              productIntroOpen={productIntroOpen}
+              onProductIntroOpenChange={setProductIntroOpen}
+              updater={updater}
+            />
+          </SurfaceBoundary>
         </div>
       </div>
 

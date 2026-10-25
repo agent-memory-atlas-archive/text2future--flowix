@@ -1,18 +1,20 @@
 import { useBrowserColumnStore } from '@features/workspace/store/browser-column-store';
 import { getWorkspaceSurfaceLifecycle } from '@features/workspace/public/surface-lifecycle-api';
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('workspace:browser-column');
 let navigationChain: Promise<unknown> = Promise.resolve();
 
 export async function flushActiveBrowserColumnDocument(
   options?: { silent?: boolean },
 ): Promise<boolean> {
-  const activeTabId = useBrowserColumnStore.getState().activeTabId;
-  const lifecycle = activeTabId ? getWorkspaceSurfaceLifecycle(activeTabId) : null;
+  const surfaceId = useBrowserColumnStore.getState().current?.id;
+  const lifecycle = surfaceId ? getWorkspaceSurfaceLifecycle(surfaceId) : null;
   if (lifecycle?.status === 'ready' && lifecycle.flush) {
     try {
       return await lifecycle.flush(options);
     } catch (error) {
-      console.error('[BrowserColumn] Failed to flush active surface lifecycle', error);
+      logger.error('Failed to flush active surface lifecycle', { error });
       return false;
     }
   }
@@ -21,8 +23,8 @@ export async function flushActiveBrowserColumnDocument(
 
 /** False means this editor cannot discard and must still cross its flush barrier. */
 export function discardActiveBrowserColumnDocument(): boolean {
-  const activeTabId = useBrowserColumnStore.getState().activeTabId;
-  const lifecycle = activeTabId ? getWorkspaceSurfaceLifecycle(activeTabId) : null;
+  const surfaceId = useBrowserColumnStore.getState().current?.id;
+  const lifecycle = surfaceId ? getWorkspaceSurfaceLifecycle(surfaceId) : null;
   if (lifecycle?.status === 'ready' && lifecycle.discard) {
     lifecycle.discard();
     return true;
@@ -32,9 +34,9 @@ export function discardActiveBrowserColumnDocument(): boolean {
 }
 
 /**
- * Serialize every operation which can replace or unmount the active tab.
+ * Serialize every operation which can replace or unmount the current surface.
  * `null` means the operation was rejected because the active editor could not
- * be flushed; callers must leave the current tab intact in that case.
+ * be flushed; callers must leave the current surface intact in that case.
  */
 export function enqueueBrowserColumnNavigation<T>(
   operation: () => T | Promise<T>,
@@ -51,11 +53,11 @@ export function enqueueBrowserColumnNavigation<T>(
   return run;
 }
 
-export function activateBrowserColumnTab(tabId: string): Promise<boolean | null> {
+export function activateBrowserColumnEntry(surfaceId: string): Promise<boolean | null> {
   return enqueueBrowserColumnNavigation(() => {
     const state = useBrowserColumnStore.getState();
-    if (!state.tabs.some((tab) => tab.id === tabId)) return false;
-    state.commitTab(tabId);
+    if (state.current?.id !== surfaceId) return false;
+    state.focusContent(surfaceId);
     return true;
   });
 }

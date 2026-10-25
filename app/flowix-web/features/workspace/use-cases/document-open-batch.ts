@@ -35,9 +35,7 @@ export async function openDocumentFile(path: string, host: FileHost) {
     fileTreeVisible: true, fileTreeWidth: 220,
   });
   const target = { kind: 'external' as const, path, scopePath: context.scopePath, fileBrowser: context };
-  return openWorkspaceSurface(host === 'browser-column'
-    ? { host, target, options: { notebookId: context.notebookId, browserDisposition: 'open-in-column' } }
-    : { host, target, options: { notebookId: context.notebookId } });
+  return openWorkspaceSurface({ host, target, options: { notebookId: context.notebookId } });
 }
 
 /** Both actions share placement, ownership, duplicate activation and per-file retry. */

@@ -79,7 +79,7 @@ describe('note deep links', () => {
   });
 
   it('routes anchor requests to the browser column tab when content lands there', async () => {
-    openWorkspaceSurface.mockResolvedValueOnce({ status: 'opened', host: 'browser-column', location: { host: 'browser-column', tabId: 'tab-7' } });
+    openWorkspaceSurface.mockResolvedValueOnce({ status: 'opened', host: 'browser-column', location: { host: 'browser-column', surfaceId: 'tab-7' } });
     await openNoteByDeepLink('flowix://open?b=My+Vault&f=Projects%2FPlan.md#%E7%BB%93%E8%AE%BA');
     const request = peekAgentLocationRequest('C:/Notes/Projects/Plan.md');
     expect(request?.host).toBe('browser-column');
@@ -95,7 +95,7 @@ describe('note deep links', () => {
 
   it('opens a note in the browser column without touching the work column', async () => {
     openWorkspaceSurface.mockResolvedValueOnce({
-      status: 'opened', host: 'browser-column', location: { host: 'browser-column', tabId: 'file:C:/Notes/Projects/Plan.md' },
+      status: 'opened', host: 'browser-column', location: { host: 'browser-column', surfaceId: 'file:C:/Notes/Projects/Plan.md' },
     });
     await openNoteByDeepLink('flowix://open?b=My+Vault&f=Projects%2FPlan.md', null, {
       destination: 'browser-column',
@@ -109,7 +109,7 @@ describe('note deep links', () => {
 
   it('publishes the anchor against the browser column tab', async () => {
     openWorkspaceSurface.mockResolvedValueOnce({
-      status: 'opened', host: 'browser-column', location: { host: 'browser-column', tabId: 'tab-note' },
+      status: 'opened', host: 'browser-column', location: { host: 'browser-column', surfaceId: 'tab-note' },
     });
     await openNoteByDeepLink('flowix://open?b=My+Vault&f=Projects%2FPlan.md#%E7%BB%93%E8%AE%BA', null, {
       destination: 'browser-column',

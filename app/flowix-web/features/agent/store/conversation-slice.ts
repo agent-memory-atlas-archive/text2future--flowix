@@ -17,6 +17,8 @@ import { normalizeConversationWorkspaceState } from "@features/agent/runtime/con
 import { normalizeWorkspacePath } from "@features/agent/runtime/workspace-path";
 import { createFreshExternalAgentThreadId } from "@features/agent/services/external-agent-runtime-adapters";
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('agent-session');
 type SessionSet = (
   updater: (state: ConversationContext) => Partial<ConversationContext> | ConversationContext,
 ) => void;
@@ -57,7 +59,7 @@ function enqueueInstancePersistence(
     operation()
       .then(() => undefined)
       .catch((error) => {
-        console.error(`[AgentSession] ${errorLabel}:`, error);
+        logger.error(`${errorLabel}:`, error);
       });
   const pending = previous ? previous.then(run, run) : run();
   instancePersistenceQueues.set(instanceId, pending);
@@ -136,7 +138,7 @@ function deletePersistedInstancesForThread(threadId: string): Promise<void> {
   return agentClient.deleteConversationInstancesForThread(threadId).then(
     () => undefined,
     (error) => {
-      console.error("[AgentSession] Failed to delete thread instances:", error);
+      logger.error("Failed to delete thread instances:", error);
       // Lifecycle cleanup must still complete if the best-effort persistence
       // request fails; the next list refresh will reconcile with the backend.
       return undefined;
@@ -265,7 +267,7 @@ export function createConversationSlice(
           return { conversationRegistry: { instances: next } };
         });
       } catch (error) {
-        console.error("[AgentSession] Failed to hydrate instances:", error);
+        logger.error('Failed to hydrate instances', { error });
       }
     },
     hydrateInstance: async (instanceId) => {
@@ -287,7 +289,7 @@ export function createConversationSlice(
         });
         return normalized;
       } catch (error) {
-        console.error("[AgentSession] Failed to hydrate instance:", error);
+        logger.error('Failed to hydrate instance', { error });
         throw error;
       }
     },

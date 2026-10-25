@@ -1,10 +1,10 @@
 import { beforeEach, expect, it } from 'vitest';
 import { restoreBrowserColumnSession } from './browser-column-persistence';
 import { BROWSER_COLUMN_DEFAULT_SPLIT_RATIO } from '../model/browser-column-layout';
-import type { BrowserColumnSessionState, BrowserColumnTab } from '../model/browser-column-tab';
+import type { BrowserColumnSessionState, BrowserColumnEntry } from '../model/browser-column-session';
 
-const current: BrowserColumnSessionState = { visible: false, splitRatio: BROWSER_COLUMN_DEFAULT_SPLIT_RATIO, tabs: [], activeTabId: null };
-const tab = (id: string, url: string): BrowserColumnTab => ({ id, title: id, icon: null, target: { kind: 'web', url } });
+const current: BrowserColumnSessionState = { visible: false, splitRatio: BROWSER_COLUMN_DEFAULT_SPLIT_RATIO, current: null, backStack: [], forwardStack: [] };
+const tab = (id: string, url: string): BrowserColumnEntry => ({ id, title: id, icon: null, target: { kind: 'web', url } });
 beforeEach(() => localStorage.removeItem('flowix.workspace.fourth-column.split-ratio'));
 
 it('keeps the default ratio when there is no legacy value, and migrates a valid legacy value', () => {
@@ -23,9 +23,8 @@ it('deduplicates target and tab identities even after replacing a duplicate with
     tab('active', 'https://two.example/'),
     tab('last', 'https://last.example/'),
   ] }, current);
-  expect(restored.tabs.map((tab) => tab.id)).toEqual(['active', 'last']);
-  expect(restored.activeTabId).toBe('active');
-  expect(new Set(restored.tabs.map((tab) => tab.id)).size).toBe(restored.tabs.length);
+  expect(restored.current?.id).toBe('active');
+  expect(restored.current?.id).toBe('active');
 });
 
 it('drops malformed targets and recovers selection without changing the surviving order', () => {
@@ -34,8 +33,8 @@ it('drops malformed targets and recovers selection without changing the survivin
     { ...tab('invalid', 'https://invalid.example/'), target: { kind: 'unknown' } },
     tab('first', 'https://one.example/'),
   ] }, current);
-  expect(restored.tabs.map((tab) => tab.id)).toEqual(['second', 'first']);
-  expect(restored.activeTabId).toBe('second');
+  expect(restored.current?.id).toBe('second');
+  expect(restored.current?.id).toBe('second');
 });
 
 it('ignores an incomplete collection identity while retaining the recoverable file address', () => {
@@ -44,6 +43,22 @@ it('ignores an incomplete collection identity while retaining the recoverable fi
     target: { kind: 'file-browser', activeFilePath: '/book/example.table.yaml', notebookId: 'book',
       collectionDisplay: { notebookId: 'book', collectionId: '', displayId: 'display' } },
   }] }, current);
-  expect(restored.tabs[0].target).toMatchObject({ kind: 'file-browser', activeFilePath: '/book/example.table.yaml' });
-  expect('collectionDisplay' in restored.tabs[0].target).toBe(false);
+  expect(restored.current!.target).toMatchObject({ kind: 'file-browser', activeFilePath: '/book/example.table.yaml' });
+  expect('collectionDisplay' in restored.current!.target).toBe(false);
+});
+
+it('restores independent visit stacks without deduplicating revisits or retaining malformed entries', () => {
+  const restored = restoreBrowserColumnSession({ activeTabId: 'current', tabs: [tab('current', 'https://current.example/')],
+    backStack: [tab('a', 'https://a.example/'), null, tab('b', 'https://a.example/')],
+    forwardStack: [tab('next', 'https://next.example/')],
+  }, current);
+  expect(restored.backStack.map((item) => item.id)).toEqual(['a', 'b']);
+  expect(restored.forwardStack.map((item) => item.id)).toEqual(['next']);
+  expect(restored.current).not.toBeNull();
+});
+
+it('restores the new single-content format and never resurrects legacy tabs after explicit clearing', () => {
+  const entry = tab('current', 'https://current.example/');
+  expect(restoreBrowserColumnSession({ current: entry, backStack: [entry], forwardStack: [], visible: true }, current)).toMatchObject({ current: entry, backStack: [entry], visible: true });
+  expect(restoreBrowserColumnSession({ current: null, tabs: [entry], activeTabId: entry.id }, current)).toMatchObject({ current: null, visible: false });
 });

@@ -27,7 +27,7 @@ import {
 } from '@shared/ui/overlay-scrollbar';
 import { translate, type AppLanguage, type I18nKey } from '@/lib/i18n';
 import type { AgentTypeKey } from '@/types/agent';
-import { AgentIcon } from '@features/agent/components/agent-icon';
+import { AgentIcon } from '@features/agent/public/icon-api';
 import { Kbd } from '@shared/ui/shortcut-kbd';
 import { MediaLibraryIcon, TableDocumentIcon } from '@features/memo/components/file-type-icon';
 import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';

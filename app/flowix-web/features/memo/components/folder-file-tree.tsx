@@ -158,7 +158,7 @@ export function FolderFileTree({
     }
     const parent = item.fullPath.slice(0, item.fullPath.replace(/\/+$/, '').lastIndexOf('/'));
     await tree.refresh(parent || folderPath);
-    toast.success(t('memo.fileTree.deleted', { name: item.name }));
+    toast.success(t('status.deleteCompleted'));
   }, [folderPath, t, tree]);
 
   const handleRename = useCallback(async (item: DocTreeItem, nextName: string) => {

@@ -48,6 +48,11 @@ vi.mock('@features/memo/store/note-store', () => ({ useNoteStore: (selector: (st
 vi.mock('@features/agent/hooks/use-agent-events', () => ({
   useAgentEvents: mocks.useAgentEvents,
 }));
+// 运行中投影的发布器同样读 agent-session-store（连带 platform client）。
+// 本文件只验证 AgentWindowEffects 的生命周期编排，不验证投影计算，因此桩掉。
+vi.mock('@features/agent/store/running-agent-selector', () => ({
+  useRunningAgentTypeIndexPublisher: vi.fn(),
+}));
 vi.mock('@features/agent/store/agent-runtime-store', () => ({
   useAgentRuntimeStore: (selector: (state: { refresh: typeof mocks.refreshRuntime }) => unknown) => (
     selector({ refresh: mocks.refreshRuntime })
@@ -232,7 +237,9 @@ describe('AgentWindowEffects', () => {
     expect(mocks.loadWorkspace).not.toHaveBeenCalled();
     expect(mocks.initializePiMode).not.toHaveBeenCalled();
     expect(mocks.initializeLegacySessionSettings).not.toHaveBeenCalled();
-    expect(mocks.useAgentEvents).toHaveBeenCalledOnce();
+    // 事件订阅是 stage3 之后按需挂载的（它背后是整个 agent-session-store），
+    // 所以首帧前不应发生，见下方 admitStartupStage3 之后的断言。
+    expect(mocks.useAgentEvents).not.toHaveBeenCalled();
     expect(mocks.acquireMemoEventBridge).toHaveBeenCalledOnce();
     expect(mocks.refreshRuntime).not.toHaveBeenCalled();
     expect(mocks.loadWorkspace).not.toHaveBeenCalled();
@@ -247,6 +254,8 @@ describe('AgentWindowEffects', () => {
     expect(mocks.refreshRuntime).toHaveBeenCalledWith({ force: true });
     expect(mocks.prewarmNotebookCache).toHaveBeenCalledOnce();
     expect(mocks.refreshCloudPiModelProviderAtStartup).not.toHaveBeenCalled();
+    // stage3 之后懒加载的订阅才挂上（多一次动态 import，需要等一拍）。
+    await vi.waitFor(() => expect(mocks.useAgentEvents).toHaveBeenCalledOnce());
 
     await act(async () => root.render(createElement('div', null,
       createElement(MainWorkspaceSync, { key: 'during', revision: 'during' }),
@@ -291,6 +300,9 @@ describe('AgentWindowEffects', () => {
     document.body.appendChild(container);
     const root = createRoot(container);
     await act(async () => root.render(createElement(AgentWindowEffects)));
+    // 首帧快照现在由 stage3 统一触发（cloud/model catalog 那条链是懒加载的）。
+    await act(async () => admitStartupStage3());
+    await vi.waitFor(() => expect(mocks.getCloudState).toHaveBeenCalledOnce());
 
     const signedIn = {
       revision: 2,
@@ -298,12 +310,15 @@ describe('AgentWindowEffects', () => {
       authStatus: 'authenticated' as const,
       account: {
         user: { id: 'user-1', email: 'member@example.com', displayName: 'Member' },
-        protocolEpoch: 2 as const,
+        protocolEpoch: 3 as const,
       },
     };
     await act(async () => mocks.cloudStateHandler?.(signedIn));
-    expect(mocks.setPiCloudAccount).toHaveBeenCalledWith('user-1', 2);
+    // 目录同步走动态 import：事件回调返回只是入队，真正的调用在下一拍。
+    // setPiCloudAccount 的签名带第三个可选参数 membership；该状态没有会员信息，
+    // 因此调用方显式传 undefined，断言按真实签名书写。
     await vi.waitFor(() => {
+      expect(mocks.setPiCloudAccount).toHaveBeenCalledWith('user-1', 2, undefined);
       expect(mocks.refreshCloudPiModelProviderAtStartup).toHaveBeenCalledOnce();
       expect(mocks.refreshAgentModelCatalog).toHaveBeenCalledWith('pi');
     });
@@ -321,7 +336,9 @@ describe('AgentWindowEffects', () => {
       authenticated: false,
       authStatus: 'signed_out',
     }));
-    expect(mocks.setPiCloudAccount).toHaveBeenLastCalledWith(null, 3);
+    await vi.waitFor(() => {
+      expect(mocks.setPiCloudAccount).toHaveBeenLastCalledWith(null, 3, undefined);
+    });
     expect(mocks.piCloudAccountId).toBeNull();
 
     await act(async () => root.unmount());

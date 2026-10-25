@@ -1,0 +1,15 @@
+{
+  "layers": {
+    "foundation": { "paths": ["lib", "shared", "platform"] },
+    "features": { "paths": ["features/*"] },
+    "coordination": { "paths": ["app", "features/workspace", "features/surface", "features/shell"] }
+  },
+  "rules": {
+    "foundationMustNotImportFeatures": true,
+    "featuresMustUsePublicEntrypoints": true,
+    "noDirectTauriImportOutsidePlatform": true
+  },
+  "grandfathered": {
+    "privateCrossFeatureImports": "architecture-baseline.json"
+  }
+}

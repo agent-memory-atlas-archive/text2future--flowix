@@ -72,8 +72,8 @@ describe('media library surface save barrier', () => {
       await Promise.resolve();
     });
 
-    expect(container.textContent).toContain('mediaLibrary.refreshFailed');
-    expect(container.textContent).toContain('temporary disk read failure');
+    expect(container.textContent).toContain('errors.friendly.mediaRefresh');
+    expect(container.textContent).not.toContain('temporary disk read failure');
     expect(container.querySelector('[role="alert"]')).not.toBeNull();
 
     const retry = [...container.querySelectorAll('button')].find((button) => button.textContent === 'error.retry');
@@ -84,7 +84,7 @@ describe('media library surface save barrier', () => {
       await Promise.resolve();
     });
 
-    expect(container.textContent).not.toContain('mediaLibrary.refreshFailed');
+    expect(container.textContent).not.toContain('errors.friendly.mediaRefresh');
     expect(mocks.read).toHaveBeenCalledWith('/book/library.lib.yaml', '/book');
   });
 

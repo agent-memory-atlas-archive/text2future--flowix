@@ -2121,7 +2121,7 @@ export class ExternalAgentSettingsController {
     reasoningSection.textContent = this.t("agent.reasoningDepth.title");
     if (this.getTypeKey() === "pi") {
       const reasoningGroup = document.createElement("div");
-      reasoningGroup.className = "pi-model-picker__reasoning";
+      reasoningGroup.className = "agent-pi-model-picker__reasoning";
       reasoningGroup.setAttribute("role", "group");
       reasoningGroup.setAttribute("aria-label", this.t("agent.reasoningDepth.title"));
       reasoningGroup.append(reasoningSection);

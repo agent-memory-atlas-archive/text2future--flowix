@@ -5,6 +5,8 @@ import { useNotebookBackgroundStore } from '../store/notebook-background-store';
 import { useNotebookMediaMaintenanceStore } from '../store/notebook-media-maintenance-store';
 import { useNoteStore } from '../store/note-store';
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('memo/services/notebook-background-service');
 /** Subscribe before taking the snapshot; revisions reject late snapshot/event results. */
 export function mountNotebookBackgroundUpdates(): () => void {
   let disposed = false;
@@ -23,7 +25,7 @@ export function mountNotebookBackgroundUpdates(): () => void {
   };
   const reconcile = () => {
     void notebooks.getBackgroundStatus().then((statuses) => statuses.forEach(apply))
-      .catch((error) => console.warn('Notebook maintenance status unavailable:', error));
+      .catch((error) => logger.warn('Notebook maintenance status unavailable:', error));
   };
   const stop = subscribe<NotebookBackgroundStatus>('flowix:notebook-maintenance', apply, { onListenerReady: reconcile });
   reconcile();
@@ -32,7 +34,7 @@ export function mountNotebookBackgroundUpdates(): () => void {
   };
   const reconcileMedia = () => {
     void notebooks.getMediaMaintenanceStatus().then((statuses) => statuses.forEach(applyMedia))
-      .catch((error) => console.warn('Media maintenance status unavailable:', error));
+      .catch((error) => logger.warn('Media maintenance status unavailable:', error));
   };
   const stopMedia = subscribe<NotebookMediaMaintenanceStatus>(
     'flowix:media-maintenance', applyMedia, { onListenerReady: reconcileMedia },

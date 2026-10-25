@@ -2,7 +2,7 @@ import { canonicalPath } from '@/lib/path';
 import { findFileDisplayId, listFileDisplayIdentities, suspendFileDisplayReconciliation } from '@/lib/file-display-registry';
 import { getWorkspaceDocumentState, getWorkspaceDocumentHistory, replaceWorkspaceDocumentHistoryPath } from '@features/document/public/workspace-api';
 import { getWorkspaceMemoState, updateNoteLinksAfterMove } from '@features/memo/public/workspace-api';
-import { useBrowserColumnStore } from '../store/browser-column-store';
+import { getBrowserColumnEntries, useBrowserColumnStore } from '../store/browser-column-store';
 import { useWorkColumnStore } from '../store/work-column-store';
 import { useWorkspaceRestoreStore } from '../store/workspace-restore-store';
 import { replaceExternalDocumentPath } from './workspace-navigation';
@@ -44,7 +44,7 @@ export function applyNotebookPathMove(input: {
   for (const target of [navigation.target, navigation.pendingTarget, navigation.previousTarget, desired]) {
     if (target?.kind === 'external') candidates.push(target.path);
   }
-  for (const tab of useBrowserColumnStore.getState().tabs) {
+  for (const tab of getBrowserColumnEntries(useBrowserColumnStore.getState())) {
     if (tab.target.kind === 'file-browser') candidates.push(tab.target.activeFilePath ?? undefined);
   }
   const resume = suspendFileDisplayReconciliation();
@@ -67,11 +67,10 @@ export function applyNotebookPathMove(input: {
       useWorkColumnStore.setState({ navigation: { ...navigation, target, pendingTarget, previousTarget } });
     }
     const browser = useBrowserColumnStore.getState();
-    const tabs = browser.tabs.map((tab) => {
+    browser.updateEntries((tab) => {
       const target = rebase(tab.target);
       return target === tab.target ? tab : { ...tab, target };
     });
-    if (tabs.some((tab, index) => tab !== browser.tabs[index])) useBrowserColumnStore.setState({ tabs });
     const desired = useWorkspaceRestoreStore.getState().desiredTarget;
     if (desired) {
       const updated = rebase(desired);

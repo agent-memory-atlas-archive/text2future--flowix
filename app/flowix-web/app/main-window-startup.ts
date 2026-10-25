@@ -22,6 +22,8 @@ import { getWorkspaceMemoState } from '@features/memo/public/workspace-api';
 import { admitStartupStage3, runStartupStage3Task } from '@/lib/startup-stage3';
 import { waitForWorkbenchMounted } from '@/lib/workbench-mount';
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('app/main-window-startup');
 let startupAttemptSequence = 0;
 let startupPromise: Promise<void> | null = null;
 let workspaceRestorationPromise: Promise<void> = Promise.resolve();
@@ -61,7 +63,7 @@ async function performMainWindowStartup(): Promise<void> {
   const startupAttemptId = `${Date.now()}-${++startupAttemptSequence}`;
   const logStage = (stage: string) => {
     const elapsedMs = Math.round(performance.now() - startedAt);
-    console.info('[perf:startup]', stage, { elapsedMs });
+    logger.info('perf:startup', { stage, elapsedMs });
     if (nativeRuntime) void boot.recordStartupStage(stage, elapsedMs, startupAttemptId).catch(() => undefined);
   };
   // Keep only workbench prerequisites in this awaited chain. Content hydration
@@ -131,7 +133,7 @@ async function performMainWindowStartup(): Promise<void> {
     }).catch((error) => {
       const targetStillDesired = JSON.stringify(captureWorkspaceRestoreTarget()) === JSON.stringify(desiredTarget);
       if (targetStillDesired) {
-        console.warn('Workspace content restoration unavailable:', error);
+        logger.warn('Workspace content restoration unavailable:', error);
         setWorkspaceRestoreStatus('unavailable');
       } else {
         logStage('workspace-restore-superseded');

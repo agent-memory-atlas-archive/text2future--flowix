@@ -89,14 +89,13 @@ function prepareWorkspace(oldPath: string): void {
   });
   useBrowserColumnStore.setState({
     visible: true,
-    activeTabId: 'rename-integration-tab',
-    tabs: [{
+    current: {
       id: 'rename-integration-tab', title: 'Old.md', icon: null,
       target: {
         kind: 'file-browser', folderPath: root, notebookId, scopePath: root,
         fileTreeVisible: true, fileTreeWidth: 220, activeFilePath: oldPath,
       },
-    }],
+    },
   });
   useWorkspaceRestoreStore.getState().setDesiredTarget({ kind: 'external', path: oldPath, scopePath: root });
   useDocumentHistoryStore.getState().pushBack({ kind: 'external', path: oldPath, scopePath: root, openedAt: 1 });
@@ -183,7 +182,7 @@ describe('main-window rename event integration', () => {
     expect(useDocumentStore.getState().currentDocumentPath).toBe(oldPath);
     expect(useNoteStore.getState().selectedNote?.relativePath).toBe('Folder/Old.md');
     expect(useNoteStore.getState().notes[0]?.relativePath).toBe('Folder/Old.md');
-    const tabDuringRename = useBrowserColumnStore.getState().tabs[0];
+    const tabDuringRename = useBrowserColumnStore.getState().current;
     expect(tabDuringRename?.target.kind === 'file-browser' ? tabDuringRename.target.activeFilePath : null).toBe(oldPath);
 
     mutationResolvers.shift()!({
@@ -223,7 +222,7 @@ describe('main-window rename event integration', () => {
     expect(document.currentDocumentPath).toBe(finalPath);
     expect(document.activeExternalSession).toMatchObject({ openedAt, transitionId, relativePath: 'Folder/Final.md' });
     expect(useWorkColumnStore.getState().navigation.target).toMatchObject({ kind: 'external', path: finalPath });
-    expect(useBrowserColumnStore.getState().tabs[0]?.target).toMatchObject({ kind: 'file-browser', activeFilePath: finalPath });
+    expect(useBrowserColumnStore.getState().current?.target).toMatchObject({ kind: 'file-browser', activeFilePath: finalPath });
     expect(useWorkspaceRestoreStore.getState().desiredTarget).toMatchObject({ kind: 'external', path: finalPath });
     expect(useDocumentHistoryStore.getState().backStack[0]).toMatchObject({ kind: 'external', path: finalPath });
     expect(card).toMatchObject({ relativePath: 'Folder/Final.md', filename: 'Final.md', title: 'Final', renderKey: 'stable-note-card' });

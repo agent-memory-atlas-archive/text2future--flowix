@@ -142,6 +142,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn conversation_history_excludes_placeholders_but_keeps_untitled_messages() {
+        let manager = ThreadManager::for_tests();
+        for (id, time) in [("draft", 400), ("placeholder", 300), ("untitled", 200), ("named", 100)] {
+            seed_conversation(&manager, id, "codex", Some("nb-visible"), time).await;
+        }
+        {
+            let conn = manager.lock_conn();
+            conn.execute("DELETE FROM threads_index WHERE instance_id = 'draft'", []).unwrap();
+            conn.execute("UPDATE threads_index SET title = '' WHERE instance_id IN ('placeholder', 'untitled')", []).unwrap();
+            conn.execute("INSERT INTO thread_messages (id, thread_id, role, content, timestamp, sequence) VALUES ('visible-message', 'thread-untitled', 'user', 'Hello', '0', 1)", []).unwrap();
+        }
+        let rows = manager.list_agent_conversation_instances_page(
+            Some("nb-visible".into()), None, None, 10,
+        ).await.unwrap();
+        assert_eq!(rows.iter().map(|row| row.instance_id.as_str()).collect::<Vec<_>>(), vec!["untitled", "named"]);
+        assert!(rows[0].has_messages);
+        assert!(!rows[1].has_messages);
+        // Hidden rows remain recoverable by id; this is a presentation filter.
+        assert!(manager.get_agent_conversation_instance("placeholder").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn conversation_visibility_includes_external_history_and_ignores_status_events() {
+        let manager = ThreadManager::for_tests();
+        for (id, time) in [("product", 600), ("provider", 500), ("legacy", 400), ("status", 300), ("wrong-runtime", 200), ("legacy-json", 100)] {
+            seed_conversation(&manager, id, "codex", Some("nb-external"), time).await;
+        }
+        {
+            let conn = manager.lock_conn();
+            conn.execute("UPDATE threads_index SET title = ''", []).unwrap();
+            // Old event journals can be keyed by provider identity rather than product id.
+            conn.execute("INSERT INTO threads (thread_id, agent_id, title, created_at, updated_at) VALUES ('provider-session', 'codex', '', 0, 0), ('legacy-session', 'codex', '', 0, 0)", []).unwrap();
+            conn.execute("INSERT INTO threads_codex (thread_id, external_id) VALUES ('thread-provider', 'provider-session')", []).unwrap();
+            conn.execute("INSERT INTO thread_external_sessions (thread_id, runtime, external_session_id, created_at, updated_at) VALUES ('thread-legacy', 'codex', 'legacy-session', 0, 0)", []).unwrap();
+            for (thread_id, runtime, kind, payload) in [
+                ("thread-product", "codex", Some("user_message"), r#"{"kind":"user_message","text":"Hello"}"#),
+                ("provider-session", "codex", Some("text"), r#"{"kind":"text","text":"Answer"}"#),
+                ("legacy-session", "codex", Some("tool_call"), r#"{"kind":"tool_call","name":"test"}"#),
+                ("thread-status", "codex", Some("session_resolved"), r#"{"kind":"session_resolved"}"#),
+                ("thread-wrong-runtime", "pi", Some("text"), r#"{"kind":"text","text":"Other runtime"}"#),
+                ("thread-legacy-json", "codex", None, r#"{"kind":"user_message","text":"Legacy metadata"}"#),
+            ] {
+                conn.execute("INSERT INTO agent_external_events (thread_id, runtime, event_kind, normalized_json, created_at) VALUES (?1, ?2, ?3, ?4, 0)", params![thread_id, runtime, kind, payload]).unwrap();
+            }
+        }
+        let rows = manager.list_agent_conversation_instances_page(Some("nb-external".into()), None, None, 2).await.unwrap();
+        assert_eq!(rows.iter().map(|row| row.instance_id.as_str()).collect::<Vec<_>>(), vec!["product", "provider"]);
+        assert!(rows.iter().all(|row| row.has_messages));
+        let cursor = AgentConversationCursor { updated_at: rows[1].updated_at, instance_id: rows[1].instance_id.clone() };
+        let next = manager.list_agent_conversation_instances_page(Some("nb-external".into()), None, Some(cursor), 2).await.unwrap();
+        assert_eq!(next.iter().map(|row| row.instance_id.as_str()).collect::<Vec<_>>(), vec!["legacy", "legacy-json"]);
+        assert_eq!(manager.count_agent_conversation_instances_by_notebook(Some("nb-external".into())).await.unwrap(), 4);
+        let counts = manager.list_agent_conversation_type_counts_by_notebook(Some("nb-external".into())).await.unwrap();
+        assert_eq!(counts[0].count, 4);
+        let favorites = manager.get_agent_conversation_instances_by_ids("nb-external".into(), vec!["provider".into(), "legacy".into()]).await.unwrap();
+        assert!(favorites.iter().all(|row| row.has_messages));
+        assert!(manager.get_agent_conversation_instance("provider").await.unwrap().unwrap().has_messages);
+        assert!(!manager.get_agent_conversation_instance("status").await.unwrap().unwrap().has_messages);
+    }
+
+    #[tokio::test]
     async fn page_returns_latest_n_when_before_is_none() {
         let manager = ThreadManager::for_tests();
         seed_thread(&manager, "t1", 25).await;

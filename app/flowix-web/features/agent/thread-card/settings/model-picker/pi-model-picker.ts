@@ -44,37 +44,37 @@ function createModelGroups(
   providerLabelPlacement: ProviderLabelPlacement,
 ): HTMLElement {
   const list = document.createElement("div");
-  list.className = "pi-model-picker__models";
+  list.className = "agent-pi-model-picker__models";
 
   groupModels(models).forEach((group) => {
     const groupElement = document.createElement("section");
-    groupElement.className = "pi-model-picker__provider";
+    groupElement.className = "agent-pi-model-picker__provider";
     groupElement.setAttribute("role", "group");
     groupElement.setAttribute("aria-label", group.label);
 
     if (providerLabelPlacement === "group") {
       const heading = document.createElement("div");
-      heading.className = "pi-model-picker__provider-label";
+      heading.className = "agent-pi-model-picker__provider-label";
       heading.textContent = group.label;
       groupElement.append(heading);
     }
 
     group.models.forEach((model) => {
       const item = props.createModelItem(model);
-      item.classList.add("pi-model-picker__item");
+      item.classList.add("agent-pi-model-picker__item");
       const subtitle = isFlowixCloudModelOption(model) ? model.subtitle?.trim() : undefined;
       if (subtitle) item.title = subtitle;
       const checkmark = item.querySelector(".agent-thread-card__copy-icon");
       if (providerLabelPlacement === "item") {
         const providerName = document.createElement("span");
-        providerName.className = "pi-model-picker__provider-name";
+        providerName.className = "agent-pi-model-picker__provider-name";
         providerName.textContent = group.label;
         providerName.title = group.label;
         item.insertBefore(providerName, checkmark);
       }
       if (isFlowixCloudModelOption(model) && model.creditMultiplier != null) {
         const multiplier = document.createElement("span");
-        multiplier.className = "pi-model-picker__multiplier";
+        multiplier.className = "agent-pi-model-picker__multiplier";
         multiplier.textContent = `${model.creditMultiplier.toFixed(2)}x`;
         multiplier.setAttribute(
           "aria-label",
@@ -84,13 +84,13 @@ function createModelGroups(
       }
       if (!checkmark) {
         const checkmarkPlaceholder = document.createElement("span");
-        checkmarkPlaceholder.className = "pi-model-picker__checkmark-placeholder";
+        checkmarkPlaceholder.className = "agent-pi-model-picker__checkmark-placeholder";
         checkmarkPlaceholder.setAttribute("aria-hidden", "true");
         item.append(checkmarkPlaceholder);
       }
       const providerIcon = item.querySelector(".agent-thread-card__model-provider-icon");
       if (providerIcon) {
-        providerIcon.classList.add("pi-model-picker__provider-icon");
+        providerIcon.classList.add("agent-pi-model-picker__provider-icon");
         item.prepend(providerIcon);
       }
       item.removeAttribute("role");
@@ -117,10 +117,10 @@ function createModelCategory(
   emptyLabel?: string,
 ): HTMLElement {
   const category = document.createElement("section");
-  category.className = "pi-model-picker__category";
+  category.className = "agent-pi-model-picker__category";
 
   const heading = document.createElement("div");
-  heading.className = "agent-thread-card__codex-settings-title pi-model-picker__category-label";
+  heading.className = "agent-thread-card__codex-settings-title agent-pi-model-picker__category-label";
   heading.setAttribute("role", "heading");
   heading.setAttribute("aria-level", "3");
   heading.textContent = label;
@@ -130,7 +130,7 @@ function createModelCategory(
     category.append(createModelGroups(models, props, providerLabelPlacement));
   } else if (emptyLabel) {
     const empty = document.createElement("div");
-    empty.className = "pi-model-picker__empty pi-model-picker__empty--category";
+    empty.className = "agent-pi-model-picker__empty agent-pi-model-picker__empty--category";
     empty.textContent = emptyLabel;
     category.append(empty);
   }
@@ -140,11 +140,11 @@ function createModelCategory(
 
 export function createPiModelPicker(props: PiModelPickerProps): HTMLElement {
   const root = document.createElement("div");
-  root.className = "pi-model-picker";
+  root.className = "agent-pi-model-picker";
 
   if (props.models.length === 0) {
     const empty = document.createElement("div");
-    empty.className = "pi-model-picker__empty";
+    empty.className = "agent-pi-model-picker__empty";
     empty.textContent = props.emptyLabel;
     root.append(empty);
     return root;
@@ -154,14 +154,14 @@ export function createPiModelPicker(props: PiModelPickerProps): HTMLElement {
   const mineModels = props.models.filter((model) => !isFlowixCloudModelOption(model));
   if (!props.showMemberSection || memberModels.length === 0) {
     const panel = document.createElement("div");
-    panel.className = "pi-model-picker__panel";
+    panel.className = "agent-pi-model-picker__panel";
     panel.append(createModelGroups(props.models, props, "item"));
     root.append(panel);
     return root;
   }
 
   const panel = document.createElement("div");
-  panel.className = "pi-model-picker__panel";
+  panel.className = "agent-pi-model-picker__panel";
   panel.append(
     createModelCategory(props.memberLabel, memberModels, props, "none"),
     createModelCategory(

@@ -359,7 +359,7 @@ function RunningAgentConversationsGroup({ onClose }: RunningAgentConversationsGr
 
   const openRunningInstance = async (instance: AgentConversationInstance) => {
     prepareAgentConversationSelection(instance);
-    await openWorkspaceSurface({ target: { kind: 'agent-conversation', instanceId: instance.instanceId } });
+    await openWorkspaceSurface({ host: 'main-third', target: { kind: 'agent-conversation', instanceId: instance.instanceId } });
     onClose();
   };
 

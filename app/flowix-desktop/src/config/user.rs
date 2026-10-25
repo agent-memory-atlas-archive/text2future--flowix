@@ -718,7 +718,7 @@ impl UserConfigStore {
     /// Run local configuration imports during the explicit version
     /// initialization phase, before settings IPC is enabled.
     pub fn initialize_legacy_config_migrations(&self) -> Result<(), String> {
-        self.with_runtime_storage_rebuild(|| self.initialize_legacy_config_migrations_inner())
+        self.initialize_legacy_config_migrations_inner()
     }
 
     fn initialize_legacy_config_migrations_inner(&self) -> Result<(), String> {
@@ -750,40 +750,13 @@ impl UserConfigStore {
     /// Opening the store recreates a missing database/tables; existing presets
     /// retain their identities and user values.
     pub fn ensure_runtime_storage(&self) -> Result<(), String> {
-        self.with_runtime_storage_rebuild(|| {
-            self.property_presets.initialize_legacy_schema()?;
-            self.property_presets.initialize_system_presets()
-        })
+        self.initialize_current_runtime_storage()
     }
 
-    fn with_runtime_storage_rebuild(
-        &self,
-        mut operation: impl FnMut() -> Result<(), String>,
-    ) -> Result<(), String> {
-        flowix_core::memo_file::with_database_rebuild(&self.config_dir.join("db/local.db"), || {
-            operation().map_err(|message| {
-                let invalid_data = [
-                    "no such",
-                    "has no column",
-                    "malformed",
-                    "not a database",
-                    "Invalid column",
-                    "invalid column",
-                    "datatype mismatch",
-                ]
-                .iter()
-                .any(|pattern| message.contains(pattern));
-                std::io::Error::new(
-                    if invalid_data {
-                        std::io::ErrorKind::InvalidData
-                    } else {
-                        std::io::ErrorKind::Other
-                    },
-                    message,
-                )
-            })
-        })
-        .map_err(|error| error.to_string())
+    /// The startup coordinator owns recreation of shared local.db, so property
+    /// initialization must not independently replace the notebook registry.
+    pub fn initialize_current_runtime_storage(&self) -> Result<(), String> {
+        self.property_presets.initialize_runtime_storage()
     }
 
     /// Restore process-local state after persistent migration completion.
@@ -873,9 +846,10 @@ impl UserConfigStore {
     }
 
     pub fn get_property_presets(&self) -> Result<PropertyPresetRegistry, UserConfigError> {
-        self.property_presets
-            .get()
-            .map_err(UserConfigError::InvalidConfig)
+        Ok(self.property_presets.get().unwrap_or_else(|error| {
+            tracing::warn!(%error, "property presets unavailable; returning runtime defaults without changing stored data");
+            PropertyPresetStore::runtime_defaults()
+        }))
     }
 
     pub fn patch_property_presets(
@@ -1789,6 +1763,8 @@ mod tests {
         .unwrap();
 
         let store = test_user_config_store(home.path().to_path_buf());
+        store.initialize_legacy_config_migrations().unwrap();
+        store.prepare_initialized_runtime();
         let migrated = store.get_property_presets().unwrap();
         assert_eq!(migrated.fields.len(), 1);
         assert!(migrated.fields[0]

@@ -1,10 +1,11 @@
 import { useShallow } from 'zustand/react/shallow';
 import { useNoteStore } from '@features/memo/store/note-store';
 import { noteRepository, notebookRepository } from '@features/memo/services/note-repository';
+import { notes as noteApi, type NoteTemplate } from '@platform/tauri/client';
 
 export { MemoList } from '@features/memo/components/memo-list';
-export { useNotebookNoteIcons } from '@features/memo/hooks/use-notebook-note-icons';
-export { NotebookNoteTabIcon } from '@features/memo/components/notebook-note-tab-icon';
+export { useNotebookNoteIcon } from '@features/memo/hooks/use-notebook-note-icon';
+export { NotebookNoteIcon } from '@features/memo/components/notebook-note-icon';
 export { NotebookTreeFileIcon } from '@features/memo/components/notebook-tree-file-icon';
 export { useMemoListHoverPreview } from '@features/memo/components/use-memo-list-hover-preview';
 export { MemoListTitlebarWin } from '@features/memo/components/memo-list-titlebar-win';
@@ -20,6 +21,7 @@ export {
   type MemoItem,
   type Notebook,
 } from '@features/memo/store';
+export type { NoteTemplate };
 export { startNotebookImportWithMonitoring } from '@features/memo/services/notebook-creation-service';
 
 /** Persist a notebook template task; the application coordinator starts it when the workspace is ready. */
@@ -45,6 +47,16 @@ export async function createShellNote(notebookId: string) {
   return created;
 }
 
+export function listShellNoteTemplates(): Promise<NoteTemplate[]> {
+  return noteApi.listTemplates();
+}
+
+export async function createShellNoteFromTemplate(templateId: string, notebookId: string) {
+  const created = await noteApi.createFromTemplate(templateId, notebookId);
+  useNoteStore.getState().upsertCreatedNote(created);
+  return created;
+}
+
 export function useShellMemoViewModel() {
   return useNoteStore(useShallow((state) => ({
     notebooks: state.notebooks,
@@ -66,3 +78,5 @@ export function showAgentConversationsView(): void {
 }
 
 /** The one list data source that must be ready before the workspace is shown. */
+
+export { useAccessSpaceSelectionCount, useAccessSpaceSelectedPaths, useAccessSpaceSelectionContentKinds } from '@features/memo/store/notebook-tree-selection-store';

@@ -23,3 +23,20 @@ export function styleAccessibleIframeScrollbar(iframe: HTMLIFrameElement | null)
     // Cross-origin documents cannot be styled from the host page.
   }
 }
+
+/** Keep one native scrollbar per HTML scrolling region. Only its thumb color
+ * changes while scrolling; overflow, geometry and native interactions stay owned
+ * by the page/browser. Match the editor's platform-specific thumb colors.
+ */
+export function localHtmlScrollbarCss(color: string, mac: boolean): string {
+  const thumb = `color-mix(in oklch, ${color} ${mac ? 78 : 34}%, transparent)`;
+  return `
+    * { scrollbar-width: ${mac ? 'auto' : 'thin'} !important; scrollbar-color: ${mac ? 'auto' : 'transparent transparent'} !important; }
+    ::-webkit-scrollbar { width: 6px !important; height: 6px !important; }
+    ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent !important; }
+    ::-webkit-scrollbar-thumb { background: transparent !important; border-radius: 999px !important; }
+    [data-flowix-html-scrolling="true"] { scrollbar-color: ${mac ? 'auto' : `${thumb} transparent`} !important; }
+    [data-flowix-html-scrolling="true"]::-webkit-scrollbar-thumb { background: ${thumb} !important; }
+    [data-flowix-html-scrolling="true"]::-webkit-scrollbar-thumb:hover { background: ${color} !important; }
+  `;
+}

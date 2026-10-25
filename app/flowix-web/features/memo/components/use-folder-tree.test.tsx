@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { files, type DocTreeItem } from '@platform/tauri/client';
+import { noteMetadata } from '../services/note-metadata-service';
 import {
   flattenLoadedTree,
   flattenVisibleTree,
@@ -48,6 +49,7 @@ describe('useFolderTree', () => {
   let root: Root | null = null;
 
   beforeEach(() => {
+    noteMetadata.clear();
     getTreeMock.mockReset();
     getDirChildrenMock.mockReset();
     lastState = null;
@@ -110,6 +112,69 @@ describe('useFolderTree', () => {
     act(() => lastState?.updateNoteMetadata('/root/sub/a.md', { ...latest, icon: null }));
     expect(lastState?.nodes.get('/root/sub/a.md')?.memoMeta?.icon).toBeNull();
     expect(lastState?.nodes.get('/root/sub')?.children?.[0].memoMeta?.icon).toBeNull();
+  });
+
+  it.each(['refresh', 'reload'] as const)('keeps confirmed metadata when a later %s has no indexed metadata', async (mode) => {
+    const path = '/root/a.md';
+    getTreeMock.mockResolvedValue([file(path, 'a.md')]);
+    mount('/root');
+    await vi.waitFor(() => expect(lastState?.loading).toBe(false));
+    const latest = { icon: 'flashlight', colors: ['blue' as const], favorited: true };
+    act(() => lastState?.updateNoteMetadata(path, latest));
+    getTreeMock.mockResolvedValueOnce([{ ...file(path, 'a.md'), memoMeta: null }]);
+    await act(async () => { await (mode === 'reload' ? lastState?.reload() : lastState?.refresh()); });
+    expect(lastState?.rootChildren[0].memoMeta).toEqual(latest);
+    expect(lastState?.nodes.get(path)?.memoMeta).toEqual(latest);
+    // An explicit empty metadata object is a real clear, not missing data.
+    const cleared = { icon: null, colors: [], favorited: false };
+    getTreeMock.mockResolvedValueOnce([{ ...file(path, 'a.md'), memoMeta: cleared }]);
+    await act(async () => { await lastState?.refresh(); });
+    expect(lastState?.rootChildren[0].memoMeta).toEqual(cleared);
+  });
+
+  it('keeps deep note metadata across a later directory refresh without metadata', async () => {
+    const path = '/root/a/b/note.md';
+    getTreeMock.mockResolvedValue([dir('/root/a', 'a')]);
+    getDirChildrenMock.mockImplementation(async (directory) => directory === '/root/a'
+      ? [dir('/root/a/b', 'b')] : [file(path, 'note.md')]);
+    mount('/root');
+    await vi.waitFor(() => expect(lastState?.loading).toBe(false));
+    await act(async () => { lastState?.toggle('/root/a'); });
+    await act(async () => { lastState?.toggle('/root/a/b'); });
+    const latest = { icon: 'flashlight', colors: ['blue' as const], favorited: true };
+    act(() => lastState?.updateNoteMetadata(path, latest));
+    await act(async () => { await lastState?.refresh('/root/a/b'); });
+    expect(flattenVisibleTree(lastState!).find(({ item }) => item.fullPath === path)?.item.memoMeta).toEqual(latest);
+  });
+
+  it('drops cached metadata after deletion instead of applying it to a new file at the same path', async () => {
+    const path = '/root/a.md';
+    getTreeMock.mockResolvedValueOnce([file(path, 'a.md')]);
+    mount('/root');
+    await vi.waitFor(() => expect(lastState?.loading).toBe(false));
+    act(() => lastState?.updateNoteMetadata(path, { icon: 'flashlight', colors: ['blue'], favorited: true }));
+    getTreeMock.mockResolvedValueOnce([]);
+    await act(async () => { await lastState?.refresh(); });
+    getTreeMock.mockResolvedValueOnce([file(path, 'a.md')]);
+    await act(async () => { await lastState?.refresh(); });
+    expect(lastState?.rootChildren[0].memoMeta).toBeNull();
+  });
+
+  it('updates and clears note metadata several folders deep in the visible tree', async () => {
+    getTreeMock.mockResolvedValue([dir('/root/a', 'a')]);
+    getDirChildrenMock.mockImplementation(async (path) => path === '/root/a'
+      ? [dir('/root/a/b', 'b')]
+      : [file('/root/a/b/note.md', 'note.md')]);
+    mount('/root');
+    await vi.waitFor(() => expect(lastState?.loading).toBe(false));
+    await act(async () => { lastState?.toggle('/root/a'); });
+    await act(async () => { lastState?.toggle('/root/a/b'); });
+    const latest = { icon: 'flashlight', colors: ['blue' as const], favorited: true };
+    act(() => lastState?.updateNoteMetadata('/root/a/b/note.md', latest));
+    const visibleNote = () => flattenVisibleTree(lastState!).find(({ item }) => item.fullPath === '/root/a/b/note.md')?.item;
+    expect(visibleNote()?.memoMeta).toEqual(latest);
+    act(() => lastState?.updateNoteMetadata('/root/a/b/note.md', { icon: null, colors: [], favorited: false }));
+    expect(visibleNote()?.memoMeta).toEqual({ icon: null, colors: [], favorited: false });
   });
 
   it('加载根目录单层列表, folder 占位空 children', async () => {

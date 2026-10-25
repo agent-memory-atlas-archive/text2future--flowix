@@ -18,6 +18,23 @@ describe('work-column store', () => {
     });
   });
 
+  it('reserves preflight intent on the transaction revision without changing visible content', () => {
+    const store = useWorkColumnStore.getState();
+    const target = { kind: 'web' as const, url: 'https://visible.test' };
+    const committed = store.beginNavigation(target, null);
+    store.commitNavigation(committed, target);
+    const oldLoader = store.beginNavigation({ kind: 'empty' }, 'retry-old');
+    const intent = store.reserveNavigationIntent();
+    expect(store.isCurrentNavigation(oldLoader)).toBe(false);
+    expect(store.commitNavigation(oldLoader, { kind: 'empty' })).toBe(false);
+    expect(useWorkColumnStore.getState().navigation).toMatchObject({
+      requestId: intent, target, phase: 'committed', pendingTarget: null,
+      showWorkColumnLoading: false, retryToken: null,
+    });
+    store.beginNavigation({ kind: 'empty' }, null);
+    expect(store.isCurrentNavigation(intent)).toBe(false);
+  });
+
   it('owns the runtime work-column target independently from restore state', () => {
     const requestId = useWorkColumnStore.getState().beginNavigation(
       { kind: 'external', path: '/notebook/readme.md', scopePath: '/notebook', transitionId: null },

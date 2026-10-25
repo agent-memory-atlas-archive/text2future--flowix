@@ -233,7 +233,11 @@ html:not([data-theme="dark"]):not([data-theme="mist"])
   border-color: var(--border);
   border-radius: 7px;
   background: var(--background);
-  font-size: var(--agent-message-base-font-size, 15px);
+  /* Mode tags sit inside the message flow, so they follow the message font
+   * setting like every other message string (base size × user scale). */
+  font-size: calc(
+    var(--agent-message-base-font-size, 15px) * var(--agent-message-size-scale, 1)
+  );
   line-height: 1.2;
 }
 
@@ -501,31 +505,42 @@ html:not([data-theme="dark"]):not([data-theme="mist"])
   white-space: nowrap;
 }
 
+/* Text selection is owned here, for every Thread Card mode.
+ *
+ * The card root sets `user-select: none` on all descendants (chrome.css) so the
+ * surrounding editor cannot start a drag selection from the card chrome. Message
+ * text opts back in explicitly; buttons, badges, timestamps and chips stay
+ * unselectable in all three surfaces.
+ *
+ * This used to exclude fullscreen and lean on a "everything inside fullscreen is
+ * selectable" rule in note-picker.css, which selected chrome text that standalone
+ * could not. The selectable set is now one list for standalone / fullscreen /
+ * inline: message bodies of every role plus tool row text (paths and commands
+ * people actually copy), minus chrome. */
 :is(
-    .agent-conversation-surface.agent-thread-card:not(.agent-thread-card--fullscreen),
-    .agent-conversation-surface .agent-thread-card:not(.agent-thread-card--fullscreen)
+    .agent-conversation-surface.agent-thread-card,
+    .agent-conversation-surface .agent-thread-card
   )
-  .agent-thread-card__message--user
-  .agent-thread-card__message-content,
+  :is(
+    .agent-thread-card__message-content,
+    .agent-thread-card__message-tool-name,
+    .agent-thread-card__message-tool-summary,
+    .agent-thread-card__message-tool-input,
+    .agent-thread-card__message-tool-payload,
+    .agent-thread-card__command-line
+  ),
 :is(
-    .agent-conversation-surface.agent-thread-card:not(.agent-thread-card--fullscreen),
-    .agent-conversation-surface .agent-thread-card:not(.agent-thread-card--fullscreen)
+    .agent-conversation-surface.agent-thread-card,
+    .agent-conversation-surface .agent-thread-card
   )
-  .agent-thread-card__message--user
-  .agent-thread-card__message-content
-  *,
-:is(
-    .agent-conversation-surface.agent-thread-card:not(.agent-thread-card--fullscreen),
-    .agent-conversation-surface .agent-thread-card:not(.agent-thread-card--fullscreen)
+  :is(
+    .agent-thread-card__message-content,
+    .agent-thread-card__message-tool-name,
+    .agent-thread-card__message-tool-summary,
+    .agent-thread-card__message-tool-input,
+    .agent-thread-card__message-tool-payload,
+    .agent-thread-card__command-line
   )
-  .agent-thread-card__message--assistant
-  .agent-thread-card__message-content,
-:is(
-    .agent-conversation-surface.agent-thread-card:not(.agent-thread-card--fullscreen),
-    .agent-conversation-surface .agent-thread-card:not(.agent-thread-card--fullscreen)
-  )
-  .agent-thread-card__message--assistant
-  .agent-thread-card__message-content
   * {
   -webkit-user-select: text;
   user-select: text;

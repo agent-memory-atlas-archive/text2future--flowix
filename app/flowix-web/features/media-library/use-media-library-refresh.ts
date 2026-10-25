@@ -49,6 +49,7 @@ export function useMediaLibraryRefresh({
       setError(null);
     }).catch((reason: unknown) => {
       if (activeSessionKeyRef.current !== sessionKey || requestIdRef.current !== requestId) return;
+      console.warn('Media library refresh failed', reason);
       setError(reason instanceof Error ? reason.message : String(reason));
     });
   }, [acceptContent, notebookPath, saveInFlightRef, sessionKey]);

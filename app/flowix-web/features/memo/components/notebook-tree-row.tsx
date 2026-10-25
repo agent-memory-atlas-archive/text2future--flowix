@@ -36,8 +36,9 @@ import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@shared/ui/dialog';
 import folderIcon from '@/assets/folder-outline.svg?raw';
 import { getPropertyIconOption } from '@features/document/properties/property-icons';
+import { useNoteMetadata } from '../hooks/use-note-metadata';
 import { resourceKindFromPath } from '@features/editor/code-file';
-import { ContentIcon } from '@features/content/public/content-api';
+import { ContentIcon, getFileIconKind, HtmlFileIcon } from '@features/content/public/content-api';
 import { files, notes, product, type DocTreeItem } from '@platform/tauri/client';
 import { logNativeContextMenuError } from '@platform/tauri/native-context-menu';
 import type { TableViewType } from '@features/multidimensional-table/public/create-api';
@@ -100,6 +101,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   onRename,
   onDeleteFolder,
   onDeleteFile,
+  onDeleteSelected,
   onSetDefaultFolder,
   isDefaultFolder,
   onPointerDown,
@@ -110,6 +112,8 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   onFavoriteChanged,
   tableViewVisibility,
   mediaLibraryViewVisibility,
+  workDocumentsCollection = false,
+  workDocumentsViewVisibility,
   tabIndex = 0,
   moveStatus,
 }: {
@@ -139,7 +143,8 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   onRename: (item: DocTreeItem, nextName: string) => Promise<boolean | void> | boolean | void;
   onPointerDown: (item: DocTreeItem, event: ReactPointerEvent<HTMLDivElement>) => void;
   onDeleteFolder?: (path: string) => Promise<void>;
-  onDeleteFile?: (item: DocTreeItem) => Promise<void>;
+  onDeleteSelected?: () => Promise<void>;
+  onDeleteFile?: (item: DocTreeItem, options?: { silent?: boolean }) => Promise<boolean | void>;
   onSetDefaultFolder?: (folderPath: string) => void;
   isDefaultFolder?: boolean;
   onKeyDown?: (path: string, event: ReactKeyboardEvent<HTMLDivElement>) => void;
@@ -149,6 +154,8 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   onFavoriteChanged?: (itemId: string, favorited: boolean) => void;
   tableViewVisibility?: { collectionId: string; inViews: boolean; identityConflict?: boolean; onChange: (inViews: boolean) => void; onMakeIdentityUnique?: () => void };
   mediaLibraryViewVisibility?: { inViews: boolean; identityConflict?: boolean; onChange: (inViews: boolean) => void; onMakeIdentityUnique?: () => void };
+  workDocumentsCollection?: boolean;
+  workDocumentsViewVisibility?: { inViews: boolean; disabled?: boolean; onChange: (inViews: boolean) => void };
   tabIndex?: number;
   moveStatus?: 'moving' | 'success';
 }) {
@@ -205,6 +212,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   };
   const resourceKind = isFolder ? null : item.resourceKind ?? resourceKindFromPath(item.name);
   const isNote = resourceKind === 'note';
+  const isHtmlFile = !isFolder && getFileIconKind(item.fullPath) === 'html';
   const isTableDocument = !isFolder && (Boolean(tableViewVisibility)
     || (isTableDocumentFilename(item.name) && !isMediaLibraryFilename(item.name)));
   const isMediaLibrary = !isFolder && (Boolean(mediaLibraryViewVisibility)
@@ -220,8 +228,8 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
     return noteIndexFor(state.notes).get(noteLookupKey(notebook.id, relativePath)) ?? null;
   });
   const displayedMemo = storeNote ?? pathNote;
-  // A context-menu lookup is a snapshot; indexed tree updates take precedence.
-  const displayedMetadata = storeNote ?? item.memoMeta ?? pathNote;
+  // List cards and context-menu lookups are not metadata authorities for tree rows.
+  const displayedMetadata = useNoteMetadata(item.fullPath, item.memoMeta, isNote);
   const displayedIcon = displayedMetadata?.icon ?? null;
   const displayedColors = displayedMetadata?.colors ?? [];
   const noteIcon = isNote && displayedIcon
@@ -339,10 +347,11 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   }, [deleting, item.fullPath, onDeleteFolder]);
 
   const confirmFileDeleteAction = useCallback(async () => {
-    if (!onDeleteFile || deleting) return;
+    if ((!onDeleteFile && !onDeleteSelected) || deleting) return;
     setDeleting(true);
     try {
-      await onDeleteFile(item);
+      if (onDeleteSelected) await onDeleteSelected();
+      else if (await onDeleteFile?.(item) === false) return;
       setConfirmFileDelete(false);
     } catch (error) {
       console.warn('[NotebookTreeRow] delete file failed', error);
@@ -350,7 +359,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
     } finally {
       setDeleting(false);
     }
-  }, [deleting, item, onDeleteFile, t]);
+  }, [deleting, item, onDeleteFile, onDeleteSelected, t]);
 
   const submitRename = useCallback(async () => {
     if (!renaming || renameSaving) return;
@@ -454,7 +463,9 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
             ) : isNote ? (
               <ContentIcon content={{ kind: 'note' }} className="notebook-file-tree__default-file-icon h-[18px] w-[18px]" />
             ) : (
-              <ContentIcon content={isMediaLibrary ? { kind: 'media-library' } : isTableDocument ? { kind: 'multidimensional-table' } : { kind: 'file', path: item.name }} className="h-[18px] w-[18px]" />
+              isHtmlFile
+                ? <HtmlFileIcon className="h-[18px] w-[18px]" />
+                : <ContentIcon content={workDocumentsCollection ? { kind: 'work-documents' } : isMediaLibrary ? { kind: 'media-library' } : isTableDocument ? { kind: 'multidimensional-table' } : { kind: 'file', path: item.name }} className="h-[18px] w-[18px]" />
             )}
           </span>
           <input
@@ -524,7 +535,9 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
               ) : isNote ? (
                 <ContentIcon content={{ kind: 'note' }} className="notebook-file-tree__default-file-icon h-[18px] w-[18px]" />
               ) : (
-                <ContentIcon content={isMediaLibrary ? { kind: 'media-library' } : isTableDocument ? { kind: 'multidimensional-table' } : { kind: 'file', path: item.name }} className="h-[18px] w-[18px]" />
+                isHtmlFile
+                  ? <HtmlFileIcon className="h-[18px] w-[18px]" />
+                  : <ContentIcon content={workDocumentsCollection ? { kind: 'work-documents' } : isMediaLibrary ? { kind: 'media-library' } : isTableDocument ? { kind: 'multidimensional-table' } : { kind: 'file', path: item.name }} className="h-[18px] w-[18px]" />
               )}
             </span>
           )}
@@ -601,6 +614,12 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className={TREE_MENU_CLASS}>
+        {onDeleteSelected ? (
+          <ContextMenuItem className={TREE_MENU_ITEM_CLASS} onClick={() => setConfirmFileDelete(true)}>
+            <TrashSimpleIcon className="mr-2 h-4 w-4" />
+            {t('memo.fileTree.delete')}
+          </ContextMenuItem>
+        ) : <>
         {!isFolder && onOpenInNewTab && (
           <ContextMenuItem onClick={() => onOpenInNewTab(item.fullPath)} className={TREE_MENU_ITEM_CLASS}>
             <SquareSplitHorizontalIcon className="mr-2 h-4 w-4" aria-hidden="true" />
@@ -667,6 +686,16 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
           >
             <EyeSlashIcon className="mr-2 h-4 w-4" aria-hidden="true" />
             {t(tableViewVisibility.inViews ? 'multidimensionalTable.viewMembership.hide' : 'multidimensionalTable.viewMembership.add')}
+          </ContextMenuItem>
+        )}
+        {workDocumentsCollection && workDocumentsViewVisibility && (
+          <ContextMenuItem
+            onClick={() => workDocumentsViewVisibility.onChange(!workDocumentsViewVisibility.inViews)}
+            disabled={workDocumentsViewVisibility.disabled}
+            className={TREE_MENU_ITEM_CLASS}
+          >
+            <EyeSlashIcon className="mr-2 h-4 w-4" aria-hidden="true" />
+            {t(workDocumentsViewVisibility.inViews ? 'multidimensionalTable.viewMembership.hide' : 'multidimensionalTable.viewMembership.add')}
           </ContextMenuItem>
         )}
         {isMediaLibrary && mediaLibraryViewVisibility && (
@@ -739,6 +768,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
             </ContextMenuItem>
           </>
         )}
+        </>}
       </ContextMenuContent>
       </ContextMenu>
       <Dialog open={confirmDelete} onOpenChange={(open) => { if (!open && !deleting) setConfirmDelete(false); }}>
@@ -763,7 +793,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
         <DialogContent className="rounded-xl border border-[var(--border-popup)] bg-[var(--card)] shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
           <DialogHeader>
             <DialogTitle>{t('document.external.deleteFileTitle')}</DialogTitle>
-            <DialogDescription>{t('document.external.deleteFileDescription', { name: item.name })}</DialogDescription>
+            <DialogDescription>{onDeleteSelected ? t('memo.fileTree.deleteSelectedDescription') : t('document.external.deleteFileDescription', { name: item.name })}</DialogDescription>
           </DialogHeader>
           <div className="mt-4 flex justify-end gap-2">
             <button

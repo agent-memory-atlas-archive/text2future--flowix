@@ -1,5 +1,7 @@
 'use client';
 
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
+
 import { useCallback, useEffect, useState } from 'react';
 import { Loader2, Plus } from 'lucide-react';
 import { PencilSimpleIcon, TrashSimpleIcon } from '@phosphor-icons/react';
@@ -49,11 +51,14 @@ function draftFrom(server?: PiMcpServerConfig): Draft {
   };
 }
 
-function parseStringMap(source: string, label: string): Record<string, string> {
-  const parsed: unknown = JSON.parse(source || '{}');
+class McpInputError extends Error {}
+
+function parseStringMap(source: string, message: string): Record<string, string> {
+  let parsed: unknown;
+  try { parsed = JSON.parse(source || '{}'); } catch { throw new McpInputError(message); }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
     || !Object.entries(parsed).every(([key, value]) => Boolean(key) && typeof value === 'string')) {
-    throw new Error(`${label} must be a JSON object with string values`);
+    throw new McpInputError(message);
   }
   return parsed as Record<string, string>;
 }
@@ -69,9 +74,9 @@ export function PiMcpSettings() {
   const reload = useCallback(async () => {
     setError(null);
     try { setServers(await piMcp.list()); }
-    catch (value) { setError(value instanceof Error ? value.message : String(value)); }
+    catch (value) { setError(friendlyErrorMessage(value, t, 'errors.friendly.mcpLoad')); }
     finally { setLoading(false); }
-  }, []);
+  }, [t]);
 
   useEffect(() => { void reload(); }, [reload]);
 
@@ -83,17 +88,17 @@ export function PiMcpSettings() {
     try {
       config.description = draft.description.trim() || undefined;
       if (draft.transport === 'stdio') {
-        if (!draft.command.trim()) throw new Error(t('preferences.pi.mcp.commandRequired'));
+        if (!draft.command.trim()) throw new McpInputError(t('preferences.pi.mcp.commandRequired'));
         delete config.url; delete config.headers; delete config.oauth; delete config.type;
         config.command = draft.command.trim();
         config.args = draft.args.split('\n').map((arg) => arg.trim()).filter(Boolean);
-        config.env = parseStringMap(draft.env, t('preferences.pi.mcp.env'));
+        config.env = parseStringMap(draft.env, t('errors.friendly.mcpMap', { label: t('preferences.pi.mcp.env') }));
         if (draft.cwd.trim()) config.cwd = draft.cwd.trim(); else delete config.cwd;
       } else {
-        if (!draft.url.trim()) throw new Error(t('preferences.pi.mcp.urlRequired'));
+        if (!draft.url.trim()) throw new McpInputError(t('preferences.pi.mcp.urlRequired'));
         delete config.command; delete config.args; delete config.env; delete config.cwd;
         config.url = draft.url.trim();
-        config.headers = parseStringMap(draft.headers, t('preferences.pi.mcp.headers'));
+        config.headers = parseStringMap(draft.headers, t('errors.friendly.mcpMap', { label: t('preferences.pi.mcp.headers') }));
         delete config.type;
       }
       if (!config.description) delete config.description;
@@ -102,7 +107,7 @@ export function PiMcpSettings() {
       await reload();
       toast.success(t('preferences.pi.mcp.saved'));
     } catch (value) {
-      toast.error(value instanceof Error ? value.message : String(value));
+      toast.error(value instanceof McpInputError ? value.message : friendlyErrorMessage(value, t, 'errors.friendly.mcpSave'));
     } finally {
       setBusy(false);
     }
@@ -111,7 +116,7 @@ export function PiMcpSettings() {
   const remove = async (name: string) => {
     setBusy(true);
     try { await piMcp.delete(name); await reload(); toast.success(t('preferences.pi.mcp.deleted')); }
-    catch (value) { toast.error(value instanceof Error ? value.message : String(value)); }
+    catch (value) { toast.error(friendlyErrorMessage(value, t, 'errors.friendly.mcpRemove')); }
     finally { setBusy(false); }
   };
 

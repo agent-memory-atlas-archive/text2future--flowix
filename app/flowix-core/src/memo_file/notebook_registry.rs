@@ -27,16 +27,21 @@ impl NotebookRegistry {
     }
 
     pub(super) fn open(&self) -> std::io::Result<Connection> {
-        self.open_with_legacy_migrations(false)
+        self.open_with_legacy_migrations(false, false)
     }
 
     pub(super) fn open_for_initialization(&self) -> std::io::Result<Connection> {
-        self.open_with_legacy_migrations(true)
+        self.open_with_legacy_migrations(true, false)
+    }
+
+    pub(super) fn open_for_runtime_initialization(&self) -> std::io::Result<Connection> {
+        self.open_with_legacy_migrations(true, true)
     }
 
     fn open_with_legacy_migrations(
         &self,
         run_legacy_migrations: bool,
+        allow_missing_notebooks: bool,
     ) -> std::io::Result<Connection> {
         if let Some(parent) = self.db_path().parent() {
             fs::create_dir_all(parent)?;
@@ -50,7 +55,7 @@ impl NotebookRegistry {
                 ));
             }
         }
-        if !path.try_exists()? {
+        if !path.try_exists()? && !allow_missing_notebooks {
             let initialized = self.config_dir.join("notebook-registry-initialized");
             let companions = ["-wal", "-shm", "-journal"]
                 .iter()
@@ -79,7 +84,11 @@ impl NotebookRegistry {
                 "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
             )
             .map_err(sqlite_to_io)?;
-        let setup_upgrade_allowed = if run_legacy_migrations && existing_database {
+        let has_registry: bool = database.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='notebooks')",
+            [], |row| row.get(0),
+        ).map_err(sqlite_to_io)?;
+        let setup_upgrade_allowed = if run_legacy_migrations && existing_database && has_registry {
             snapshot_before_registry_upgrade(&database, &path)?
         } else {
             true
@@ -97,9 +106,25 @@ impl NotebookRegistry {
                 |row| row.get(0),
             )
             .map_err(sqlite_to_io)?;
-        // An existing database without identities is not a fresh installation.
-        // Do not silently populate an unrelated or partially damaged database with an empty registry.
-        if !notebooks_table_exists && existing_database {
+        // An interrupted first initialization may leave only a SQLite header.
+        // Resume only a schema-free store with no prior initialization or legacy
+        // registry; never reinterpret existing user data as a fresh installation.
+        let empty_first_initialization = !self
+            .config_dir
+            .join("notebook-registry-initialized")
+            .try_exists()?
+            && !self.config_dir.join("local.db").try_exists()?
+            && conn
+                .query_row("SELECT COUNT(*) FROM sqlite_master", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .map_err(sqlite_to_io)?
+                == 0;
+        if !notebooks_table_exists
+            && existing_database
+            && !empty_first_initialization
+            && !allow_missing_notebooks
+        {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "existing notebook registry has no notebooks table; recovery required",

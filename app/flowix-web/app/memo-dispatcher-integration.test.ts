@@ -120,17 +120,17 @@ describe('memo dispatcher window isolation', () => {
     });
     const { memoDispatcher, acquireMemoEventBridge } = await import('@/lib/memo-dispatcher');
     const releaseBridge = acquireMemoEventBridge();
-    const openPathInBrowserColumn = vi.fn().mockResolvedValue(undefined);
+    const notifyCreatedNote = vi.fn().mockResolvedValue(undefined);
     const unsubscribe = memoDispatcher.subscribe((event) => {
       handleMainWindowMemoEvent(event, {
         getSelectedNotebookId: () => 'notebook-a',
         invalidateMentionCaches: vi.fn(),
-        openPathInBrowserColumn,
-        reportOpenFailure: vi.fn(),
+        notifyCreatedNote,
+        reportNotificationFailure: vi.fn(),
         handleMemoCreated: vi.fn(),
         handleMemoUpdated: vi.fn(),
         handleMemoDeleted: vi.fn(),
-        removeBrowserColumnTabsByPath: vi.fn(),
+        removeBrowserColumnContentByPath: vi.fn(),
         handleTagsRenamed: vi.fn(),
         handleTagsDeleted: vi.fn(),
         refreshSelectedNotebookMetadata: vi.fn(),
@@ -159,7 +159,7 @@ describe('memo dispatcher window isolation', () => {
       source: 'external_tool',
     });
 
-    expect(openPathInBrowserColumn).toHaveBeenCalledWith('notebook-b', 'External.md');
+    expect(notifyCreatedNote).toHaveBeenCalledWith('notebook-b', 'External.md');
     unsubscribe();
     releaseBridge();
   });

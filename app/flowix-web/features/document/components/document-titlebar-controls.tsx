@@ -182,7 +182,7 @@ export function MediaActions({
   iconButtonClass: string;
   onCopyLink: () => void | Promise<void>;
   onRevealInFileManager: () => void;
-  onRequestDelete: () => void;
+  onRequestDelete?: () => void;
 }) {
   const { t } = useI18n();
 
@@ -215,14 +215,16 @@ export function MediaActions({
           <FolderOpenIcon className="h-4 w-4" />
           {t('memo.fileTree.reveal')}
         </DropdownMenuItem>
-        <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
-        <DropdownMenuItem
-          onClick={onRequestDelete}
-          className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-transparent hover:text-[var(--destructive)]"
-        >
-          <TrashSimpleIcon className="h-4 w-4" />
-          {t('media.fileTree.delete')}
-        </DropdownMenuItem>
+        {onRequestDelete && <>
+          <div role="separator" aria-hidden="true" className={POPUP_SEPARATOR_CLASS} />
+          <DropdownMenuItem
+            onClick={onRequestDelete}
+            className="group h-7 items-center justify-start gap-2 rounded-lg px-2 py-0 text-left hover:bg-transparent hover:text-[var(--destructive)]"
+          >
+            <TrashSimpleIcon className="h-4 w-4" />
+            {t('media.fileTree.delete')}
+          </DropdownMenuItem>
+        </>}
       </DropdownMenuContent>
     </DropdownMenu>
   );

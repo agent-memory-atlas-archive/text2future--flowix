@@ -4,6 +4,7 @@ import { notebooks as notebooksClient } from '@platform/tauri/client';
 import { notebookDeleteErrorMessage } from '@platform/tauri/errors';
 import { useI18n } from '@/lib/i18n';
 import { createLogger } from '@/lib/logger';
+import { fireAndForget } from '@/lib/fire-and-forget';
 import { toast } from '@/lib/toast';
 import { useSettingsStore } from '@/lib/store/settings-store';
 import {
@@ -177,11 +178,14 @@ export function useMainWindowBusinessController(): MainWindowBusinessController 
         type?: CollectionType;
       }>).detail;
       if (!detail?.filePath || !detail.notebookPath || !detail.notebookId || !detail.type) return;
-      void handleSwitchFolderCollectionType({
-        filePath: detail.filePath,
-        notebookPath: detail.notebookPath,
-        notebookId: detail.notebookId,
-      }, detail.type);
+      fireAndForget(
+        handleSwitchFolderCollectionType({
+          filePath: detail.filePath,
+          notebookPath: detail.notebookPath,
+          notebookId: detail.notebookId,
+        }, detail.type),
+        'main-window:switch-folder-collection-type',
+      );
     };
     window.addEventListener('flowix:request-switch-folder-collection-type', handleRequest);
     return () => window.removeEventListener('flowix:request-switch-folder-collection-type', handleRequest);

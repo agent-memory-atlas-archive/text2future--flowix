@@ -1,10 +1,11 @@
 'use client';
 
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
+
 import { useEffect, useState } from 'react';
 import { Check, Cloud, Info, Loader2 } from 'lucide-react';
 
 import googleLogo from '@/assets/google.svg';
-import { errorMessage } from '@/lib/error-message';
 import { useI18n } from '@/lib/i18n';
 import { toast } from '@/lib/toast';
 import { openUrl } from '@platform/tauri/opener';
@@ -94,7 +95,7 @@ export function CloudSyncSection() {
     try {
       setOrders(await cloud.listBillingOrders());
     } catch (error) {
-      setOrdersLoadError(errorMessage(error));
+      setOrdersLoadError(friendlyErrorMessage(error, t, 'errors.friendly.ordersLoad'));
     } finally {
       setOrdersLoading(false);
     }
@@ -111,7 +112,7 @@ export function CloudSyncSection() {
     try {
       setSubscriptions(await cloud.listSubscriptions());
     } catch (error) {
-      setSubscriptionsLoadError(errorMessage(error));
+      setSubscriptionsLoadError(friendlyErrorMessage(error, t, 'errors.friendly.subscriptionLoad'));
     } finally {
       setSubscriptionsLoading(false);
     }
@@ -122,7 +123,7 @@ export function CloudSyncSection() {
     void cloud.listProducts().then((next) => {
       if (active) setProducts(next);
     }).catch((error) => {
-      if (active) setProductsLoadError(errorMessage(error));
+      if (active) setProductsLoadError(friendlyErrorMessage(error, t, 'errors.friendly.productsLoad'));
     }).finally(() => {
       if (active) setProductsLoading(false);
     });
@@ -141,7 +142,7 @@ export function CloudSyncSection() {
     void cloud.listBillingOrders().then((next) => {
       if (active) setOrders(next);
     }).catch((error) => {
-      if (active) setOrdersLoadError(errorMessage(error));
+      if (active) setOrdersLoadError(friendlyErrorMessage(error, t, 'errors.friendly.ordersLoad'));
     }).finally(() => {
       if (active) setOrdersLoading(false);
     });
@@ -160,7 +161,7 @@ export function CloudSyncSection() {
     void cloud.listSubscriptions().then((next) => {
       if (active) setSubscriptions(next);
     }).catch((error) => {
-      if (active) setSubscriptionsLoadError(errorMessage(error));
+      if (active) setSubscriptionsLoadError(friendlyErrorMessage(error, t, 'errors.friendly.subscriptionLoad'));
     }).finally(() => {
       if (active) setSubscriptionsLoading(false);
     });
@@ -198,7 +199,7 @@ export function CloudSyncSection() {
       }
     } catch (error) {
       setOrderCheckFailedId(orderId);
-      toast.error(cloudSyncErrorMessage(error, t));
+      toast.error(cloudSyncErrorMessage(error, t, 'errors.friendly.orderCheck'));
     } finally {
       setCheckingOrderId(null);
     }
@@ -210,7 +211,7 @@ export function CloudSyncSection() {
       const checkout = await cloud.createCheckout(order.productId);
       await openUrl(checkout.checkoutUrl);
     } catch (error) {
-      toast.error(cloudSyncErrorMessage(error, t));
+      toast.error(cloudSyncErrorMessage(error, t, 'errors.friendly.checkout'));
     } finally {
       await loadOrders();
       setResumingOrderId(null);
@@ -225,7 +226,7 @@ export function CloudSyncSection() {
       toast.success(t('preferences.cloud.subscription.cancelSuccess'));
       await loadSubscriptions();
     } catch (error) {
-      toast.error(cloudSyncErrorMessage(error, t));
+      toast.error(cloudSyncErrorMessage(error, t, 'errors.friendly.subscriptionCancel'));
     } finally {
       setCancelingSubscriptionId(null);
     }
@@ -265,7 +266,7 @@ export function CloudSyncSection() {
 
       {(stateLoadError ?? state?.authError) && (
         <p className="break-words text-sm text-[var(--destructive)]">
-          {stateLoadError ?? state?.authError}
+          {cloudSyncErrorMessage(stateLoadError ?? state?.authError, t, 'errors.friendly.accountLoad')}
         </p>
       )}
 
@@ -348,7 +349,7 @@ export function CloudSyncSection() {
                 )}
               </div>
               {membershipError && <div className="space-y-2">
-                <p className="text-sm text-[var(--destructive)]">{t('preferences.cloud.membershipFailed')}: {membershipError}</p>
+                <p className="text-sm text-[var(--destructive)]">{t('preferences.cloud.membershipFailed')}</p>
                 <Button variant="outline" className="px-3" disabled={membershipLoading} onClick={() => void refreshMembership()}>
                   {t('preferences.cloud.retry')}
                 </Button>
@@ -362,7 +363,7 @@ export function CloudSyncSection() {
                   ) : subscriptionsLoadError ? (
                     <div className="space-y-2">
                       <p className="break-words text-sm text-[var(--destructive)]">
-                        {t('preferences.cloud.subscription.loadFailed')}: {subscriptionsLoadError}
+                        {subscriptionsLoadError}
                       </p>
                       <Button variant="outline" size="sm" className="rounded-lg" onClick={() => void loadSubscriptions()}>
                         {t('preferences.cloud.retry')}
@@ -598,7 +599,7 @@ export function CloudSyncSection() {
                               setBusy(true);
                               void cloud.createCheckout(product.id)
                                 .then((checkout) => openUrl(checkout.checkoutUrl))
-                                .catch((error) => toast.error(cloudSyncErrorMessage(error, t)))
+                                .catch((error) => toast.error(cloudSyncErrorMessage(error, t, 'errors.friendly.checkout')))
                                 .finally(async () => {
                                   await loadOrders();
                                   setBusy(false);

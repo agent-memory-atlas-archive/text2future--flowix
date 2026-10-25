@@ -8,7 +8,7 @@ import { useCallback, useLayoutEffect, useMemo } from 'react';
 import { getWorkspaceSurfaceRendererDefinition } from './workspace-surface-renderer-registry';
 import type { WorkspaceSurfaceRendererData, WorkspaceSurfaceRenderContext } from './workspace-surface-renderer-contract';
 import { WorkspaceSurfaceStateView } from './workspace-surface-state-view';
-import { resetCurrentCollectionView } from '@features/workspace/use-cases/workspace-navigation';
+import { resetCurrentCollectionView } from '@features/workspace/public/collection-navigation-api';
 import { toast } from '@/lib/toast';
 import { workspaceSurfaceContentPresentation } from '@features/workspace/public/surface-api';
 
@@ -39,7 +39,7 @@ export function FileBrowserRenderer({ surface: data, context }: {
   const resetUnavailableCollectionView = useCallback(async () => {
     if (!surface.activeFilePath) return;
     try {
-      await resetCurrentCollectionView(surface.activeFilePath, surface.scopePath, surface.notebookId, { host: 'browser-column', tabId: context.viewId });
+      await resetCurrentCollectionView(surface.activeFilePath, surface.scopePath, surface.notebookId, { host: 'browser-column', surfaceId: context.viewId });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '重置当前视图失败');
     }
@@ -65,16 +65,16 @@ export function FileBrowserRenderer({ surface: data, context }: {
       });
       return;
     }
-    const state = contentDetectionLoading
-          ? { status: 'loading' as const, loadingMode: 'blocking' as const, retainContent: true }
-        : surface.collectionUnavailableReason
-          ? unavailableState
-          : collectionLocationLoading
-            ? { status: 'loading' as const, loadingMode: 'blocking' as const, retainContent: true }
-          : { status: 'loading' as const, loadingMode: 'blocking' as const, retainContent: true };
+    // The shell owns only resolution/unavailability. Once a content renderer
+    // exists, that renderer alone owns loading/ready/error; layout or focus
+    // updates must never reset an already loaded document to loading.
+    const state = surface.collectionUnavailableReason ? unavailableState
+      : contentDetectionLoading || collectionLocationLoading
+        ? { status: 'loading' as const, loadingMode: 'blocking' as const, retainContent: true }
+        : undefined;
     context.reportPresentation?.({
       ...workspaceSurfaceContentPresentation(dynamicKind),
-      state,
+      ...(state ? { state } : {}),
     });
   }, [collectionLocationLoading, context.reportPresentation, dynamicKind, contentDetectionLoading, surface.activeFilePath, surface.collectionUnavailableReason, unavailableState]);
   if (!surface.activeFilePath) {

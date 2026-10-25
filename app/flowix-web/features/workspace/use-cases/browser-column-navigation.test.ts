@@ -1,415 +1,68 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  openBrowserColumnAgentConversation,
-  openBrowserColumnDroppedFile,
-  openBrowserColumnFileBrowser,
-  openBrowserColumnMarkdown,
-  openBrowserColumnNotebookNote,
-  openBrowserColumnTarget,
-  openBrowserColumnWebpage,
-  openWorkColumnTargetInBrowserColumn,
-} from './browser-column-navigation';
-import { openBrowserColumnTabInWorkColumn } from './surface-opening';
-import { useBrowserColumnStore } from '@features/workspace/store/browser-column-store';
-import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
-import { useWorkspaceFocusStore } from '@features/workspace/store/workspace-focus-store';
-import {
-  resetBrowserColumnCoordinator,
-} from './browser-column-coordinator';
-import { notes } from '@platform/tauri/client';
-
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { openBrowserColumnWebpage, openBrowserColumnMarkdown, selectBrowserColumnFile, navigateBrowserColumnHistory } from './browser-column-navigation';
+import { useBrowserColumnStore } from '../store/browser-column-store';
+import { resetBrowserColumnCoordinator } from './browser-column-coordinator';
 import { registerWorkspaceSurfaceLifecycle } from '../store/surface-lifecycle-store';
-const registeredViews = new Set<string>();
-function registerDocumentLifecycle(tabId: string, flush: () => Promise<boolean>) {
-  registeredViews.add(tabId);
-  registerWorkspaceSurfaceLifecycle(tabId, { status: 'ready', flush });
-}
-afterEach(() => {
-  for (const tabId of registeredViews) registerWorkspaceSurfaceLifecycle(tabId, null);
-  registeredViews.clear();
+const ids: string[] = [];
+beforeEach(() => { useBrowserColumnStore.getState().reset(); resetBrowserColumnCoordinator(); });
+afterEach(() => { for (const id of ids.splice(0)) registerWorkspaceSurfaceLifecycle(id, null); });
+it('opens into the same column and navigates visits without adding replay entries', async () => {
+  await openBrowserColumnWebpage('https://a.example/');
+  await openBrowserColumnWebpage('https://b.example/');
+  await navigateBrowserColumnHistory('back');
+  expect(useBrowserColumnStore.getState().current!.target).toEqual({ kind: 'web', url: 'https://a.example/' });
+  expect(useBrowserColumnStore.getState().backStack).toEqual([]);
+  await navigateBrowserColumnHistory('forward');
+  expect(useBrowserColumnStore.getState().current!.target).toEqual({ kind: 'web', url: 'https://b.example/' });
+  expect(useBrowserColumnStore.getState().backStack).toHaveLength(1);
 });
-
-function resetWorkspace() {
-  useWorkColumnStore.setState({
-    navigation: {
-      phase: 'idle',
-      showWorkColumnLoading: false,
-      requestId: 0,
-      target: { kind: 'empty' },
-      pendingTarget: null,
-      previousTarget: null,
-      failure: null,
-      retryToken: null,
-    },
-  });
-}
-
-describe('browser column navigation', () => {
-  beforeEach(() => {
-    resetWorkspace();
-    resetBrowserColumnCoordinator();
-    useBrowserColumnStore.getState().reset();
-  });
-
-  it('opens local Markdown targets as browser-column tabs', async () => {
-    const tabId = await openBrowserColumnMarkdown('/notes/plan.md');
-
-    expect(tabId).toEqual({
-      host: 'browser-column',
-      tabId: 'file:/notes/plan.md',
-      alreadyOpen: false,
-    });
-    expect(useBrowserColumnStore.getState().tabs[0]).toMatchObject({
-      title: 'plan',
-      target: { kind: 'file-browser', folderPath: null, notebookId: null, fileTreeVisible: true, fileTreeWidth: 220, activeFilePath: '/notes/plan.md', scopePath: null },
-    });
-  });
-
-  it('keeps a background notebook note scoped to its notebook', async () => {
-    await openBrowserColumnNotebookNote('/other/Created.md', 'other', '/other');
-    expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({
-      kind: 'file-browser', activeFilePath: '/other/Created.md',
-      notebookId: 'other', scopePath: '/other',
-    });
-  });
-
-  it('opens one file-browser tab per folder and switches its active file', async () => {
-    await openBrowserColumnFileBrowser('/workspace');
-    await openBrowserColumnFileBrowser('/workspace', '/workspace/src/main.ts');
-
-    const store = useBrowserColumnStore.getState();
-    expect(store.tabs).toHaveLength(1);
-    expect(store.tabs[0].target).toMatchObject({
-      kind: 'file-browser',
-      folderPath: '/workspace',
-      activeFilePath: '/workspace/src/main.ts',
-    });
-
-    await openBrowserColumnFileBrowser('/workspace', '/workspace/src/other.ts');
-    expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({
-      kind: 'file-browser',
-      activeFilePath: '/workspace/src/other.ts',
-    });
-  });
-
-  it('switches the current file-browser tab folder without changing other tabs', async () => {
-    await openBrowserColumnFileBrowser('/workspace');
-    await openBrowserColumnFileBrowser('/other');
-
-    const store = useBrowserColumnStore.getState();
-    const otherTabId = store.tabs.find((tab) => tab.target.kind === 'file-browser' && tab.target.folderPath === '/other')?.id;
-    const workspaceTab = store.tabs.find((tab) => tab.target.kind === 'file-browser' && tab.target.folderPath === '/workspace');
-    expect(otherTabId).toBeDefined();
-    expect(workspaceTab).toBeDefined();
-    if (!otherTabId || !workspaceTab) return;
-
-    store.selectFileBrowserFile(otherTabId, '/other/readme.md');
-    store.switchFileBrowserFolder(otherTabId, '/next');
-
-    expect(useBrowserColumnStore.getState().tabs).toEqual([
-      workspaceTab,
-      expect.objectContaining({
-        id: otherTabId,
-        title: 'next',
-        target: expect.objectContaining({
-          kind: 'file-browser',
-          folderPath: '/next',
-          activeFilePath: null,
-        }),
-      }),
-    ]);
-  });
-
-  it('uses the Agent instance as the stable tab target', async () => {
-    await openBrowserColumnAgentConversation('agent-1');
-
-    expect(useBrowserColumnStore.getState()).toMatchObject({
-      activeTabId: 'agent:agent-1',
-      tabs: [{ title: 'Agent 会话', target: { kind: 'agent_conversation', instanceId: 'agent-1' } }],
-    });
-    expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('browser-column');
-  });
-
-  it('opens webpages as browser-column tabs and reuses the existing tab', async () => {
-    const first = await openBrowserColumnWebpage('https://example.com/docs');
-    const second = await openBrowserColumnWebpage('https://example.com/docs');
-
-    expect(first).toEqual({
-      host: 'browser-column',
-      tabId: 'web:https://example.com/docs',
-      alreadyOpen: false,
-    });
-    expect(second).toEqual({
-      host: 'browser-column',
-      tabId: 'web:https://example.com/docs',
-      alreadyOpen: true,
-    });
-    expect(useBrowserColumnStore.getState().tabs[0]).toMatchObject({
-      title: 'example.com',
-      target: { kind: 'web', url: 'https://example.com/docs' },
-    });
-  });
-
-  it('opens a webpage in Work while retaining Browser tabs', async () => {
-    await openBrowserColumnWebpage('https://example.com/docs');
-    await openBrowserColumnWebpage('https://flowix.dev/');
-    const before = useBrowserColumnStore.getState();
-    expect(await openBrowserColumnTabInWorkColumn('web:https://example.com/docs')).toMatchObject({
-      status: 'opened', host: 'main-third', location: { host: 'main-third', state: 'active' },
-    });
-    expect(useBrowserColumnStore.getState().tabs).toEqual(before.tabs);
-    expect(useBrowserColumnStore.getState().activeTabId).toBe(before.activeTabId);
-    expect(useWorkColumnStore.getState().navigation.target).toEqual({ kind: 'web', url: 'https://example.com/docs' });
-    expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('main-third');
-  });
-
-  it('preserves a folder tab without a selected file when asked to move it', async () => {
-    await openBrowserColumnFileBrowser('/workspace');
-    const before = useBrowserColumnStore.getState();
-    expect(await openBrowserColumnTabInWorkColumn(before.tabs[0].id)).toEqual({
-      status: 'cancelled', host: 'main-third', reason: 'navigation-cancelled',
-    });
-    expect(useBrowserColumnStore.getState().tabs).toEqual(before.tabs);
-    expect(useBrowserColumnStore.getState().visible).toBe(true);
-    expect(useWorkColumnStore.getState().navigation.target).toEqual({ kind: 'empty' });
-  });
-
-  it('keeps the tab when its document cannot be flushed before moving', async () => {
-    await openBrowserColumnMarkdown('/notes/plan.md');
-    registerDocumentLifecycle(
-      'file:/notes/plan.md',
-      vi.fn().mockResolvedValue(false),
-    );
-
-    const moved = await openBrowserColumnTabInWorkColumn('file:/notes/plan.md');
-
-    expect(moved).toEqual({ status: 'cancelled', host: 'main-third', reason: 'navigation-cancelled' });
-    expect(useBrowserColumnStore.getState().tabs[0]).toMatchObject({
-      id: 'file:/notes/plan.md',
-      target: { kind: 'file-browser', folderPath: null, notebookId: null, fileTreeVisible: true, fileTreeWidth: 220, activeFilePath: '/notes/plan.md' },
-    });
-  });
-
-  it('keeps one Browser tab for repeated opens while preserving the Work view', async () => {
-    const target = { kind: 'external' as const, path: '/notes/shared.md', scopePath: '/notes', transitionId: 1 };
-    const work = useWorkColumnStore.getState();
-    const requestId = work.beginNavigation(target, null);
-    work.commitNavigation(requestId, target);
-    const first = await openBrowserColumnNotebookNote(target.path, 'notes', '/notes');
-    await openBrowserColumnWebpage('https://example.com');
-    const second = await openBrowserColumnNotebookNote(target.path, 'notes', '/notes');
-    expect(first?.alreadyOpen).toBe(false);
-    expect(second?.alreadyOpen).toBe(true);
-    expect(second).toMatchObject({ host: 'browser-column', tabId: first?.host === 'browser-column' ? first.tabId : undefined });
-    expect(useBrowserColumnStore.getState().tabs).toHaveLength(2);
-    expect(useWorkColumnStore.getState().navigation.target).toEqual(target);
-    expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('browser-column');
-  });
-
-  it('supports replacing the active tab', async () => {
-    await openBrowserColumnMarkdown('/notes/old.md');
-    await openBrowserColumnTarget({ kind: 'agent_conversation', instanceId: 'agent-2' }, 'replace-active');
-
-    expect(useBrowserColumnStore.getState().tabs.map((tab) => tab.target.kind)).toEqual(['agent_conversation']);
-    expect(useBrowserColumnStore.getState().activeTabId).toBe('agent:agent-2');
-  });
-
-  it('opens explicitly in Browser even when the content already exists in Work', async () => {
-    const workColumn = useWorkColumnStore.getState();
-    const requestId = workColumn.beginNavigation({
-      kind: 'external',
-      path: '/notes/plan.md',
-      scopePath: '/notes',
-      transitionId: null,
-    }, null);
-    workColumn.commitNavigation(requestId, {
-      kind: 'external',
-      path: '/notes/plan.md',
-      scopePath: '/notes',
-      transitionId: 1,
-    });
-
-    const result = await openBrowserColumnMarkdown('/notes/plan.md');
-
-    expect(useBrowserColumnStore.getState()).toMatchObject({
-      visible: true,
-    });
-    expect(useBrowserColumnStore.getState().tabs).toHaveLength(1);
-    expect(result).toEqual({ host: 'browser-column', tabId: 'file:/notes/plan.md', alreadyOpen: false });
-    expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('browser-column');
-  });
-
-  it('opens a dropped file in the browser column even when it is open in the work column', async () => {
-    const workColumn = useWorkColumnStore.getState();
-    const target = { kind: 'external' as const, path: '/notes/plan.md', scopePath: '/notes', transitionId: 1 };
-    const requestId = workColumn.beginNavigation(target, null);
-    workColumn.commitNavigation(requestId, target);
-
-    const result = await openBrowserColumnDroppedFile('/notes/plan.md');
-
-    expect(result).toMatchObject({ host: 'browser-column', alreadyOpen: false });
-    expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({ activeFilePath: '/notes/plan.md' });
-    expect(useWorkColumnStore.getState().navigation.target).toMatchObject({ path: '/notes/plan.md' });
-  });
-
-  it('opens the active work-column target in the right column while keeping the left target', async () => {
-    const target = {
-      kind: 'external' as const,
-      path: '/notes/plan.md',
-      scopePath: '/notes',
-      transitionId: 1,
-    };
-    const workColumn = useWorkColumnStore.getState();
-    const requestId = workColumn.beginNavigation(target, null);
-    workColumn.commitNavigation(requestId, target);
-
-    const result = await openWorkColumnTargetInBrowserColumn(target);
-
-    expect(result).toEqual({
-      host: 'browser-column',
-      tabId: 'file:/notes/plan.md',
-      alreadyOpen: false,
-    });
-    expect(useBrowserColumnStore.getState().tabs[0]).toMatchObject({
-      target: { kind: 'file-browser', folderPath: null, notebookId: null, fileTreeVisible: true, fileTreeWidth: 220, activeFilePath: '/notes/plan.md', scopePath: '/notes' },
-    });
-    expect(useWorkColumnStore.getState().navigation.target).toEqual(target);
-    expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('browser-column');
-  });
-
-  it('flushes the active editor before a programmatic tab replacement', async () => {
-    await openBrowserColumnMarkdown('/notes/old.md');
-    const flush = vi.fn().mockResolvedValue(true);
-    registerDocumentLifecycle('file:/notes/old.md', flush);
-
-    await openBrowserColumnTarget(
-      { kind: 'agent_conversation', instanceId: 'agent-2' },
-      'replace-active',
-    );
-
-    expect(flush).toHaveBeenCalledOnce();
-    expect(useBrowserColumnStore.getState().tabs.map((tab) => tab.target.kind)).toEqual([
-      'agent_conversation',
-    ]);
-  });
-
-  it('keeps the current tab when its editor refuses to flush', async () => {
-    await openBrowserColumnMarkdown('/notes/old.md');
-    registerDocumentLifecycle(
-      'file:/notes/old.md',
-      vi.fn().mockResolvedValue(false),
-    );
-
-    const result = await openBrowserColumnTarget(
-      { kind: 'agent_conversation', instanceId: 'agent-2' },
-      'replace-active',
-    );
-
-    expect(result).toBeNull();
-    expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({
-      kind: 'file-browser', folderPath: null, notebookId: null, fileTreeVisible: true, fileTreeWidth: 220, activeFilePath: '/notes/old.md',
-    });
-  });
-
-  it('opens plugin notes by file path', async () => {
-    await openBrowserColumnNotebookNote('/notes/Roadmap.md', 'notes', '/notes');
-
-    expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({
-      kind: 'file-browser',
-      activeFilePath: '/notes/Roadmap.md',
-    });
-  });
+it('keeps both the surface and history unchanged when saving fails', async () => {
+  await openBrowserColumnWebpage('https://a.example/');
+  await openBrowserColumnWebpage('https://b.example/');
+  const id = useBrowserColumnStore.getState().current?.id!;
+  ids.push(id);
+  const flush = vi.fn(async () => false);
+  registerWorkspaceSurfaceLifecycle(id, { status: 'ready', flush });
+  const before = useBrowserColumnStore.getState();
+  expect(await navigateBrowserColumnHistory('back')).toBeNull();
+  expect(await openBrowserColumnWebpage('https://c.example/')).toBeNull();
+  expect(useBrowserColumnStore.getState().current).toBe(before.current);
+  expect(useBrowserColumnStore.getState().backStack).toBe(before.backStack);
+  expect(useBrowserColumnStore.getState().forwardStack).toBe(before.forwardStack);
+  expect(flush).toHaveBeenCalledTimes(2);
 });
-
-it('opens a folder selection in Work without closing Browser tabs or deadlocking', async () => {
-  const location = vi.spyOn(notes, 'resolveLocation').mockResolvedValue({
-    path: '/workspace/readme.md', notebookId: null, notebookPath: null,
-    relativePath: null, indexable: false,
-  });
-  resetWorkspace();
-  resetBrowserColumnCoordinator();
-  useBrowserColumnStore.getState().reset();
-  const { useDocumentStore } = await import('@features/document/store/document-store');
-  const previousDocument = useDocumentStore.getState();
-  useDocumentStore.setState({ activeExternalSession: null, currentDocumentPath: null, currentDocumentSource: null });
-  try {
-    await openBrowserColumnMarkdown('/workspace/readme.md');
-    useBrowserColumnStore.setState((state) => ({
-      tabs: [...state.tabs, { id: 'file-browser:/workspace', title: 'workspace', icon: null,
-        target: { kind: 'file-browser', folderPath: '/workspace', activeFilePath: '/workspace/readme.md',
-          scopePath: '/workspace', notebookId: null, fileTreeVisible: true, fileTreeWidth: 220 } }],
-      activeTabId: 'file-browser:/workspace',
-    }));
-    const moving = openBrowserColumnTabInWorkColumn('file-browser:/workspace');
-    const result = await Promise.race([
-      moving,
-      new Promise<string>((resolve) => setTimeout(() => resolve('navigation queue deadlocked'), 100)),
-    ]);
-    expect(result).toMatchObject({ status: 'opened', host: 'main-third' });
-    expect(useWorkColumnStore.getState().navigation.target).toMatchObject({ kind: 'external', path: '/workspace/readme.md' });
-    expect(useBrowserColumnStore.getState().tabs.map((tab) => tab.id)).toEqual(['file:/workspace/readme.md', 'file-browser:/workspace']);
-    await openBrowserColumnWebpage('https://example.com/after-open');
-    expect(useBrowserColumnStore.getState().tabs).toHaveLength(3);
-  } finally {
-    location.mockRestore();
-    resetBrowserColumnCoordinator();
-    resetWorkspace();
-    useDocumentStore.setState(previousDocument);
-    useBrowserColumnStore.getState().reset();
-  }
-});
-
-it('reuses one file identity across standalone and directory opens without resetting tree preferences', async () => {
-  resetWorkspace();
-  resetBrowserColumnCoordinator();
-  useBrowserColumnStore.getState().reset();
+it('records file-tree selections and restores their full browser context', async () => {
   await openBrowserColumnMarkdown('/workspace/a.md');
-  const first = useBrowserColumnStore.getState().activeTabId!;
-  useBrowserColumnStore.getState().setFileBrowserTreeVisible(first, false);
-  await openBrowserColumnFileBrowser('/workspace', '/workspace/a.md');
-  expect(useBrowserColumnStore.getState().tabs).toHaveLength(1);
-  expect(useBrowserColumnStore.getState().activeTabId).toBe(first);
-  expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({ fileTreeVisible: false });
+  const id = useBrowserColumnStore.getState().current?.id!;
+  useBrowserColumnStore.getState().setFileBrowserTreeVisible(id, false);
+  await selectBrowserColumnFile(id, '/workspace/b.md', '/workspace');
+  expect(useBrowserColumnStore.getState().current).not.toBeNull();
+  expect(useBrowserColumnStore.getState().backStack).toHaveLength(1);
+  await navigateBrowserColumnHistory('back');
+  expect(useBrowserColumnStore.getState().current!.target).toMatchObject({ activeFilePath: '/workspace/a.md', fileTreeVisible: false });
+});
+it('serializes a new open behind an unfinished save', async () => {
+  await openBrowserColumnWebpage('https://a.example/');
+  const id = useBrowserColumnStore.getState().current?.id!;
+  ids.push(id);
+  let release!: (saved: boolean) => void;
+  registerWorkspaceSurfaceLifecycle(id, { status: 'ready', flush: () => new Promise<boolean>((resolve) => { release = resolve; }) });
+  const opening = openBrowserColumnWebpage('https://b.example/');
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  expect(useBrowserColumnStore.getState().current!.target).toMatchObject({ url: 'https://a.example/' });
+  release(true);
+  await opening;
+  expect(useBrowserColumnStore.getState().current!.target).toMatchObject({ url: 'https://b.example/' });
 });
 
-it('upgrades a standalone file tab with its resource folder context in place', async () => {
-  resetWorkspace();
-  resetBrowserColumnCoordinator();
-  useBrowserColumnStore.getState().reset();
+it('honors consecutive clicks from the mounted tree while rejecting events from an already retired tree', async () => {
   await openBrowserColumnMarkdown('/workspace/a.md');
-  const tabId = useBrowserColumnStore.getState().activeTabId!;
-  useBrowserColumnStore.getState().setFileBrowserTreeVisible(tabId, false);
-  await openBrowserColumnFileBrowser('/workspace', '/workspace/a.md');
-  const tab = useBrowserColumnStore.getState().tabs[0];
-  expect(tab.id).toBe(tabId);
-  expect(tab.target).toMatchObject({
-    kind: 'file-browser',
-    folderPath: '/workspace',
-    activeFilePath: '/workspace/a.md',
-    fileTreeVisible: false,
-  });
-});
-
-it('keeps the old file when a tree selection cannot be saved and reuses already open files', async () => {
-  const { selectBrowserColumnFile } = await import('./browser-column-navigation');
-  resetWorkspace();
-  resetBrowserColumnCoordinator();
-  useBrowserColumnStore.getState().reset();
-  await openBrowserColumnMarkdown('/workspace/a.md');
-  const first = useBrowserColumnStore.getState().activeTabId!;
-  const flush = vi.fn().mockResolvedValue(false);
-  registerDocumentLifecycle(first, flush);
-  expect(await selectBrowserColumnFile(first, '/workspace/b.md')).toBeNull();
-  expect(useBrowserColumnStore.getState().tabs[0].target).toMatchObject({ activeFilePath: '/workspace/a.md' });
-  flush.mockResolvedValue(true);
-  await selectBrowserColumnFile(first, '/workspace/b.md');
-  expect(useBrowserColumnStore.getState().tabs[0]).toMatchObject({ id: first, title: 'b' });
-  await openBrowserColumnMarkdown('/workspace/a.md');
-  const second = useBrowserColumnStore.getState().activeTabId!;
-  expect(second).not.toBe(first);
-  expect(new Set(useBrowserColumnStore.getState().tabs.map((tab) => tab.id)).size).toBe(2);
-  await selectBrowserColumnFile(second, '/workspace/b.md');
-  expect(useBrowserColumnStore.getState().activeTabId).toBe(first);
-  expect(useBrowserColumnStore.getState().tabs).toHaveLength(2);
-  resetBrowserColumnCoordinator();
+  const id = useBrowserColumnStore.getState().current!.id;
+  const first = selectBrowserColumnFile(id, '/workspace/b.md');
+  const second = selectBrowserColumnFile(id, '/workspace/c.md');
+  expect(await first).toBe(true);
+  expect(await second).toBe(true);
+  expect(useBrowserColumnStore.getState().current?.target).toMatchObject({ activeFilePath: '/workspace/c.md' });
+  expect(useBrowserColumnStore.getState().backStack.map((entry) => entry.target.kind === 'file-browser' ? entry.target.activeFilePath : null)).toEqual(['/workspace/a.md', '/workspace/b.md']);
+  expect(await selectBrowserColumnFile(id, '/workspace/stale.md')).toBe(false);
 });

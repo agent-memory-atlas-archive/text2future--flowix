@@ -38,18 +38,18 @@ vi.mock("@/lib/toast", () => ({ toast: toastMock }));
 vi.mock("@features/workspace/use-cases/browser-column-navigation", () => ({
   openBrowserColumnFileBrowser: vi.fn(() => ({
     host: 'browser-column',
-    tabId: 'file-browser:/Users/rop/Desktop/vibe/flowix-main',
+    surfaceId: 'file-browser:/Users/rop/Desktop/vibe/flowix-main',
     alreadyOpen: false,
   })),
   openBrowserColumnNotebookNote: vi.fn(() => ({
-    host: 'browser-column', tabId: 'file:external-note', alreadyOpen: false,
+    host: 'browser-column', surfaceId: 'file:external-note', alreadyOpen: false,
   })),
   openBrowserColumnText: vi.fn(() => ({
-    host: 'browser-column', tabId: 'file:external-text', alreadyOpen: false,
+    host: 'browser-column', surfaceId: 'file:external-text', alreadyOpen: false,
   })),
   openBrowserColumnWebpage: vi.fn(() => ({
     host: 'browser-column',
-    tabId: 'web:https://example.com/docs',
+    surfaceId: 'web:https://example.com/docs',
     alreadyOpen: false,
   })),
 }));

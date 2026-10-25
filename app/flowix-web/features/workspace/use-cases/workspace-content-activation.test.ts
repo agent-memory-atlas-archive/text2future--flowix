@@ -50,7 +50,7 @@ describe('workspace content activation', () => {
 
   it('reveals the browser column and activates its matching tab and host', () => {
     const browserColumn = useBrowserColumnStore.getState();
-    browserColumn.openTab({
+    browserColumn.openContent({
       id: 'memo:b',
       title: 'B',
       icon: null,
@@ -61,7 +61,7 @@ describe('workspace content activation', () => {
         activeFilePath: '/notes/b.md',
       },
     });
-    browserColumn.openTab({
+    browserColumn.openContent({
       id: 'memo:a',
       title: 'A',
       icon: null,
@@ -72,22 +72,21 @@ describe('workspace content activation', () => {
         activeFilePath: '/notes/a.md',
       },
     });
-    browserColumn.commitTab('memo:b');
+    browserColumn.focusContent('memo:b');
     browserColumn.setVisible(false);
 
     expect(activateExistingWorkspaceContent({ kind: 'external', path: '/notes/a.md' })).toEqual({
       host: 'browser-column',
-      tabId: 'memo:a',
+      surfaceId: 'memo:a',
     });
     expect(useBrowserColumnStore.getState()).toMatchObject({
       visible: true,
-      activeTabId: 'memo:a',
     });
     expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('browser-column');
   });
 
   it('treats Markdown and text views of the same canonical path as one document', () => {
-    useBrowserColumnStore.getState().openTab({
+    useBrowserColumnStore.getState().openContent({
       id: 'file:/notes/a.md',
       title: 'A',
       icon: null,
@@ -102,13 +101,13 @@ describe('workspace content activation', () => {
       path: '/notes/a.md',
     })).toEqual({
       host: 'browser-column',
-      tabId: 'file:/notes/a.md',
+      surfaceId: 'file:/notes/a.md',
     });
   });
 
   it('prefers the third column when legacy state contains the target twice', () => {
     commitWorkColumnTarget({ kind: 'agent-conversation', instanceId: 'agent-a' });
-    useBrowserColumnStore.getState().openTab({
+    useBrowserColumnStore.getState().openContent({
       id: 'agent:agent-a',
       title: 'Agent A',
       icon: null,
@@ -134,7 +133,7 @@ describe('workspace content activation', () => {
       kind: 'external',
       path: '/notes/pending.md',
     })).toEqual({ host: 'main-third', state: 'pending' });
-    expect(useBrowserColumnStore.getState().tabs).toEqual([]);
+    expect(useBrowserColumnStore.getState().current).toBeNull();
     expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('main-third');
   });
 });

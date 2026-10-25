@@ -5,6 +5,8 @@ import { system } from '@platform/tauri/client';
 import type { MemoItem } from '@/types/memo-item';
 import type { NoteListItem } from '@/types/note-item';
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('custom-filter-store');
 export type CustomFilterOperator = 'contains' | 'equals';
 export type CustomViewDocumentType = 'note' | 'image' | 'video';
 
@@ -75,7 +77,7 @@ function persistNotebookFilters(notebookId: string, filters: CustomFilter[]): vo
     .catch(() => undefined)
     .then(() => system.setCustomViews(notebookId, { filters }))
     .catch((error) => {
-      console.warn('[custom-filter-store] Failed to save notebook views:', error);
+      logger.warn('Failed to save notebook views:', error);
     });
   writesByNotebook.set(notebookId, next);
 }
@@ -126,7 +128,7 @@ export const useCustomFilterStore = create<CustomFilterStore>()((set, get) => ({
       }));
       if (didMigrateLegacy) persistNotebookFilters(notebookId, notebookFilters);
     }).catch((error) => {
-      console.warn('[custom-filter-store] Failed to load notebook views:', error);
+      logger.warn('Failed to load notebook views:', error);
       set((state) => ({
         filtersByNotebook: { ...state.filtersByNotebook, [notebookId]: [] },
         loadedNotebookIds: [...state.loadedNotebookIds, notebookId],

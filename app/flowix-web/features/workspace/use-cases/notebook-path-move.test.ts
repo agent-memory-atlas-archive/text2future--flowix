@@ -24,7 +24,8 @@ vi.mock('@features/memo/public/workspace-api', () => ({
   getWorkspaceMemoState: () => ({ selectedNote: mocks.selected, setSelectedNote: mocks.setSelectedNote }),
 }));
 vi.mock('../store/browser-column-store', () => ({
-  useBrowserColumnStore: { getState: () => ({ tabs: mocks.tabs }), setState: vi.fn() },
+  getBrowserColumnEntries: () => mocks.tabs,
+  useBrowserColumnStore: { getState: () => ({ updateEntries: vi.fn() }), setState: vi.fn() },
 }));
 vi.mock('../store/work-column-store', () => ({
   useWorkColumnStore: { getState: () => ({ navigation: { target: { kind: 'external', path: mocks.documentPath }, pendingTarget: null, previousTarget: null } }), setState: vi.fn() },

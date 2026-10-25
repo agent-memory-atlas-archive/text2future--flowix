@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Info, ListTodo } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import mcpPluginIcon from '@/assets/mcp-plugin.svg';
@@ -8,14 +8,11 @@ import { Tooltip } from '@shared/ui/tooltip';
 import type { Notebook } from '@features/memo/store/note-store';
 import { NotebookSelectorPopup } from '@features/shell/components/status-bar/notebook-selector-popup';
 import { ProductUpdatePill } from '@features/shell/components/status-bar/product-update-pill';
-import { ProductIntroDialog } from '@features/shell/components/status-bar/product-intro-dialog';
-import {
-  AgentConversationStatusBar,
-  AgentIcon,
-  createAndOpenPiConversation,
-} from '@features/agent/public/shell-api';
+import { ProductIntroDialog } from '@features/product-intro';
+import { AgentIcon } from '@features/agent/public/icon-api';
+import { createAndOpenPiConversation } from '@features/agent/public/new-conversation-api';
+import { normalizeAgentRuntimeStatus } from '@features/agent/public/status-bar-api';
 import { useAgentRuntimeStore } from '@features/agent/store/agent-runtime-store';
-import { normalizeAgentRuntimeStatus } from '@features/agent/runtime/agent-runtime-status';
 import { useI18n } from '@/lib/i18n';
 import { getCloudSyncAccess } from '@/lib/cloud-account';
 import { useDocumentMetricsStore } from '@features/document/store/document-metrics-store';
@@ -29,6 +26,14 @@ import {
   type CloudSyncStatus,
 } from '@platform/tauri/client';
 import type { AppUpdaterState } from '@features/shell/hooks/use-app-updater';
+
+// 会话片段要读 agent-session-store（约 220 文件 / 3.3 万行），状态栏是常驻 UI，
+// 不能为它把整套会话数据图拉进启动 chunk。首帧没有运行中的会话，空占位即可。
+const AgentConversationStatusBar = lazy(() =>
+  import('@features/agent/public/status-bar-api').then((module) => ({
+    default: module.AgentConversationStatusBar,
+  })),
+);
 
 interface StatusBarProps {
   onSelectNotebook: (notebook: Notebook) => void;
@@ -233,7 +238,9 @@ export function StatusBar({
         >
           <ListTodo className="w-3.5 h-3.5 shrink-0" />
         </button>
-        <AgentConversationStatusBar />
+        <Suspense fallback={null}>
+          <AgentConversationStatusBar />
+        </Suspense>
         <div className="flex-1" />
         <ProductUpdatePill updater={updater} anchor={statusBarRightEdgeRef} />
         {cloudSyncInProgress && (

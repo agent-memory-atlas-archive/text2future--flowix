@@ -2,6 +2,7 @@ import { getDocumentSession, findDocumentSession, listDocumentSessions, releaseD
 import { cancelDocumentCapture, scheduleDocumentCapture, hasDocumentCommit, waitForDocumentCommits, documentCommitDiagnostics } from './document-commit-queue';
 import { getTitleDraft, hasTitleDraft, isTitleProtected, markTitleProtected, flushTitleDraft, subscribeTitleChanges } from './document-title-session';
 import { pinFileDisplayId, findFileDisplayPath } from '@/lib/file-display-registry';
+import { fireAndForget } from '@/lib/fire-and-forget';
 import { subscribeDocumentBufferChanges } from './buffer-registry';
 import {
   applyLoadedContent,
@@ -107,11 +108,20 @@ export function commitDocumentSession(identity: DocumentIdentity): void {
   finally { session.capturing = false; }
   const path = session.identity.path;
   if (!path) return;
-  void protectDocumentDraft(session.identity, path, 'autosave');
+  fireAndForget(protectDocumentDraft(session.identity, path, 'autosave'), 'document:autosave-draft');
   if (hasUnsavedLocalChanges(identity)) {
-    void flushDocument(session.identity, path, { scopePath: session.retainedAdapter?.scopePath }).then(saved => {
-      if (!saved) void protectDocumentDraft(session.identity, session.identity.path, 'save-error');
-    });
+    fireAndForget(
+      flushDocument(session.identity, path, { scopePath: session.retainedAdapter?.scopePath })
+        .then((saved) => {
+          if (!saved) {
+            fireAndForget(
+              protectDocumentDraft(session.identity, session.identity.path, 'save-error'),
+              'document:save-error-draft',
+            );
+          }
+        }),
+      'document:autosave-flush',
+    );
   }
 }
 

@@ -285,6 +285,7 @@ export interface MarkdownEditorExtensionContext {
   getOwnerPath: () => string | undefined;
   getAttachmentNotebookId: () => string | undefined;
   propertyTargetId?: string;
+  onPropertyAreaHoverChange?: (hovered: boolean) => void;
   onViewSourceMode?: () => void;
   transitionId?: number | null;
   workspaceHost: WorkspaceHostId;
@@ -297,6 +298,7 @@ export function createMarkdownEditorExtensions({
   getOwnerPath,
   getAttachmentNotebookId,
   propertyTargetId,
+  onPropertyAreaHoverChange,
   onViewSourceMode,
   transitionId,
   workspaceHost,
@@ -359,6 +361,7 @@ export function createMarkdownEditorExtensions({
     MarkdownPaste,
     Frontmatter.configure({
       propertyTargetId,
+      onPropertyAreaHoverChange,
       onViewSourceMode,
       getAttachmentNotebookId,
     }),

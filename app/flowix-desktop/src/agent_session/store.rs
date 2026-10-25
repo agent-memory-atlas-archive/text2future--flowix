@@ -67,7 +67,7 @@ impl ThreadManager {
         // turn the temporary connection into a successful in-memory store.
         let old = std::mem::replace(&mut *connection, Connection::open_in_memory()?);
         drop(old);
-        let initialized = flowix_core::memo_file::with_database_rebuild(path, || {
+        let initialized = flowix_core::memo_file::with_corrupt_database_rebuild(path, || {
             let mut conn = Connection::open(path).map_err(std::io::Error::other)?;
             // A newer schema may contain user messages this binary cannot read.
             // Unsupported versions are not corruption and must not be rebuilt.
@@ -75,6 +75,29 @@ impl ThreadManager {
             Ok(conn)
         }).map_err(|error| ThreadError::Join(format!("initialize thread database: {error}")))?;
         *connection = initialized;
+        Ok(())
+    }
+
+    /// Preserve healthy disk data on access or schema errors and use a fresh
+    /// memory store for this session. Only confirmed file damage permits reset.
+    pub fn initialize_runtime_storage(&self) -> Result<(), ThreadError> {
+        if let Err(error) = self.initialize_storage() {
+            tracing::warn!(%error, "thread disk initialization unavailable");
+            if let Some(path) = self.db_path.as_ref() {
+                if flowix_core::memo_file::database_file_is_corrupt(path).unwrap_or(false) {
+                    flowix_core::memo_file::discard_database_for_runtime(path);
+                    if self.initialize_storage().is_ok() {
+                        return Ok(());
+                    }
+                }
+            }
+            tracing::warn!(
+                "using a fresh memory thread database; original disk data retained when usable"
+            );
+            let mut connection = Connection::open_in_memory()?;
+            Self::run_migrations(&mut connection)?;
+            *self.lock_conn() = connection;
+        }
         Ok(())
     }
 
@@ -199,6 +222,64 @@ mod storage_rebuild_tests {
     use super::*;
 
     #[test]
+    fn runtime_thread_storage_recreates_even_when_backup_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("thread.db");
+        std::fs::write(&path, b"broken threads").unwrap();
+        std::fs::write(temp.path().join("rebuild-backups"), b"blocked").unwrap();
+        let manager = ThreadManager::new_uninitialized(path).unwrap();
+        manager.initialize_runtime_storage().unwrap();
+        assert_eq!(
+            manager
+                .lock_conn()
+                .query_row("SELECT COUNT(*) FROM threads", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn runtime_future_thread_schema_is_preserved_instead_of_rebuilt() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("thread.db");
+        let manager = ThreadManager::new(path.clone()).unwrap();
+        manager.lock_conn().execute_batch("CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES ('keep'); PRAGMA user_version=9999;").unwrap();
+        manager.initialize_runtime_storage().unwrap();
+        let original = Connection::open(path).unwrap();
+        assert_eq!(
+            original
+                .query_row("SELECT value FROM retained", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            "keep"
+        );
+        assert_eq!(
+            original
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            9999
+        );
+        assert!(!temp.path().join("rebuild-backups").exists());
+    }
+
+    #[test]
+    fn runtime_thread_storage_uses_memory_when_disk_creation_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(format!("{}.db", "x".repeat(300)));
+        let manager = ThreadManager::new_uninitialized(path).unwrap();
+        manager.initialize_runtime_storage().unwrap();
+        assert_eq!(
+            manager
+                .lock_conn()
+                .query_row("SELECT COUNT(*) FROM threads", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
     fn invalid_thread_database_is_backed_up_and_recreated() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("thread.db");
@@ -217,16 +298,20 @@ mod storage_rebuild_tests {
     fn completed_schema_marker_does_not_hide_missing_tables() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("thread.db");
-        let manager = ThreadManager::new(path).unwrap();
+        let manager = ThreadManager::new(path.clone()).unwrap();
         manager
             .lock_conn()
             .execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE thread_messages;")
             .unwrap();
-        manager.initialize_storage().unwrap();
+        assert!(manager.initialize_storage().is_err());
+        manager.initialize_runtime_storage().unwrap();
         manager
             .lock_conn()
             .execute_batch("SELECT id FROM thread_messages LIMIT 0;")
             .unwrap();
-        assert!(temp.path().join("rebuild-backups").exists());
+        assert!(!temp.path().join("rebuild-backups").exists());
+        let original = Connection::open(path).unwrap();
+        assert!(original.prepare("SELECT id FROM thread_messages LIMIT 0").is_err());
+        assert!(original.prepare("SELECT thread_id FROM threads LIMIT 0").is_ok());
     }
 }

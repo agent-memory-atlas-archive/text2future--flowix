@@ -102,7 +102,7 @@ export function mountMemoListRefreshService(): () => void {
     cardUpdates.clear();
     useNoteStore.getState().applyNoteListBatch(changes);
   };
-  const pending = new Map<string, 'list' | 'notebook-views'>();
+  const pending = new Map<string, 'list' | 'notebook-views' | 'snapshot'>();
   let timer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
   let currentWindowLabel: string | null = null;
@@ -121,18 +121,31 @@ export function mountMemoListRefreshService(): () => void {
     const selectedNotebookId = state.selectedNotebook?.id;
     if (!selectedNotebookId) return;
     const scope = pendingNotebookIds.get(selectedNotebookId);
-    if (scope === 'notebook-views') state.triggerNotebookMetadataRefresh();
-    if (scope) state.handleMemoListInvalidation(selectedNotebookId);
+    if (scope === 'notebook-views' || scope === 'snapshot') state.triggerNotebookMetadataRefresh();
+    if (scope === 'snapshot') state.triggerMemoListRefresh();
+    else if (scope) state.handleMemoListInvalidation(selectedNotebookId);
   };
 
-  const schedule = (notebookId: string, scope: 'list' | 'notebook-views') => {
+  const schedule = (notebookId: string, scope: 'list' | 'notebook-views' | 'snapshot') => {
     if (disposed) return;
     const current = pending.get(notebookId);
-    pending.set(notebookId, current === 'notebook-views' || scope === 'notebook-views'
+    pending.set(notebookId, current === 'snapshot' || scope === 'snapshot' ? 'snapshot' : current === 'notebook-views' || scope === 'notebook-views'
       ? 'notebook-views'
       : 'list');
     if (timer) clearTimeout(timer);
     timer = setTimeout(flush, REFRESH_BATCH_WINDOW_MS);
+  };
+
+  const reconcileSelectedNotebook = () => {
+    if (disposed) return;
+    // Events received before recovery can no longer serve as a fresh snapshot.
+    if (cardTimer) clearTimeout(cardTimer);
+    cardTimer = null;
+    cardUpdates.clear();
+    for (const read of pendingReads.values()) { read.cancelled = true; read.cancelWait?.(); }
+    pendingReads.clear();
+    const notebookId = useNoteStore.getState().selectedNotebook?.id;
+    if (notebookId) schedule(notebookId, 'snapshot');
   };
 
   const stopNotebookChanges = subscribeNotebookChanges((change) => {
@@ -183,7 +196,7 @@ export function mountMemoListRefreshService(): () => void {
       && currentWindowLabel
       && change.originWindowLabel === currentWindowLabel) return;
     schedule(change.notebookId, 'list');
-  });
+  }, { onListenerReady: reconcileSelectedNotebook });
   const stopFileManagement = subscribe<{ notebookId: string; operationId?: string }>(
     'file-management-changed',
     ({ notebookId, operationId }) => {
@@ -193,6 +206,7 @@ export function mountMemoListRefreshService(): () => void {
       if (operationId) return;
       schedule(notebookId, 'notebook-views');
     },
+    { onListenerReady: reconcileSelectedNotebook },
   );
 
   return () => {

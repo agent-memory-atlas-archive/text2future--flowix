@@ -1,11 +1,19 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
 
 import { canonicalPath, samePath, uniquePaths } from '@/lib/path';
 import { findFileDisplayId } from '@/lib/file-display-registry';
+import type { ContentKind } from '@features/content/public/content-api';
+import { EMPTY_SELECTION_CONTENT_KINDS, useNotebookTreeSelectionStore } from '../store/notebook-tree-selection-store';
 import { TREE_ROW_HEIGHT, TREE_ROW_SIZE } from './notebook-tree-layout';
 import type { VisibleTreeNode } from './use-folder-tree';
+
+interface NotebookTreeSelectionModifiers {
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  shiftKey?: boolean;
+}
 
 interface NotebookTreeController {
   expanded: Set<string>;
@@ -36,6 +44,8 @@ interface UseNotebookTreeInteractionOptions {
   activeFilePath: string | null;
   visibleTreeItems: VisibleTreeNode[];
   treeItemPaths: ReadonlySet<string>;
+  pinnedDocumentPaths?: string[];
+  contentKinds?: ReadonlyMap<string, ContentKind>;
   tree: NotebookTreeController;
   treeRootRef: RefObject<HTMLDivElement | null>;
   treeScrollerRef: RefObject<HTMLDivElement | null>;
@@ -51,6 +61,8 @@ export function useNotebookTreeInteraction({
   activeFilePath,
   visibleTreeItems,
   treeItemPaths,
+  pinnedDocumentPaths = [],
+  contentKinds = EMPTY_SELECTION_CONTENT_KINDS,
   tree,
   treeRootRef,
   treeScrollerRef,
@@ -61,9 +73,30 @@ export function useNotebookTreeInteraction({
   onNoteSelect,
 }: UseNotebookTreeInteractionOptions) {
   const [selectedFilePaths, setSelectedFilePaths] = useState<string[]>([]);
+  const selectionOwner = useRef(Symbol('notebook-tree-selection'));
+  useLayoutEffect(() => {
+    const owner = selectionOwner.current;
+    if (isActive) {
+      useNotebookTreeSelectionStore.setState({ owner, count: selectedFilePaths.length, paths: selectedFilePaths, contentKinds });
+    } else if (useNotebookTreeSelectionStore.getState().owner === owner) {
+      useNotebookTreeSelectionStore.setState({ owner: null, count: 0, paths: [], contentKinds: EMPTY_SELECTION_CONTENT_KINDS });
+    }
+  }, [isActive, selectedFilePaths, contentKinds]);
+  useLayoutEffect(() => {
+    const owner = selectionOwner.current;
+    return () => {
+      if (useNotebookTreeSelectionStore.getState().owner === owner) {
+        useNotebookTreeSelectionStore.setState({ owner: null, count: 0, paths: [], contentKinds: EMPTY_SELECTION_CONTENT_KINDS });
+      }
+    };
+  }, []);
   const [focusedTreePath, setFocusedTreePath] = useState<string | null>(null);
   const selectedFilePathsRef = useRef<string[]>([]);
+  const selectionListRef = useRef<'tree' | 'pinned'>('tree');
   const selectionAnchorPathRef = useRef<string | null>(null);
+  // A local open may finish after newer modifier clicks. Its commit must not
+  // discard that newer selection; unrelated external navigation still clears it.
+  const selectionNavigationPathRef = useRef<string | null>(null);
   const activePath = activeFilePath ? canonicalPath(activeFilePath) : null;
   const activeDisplayId = activeFilePath ? findFileDisplayId(activeFilePath) : null;
   const previousActiveFileRef = useRef({ path: activePath, displayId: activeDisplayId });
@@ -105,9 +138,11 @@ export function useNotebookTreeInteraction({
   }, [activeFilePath]);
 
   const navigateToNote = useCallback((path: string, policy: 'reveal' | 'preserve') => {
+    selectionNavigationPathRef.current = activeFilePath && samePath(path, activeFilePath)
+      ? null : canonicalPath(path);
     setNavigationPolicy(path, policy);
     onNoteSelect(path);
-  }, [onNoteSelect, setNavigationPolicy]);
+  }, [activeFilePath, onNoteSelect, setNavigationPolicy]);
 
   useLayoutEffect(() => {
     const nextActivePath = activePath;
@@ -138,7 +173,13 @@ export function useNotebookTreeInteraction({
       ? navigationPolicies.pending
       : null;
     setNavigationPolicies({ active: requestedPolicy, pending: null });
+    const isSelectionNavigation = nextActivePath !== null
+      && selectionNavigationPathRef.current === nextActivePath;
+    selectionNavigationPathRef.current = null;
+    if (isSelectionNavigation) return;
     if (selectedFilePathsRef.current.length === 0 && selectionAnchorPathRef.current === null) return;
+    // Opening a clicked row must retain the anchor for the next Shift click.
+    if (nextActivePath && selectionAnchorPathRef.current && samePath(nextActivePath, selectionAnchorPathRef.current)) return;
     updateSelection([], null);
   }, [activePath, activeDisplayId, navigationPolicies.pending, updateSelection]);
 
@@ -285,30 +326,42 @@ export function useNotebookTreeInteraction({
     treeScrollerRef,
   ]);
 
-  const selectNote = useCallback((filePath: string, event?: MouseEvent<HTMLDivElement>) => {
-    const currentPaths = selectedFilePathsRef.current;
-    const isToggle = Boolean(event?.ctrlKey || event?.metaKey);
-    const anchorPath = selectionAnchorPathRef.current;
-    const targetIndex = visibleDocumentPaths.findIndex((path) => samePath(path, filePath));
+  const selectNote = useCallback((filePath: string, modifiers?: NotebookTreeSelectionModifiers, list: 'tree' | 'pinned' = 'tree') => {
+    const documentPaths = list === 'pinned' ? pinnedDocumentPaths : visibleDocumentPaths;
+    const sameList = selectionListRef.current === list;
+    const currentPaths = sameList ? selectedFilePathsRef.current : [];
+    const isToggle = Boolean(modifiers?.ctrlKey || modifiers?.metaKey);
+    const anchorPath = sameList ? selectionAnchorPathRef.current : null;
+    selectionListRef.current = list;
+    const targetIndex = documentPaths.findIndex((path) => samePath(path, filePath));
     const anchorIndex = anchorPath
-      ? visibleDocumentPaths.findIndex((path) => samePath(path, anchorPath))
+      ? documentPaths.findIndex((path) => samePath(path, anchorPath))
       : -1;
 
-    if (event?.shiftKey && anchorIndex >= 0 && targetIndex >= 0) {
+    let nextPaths: string[];
+    let nextAnchor: string | null = filePath;
+    if (modifiers?.shiftKey && anchorIndex >= 0 && targetIndex >= 0) {
       const start = Math.min(anchorIndex, targetIndex);
       const end = Math.max(anchorIndex, targetIndex);
-      const range = visibleDocumentPaths.slice(start, end + 1);
-      updateSelection(isToggle ? [...currentPaths, ...range] : range, filePath);
+      const range = documentPaths.slice(start, end + 1);
+      nextPaths = isToggle ? [...currentPaths, ...range] : range;
+      nextAnchor = anchorPath;
     } else if (isToggle) {
-      const nextPaths = currentPaths.some((path) => samePath(path, filePath))
+      nextPaths = currentPaths.some((path) => samePath(path, filePath))
         ? currentPaths.filter((path) => !samePath(path, filePath))
         : [...currentPaths, filePath];
-      updateSelection(nextPaths, filePath);
     } else {
-      updateSelection([filePath], filePath);
-      navigateToNote(filePath, 'reveal');
+      nextPaths = [filePath];
     }
-  }, [navigateToNote, updateSelection, visibleDocumentPaths]);
+    nextPaths = uniquePaths(nextPaths);
+    updateSelection(nextPaths, nextAnchor);
+    // Returning to a singleton always shows that document, including when the
+    // previously active document was removed from a multi-selection.
+    const isPlainClick = !modifiers?.shiftKey && !isToggle;
+    if (nextPaths.length === 1 && (isPlainClick || !activeFilePath || !samePath(nextPaths[0], activeFilePath))) {
+      navigateToNote(nextPaths[0], list === 'pinned' ? 'preserve' : 'reveal');
+    }
+  }, [activeFilePath, navigateToNote, updateSelection, visibleDocumentPaths, pinnedDocumentPaths]);
 
   const treeFocusPath = focusedTreePath
     ?? (activeFileShouldReveal && activeFilePath && visibleTreeItems.some(({ item }) => samePath(item.fullPath, activeFilePath))

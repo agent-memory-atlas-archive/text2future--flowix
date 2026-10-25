@@ -199,3 +199,13 @@ it('omits the scheduled-cancellation message from the subscription card', async 
   expect(container.textContent).not.toContain('preferences.cloud.subscription.renewal');
   expect(container.textContent).not.toContain('preferences.cloud.subscription.cancel');
 });
+
+it('shows actionable copy instead of raw subscription and order API errors', async () => {
+  const failure = new Error('cloud API error 500 INTERNAL_ERROR: backend failure (request id: secret-ref)');
+  mocks.listSubscriptions.mockRejectedValue(failure);
+  mocks.listBillingOrders.mockRejectedValue(failure);
+  await act(async () => root.render(<CloudSyncSection />));
+  expect(container.textContent).toContain('errors.friendly.subscriptionLoad');
+  expect(container.textContent).toContain('errors.friendly.ordersLoad');
+  expect(container.textContent).not.toMatch(/INTERNAL_ERROR|backend failure|secret-ref/);
+});

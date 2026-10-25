@@ -33,7 +33,7 @@ export interface CloudState {
   authError?: string | null;
   account?: {
     user: CloudUser;
-    protocolEpoch: 2;
+    protocolEpoch: 3;
   } | null;
   membership?: CloudMembership | null;
   membershipStatus?: 'unknown' | 'refreshing' | 'verified' | 'error';
@@ -143,21 +143,6 @@ export interface CloudFeedbackAttachment {
   dataBase64: string;
 }
 
-export interface CloudNoteHistory {
-  noteId: string;
-  notebookId: string;
-  currentRevision: string;
-  revisions: Array<{
-    revision: string;
-    deleted: boolean;
-    relativePath: string | null;
-    contentHash: string | null;
-    sizeBytes: number;
-    syncSeq: number;
-    createdAt: number;
-  }>;
-}
-
 export const cloud = {
   getState: () => invoke<CloudState>('cloud_get_state'),
   register: (email: string, password: string, displayName: string) =>
@@ -207,12 +192,6 @@ export const cloud = {
   ) => invoke<void>('cloud_submit_feedback', { deviceId, kind, content, appVersion, platform, attachments }),
   syncNow: (notebookId?: string) =>
     invoke<CloudSyncResult>('cloud_sync_now', { notebookId }),
-  noteHistory: (notebookId: string, relativePath: string) =>
-    invoke<CloudNoteHistory>('cloud_note_history', { notebookId, relativePath }),
-  previewNoteRevision: (notebookId: string, relativePath: string, revision: string) =>
-    invoke<string>('cloud_preview_note_revision', { notebookId, relativePath, revision }),
-  restoreNoteRevision: (notebookId: string, relativePath: string, revision: string) =>
-    invoke<void>('cloud_restore_note_revision', { notebookId, relativePath, revision }),
   listConflicts: (notebookId: string) =>
     invoke<string[]>('cloud_list_conflicts', { notebookId }),
   resolveMarkdownConflict: (notebookId: string, relativePath: string, conflictPath: string, useLocal: boolean) =>

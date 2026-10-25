@@ -7,7 +7,13 @@ import { refreshIndexedMemo } from '@features/memo/services/memo-list-refresh-se
 import { useNotebookBackgroundStore } from '@features/memo/store/notebook-background-store';
 import { flushSync } from 'react-dom';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
-import { samePath, joinNotebookMemoPath } from '@/lib/path';
+import {
+  canonicalDirectoryPath,
+  joinNotebookMemoPath,
+  notebookRelativeDirectoryPath,
+  parentDirectoryPath,
+  samePath,
+} from '@/lib/path';
 import { subscribe } from '@platform/tauri/event-bus';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -60,7 +66,7 @@ import {
 import { MemoListDataLoader } from '@features/memo/components/memo-list-data-loader';
 import { noteRepository } from '@features/memo/services/note-repository';
 import { initializeMainWindowStartup } from '@app/main-window-startup';
-import { clearWorkspaceDocument } from '@features/workspace/use-cases/workspace-navigation';
+import { clearWorkspaceDocument } from '@features/workspace/public/note-navigation-api';
 import { openWorkspaceSurface } from '@features/workspace/public/open-surface-api';
 import { useI18n } from '@/lib/i18n';
 import {
@@ -69,14 +75,13 @@ import {
 import { createLogger } from '@/lib/logger';
 import { orderNoteTemplates } from '@/lib/note-template-order';
 import { files as fileApi, notes as noteApi, type NoteTemplate } from '@platform/tauri/client';
-import { canonicalDirectoryPath } from '@/lib/path';
 import type { AgentTypeKey } from '@/types/agent';
 import { useAgentRuntimeStore } from '@features/agent/store/agent-runtime-store';
 import { useNewConversationAgentSelection } from '@features/agent/hooks/use-new-conversation-agent-selection';
 import { AgentConversationTypeMenuItems } from '@features/agent/components/agent-conversation-type-menu-items';
 import {
   createAndOpenAgentConversation,
-} from '@features/agent/public/shell-api';
+} from '@features/agent/public/new-conversation-api';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -97,7 +102,7 @@ import { MemoListRows, type MemoRowKeepAliveChange } from './memo-list/memo-list
 import {
   findRunningAgentTypeForMemo,
   useRunningAgentTypeIndex,
-} from './memo-list/running-agent-index';
+} from '@features/agent/public/running-agents-api';
 const logger = createLogger('memo-list');
 
 async function nextUntitledNoteTitle(parentPath: string, baseTitle: string): Promise<string> {
@@ -335,6 +340,31 @@ export function MemoList({
   const pendingDocumentPath = useWorkColumnStore((state) => {
     const { phase, pendingTarget } = state.navigation;
     return phase === 'loading' && pendingTarget?.kind === 'external' ? pendingTarget.path : null;
+  });
+  const workTargetParentPath = useWorkColumnStore((state) => {
+    if (!selectedNotebook) return null;
+    // The committed Work target is the implicit destination for tree creation.
+    // Fall back to the notebook preference when Work has no in-notebook target.
+    const target = state.navigation.target;
+    let parentPath: string | null = null;
+
+    if (target.kind === 'folder-collection' && target.notebookId === selectedNotebook.id) {
+      parentPath = target.folderPath;
+    } else if (
+      (target.kind === 'collection' || target.kind === 'table' || target.kind === 'media-library')
+      && (!target.notebookId || target.notebookId === selectedNotebook.id)
+    ) {
+      parentPath = parentDirectoryPath(target.filePath, selectedNotebook.path);
+    } else if (target.kind === 'external') {
+      parentPath = parentDirectoryPath(target.path, selectedNotebook.path);
+    } else if (target.kind === 'media') {
+      parentPath = parentDirectoryPath(target.filePath, selectedNotebook.path);
+    }
+
+    if (parentPath === null) return null;
+    return notebookRelativeDirectoryPath(selectedNotebook.path, parentPath) === null
+      ? null
+      : parentPath;
   });
   const pendingListItem = pendingDocumentPath && selectedNotebook?.path
     ? notes.find((note) => samePath(
@@ -857,7 +887,11 @@ export function MemoList({
         setSelectedTagId(null);
         setActiveFilter(createFilter);
       }
+      const workTargetParentRelativePath = memoListView !== 'folders' || workTargetParentPath === null
+        ? null
+        : notebookRelativeDirectoryPath(selectedNotebook.path, workTargetParentPath);
       const parentRelativePath = parentRelativePathOverride
+        ?? workTargetParentRelativePath
         ?? (await fileApi.getNotebookViewPreferences(selectedNotebook.path)).defaultCreateFolder
         ?? '';
       const notebookRoot = selectedNotebook.path.replace(/[\\/]+$/, '');
@@ -912,7 +946,9 @@ export function MemoList({
     activeCustomFilter,
     activeCustomFilterId,
     loadNotebookFilters,
+    memoListView,
     prepareForInsert,
+    workTargetParentPath,
     selectedNotebook,
     setActiveFilter,
     setSelectedTagId,
@@ -1065,7 +1101,7 @@ export function MemoList({
                 }}
               >
                 <span className="flex min-w-0 items-center gap-2">
-                  <WorkDocumentsIcon className="h-5 w-5 shrink-0" />
+                  <WorkDocumentsIcon className="h-5 w-5 shrink-0 opacity-100" />
                   <span className="mention-note-title">{t('memo.create.workDocuments')}</span>
                 </span>
                 <span className="mention-note-notebook opacity-50">{t('memo.create.workDocumentsTypes')}</span>

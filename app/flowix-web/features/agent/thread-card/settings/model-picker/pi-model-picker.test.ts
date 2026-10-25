@@ -47,13 +47,13 @@ describe("Pi model picker provider icons", () => {
       createModelItem,
     });
 
-    const categories = picker.querySelectorAll(".pi-model-picker__category");
+    const categories = picker.querySelectorAll(".agent-pi-model-picker__category");
     expect(Array.from(categories).map((category) =>
-      category.querySelector(".pi-model-picker__category-label")?.textContent,
+      category.querySelector(".agent-pi-model-picker__category-label")?.textContent,
     )).toEqual(["会员模型", "我的模型"]);
-    expect(categories[0]?.querySelector(".pi-model-picker__item")?.textContent)
+    expect(categories[0]?.querySelector(".agent-pi-model-picker__item")?.textContent)
       .toContain("Member model");
-    expect(categories[1]?.querySelector(".pi-model-picker__item")?.textContent)
+    expect(categories[1]?.querySelector(".agent-pi-model-picker__item")?.textContent)
       .toContain("Custom model");
   });
 
@@ -78,16 +78,16 @@ describe("Pi model picker provider icons", () => {
       createModelItem,
     });
 
-    const item = picker.querySelector<HTMLButtonElement>(".pi-model-picker__item");
-    const providerName = item?.querySelector(".pi-model-picker__provider-name");
-    expect(picker.querySelector(".pi-model-picker__category-label")).toBeNull();
-    expect(picker.querySelector(".pi-model-picker__panel > .pi-model-picker__models"))
+    const item = picker.querySelector<HTMLButtonElement>(".agent-pi-model-picker__item");
+    const providerName = item?.querySelector(".agent-pi-model-picker__provider-name");
+    expect(picker.querySelector(".agent-pi-model-picker__category-label")).toBeNull();
+    expect(picker.querySelector(".agent-pi-model-picker__panel > .agent-pi-model-picker__models"))
       .not.toBeNull();
-    expect(picker.querySelector(".pi-model-picker__provider-label")).toBeNull();
-    expect(item?.querySelector(".pi-model-picker__provider-icon")).not.toBeNull();
+    expect(picker.querySelector(".agent-pi-model-picker__provider-label")).toBeNull();
+    expect(item?.querySelector(".agent-pi-model-picker__provider-icon")).not.toBeNull();
     expect(providerName?.textContent).toBe("My provider");
     const checkmarkPlaceholder = item?.querySelector(
-      ".pi-model-picker__checkmark-placeholder",
+      ".agent-pi-model-picker__checkmark-placeholder",
     );
     expect(checkmarkPlaceholder?.getAttribute("aria-hidden")).toBe("true");
     expect(providerName?.nextElementSibling).toBe(checkmarkPlaceholder);
@@ -123,30 +123,30 @@ describe("Pi model picker provider icons", () => {
       createModelItem,
     });
 
-    const categories = picker.querySelectorAll(".pi-model-picker__category");
-    const memberItem = categories[0]?.querySelector<HTMLButtonElement>(".pi-model-picker__item");
+    const categories = picker.querySelectorAll(".agent-pi-model-picker__category");
+    const memberItem = categories[0]?.querySelector<HTMLButtonElement>(".agent-pi-model-picker__item");
     expect(memberItem?.title).toBe("稳定高速模型");
-    const memberIcon = memberItem?.querySelector(".pi-model-picker__provider-icon");
+    const memberIcon = memberItem?.querySelector(".agent-pi-model-picker__provider-icon");
     expect(memberIcon).not.toBeNull();
     expect(memberItem?.firstElementChild).toBe(memberIcon);
     expect(memberItem?.querySelector(".agent-thread-card__codex-settings-item-label")?.textContent)
       .toBe("deepseek-v3.2");
-    const multiplier = memberItem?.querySelector(".pi-model-picker__multiplier");
+    const multiplier = memberItem?.querySelector(".agent-pi-model-picker__multiplier");
     const checkmark = memberItem?.querySelector(".agent-thread-card__copy-icon");
     expect(multiplier?.textContent).toBe("1.25x");
     expect(multiplier?.nextElementSibling).toBe(checkmark);
 
-    const personalItem = categories[1]?.querySelector<HTMLButtonElement>(".pi-model-picker__item");
-    const personalIcon = personalItem?.querySelector(".pi-model-picker__provider-icon");
+    const personalItem = categories[1]?.querySelector<HTMLButtonElement>(".agent-pi-model-picker__item");
+    const personalIcon = personalItem?.querySelector(".agent-pi-model-picker__provider-icon");
     expect(personalIcon).not.toBeNull();
     expect(personalItem?.firstElementChild).toBe(personalIcon);
     expect(personalItem?.querySelector(".agent-thread-card__codex-settings-item-label")?.textContent)
       .toBe("custom-model");
-    const providerName = personalItem?.querySelector(".pi-model-picker__provider-name");
+    const providerName = personalItem?.querySelector(".agent-pi-model-picker__provider-name");
     expect(providerName?.textContent).toBe("My provider");
     expect(providerName?.nextElementSibling?.classList.contains(
-      "pi-model-picker__checkmark-placeholder",
+      "agent-pi-model-picker__checkmark-placeholder",
     )).toBe(true);
-    expect(picker.querySelector(".pi-model-picker__provider-label")).toBeNull();
+    expect(picker.querySelector(".agent-pi-model-picker__provider-label")).toBeNull();
   });
 });

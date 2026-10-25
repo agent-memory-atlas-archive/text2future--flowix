@@ -5,7 +5,7 @@ import { ChevronRight } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
-import type { DocTreeItem, MediaLibraryListItem, TableDocumentListItem } from '@platform/tauri/client';
+import type { CollectionIndexItem, DocTreeItem, MediaLibraryListItem, TableDocumentListItem } from '@platform/tauri/client';
 import { TREE_EDGE_GUTTER } from './notebook-tree-layout';
 
 interface SectionFrameProps {
@@ -109,6 +109,8 @@ export function NotebookPinnedSection({
 interface NotebookViewsSectionProps extends SectionFrameProps {
   tables: TableDocumentListItem[];
   mediaLibraries: MediaLibraryListItem[];
+  workDocuments?: CollectionIndexItem[];
+  renderWorkDocuments?: (item: CollectionIndexItem) => ReactNode;
   renderTable: (item: TableDocumentListItem) => ReactNode;
   renderMediaLibrary: (item: MediaLibraryListItem) => ReactNode;
 }
@@ -122,6 +124,8 @@ export function NotebookViewsSection({
   mediaLibraries,
   renderTable,
   renderMediaLibrary,
+  workDocuments = [],
+  renderWorkDocuments,
 }: NotebookViewsSectionProps) {
   const { t } = useI18n();
 
@@ -138,6 +142,7 @@ export function NotebookViewsSection({
       {!collapsed && <div className="space-y-0.5">
         {tables.map(renderTable)}
         {mediaLibraries.map(renderMediaLibrary)}
+        {renderWorkDocuments && workDocuments.map(renderWorkDocuments)}
       </div>}
     </section>
   );

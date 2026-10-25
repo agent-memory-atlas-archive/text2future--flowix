@@ -6,7 +6,7 @@ import {
   buildRunningAgentTypeIndex,
   findRunningAgentForMemo,
   findRunningAgentTypeForMemo,
-} from './running-agent-index';
+} from './running-agent-projection';
 
 function instance(
   input: Partial<AgentConversationInstance> = {},

@@ -212,6 +212,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
   private disposeBodyScrollbar: () => void = () => {};
   private disposeAgentMessageTypography: () => void = () => {};
   private readonly submission = new ComposerSubmissionController();
+  private scrollToLatestButton: HTMLButtonElement;
   private interestedThreadId: string | null = null;
   private hydratingInstanceId: string | null = null;
   private instanceBindingPromise: {
@@ -237,6 +238,10 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       );
     }
     this.messages.handleScroll();
+  };
+  private boundHandleScrollToLatest = (event: MouseEvent): void => {
+    event.stopPropagation();
+    this.messages.scrollToBottomSmooth();
   };
   private boundHandleRequestFullscreen = (event: Event): void => {
     const detail = (event as CustomEvent<{
@@ -477,6 +482,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
     this.composerRoleIcon = domParts.composerRoleIcon;
     this.input = domParts.input;
     this.sendButtonMount = domParts.sendButtonMount;
+    this.scrollToLatestButton = domParts.scrollToLatestButton;
     this.input.addEventListener("focus", this.boundHandleInputFocus);
 
     const { codexSettingsPopover, composerRolePopover, composerAddPopover } = domParts;
@@ -628,6 +634,9 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       bottomFollowThresholdPx: BOTTOM_FOLLOW_THRESHOLD_PX,
       topHistoryLoadThresholdPx: TOP_HISTORY_LOAD_THRESHOLD_PX,
       scrollDeltaEpsilonPx: SCROLL_DELTA_EPSILON_PX,
+      onAtBottomChange: (atBottom) => {
+        domParts.scrollToLatestButton.hidden = atBottom;
+      },
       isDestroyed: () => this.isDestroyed,
       isCollapsed: () => this.collapsed,
       isFullscreen: () => this.isFullscreen,
@@ -714,6 +723,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       },
     });
     this.messages = this.surface.messages;
+    this.scrollToLatestButton.addEventListener("click", this.boundHandleScrollToLatest);
     this.composerController = this.surface.composer;
     this.composerAttachments.connectDocument(
       new ComposerAttachmentDocument(this.composerController.editorInstance),
@@ -791,7 +801,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
         },
         source: { kind: "dedicated", notebookId: source?.source.notebookId ?? null },
       });
-      await openWorkspaceSurface({ target: { kind: 'agent-conversation', instanceId: fork.instanceId } });
+      await openWorkspaceSurface({ host: 'main-third', target: { kind: 'agent-conversation', instanceId: fork.instanceId } });
     } catch (error) {
       logger.error(`Failed to fork ${this.typeKey} conversation`, { error });
       toast.error(error instanceof Error ? error.message : String(error));
@@ -2072,6 +2082,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
     this.interestedThreadId = null;
     this.surface.dispose();
     this.body.removeEventListener("scroll", this.boundHandleBodyScroll);
+    this.scrollToLatestButton.removeEventListener("click", this.boundHandleScrollToLatest);
     this.disposeBodyScrollbar();
     this.disposeAgentMessageTypography();
     this.runtime.dispose();

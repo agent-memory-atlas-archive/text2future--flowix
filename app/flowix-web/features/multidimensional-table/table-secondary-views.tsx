@@ -1,3 +1,4 @@
+import { friendlyErrorMessage } from '@/lib/friendly-error-message';
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Link2, LoaderCircle, Plus } from 'lucide-react';
@@ -152,7 +153,7 @@ export function TableGalleryView({ records, titleField, fields, renderValue, ima
     onPreview: onGalleryDropPreview,
     onDrop: (notes, location) => onExternalNoteDrop?.(notes, location.beforeRecordId),
     onReject: onGalleryDropReject,
-    onError: (error) => toast.error(error instanceof Error ? error.message : t('multidimensionalTable.galleryDropFailed')),
+    onError: (error) => toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteMove')),
   });
 
   const renderedRecords = dropPreview?.records ?? records;
@@ -451,7 +452,7 @@ export function TableKanbanView({ groupField, titleField, records, groups, rende
         toast.warning(t('multidimensionalTable.kanbanDropUnavailable'));
       }
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : t('multidimensionalTable.kanbanDropFailed')),
+    onError: (error) => toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteMove')),
   }), [dropLocationAt, kanbanTargetId, t]);
 
   const onLanePointerDown = (event: PointerEvent<HTMLElement>, optionId: string) => {
@@ -786,7 +787,7 @@ export function TableCalendarView({ cursor, onCursorChange, days, groups, dateFi
           toast.warning(t('memo.fileTree.calendarDropUnsupported'));
         }
       },
-      onError: (error) => toast.error(error instanceof Error ? error.message : '加入日历失败'),
+      onError: (error) => toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableLink')),
     });
   }, [calendarTargetId, dateAt, t]);
 

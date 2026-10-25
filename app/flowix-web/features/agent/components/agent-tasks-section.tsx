@@ -1,7 +1,10 @@
 'use client';
 
+import { useStartedLiveThreads } from './use-started-live-threads';
+
 import { removeAgentConversation } from '@features/agent/use-cases/remove-conversation';
 import { ConversationActionItems } from './conversation-action-items';
+import { AgentConversationHoverCard } from '@features/agent/components/agent-conversation-hover-card';
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { StarIcon } from '@phosphor-icons/react';
@@ -16,7 +19,6 @@ import {
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuTrigger } from '@shared/ui/dropdown-menu';
 import {
   RECENT_CONVERSATIONS_LIMIT,
-  isSyntheticOpenCodeHistoryInstance,
   loadFavoriteAgentConversations,
   loadRecentAgentConversations,
 } from '@features/agent/components/agent-tasks-recent';
@@ -34,6 +36,9 @@ import { createLogger } from '@/lib/logger';
 import { Input } from '@shared/ui/input';
 import { Button } from '@shared/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@shared/ui/dialog';
+
+import { selectVisibleConversations } from './conversation-list-model';
+import { EMPTY_CONVERSATION_PAGE_STATE, mergeConversationPage, sortFavoriteConversations } from './conversation-list-pagination';
 
 const logger = createLogger('agent-tasks-section');
 
@@ -65,6 +70,8 @@ export function AgentTasksSection({
   const [renameDraft, setRenameDraft] = useState('');
   const [renameSaving, setRenameSaving] = useState(false);
   const lifecycleVersion = useAgentSessionStore((state) => state.lifecycleVersion);
+  const threadTombstones = useAgentSessionStore((state) => state.threadTombstones);
+  const startedLiveThreads = useStartedLiveThreads();
   const liveInstances = useAgentSessionStore((state) => state.conversationRegistry.instances);
   const conversationRunIndex = useAgentSessionStore((state) => state.threadRunSignatures);
   const latestCompletedRunIds = useAgentSessionStore((state) => state.latestCompletedRunIds);
@@ -113,20 +120,14 @@ export function AgentTasksSection({
   }, [favoriteIds, lifecycleVersion, notebookId]);
 
   const tasks = useMemo(() => {
-    const merged = new Map<string, AgentConversationInstance>();
-    for (const instance of [
+    const page = mergeConversationPage(EMPTY_CONVERSATION_PAGE_STATE, [
       ...storedFavorites.filter((item) => favoriteIds.has(item.instanceId)),
       ...storedConversations,
-      ...Object.values(liveInstances),
-    ]) {
-      if (instance.source.notebookId !== notebookId) continue;
-      const existing = merged.get(instance.instanceId);
-      if (!existing || instance.updatedAt >= existing.updatedAt) merged.set(instance.instanceId, instance);
-    }
-    const conversations = [...merged.values()]
-      .filter((instance) => !isSyntheticOpenCodeHistoryInstance(instance))
-      .sort((left, right) => right.updatedAt - left.updatedAt);
-    const favorites = conversations.filter((instance) => favoriteIds.has(instance.instanceId));
+    ]);
+    const conversations = selectVisibleConversations(
+      page, liveInstances, notebookId, threadTombstones, startedLiveThreads,
+    );
+    const favorites = sortFavoriteConversations(conversations.filter((instance) => favoriteIds.has(instance.instanceId)));
     const recent = conversations
       .filter((instance) => !favoriteIds.has(instance.instanceId))
       .slice(0, RECENT_CONVERSATIONS_LIMIT);
@@ -135,7 +136,7 @@ export function AgentTasksSection({
       items: combined.slice(0, RECENT_CONVERSATIONS_LIMIT),
       hasMore: hasMoreConversations || combined.length > RECENT_CONVERSATIONS_LIMIT,
     };
-  }, [favoriteIds, hasMoreConversations, liveInstances, notebookId, storedConversations, storedFavorites]);
+  }, [favoriteIds, hasMoreConversations, liveInstances, notebookId, storedConversations, storedFavorites, threadTombstones, startedLiveThreads]);
 
   useLayoutEffect(() => {
     const section = sectionRef.current;
@@ -161,7 +162,7 @@ export function AgentTasksSection({
         activeAgentTypeKey: instance.agentType,
       }));
     }
-    await openWorkspaceSurface({ target: { kind: 'agent-conversation', instanceId: instance.instanceId } });
+    await openWorkspaceSurface({ host: 'main-third', target: { kind: 'agent-conversation', instanceId: instance.instanceId } });
   }, []);
 
   const prepareConversation = useCallback((instance: AgentConversationInstance) => {
@@ -341,81 +342,85 @@ export function AgentTasksSection({
               && latestCompletedRunIds[instance.threadId] !== readThroughRunIds[instance.threadId]
               && activeConversationInstanceId !== instance.instanceId;
             return (
-              <div
+              <AgentConversationHoverCard
                 key={instance.instanceId}
-                onContextMenu={(event) => showConversationContextMenu(event, instance.instanceId)}
-                className={cn(
-                  'group flex h-8 w-full items-center gap-1.5 rounded-lg px-1.5 text-left text-sm transition-colors hover:bg-[var(--muted)]',
-                  activeConversationInstanceId === instance.instanceId && 'bg-[var(--muted)]',
-                )}
-                style={{ marginLeft: edgeGutter, width }}
+                instance={instance}
               >
-                <button
-                  type="button"
-                  title={instance.title?.trim() || t('common.untitled')}
-                  onClick={() => { void openConversation(instance); }}
-                  className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
-                >
-                <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
-                  <AgentIcon typeKey={instance.agentType} alt="" className="h-4 w-4 object-contain" />
-                  {(running || unread) && (
-                    <span
-                      aria-hidden="true"
-                      className={cn(
-                        'absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 rounded-full',
-                        running ? 'bg-[var(--success)]' : 'bg-[var(--muted-foreground)]',
-                      )}
-                    />
-                  )}
-                </span>
-                <span className={cn(
-                  'min-w-0 flex-1 truncate text-[var(--foreground)]',
-                  activeConversationInstanceId === instance.instanceId ? 'opacity-100' : 'opacity-[0.82]',
-                )}>
-                  {instance.title?.trim() || t('common.untitled')}
-                </span>
-                </button>
-                <DropdownMenu
-                  open={openMenuId === instance.instanceId}
-                  onOpenChange={(open) => setOpenMenuId(open ? instance.instanceId : null)}
-                  className={cn('flex w-0 shrink-0 overflow-hidden opacity-0 transition-[width,opacity] duration-[37.5ms] group-hover:w-6 group-hover:opacity-100', openMenuId === instance.instanceId && 'w-6 opacity-100')}
-                >
-                  <DropdownMenuTrigger asChild onClick={(event) => event.stopPropagation()}>
-                    <button type="button" aria-label={t('agent.chat.conversation.more')} className="rounded bg-[var(--muted)] p-1 text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
-                      <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-[160px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
-                    <ConversationActionItems
-                      favorite={favoriteIds.has(instance.instanceId)}
-                      onOpen={() => openConversationInBrowserColumn(instance)}
-                      onFavorite={() => toggleFavorite(instance.instanceId)}
-                      onRename={() => renameConversation(instance)}
-                      onArchive={() => void removeConversation(instance, 'archive')}
-                      onDelete={() => void removeConversation(instance, 'delete')}
-                      archiveSeparator
-                    />
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <button
-                  type="button"
-                  aria-label={favoriteIds.has(instance.instanceId) ? t('agent.chat.conversation.unfavorite') : t('agent.chat.conversation.favorite')}
-                  aria-pressed={favoriteIds.has(instance.instanceId)}
-                  title={favoriteIds.has(instance.instanceId) ? t('agent.chat.conversation.unfavorite') : t('agent.chat.conversation.favorite')}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    toggleFavorite(instance.instanceId);
-                  }}
+                <div
+                  onContextMenu={(event) => showConversationContextMenu(event, instance.instanceId)}
                   className={cn(
-                    'shrink-0 overflow-hidden rounded p-1 text-[var(--muted-foreground)] transition-[width,opacity,color] duration-[37.5ms] hover:text-[var(--foreground)] focus-visible:opacity-100',
-                    favoriteIds.has(instance.instanceId)
-                      ? 'w-6 opacity-100'
-                      : 'w-0 opacity-0 group-focus-within:w-6 group-focus-within:opacity-100 group-hover:w-6 group-hover:opacity-100',
+                    'group flex h-8 w-full items-center gap-1.5 rounded-lg px-1.5 text-left text-sm transition-colors hover:bg-[var(--muted)]',
+                    activeConversationInstanceId === instance.instanceId && 'bg-[var(--muted)]',
                   )}
+                  style={{ marginLeft: edgeGutter, width }}
                 >
-                  <StarIcon className="h-4 w-4" weight={favoriteIds.has(instance.instanceId) ? 'fill' : 'regular'} aria-hidden="true" />
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    title={instance.title?.trim() || t('common.untitled')}
+                    onClick={() => { void openConversation(instance); }}
+                    className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
+                  >
+                    <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
+                      <AgentIcon typeKey={instance.agentType} alt="" className="h-4 w-4 object-contain" />
+                      {(running || unread) && (
+                        <span
+                          aria-hidden="true"
+                          className={cn(
+                            'absolute -bottom-0.5 -right-0.5 h-1.5 w-1.5 rounded-full',
+                            running ? 'bg-[var(--success)]' : 'bg-[var(--muted-foreground)]',
+                          )}
+                        />
+                      )}
+                    </span>
+                    <span className={cn(
+                      'min-w-0 flex-1 truncate text-[var(--foreground)]',
+                      activeConversationInstanceId === instance.instanceId ? 'opacity-100' : 'opacity-[0.82]',
+                    )}>
+                      {instance.title?.trim() || t('common.untitled')}
+                    </span>
+                  </button>
+                  <DropdownMenu
+                    open={openMenuId === instance.instanceId}
+                    onOpenChange={(open) => setOpenMenuId(open ? instance.instanceId : null)}
+                    className={cn('flex w-0 shrink-0 overflow-hidden opacity-0 transition-[width,opacity] duration-[37.5ms] group-hover:w-6 group-hover:opacity-100', openMenuId === instance.instanceId && 'w-6 opacity-100')}
+                  >
+                    <DropdownMenuTrigger asChild onClick={(event) => event.stopPropagation()}>
+                      <button type="button" aria-label={t('agent.chat.conversation.more')} className="rounded bg-[var(--muted)] p-1 text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+                        <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-[160px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
+                      <ConversationActionItems
+                        favorite={favoriteIds.has(instance.instanceId)}
+                        onOpen={() => openConversationInBrowserColumn(instance)}
+                        onFavorite={() => toggleFavorite(instance.instanceId)}
+                        onRename={() => renameConversation(instance)}
+                        onArchive={() => void removeConversation(instance, 'archive')}
+                        onDelete={() => void removeConversation(instance, 'delete')}
+                        archiveSeparator
+                      />
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <button
+                    type="button"
+                    aria-label={favoriteIds.has(instance.instanceId) ? t('agent.chat.conversation.unfavorite') : t('agent.chat.conversation.favorite')}
+                    aria-pressed={favoriteIds.has(instance.instanceId)}
+                    title={favoriteIds.has(instance.instanceId) ? t('agent.chat.conversation.unfavorite') : t('agent.chat.conversation.favorite')}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleFavorite(instance.instanceId);
+                    }}
+                    className={cn(
+                      'shrink-0 overflow-hidden rounded p-1 text-[var(--muted-foreground)] transition-[width,opacity,color] duration-[37.5ms] hover:text-[var(--foreground)] focus-visible:opacity-100',
+                      favoriteIds.has(instance.instanceId)
+                        ? 'w-6 opacity-100'
+                        : 'w-0 opacity-0 group-focus-within:w-6 group-focus-within:opacity-100 group-hover:w-6 group-hover:opacity-100',
+                    )}
+                  >
+                    <StarIcon className="h-4 w-4" weight={favoriteIds.has(instance.instanceId) ? 'fill' : 'regular'} aria-hidden="true" />
+                  </button>
+                </div>
+              </AgentConversationHoverCard>
             );
           })}
           {tasks.hasMore && (

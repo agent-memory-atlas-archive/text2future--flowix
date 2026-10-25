@@ -10,7 +10,13 @@ import { resolveDocumentTitlebarTarget, type DocumentTitlebarTarget } from './do
 const mocks = vi.hoisted(() => ({ save: vi.fn(), read: vi.fn(), error: vi.fn() }));
 vi.mock('../public/path-properties', () => ({ setDocumentProperties: mocks.save }));
 vi.mock('@platform/tauri/client', () => ({ notes: { readDocument: mocks.read } }));
-vi.mock('@/lib/i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }));
+// 树里有 import { DEFAULT_APP_LANGUAGE } 的模块（lib/constants、错误边界），
+// 只 mock useI18n 会让它们在加载期就失败。
+vi.mock('@/lib/i18n', () => ({
+  useI18n: () => ({ t: (key: string) => key }),
+  translate: (_language: string, key: string) => key,
+  DEFAULT_APP_LANGUAGE: 'zh-CN',
+}));
 vi.mock('@/lib/toast', () => ({ toast: { error: mocks.error } }));
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ error: vi.fn(), warn: vi.fn() }) }));
 vi.mock('@features/memo/store/note-store', async () => {

@@ -57,6 +57,11 @@ impl SyncManager {
         self.account.initialize_storage()
     }
 
+    pub fn initialize_runtime_storage(&self) -> Result<(), SyncError> {
+        self.store.initialize_runtime_schema()?;
+        self.account.initialize_storage()
+    }
+
     pub fn store(&self) -> &SyncStore {
         &self.store
     }

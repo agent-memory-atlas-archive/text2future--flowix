@@ -20,7 +20,6 @@ import { openNotebookNote } from '@features/memo/use-cases/open-notebook-note';
 import { openFolderCollectionFromFolder } from '@features/workspace/public/main-window-api';
 import { openWorkspaceSurface } from '@features/workspace/public/open-surface-api';
 import { createFileBrowserTarget } from '@features/workspace/public/browser-column-api';
-import { useWorkspaceFocusStore } from '@features/workspace/store/workspace-focus-store';
 import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
 import { clearWorkspaceTargetsForDeletedDirectory } from '@features/workspace/public/shell-api';
 import { workColumnTargetFilePath } from '@features/workspace/store/work-column-target';
@@ -32,7 +31,7 @@ import {
   type FileBrowserDirectoriesChangedEvent,
 } from '@platform/tauri/client';
 import { subscribe } from '@platform/tauri/event-bus';
-import { subscribeNotebookChanges } from '@platform/tauri/notebook-change-events';
+import { subscribeNotebookMetadata } from '../services/note-metadata-service';
 import { type Notebook } from '@features/memo/store';
 
 const FILE_BROWSER_DIRECTORIES_CHANGED_EVENT = 'file-browser-directories-changed';
@@ -68,14 +67,7 @@ export function NotebookFolderView({
   const refreshDirectoriesRef = useRef(tree.refreshDirectories);
   refreshDirectoriesRef.current = tree.refreshDirectories;
 
-  useEffect(() => subscribeNotebookChanges((change) => {
-    if (change.notebookId !== notebook.id || change.kind !== 'resource-updated') return;
-    tree.updateNoteMetadata(`${notebook.path}/${change.relativePath}`, {
-      icon: change.entry.icon,
-      colors: change.entry.colors,
-      favorited: change.entry.favorited,
-    });
-  }), [notebook.id, notebook.path, tree.updateNoteMetadata]);
+  useEffect(() => subscribeNotebookMetadata({ notebookId: notebook.id, notebookPath: notebook.path }), [notebook.id, notebook.path]);
 
   useEffect(() => subscribe<{ notebookId: string; operationId?: string }>('file-management-changed', ({ notebookId, operationId }) => {
     if (isActive && notebookId === notebook.id && !operationId) void tree.refresh();
@@ -132,11 +124,13 @@ export function NotebookFolderView({
         if (resourceKind === 'image' || resourceKind === 'video') {
           await openWorkspaceSurface({
             host: 'main-third',
+            source: 'notebook-tree',
             target: { kind: 'media', filePath, notebookId: notebook.id, notebookPath: notebook.path, resourceKind },
           });
         } else {
           await openWorkspaceSurface({
             host: 'main-third',
+            source: 'notebook-tree',
             target: { kind: 'external', path: filePath, scopePath: notebook.path, transitionId: null },
           });
         }
@@ -144,6 +138,7 @@ export function NotebookFolderView({
       }
       await openNotebookNote(filePath, notebook, {
         destination: 'main-third',
+        source: 'notebook-tree',
       });
       console.info('[perf:file-tree-open] path opened', { elapsedMs: performance.now() - startedAt });
     } catch (error) {
@@ -159,11 +154,13 @@ export function NotebookFolderView({
         if (resourceKind === 'image' || resourceKind === 'video') {
           await openWorkspaceSurface({
             host: 'browser-column',
+            source: 'notebook-tree-new-tab',
             target: { kind: 'media', filePath, notebookId: notebook.id, notebookPath: notebook.path, resourceKind },
           });
         } else {
           await openWorkspaceSurface({
             host: 'browser-column',
+            source: 'notebook-tree-new-tab',
             target: createFileBrowserTarget(filePath, notebook.path, notebook.path),
           });
         }
@@ -171,6 +168,7 @@ export function NotebookFolderView({
       }
       await openWorkspaceSurface({
         host: 'browser-column',
+        source: 'notebook-tree-new-tab',
         target: { kind: 'external', path: filePath, scopePath: notebook.path, transitionId: null },
       });
     } catch (error) {
@@ -246,7 +244,7 @@ export function NotebookFolderView({
       }
       const parent = folderPath.slice(0, folderPath.replace(/[\\/]+$/, '').lastIndexOf('/')) || notebook.path;
       await tree.refresh(parent);
-      toast.success(t('memo.fileTree.deleted', { name: folderPath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? folderPath }));
+      toast.success(t('status.deleteCompleted'));
     } catch (error) {
       logger.warn('deleting notebook folder failed', { error, folderPath });
       const parent = folderPath.slice(0, folderPath.replace(/[\\/]+$/, '').lastIndexOf('/')) || notebook.path;
@@ -255,20 +253,22 @@ export function NotebookFolderView({
     }
   }, [notebook.path, t, tree.refresh]);
 
-  const deleteFile = useCallback(async (item: DocTreeItem) => {
+  const deleteFile = useCallback(async (item: DocTreeItem, options?: { silent?: boolean }) => {
     const kind = item.resourceKind ?? resourceKindFromPath(item.name);
-    if (kind === 'note') return;
+    if (kind === 'note') return false;
     const isMedia = kind === 'image' || kind === 'video';
     const ok = isMedia
       ? await mediaResources.delete(item.fullPath, notebook.path)
       : await files.delete(item.fullPath, notebook.path);
     if (!ok) {
-      toast.error(t(isMedia ? 'media.fileTree.deleteFailed' : 'memo.fileTree.deleteFailed'));
-      return;
+      if (!options?.silent) toast.error(t(isMedia ? 'media.fileTree.deleteFailed' : 'memo.fileTree.deleteFailed'));
+      return false;
     }
     const parent = parentDirectoryPath(item.fullPath, notebook.path);
-    await tree.refresh(parent);
-    toast.success(t(isMedia ? 'media.fileTree.deleted' : 'memo.fileTree.deleted', { name: item.name }));
+    // Deletion already succeeded; a refresh failure must not classify it as failed.
+    await tree.refresh(parent).catch((error) => logger.warn('refreshing after file deletion failed', { error, parent }));
+    if (!options?.silent) toast.success(t('status.deleteCompleted'));
+    return true;
   }, [notebook.path, t, tree.refresh]);
 
   return (
@@ -289,8 +289,7 @@ export function NotebookFolderView({
       onCreateFolder={onCreateFolder}
       onNoteSelect={(filePath) => { void openFile(filePath); }}
       onFolderSelect={(folderPath) => {
-        const host = useWorkspaceFocusStore.getState().focusedHostId;
-        const opening = openFolderCollectionFromFolder(notebook.id, folderPath, host);
+        const opening = openFolderCollectionFromFolder(notebook.id, folderPath, 'main-third');
         void opening.catch((error) => {
           logger.warn('opening folder collection failed', { folderPath, error });
           toast.error(error instanceof Error ? error.message : '无法打开文件夹集合');

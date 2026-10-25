@@ -58,6 +58,15 @@ describe('notebook view actions', () => {
     expect(toast.error).toHaveBeenCalledWith('memo.fileTree.deleteFailed');
   });
 
+  it('does not refresh the catalog when the supplied deletion transaction returns false', async () => {
+    const onDeleteFile = vi.fn(async () => false);
+    await render({ onDeleteFile });
+    await act(async () => actions.deleteItem(item));
+    expect(onDeleteFile).toHaveBeenCalledWith(item);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
   it('delegates deletion to the supplied transaction before refreshing', async () => {
     const onDeleteFile = vi.fn(async () => {});
     await render({ onDeleteFile });

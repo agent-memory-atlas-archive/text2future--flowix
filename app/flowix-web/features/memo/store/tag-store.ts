@@ -3,6 +3,8 @@ import { persist } from 'zustand/middleware';
 import { tags } from '@platform/tauri/client';
 import { STORAGE_KEYS } from '@/lib/constants';
 
+import { createLogger } from '@/lib/logger';
+const logger = createLogger('memo/store/tag-store');
 export interface MemoTagItem {
   id: string;
   name: string;
@@ -72,7 +74,7 @@ export const useTagStore = create<TagStore>()(
         } catch (error) {
           // Existing tag projections remain usable; the maintenance completion
           // event retries this read. Fire-and-forget consumers must not reject.
-          if (!String(error).includes('NOTE_INDEX_PENDING')) console.warn('Tag metadata unavailable:', error);
+          if (!String(error).includes('NOTE_INDEX_PENDING')) logger.warn('Tag metadata unavailable', { error });
         }
       },
 

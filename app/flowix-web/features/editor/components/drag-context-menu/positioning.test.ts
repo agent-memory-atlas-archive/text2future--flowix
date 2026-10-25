@@ -15,9 +15,14 @@ describe('drag handle scroll-content coordinates', () => {
     expect(nodeContentY(140, 100, 40, 3)).toBe(83)
   })
 
+  it.each([48, 96])('keeps a 2px gap before content with %ipx padding', (padding) => {
+    const x = nodeContentX(100, 100, 0, padding)
+    expect(x + 18 + 2).toBe(padding)
+  })
+
   it('uses the same scroll-content coordinate system on X', () => {
-    expect(nodeContentX(240, 100, 0)).toBe(158)
-    expect(nodeContentX(220, 100, 20)).toBe(158)
+    expect(nodeContentX(240, 100, 0, 48)).toBe(168)
+    expect(nodeContentX(220, 100, 20, 48)).toBe(168)
   })
 })
 

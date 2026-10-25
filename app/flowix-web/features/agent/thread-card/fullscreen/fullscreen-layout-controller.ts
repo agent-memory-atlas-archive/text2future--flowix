@@ -27,7 +27,7 @@ export class FullscreenLayoutController {
   private readonly scrollDeltaEpsilonPx: number;
   private fullscreenContainer: HTMLElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
-  private boundsTrackingFrame: number | null = null;
+  private boundsSyncFrame: number | null = null;
   private lastFullscreenBounds: string | null = null;
   private readonly syncFullscreenBounds = (): void => {
     const container = this.fullscreenContainer;
@@ -42,14 +42,28 @@ export class FullscreenLayoutController {
     this.dom.style.setProperty("--atc-fullscreen-width", `${rect.width}px`);
     this.dom.style.setProperty("--atc-fullscreen-height", `${rect.height}px`);
   };
-  private readonly trackFullscreenBounds = (): void => {
-    this.boundsTrackingFrame = null;
-    if (!this.fullscreenContainer || !this.isFullscreen()) return;
-
-    this.syncFullscreenBounds();
-    this.boundsTrackingFrame = window.requestAnimationFrame(
-      this.trackFullscreenBounds,
-    );
+  /**
+   * Coalesces observer bursts into one layout read on the next frame.
+   *
+   * The card is `position: fixed` (it has to escape the editor's scroll/clip
+   * ancestors), so the work column's box has to be pushed into CSS variables
+   * from JS. This used to run as a permanent `requestAnimationFrame` loop for
+   * as long as the card stayed fullscreen — one `getBoundingClientRect()` every
+   * frame, forever, even when nothing moved, which also kept the page from ever
+   * going idle.
+   *
+   * Every input that can actually move or resize the work column ends in a
+   * layout pass and fires the `ResizeObserver` below (memo-list toggle, column
+   * drag, browser-column toggle, statusbar height, window resize) or the window
+   * `resize` listener. A single coalesced frame keeps the ordering the loop
+   * provided — read *after* the layout pass — without polling.
+   */
+  private readonly scheduleBoundsSync = (): void => {
+    if (this.boundsSyncFrame !== null) return;
+    this.boundsSyncFrame = window.requestAnimationFrame(() => {
+      this.boundsSyncFrame = null;
+      this.syncFullscreenBounds();
+    });
   };
 
   private returnAnchor: {
@@ -73,14 +87,14 @@ export class FullscreenLayoutController {
     if (!container) return;
 
     this.syncFullscreenBounds();
-    window.addEventListener("resize", this.syncFullscreenBounds);
+    window.addEventListener("resize", this.scheduleBoundsSync);
     if ("ResizeObserver" in window) {
-      this.resizeObserver = new ResizeObserver(this.syncFullscreenBounds);
+      this.resizeObserver = new ResizeObserver(this.scheduleBoundsSync);
       this.resizeObserver.observe(container);
     }
-    this.boundsTrackingFrame = window.requestAnimationFrame(
-      this.trackFullscreenBounds,
-    );
+    // One deferred pass: leaving the document flow can change the editor's
+    // scrollbar (and therefore the container width) after this frame.
+    this.scheduleBoundsSync();
   }
 
   exit(): void {
@@ -121,12 +135,12 @@ export class FullscreenLayoutController {
   }
 
   private stopTrackingFullscreenBounds(): void {
-    window.removeEventListener("resize", this.syncFullscreenBounds);
+    window.removeEventListener("resize", this.scheduleBoundsSync);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
-    if (this.boundsTrackingFrame !== null) {
-      window.cancelAnimationFrame(this.boundsTrackingFrame);
-      this.boundsTrackingFrame = null;
+    if (this.boundsSyncFrame !== null) {
+      window.cancelAnimationFrame(this.boundsSyncFrame);
+      this.boundsSyncFrame = null;
     }
     this.fullscreenContainer = null;
     this.lastFullscreenBounds = null;

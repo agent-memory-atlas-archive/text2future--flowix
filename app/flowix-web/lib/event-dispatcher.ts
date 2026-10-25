@@ -4,6 +4,10 @@
  * handles typed events after they enter the application layer.
  */
 
+import { createLogger } from '@/lib/logger';
+
+const logger = createLogger('event-dispatcher');
+
 export type DispatcherMiddleware<T> = (next: DispatchFn<T>) => DispatchFn<T>;
 export type DispatchFn<T> = (event: T) => void;
 export type EventFilter<T> = (event: T) => boolean;
@@ -28,21 +32,14 @@ export class EventDispatcher<T> {
     this.dispatchFn = (event: T) => this.rawDispatch(event);
   }
 
-  /**
-   * 包装 dispatch 路径。 多次 `.use(mw)` 按注册顺序叠加 — 最先注册的
-   * middleware 最先拿到事件 (洋葱模型外层)。
-   *
-   * Phase 2 用法:
-   *
-   *   dispatcher.use(dedupMiddleware({ getKey: memoKey, delay: 50 }));
-   */
+  /** Each middleware wraps the existing chain; the last registered runs first. */
   use(middleware: DispatcherMiddleware<T>): void {
     this.dispatchFn = middleware(this.dispatchFn);
   }
 
   /**
    * 同步派发事件。 先经过 middleware 链, 最终走到所有 filter 匹配的
-   * handler。 handler 抛错被 `console.warn` 捕获, 不影响其他 handler。
+   * handler。 filter / handler 抛错被记录, 不影响其他 handler。
    */
   dispatch(event: T): void {
     this.dispatchFn(event);
@@ -72,12 +69,11 @@ export class EventDispatcher<T> {
   private rawDispatch(event: T): void {
     // 拷贝避免 handler 内部 unsub 干扰本次迭代
     for (const sub of [...this.subs]) {
-      if (sub.filter && !sub.filter(event)) continue;
       try {
+        if (sub.filter && !sub.filter(event)) continue;
         sub.handler(event);
       } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn('[event-dispatcher] handler threw:', err);
+        logger.warn('subscriber failed', { error: err });
       }
     }
   }

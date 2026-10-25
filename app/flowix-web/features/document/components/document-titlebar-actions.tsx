@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { isHtmlFilePath } from '@features/content/public/content-api';
 import { Check, Code2, Ellipsis } from 'lucide-react';
 import { LinkSimpleIcon, CopyIcon, FolderOpenIcon, FileMdIcon, FileDocIcon, FilePdfIcon, ClockIcon, MapPinSimpleAreaIcon, TrashSimpleIcon, SwatchesIcon } from '@phosphor-icons/react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@shared/ui/dropdown-menu';
@@ -25,6 +26,7 @@ export function DocumentTitlebarActions({
   editorMode = 'rich',
   onSetEditorMode,
   visible = true,
+  showColorPicker = true,
 }: {
   target: DocumentTitlebarTarget;
   iconButtonClass: string;
@@ -36,6 +38,7 @@ export function DocumentTitlebarActions({
   editorMode?: DocumentEditorMode;
   onSetEditorMode?: (mode: DocumentEditorMode) => void;
   visible?: boolean;
+  showColorPicker?: boolean;
 }) {
   const {
     copyFullText: canCopyFullText, memoColors: canEditColors, exportContent: canExportContent,
@@ -64,7 +67,7 @@ export function DocumentTitlebarActions({
 
   return (
     <>
-    {canEditColors && (
+    {showColorPicker && canEditColors && (
       <NoteColorPicker colors={colors} iconButtonClass={iconButtonClass}
         onChange={changeColors} />
     )}
@@ -126,7 +129,9 @@ export function DocumentTitlebarActions({
             className={itemClass}
           >
             <Code2 className="h-4 w-4" />
-            {t(editorMode === 'source' ? 'document.action.richTextMode' : 'document.action.sourceMode')}
+            {t(editorMode === 'source'
+              ? isHtmlFilePath(filePath) ? 'htmlResource.previewMode' : 'document.action.richTextMode'
+              : 'document.action.sourceMode')}
           </DropdownMenuItem>
         )}
         {(canSaveAsTemplate || canExportContent) && (

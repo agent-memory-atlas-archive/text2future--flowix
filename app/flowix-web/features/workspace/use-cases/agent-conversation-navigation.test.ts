@@ -25,7 +25,13 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@features/agent/store/agent-session-store', () => ({
   useAgentSessionStore: {
-    getState: () => ({ hydrateInstance: mocks.hydrateInstance }),
+    getState: () => ({
+      hydrateInstance: mocks.hydrateInstance,
+      // `hasWorkspaceAgentConversation` 现在是异步的（store 走动态 import），
+      // 它需要 getInstance 判断实例是否已在内存；这里统一返回"不在内存"，
+      // 让流程继续走到 hydrate。
+      getInstance: () => null,
+    }),
   },
 }));
 
@@ -111,7 +117,7 @@ describe('agent conversation navigation', () => {
   });
 
   it('opens an existing browser-column conversation in Work for a default Work request', async () => {
-    useBrowserColumnStore.getState().openTab({
+    useBrowserColumnStore.getState().openContent({
       id: 'agent:conversation-a',
       title: 'Conversation A',
       icon: null,
@@ -124,7 +130,6 @@ describe('agent conversation navigation', () => {
     expect(mocks.openAgentConversation).toHaveBeenCalledWith('conversation-a');
     expect(useBrowserColumnStore.getState()).toMatchObject({
       visible: true,
-      activeTabId: 'agent:conversation-a',
     });
     expect(useWorkspaceFocusStore.getState().focusedHostId).toBe('main-third');
     expect(mocks.selectAgentConversation).toHaveBeenCalledWith('conversation-a', true);
@@ -144,6 +149,9 @@ describe('agent conversation navigation', () => {
     mocks.hydrateInstance.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
     const { restoreAgentConversationWorkspace } = await import('./agent-conversation-navigation');
     const restoring = restoreAgentConversationWorkspace();
+    // 判断"实例是否已在内存"这一步现在是异步的，会让出一个微任务；
+    // 必须等 hydrate 真的被调用后再接管它的 resolver。
+    await vi.waitFor(() => expect(mocks.hydrateInstance).toHaveBeenCalledOnce());
     mocks.navigationRevision = 2;
     finish(result);
     await restoring;

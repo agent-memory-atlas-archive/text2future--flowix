@@ -1,0 +1,31 @@
+/* Media resource surfaces (video / image / pdf viewers and their titlebar).
+ *
+ * These rules used to live in agent-thread-card/controls.css, which made the
+ * Agent stylesheet carry media-specific chrome. They stay visually aligned with
+ * the Agent conversation surface (same --agent-bg window, same rounded video
+ * clipping), but they are owned by the media surfaces: the document titlebar
+ * (document-titlebar.tsx) and the browser column header
+ * (browser-column-header.tsx) are the consumers, not Thread Cards. */
+
+/* Media resources share the same surface background as conversations, while
+ * keeping their own semantic chrome type. */
+.media-surface-titlebar {
+  background-color: var(--agent-bg, var(--document-bg));
+  background-image: none;
+}
+
+/* WebView native video controls are painted inside the replaced element and
+ * may ignore the element's border-radius at the corners. Clip the complete
+ * rendered layer so the controls' gray overlay follows the same radius,
+ * without introducing a sizing wrapper that could crop the video. */
+.media-resource-video {
+  clip-path: inset(0 round 0.5rem);
+}
+
+/* The native WebKit controls panel is darker than the media surface by
+ * default. Keep the native controls, but make their gray mask lighter and
+ * semi-transparent so the video remains visible underneath. */
+.media-resource-video::-webkit-media-controls-panel {
+  background-color: rgb(96 96 96 / 50%);
+  background-image: none;
+}

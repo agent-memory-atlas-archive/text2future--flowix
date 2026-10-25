@@ -1,40 +1,37 @@
 # Cloud sync acceptance
 
-This checklist applies to `flowix-main` and `flowix-cloud` protocol epoch 2. File identity is the notebook ID plus notebook-relative path; local memo IDs are not sync keys.
+This checklist applies to Cloud protocol epoch 3. A file is identified by the notebook ID and its notebook-relative path. Markdown and attachment files each have an independent index head and blob.
 
-## Automated gates
+## Release checks
 
-| Scenario | Test or command | Result |
+The epoch 3 implementation has not been run through automated or two-device verification in this workspace. Mark these checks complete only after running them against the matching `flowix-main` and `flowix-cloud` builds.
+
+| Scenario | Expected result | Status |
 |---|---|---|
-| Concurrent child edit vs notebook deletion | Cloud `NOTEBOOK_TREE_CONFLICT` actor test | Pass |
-| Fixed bootstrap pages while heads change | Cloud frozen snapshot actor test | Pass |
-| A/B offline edits, stale push, upload interruption and retry | Cloud HTTP end-to-end test | Pass |
-| Nonoverlapping Markdown edits, including adjacent lines | `flowix-sync` merge tests using `diffy` patches | Pass |
-| Overlap and same-position insertion | `flowix-sync` conflict tests | Pass |
-| Deleted note and attachment restoration | Cloud HTTP end-to-end tests | Pass |
-| Move lineage in history | Cloud actor test | Pass |
-| Move back to a path whose stable ID is a tombstone | Cloud actor test and `flowix-sync` store test | Pass |
-| Rejected move queue cleanup and forced bootstrap | `flowix-sync` store test | Pass |
-| Local remote-delete protection | Desktop cloud deletion tests | Pass |
-| Remote edit versus pending local move | Native two-instance release gate | Pending |
-| Remote edit versus local delete | Native two-instance release gate | Pending |
-| Conflict resolution after the common-base blob expires | Native two-instance release gate | Pending |
-| Desktop Rust and frontend compilation | `cargo check -p flowix-desktop`, `vite build` | Pass |
+| Fresh actor schema | Exactly five application tables: `notes`, `notebooks`, `state`, `operations`, `uploads` | Pending |
+| Existing epoch 2 actor | Sync index resets; account and local notebook files remain; legacy objects on the active R2 backend enter delayed cleanup | Pending |
+| Bootstrap while files change | Pages use one starting cursor; the follow-up changes request catches concurrent updates and deletions | Pending |
+| Compact changes | Each entity returns its latest head after the requested cursor; tombstones remain available | Pending |
+| Upload interruption | An incomplete upload cannot become a note head; expired orphan objects are eventually collected | Pending |
+| Blob ownership and quota | Each file has its own blob ID; replacing, moving, and deleting files keep usage and ownership correct | Pending |
+| Membership note count | Counts live Markdown files and excludes `attachments/` rows | Pending |
+| Offline edit conflict | A stale revision is rejected; the entire local version is preserved in a named conflict copy before the current cloud head is applied. Cloud does not have a common base for automatic three-way merging, including for non-overlapping edits. | Pending |
+| Notebook deletion race | A child change after `baseTreeSeq` rejects the notebook deletion | Pending |
+| Local path archive | Local archived versions remain restorable without a Cloud history endpoint | Pending |
 
-Cloud: `npm run check` from `flowix-cloud`. Rust: `CARGO_INCREMENTAL=0 cargo test -p flowix-sync --lib` and `CARGO_INCREMENTAL=0 cargo test -p flowix-desktop --lib commands::cloud::deletion::tests` from `flowix-main/app`.
+## Two-device release check
 
-## Native two-instance release gate
+Use two signed-in desktop instances with separate local notebook directories. This was not executed in this workspace.
 
-This requires two signed-in desktop instances using the same test account and separate local notebook directories. It has not been executed in this workspace: only one Flowix instance is available, and computer-use permission is unavailable. Do not use the user's active notebook as a test fixture. Validate before general availability:
+1. Sync a nested Markdown file and an attachment from A to B; verify each has its own cloud index row.
+2. Disconnect both devices, edit different Markdown lines, reconnect A and then B, and confirm A's accepted head is applied while B's entire rejected local version is preserved in a named conflict copy. Non-overlapping edits are not automatically merged because Cloud retains only the current head.
+3. Repeat with overlapping edits and confirm rejected local bytes remain in a named conflict copy.
+4. Edit the same attachment on both devices and confirm the conflict copy and selected resolution are preserved.
+5. Move a file on A while B edits its old path offline; confirm the current bytes appear at the moved path without silent loss.
+6. Move A→B→A and confirm the path tombstone is reused correctly.
+7. Delete a file on A while B edits offline; confirm B's edits are preserved and the current cloud state converges on both devices.
+8. Interrupt an upload after reservation, retry, and confirm the pending object is cleaned up without losing local bytes.
+9. Edit a child on A while B deletes its notebook from an older tree cursor; confirm `NOTEBOOK_TREE_CONFLICT` and no child loss.
+10. Interrupt bootstrap between pages while A changes a file; confirm the next pull catches the change.
 
-1. Sync the same nested Markdown file and attachment to A and B, then disconnect both.
-2. Edit different Markdown lines on A and B. Reconnect A, then B. Both edits must appear on both clients with no conflict copy.
-3. Repeat with overlapping edits. The original must match the accepted remote head; B's work must appear in a named conflict copy and in Cloud preferences. Resolve each choice and confirm both devices converge.
-4. Edit an attachment on both clients. Confirm the binary conflict copy, archive, and selected resolution.
-5. Move a file on A while B edits its old path offline. Confirm the merged or preserved result at the new path and no silent overwrite.
-6. Move A→B→A and confirm the earlier path tombstone is reused with an intact history lineage.
-7. Delete a file on A while B edits offline. Confirm B's older revision is preserved as a conflict copy, the remote edit returns at the original path, and both devices converge. Restore a historical revision through Cloud preferences.
-8. Interrupt blob upload after reservation and retry. Confirm the same immutable operation can complete without duplicate revisions or lost local bytes.
-9. Edit a child on A while B deletes its notebook from an older tree cursor. Confirm `NOTEBOOK_TREE_CONFLICT` and no child loss.
-10. Interrupt bootstrap between pages while A changes a head. Confirm all pages share one cursor and the next sync catches the later change.
-11. Keep B offline beyond the revision retention period, then create a conflicting edit on A. Confirm B preserves a conflict copy when its common-base blob is no longer available and then converges to A's head.
+The backend reset and matching desktop release must ship together because epoch 3 is incompatible with epoch 2.
