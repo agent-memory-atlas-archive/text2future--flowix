@@ -414,7 +414,7 @@ export function NotebookSelectorPopup({
         onExitComplete={handleExitComplete}
         aria-label={t('status.notebookList')}
         className={cn(
-          'flowix-notebook-selector-popup !z-[150] !w-[max(25vw,320px)] !max-w-[calc(100vw-1rem)] !h-[72vh] !max-h-[72vh] !flex !flex-col !overflow-hidden !rounded-xl !border-[var(--border-popup)] !bg-[var(--popover)] !p-0 !text-[var(--foreground)] !shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]',
+          'flowix-notebook-selector-popup !z-[150] !w-[320px] !max-w-[calc(100vw-1rem)] !h-auto !max-h-[72vh] !flex !flex-col !overflow-hidden !rounded-xl !border-[var(--border-popup)] !bg-[var(--popover)] !p-0 !text-[var(--foreground)] !shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]',
           side === 'bottom' && 'flowix-notebook-selector-popup--bottom',
         )}
       >
@@ -442,9 +442,9 @@ export function NotebookSelectorPopup({
           />
         </div>
         <OverlayScrollbar
-          className="flowix-notebook-selector-scrollbar min-h-0 flex-1"
+          className="flowix-notebook-selector-scrollbar min-h-0 max-h-[calc(72vh-6.375rem)] flex-initial"
           scrollerRef={listViewportRef}
-          scrollerClassName="h-full min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain px-2 pt-1 pb-1"
+          scrollerClassName="min-h-0 max-h-[calc(72vh-6.375rem)] overflow-x-hidden overflow-y-auto overscroll-contain px-2 pt-1 pb-1"
         >
           <div className="flex flex-col space-y-0.5">
             {notebooks.length === 0 && (
@@ -491,7 +491,7 @@ export function NotebookSelectorPopup({
                   onKeyDown={(event) => handleCardKeyDown(notebook, event)}
                   className={cn(
                     NOTEBOOK_ITEM_CLASS,
-                    'group relative flex cursor-pointer select-none items-center gap-3 rounded-lg px-1.5 py-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]',
+                    'group relative flex cursor-pointer select-none items-center gap-0 rounded-lg px-1.5 py-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ring)]',
                     isActive
                       ? 'bg-[color-mix(in_oklch,var(--primary)_9%,var(--popover))]'
                       : 'bg-transparent hover:bg-[var(--muted)]',
@@ -503,10 +503,15 @@ export function NotebookSelectorPopup({
                     icon={notebook.icon}
                     name={notebook.name}
                     className={cn(
-                      'h-7 w-7 shrink-0 rounded-md text-[15px] font-semibold transition-colors duration-150',
+                      'mr-3 h-7 w-7 shrink-0 rounded-md text-[15px] font-semibold transition-colors duration-150',
                       isActive
                         ? 'bg-[color-mix(in_oklch,var(--primary)_16%,var(--muted))] !text-[var(--primary)]'
                         : 'bg-[var(--muted)] !text-[var(--foreground)]',
+                    )}
+                    fallbackClassName={cn(
+                      isActive
+                        ? '!text-[color-mix(in_oklch,var(--primary)_25%,transparent)]'
+                        : '!text-[color-mix(in_oklch,var(--foreground)_25%,transparent)]',
                     )}
                     imageClassName="h-[72%] w-[72%]"
                   />

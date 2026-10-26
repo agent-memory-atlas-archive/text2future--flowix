@@ -1809,6 +1809,7 @@ const zhCN = {
     "document.action.unpin": "取消置顶",
     "document.action.pin": "置顶",
     "document.action.saveAsTemplate": "保存为模板",
+    "document.action.archiveVersion": "保存归档",
     "document.action.exportMarkdown": "导出为 Markdown",
     "document.action.exportWord": "导出为 Word",
     "document.action.exportPdf": "导出为 PDF",

@@ -23,6 +23,22 @@ The source editor mounts only when requested and keeps its existing document ses
 
 `html-resource-view.test.tsx` covers authorization before frame mounting, the native parsed-document notification, rejection of foreign/stale signals, idempotent Preview clicks, bounded reads, iframe timeouts and late recovery, source switching, errors/retry and file-watch refresh. Shared surface state and lifecycle tests cover host integration. Native changes require rebuilding/restarting the desktop application; frontend hot reload cannot install a new native plugin or CSP.
 
+## Document links
+
+The native local-frame script delegates cross-document anchor clicks to the host,
+including `_blank`, download anchors and middle clicks. Same-document fragment
+links retain native scrolling. The host accepts messages only from the current
+preview window and entry URL (ignoring its fragment), and removes the listener
+when the attempt ends. Messages confer no filesystem authorization.
+
+Workspace resolves HTML URLs against the original file and its optional `base
+href`, then opens the target through `openWorkspaceSurface` in Browser. File
+targets use existing surface classification, ownership resolution, save barriers
+and history. PDF and other unsupported formats retain the normal unavailable-file
+surface; there is no new binary parser. Markdown fragments use existing heading
+navigation. HTTP(S) uses the web surface; mail and telephone links use the system
+handler. Other protocols are rejected. File queries do not become part of the path.
+
 ## Scrollbar behavior
 
 Local asset frames style their existing native scrollbars. No overlay host, shadow scrollbar, content wrapper, overflow change or wheel interception is added. This avoids native/custom duplication and preserves the browser's vertical/horizontal scrolling and thumb dragging.

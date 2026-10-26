@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { externalDocuments, files } from '@platform/tauri/client';
+import type { LocalHtmlLink } from '@/lib/local-html-link';
 
 export const HTML_PREVIEW_TIMEOUT_MS = 10_000;
 export type HtmlPreviewPhase = 'reading' | 'loading' | 'ready' | 'timeout' | 'error';
@@ -7,7 +8,9 @@ export type HtmlPreviewPhase = 'reading' | 'loading' | 'ready' | 'timeout' | 'er
 /** One hook instance belongs to one keyed file/open attempt. Native asset URLs
  * preserve relative resources; the scoped read authorizes and validates the entry.
  */
-export function useLocalHtmlPreview(filePath: string, scopePath: string | null) {
+export function useLocalHtmlPreview(filePath: string, scopePath: string | null, onLink?: (link: LocalHtmlLink) => void) {
+  const linkCallback = useRef(onLink);
+  linkCallback.current = onLink;
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [content, setContent] = useState<string | null>(null);
   const [src, setSrc] = useState<string | null>(null);
@@ -59,12 +62,23 @@ export function useLocalHtmlPreview(filePath: string, scopePath: string | null) 
   useLayoutEffect(() => {
     if (!src) return;
     const onMessage = (event: MessageEvent) => {
-      // Sandboxed documents have opaque origins. Match the actual frame window
-      // and entry URL; readiness conveys no native privileges.
-      if (event.source !== iframeRef.current?.contentWindow
-        || event.data?.type !== 'flowix:local-html-document-ready'
-        || event.data?.url !== src) return;
-      ready();
+      // Opaque origins cannot identify a frame. Bind messages to this attempt's
+      // window and entry (hash changes are same-document navigation). Payloads
+      // never grant file access; native document reads still enforce scope.
+      if (!active.current || terminal.current || event.source !== iframeRef.current?.contentWindow
+        || typeof event.data?.url !== 'string') return;
+      try {
+        const entry = new URL(event.data.url);
+        entry.hash = '';
+        if (entry.href !== src) return;
+      } catch { return; }
+      if (event.data.type === 'flowix:local-html-document-ready') ready();
+      else if (event.data.type === 'flowix:local-html-link'
+        && typeof event.data.href === 'string'
+        && event.data.href.length <= 8192
+        && (event.data.baseHref === null || (typeof event.data.baseHref === 'string' && event.data.baseHref.length <= 8192))) {
+        linkCallback.current?.({ href: event.data.href, baseHref: event.data.baseHref });
+      }
     };
     const iframe = iframeRef.current;
     iframe?.addEventListener('error', fail);

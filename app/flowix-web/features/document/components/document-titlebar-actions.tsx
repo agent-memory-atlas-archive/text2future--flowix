@@ -159,7 +159,7 @@ export function DocumentTitlebarActions({
         )}
         {canViewVersionHistory && target.notebookId && target.relativePath && (
           <>
-            <DropdownMenuItem className={itemClass} onClick={() => { void archiveVersion(); }}><ClockIcon className="h-4 w-4" /> 保存归档</DropdownMenuItem>
+            <DropdownMenuItem className={itemClass} onClick={() => { void archiveVersion(); }}><ClockIcon className="h-4 w-4" /> {t('document.action.archiveVersion')}</DropdownMenuItem>
             <VersionHistorySubmenu
               notebookId={target.notebookId}
               relativePath={target.relativePath}
@@ -212,7 +212,7 @@ export function DocumentTitlebarActions({
                 setConfirmDelete(false);
                 void onDeleteExternalFile();
               }}
-              className="h-8 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 text-sm text-[var(--foreground)] hover:border-[var(--destructive)] hover:bg-transparent hover:text-[var(--destructive)]"
+              className="h-8 rounded-lg border border-[var(--destructive)] bg-[var(--destructive)] px-3 text-sm text-white hover:opacity-90"
             >
               {t(indexable ? 'memo.delete.confirm' : 'document.external.deleteFileConfirm')}
             </button>

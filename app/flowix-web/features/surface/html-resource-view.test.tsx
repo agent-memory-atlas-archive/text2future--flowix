@@ -7,7 +7,9 @@ import { HtmlResourceView } from './html-resource-view';
 import { HTML_PREVIEW_TIMEOUT_MS } from './use-local-html-preview';
 import bridgeSource from '../../../flowix-desktop/src/local_html_preview.js?raw';
 
-const mocks = vi.hoisted(() => ({ read: vi.fn(), finish: vi.fn(), sourceMount: vi.fn(), watch: vi.fn(), metadata: vi.fn() }));
+const mocks = vi.hoisted(() => ({ read: vi.fn(), finish: vi.fn(), sourceMount: vi.fn(), watch: vi.fn(), metadata: vi.fn(), openLink: vi.fn() }));
+vi.mock('@features/workspace/public/html-link-api', () => ({ openHtmlLink: mocks.openLink }));
+vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
 vi.mock('@platform/tauri/client', () => ({
   externalDocuments: { read: mocks.read },
   files: { toAssetUrl: (path: string) => `asset://localhost/${encodeURIComponent(path)}` },
@@ -51,6 +53,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   useDocumentEditorViewStore.getState().reset();
   mocks.watch.mockReturnValue(() => undefined);
+  mocks.openLink.mockResolvedValue(undefined);
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
@@ -63,6 +66,24 @@ afterEach(async () => {
 });
 
 describe('HTML preview lifecycle', () => {
+  it('routes only current-frame links to Browser, including after an in-page anchor change', async () => {
+    mocks.read.mockResolvedValue('<html></html>');
+    await render();
+    const frame = host.querySelector('iframe')!;
+    const send = async (source: MessageEventSource | null, url = frame.src, href: unknown = 'report.pdf') => {
+      await act(async () => window.dispatchEvent(new MessageEvent('message', { source,
+        data: { type: 'flowix:local-html-link', url, href, baseHref: null } })));
+    };
+    await send(window);
+    await send(frame.contentWindow, 'asset://localhost/other.html');
+    await send(frame.contentWindow, frame.src, {});
+    expect(mocks.openLink).not.toHaveBeenCalled();
+    await send(frame.contentWindow, `${frame.src}#library`);
+    expect(mocks.openLink).toHaveBeenCalledWith({ href: 'report.pdf', baseHref: null }, '/book/index.html', '/book', null);
+    await selectMode('source');
+    await send(frame.contentWindow);
+    expect(mocks.openLink).toHaveBeenCalledTimes(1);
+  });
   it('authorizes the file, accepts only its document-ready signal, and keeps repeated preview clicks idempotent', async () => {
     const read = deferred();
     mocks.read.mockReturnValue(read.promise);
@@ -164,6 +185,29 @@ describe('HTML preview lifecycle', () => {
 });
 
 describe('native local HTML readiness bridge', () => {
+  it('delegates cross-document links, leaves local anchors alone, and removes listeners on unload', () => {
+    const parent = { postMessage: vi.fn() };
+    const frame = Object.assign(new EventTarget(), { parent });
+    const doc = document.implementation.createHTMLDocument();
+    doc.body.innerHTML = '<a href="#library">anchor</a><a href="file:///repo/README.md" target="_blank"><span>note</span></a><a href="javascript:alert(1)">invalid</a>';
+    Object.defineProperty(doc, 'baseURI', { value: 'asset://localhost/book/index.html' });
+    new Function('window', 'document', 'location', bridgeSource)(frame, doc, { href: doc.baseURI });
+    const click = (target: Element) => {
+      const event = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+      target.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    parent.postMessage.mockClear();
+    expect(click(doc.querySelector('a')!)).toBe(false);
+    doc.querySelector('a')!.setAttribute('href', '#');
+    expect(click(doc.querySelector('a')!)).toBe(false);
+    expect(parent.postMessage).not.toHaveBeenCalled();
+    expect(click(doc.querySelector('span')!)).toBe(true);
+    expect(parent.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'flowix:local-html-link', href: 'file:///repo/README.md', baseHref: null }), '*');
+    expect(click(doc.querySelectorAll('a')[2])).toBe(true);
+    frame.dispatchEvent(new Event('pagehide'));
+    expect(click(doc.querySelector('span')!)).toBe(false);
+  });
   it('reports parsed local documents before window load and answers probes', () => {
     const parent = { postMessage: vi.fn() };
     const frame = Object.assign(new EventTarget(), { parent });

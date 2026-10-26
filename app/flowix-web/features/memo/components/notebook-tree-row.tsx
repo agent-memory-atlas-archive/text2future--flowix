@@ -808,7 +808,7 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
               type="button"
               disabled={deleting}
               onClick={() => void confirmFileDeleteAction()}
-              className="h-8 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 text-sm text-[var(--foreground)] hover:border-[var(--destructive)] hover:bg-[var(--destructive)] hover:text-white disabled:opacity-50"
+              className="h-8 rounded-lg border border-[var(--destructive)] bg-[var(--destructive)] px-3 text-sm text-white hover:opacity-90 disabled:opacity-50"
             >
               {t('memo.fileTree.delete')}
             </button>

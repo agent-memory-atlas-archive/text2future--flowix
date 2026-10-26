@@ -8,17 +8,18 @@ export function WorkColumnSelectionView({ paths, label, contentKinds }: {
   label: string;
   contentKinds?: ReadonlyMap<string, ContentKind>;
 }) {
-  const halfSpread = Math.min(22, (paths.length - 1) * 6);
+  const visiblePaths = paths.slice(0, 15);
+  const halfSpread = Math.min(22, (visiblePaths.length - 1) * 6);
   return (
     <section className="work-column-selection-view" aria-label={label}>
       <div className="work-column-selection-summary">
         <ul className="work-column-selection-fan">
-          {paths.map((path, index) => {
+          {visiblePaths.map((path, index) => {
             const normalizedPath = canonicalPath(path);
             const fileName = normalizedPath.split('/').pop() || normalizedPath;
             const name = fileName.replace(/(?:\.index\.yaml|\.md)$/i, '');
             const contentKind = contentKinds?.get(normalizedPath);
-            const position = paths.length > 1 ? (index / (paths.length - 1)) * 2 - 1 : 0;
+            const position = visiblePaths.length > 1 ? (index / (visiblePaths.length - 1)) * 2 - 1 : 0;
             const style = {
               '--fan-position': position * halfSpread / 22,
               '--fan-angle': `${position * halfSpread}deg`,

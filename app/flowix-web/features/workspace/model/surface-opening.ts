@@ -18,7 +18,7 @@ export interface WorkWorkspaceSurfaceOptions extends WorkspaceOpenNavigationOpti
 export interface BrowserWorkspaceSurfaceOptions {
   notebookId?: string | null;
 }
-export type WorkspaceNavigationSource = 'notebook-tree' | 'notebook-tree-new-tab' | 'agent-message';
+export type WorkspaceNavigationSource = 'notebook-tree' | 'notebook-tree-new-tab' | 'agent-message' | 'html-link';
 
 export interface WorkWorkspaceSurfaceRequest {
   source?: WorkspaceNavigationSource;

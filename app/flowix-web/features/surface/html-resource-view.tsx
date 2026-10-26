@@ -17,6 +17,9 @@ import { connectLocalHtmlScrollbar } from '@shared/ui/local-html-scrollbar';
 import { useDocumentEditorMode, setDocumentEditorMode } from '@features/document/store/document-editor-view-store';
 import type { SurfacePresentationUpdate, SurfaceState } from '@features/workspace/model/surface-contract';
 import type { DocumentContentStatus } from '@features/document/components/session/types';
+import { openHtmlLink } from '@features/workspace/public/html-link-api';
+import { toast } from '@/lib/toast';
+import type { LocalHtmlLink } from '@/lib/local-html-link';
 
 type DocumentProps = ComponentProps<typeof DocumentContainer>;
 
@@ -73,7 +76,12 @@ function HtmlPreview({ filePath, scopePath, documentProps, reportPresentation, r
   onDocumentResolved: (available: boolean) => void;
 }) {
   const { t } = useI18n();
-  const { iframeRef, src, content, phase, onLoad } = useLocalHtmlPreview(filePath, scopePath);
+  const onLink = useCallback((link: LocalHtmlLink) => {
+    void openHtmlLink(link, filePath, scopePath, documentProps.notebookId ?? null).catch((error: unknown) => {
+      toast.error(error instanceof Error ? error.message : String(error));
+    });
+  }, [documentProps.notebookId, filePath, scopePath]);
+  const { iframeRef, src, content, phase, onLoad } = useLocalHtmlPreview(filePath, scopePath, onLink);
   const focused = useWorkspaceFocusStore((state) => state.focusedHostId === (documentProps.workspaceHost ?? 'main-third'));
   const documentKey = documentIdentityKey(documentIdentityFromFile(documentProps.fileIdentity));
   const charCount = useMemo(() => content === null ? 0 : countTextUnits(extractBodyContent(content)), [content]);

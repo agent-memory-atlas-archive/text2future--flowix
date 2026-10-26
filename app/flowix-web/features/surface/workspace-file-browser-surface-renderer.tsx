@@ -140,7 +140,8 @@ export function FileBrowserRenderer({ surface: data, context }: {
       };
       break;
     case 'html':
-      fileSurface = { kind: 'file-html', fileIdentity, scopePath: surface.scopePath, documentProps: surface.documentProps };
+      fileSurface = { kind: 'file-html', fileIdentity, scopePath: surface.scopePath,
+        documentProps: { ...surface.documentProps, notebookId: surface.notebookId ?? surface.documentProps.notebookId } };
       break;
     case 'docx':
       fileSurface = { kind: 'file-docx', fileIdentity, scopePath: surface.scopePath };
