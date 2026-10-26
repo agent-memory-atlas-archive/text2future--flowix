@@ -1300,14 +1300,14 @@ fn reconcile_picks_up_orphan_files() {
 }
 
 #[test]
-fn reconcile_skips_hidden_directory() {
+fn reconcile_indexes_agent_directories_without_indexing_non_markdown_files() {
     let (mf, base) = fresh_memo_file();
-    let hidden = base.join(".hidden");
-    fs::create_dir_all(&hidden).unwrap();
-    fs::write(hidden.join("memo index"), "{}").unwrap();
-    fs::write(hidden.join("todo metadata"), "{}").unwrap();
+    let agents = base.join(".agents");
+    fs::create_dir_all(&agents).unwrap();
+    fs::write(agents.join("memo index"), "{}").unwrap();
+    fs::write(agents.join("todo metadata"), "{}").unwrap();
     let added = mf.reconcile_with_disk().expect("reconcile ok");
-    assert_eq!(added, 0, "hidden directories should be skipped");
+    assert_eq!(added, 0, "non-Markdown files should stay out of the note index");
 }
 
 #[test]
@@ -1343,14 +1343,21 @@ fn reconcile_registers_root_and_nested_markdown_files() {
 }
 
 #[test]
-fn reconcile_indexes_agents_files_like_other_markdown_files() {
+fn reconcile_indexes_user_and_agent_hidden_folders_but_skips_unrelated_directories() {
     let (mf, base) = fresh_memo_file();
     for directory in [
-        ".hidden",
+        ".agent",
+        ".agents",
+        ".vscode",
+        "docs/.agents",
+        ".unrelated",
         "docs/.drafts",
+        ".git",
         "node_modules/pkg",
         "attachments",
         "attachments-cache",
+        "bower_components",
+        "__pycache__",
     ] {
         fs::create_dir_all(base.join(directory)).unwrap();
         fs::write(base.join(directory).join("Ignored.md"), "# Ignored\n").unwrap();
@@ -1362,9 +1369,9 @@ fn reconcile_indexes_agents_files_like_other_markdown_files() {
     fs::write(base.join("docs/public/Visible.md"), "# Visible\n").unwrap();
 
     let report = mf.reconcile_with_disk_bidirectional().unwrap();
-    // AGENTS.md files follow ordinary Markdown indexing at every depth.
-    // Ignored directories and hidden files stay excluded.
-    assert_eq!(report.added, 3);
+    // Common user configuration and Agent folders are indexed; unrelated dot
+    // directories, dependency folders and attachment storage stay excluded.
+    assert_eq!(report.added, 7);
     let indexed_paths = mf
         .read_all_memos()
         .into_iter()
@@ -1373,6 +1380,19 @@ fn reconcile_indexes_agents_files_like_other_markdown_files() {
     assert!(indexed_paths.contains("AGENTS.md"));
     assert!(indexed_paths.contains("docs/AGENTS.md"));
     assert!(indexed_paths.contains("docs/public/Visible.md"));
+    assert!(indexed_paths.contains(".agent/Ignored.md"));
+    assert!(indexed_paths.contains(".agents/Ignored.md"));
+    assert!(indexed_paths.contains(".vscode/Ignored.md"));
+    assert!(indexed_paths.contains("docs/.agents/Ignored.md"));
+    assert!(!indexed_paths.contains(".unrelated/Ignored.md"));
+    assert!(!indexed_paths.contains("docs/.drafts/Ignored.md"));
+    assert!(!indexed_paths.contains(".git/Ignored.md"));
+    assert!(!indexed_paths.contains("node_modules/pkg/Ignored.md"));
+    assert!(!indexed_paths.contains("attachments/Ignored.md"));
+    assert!(!indexed_paths.contains("attachments-cache/Ignored.md"));
+    assert!(!indexed_paths.contains("bower_components/Ignored.md"));
+    assert!(!indexed_paths.contains("__pycache__/Ignored.md"));
+    assert!(!indexed_paths.contains(".hidden-note.md"));
 }
 
 #[test]
@@ -1525,12 +1545,12 @@ fn reconcile_bidirectional_no_op_when_consistent() {
 }
 
 #[test]
-fn reconcile_bidirectional_skips_hidden_directory() {
+fn reconcile_bidirectional_indexes_agent_directories_without_indexing_non_markdown_files() {
     let (mf, base) = fresh_memo_file();
-    let hidden = base.join(".hidden");
-    fs::create_dir_all(&hidden).unwrap();
-    fs::write(hidden.join("memo index"), "{}").unwrap();
-    fs::write(hidden.join("todo metadata"), "{}").unwrap();
+    let agents = base.join(".agents");
+    fs::create_dir_all(&agents).unwrap();
+    fs::write(agents.join("memo index"), "{}").unwrap();
+    fs::write(agents.join("todo metadata"), "{}").unwrap();
     // memo index 里没任何 entry, 也不应该被注册 (不是 .md)
     let report = mf.reconcile_with_disk_bidirectional().unwrap();
     assert_eq!(report.added, 0);

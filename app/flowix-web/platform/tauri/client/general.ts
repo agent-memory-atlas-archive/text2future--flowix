@@ -363,6 +363,7 @@ export interface NotebookCustomViews {
 export interface NotebookFileTreePreferences {
   sectionOrder: string[];
   hiddenSections: string[];
+  pinnedFolders: string[];
 }
 
 // System metadata (backend ~/.flowix/boot/system.json).
@@ -396,6 +397,8 @@ export const system = {
     invoke<NotebookFileTreePreferences>('get_notebook_file_tree_preferences', { notebookId }),
   setNotebookFileTreeSectionOrder: (notebookId: string, sectionOrder: string[], hiddenSections?: string[]) =>
     invoke<void>('set_notebook_file_tree_section_order', { notebookId, sectionOrder, hiddenSections }),
+  setNotebookPinnedFolders: (notebookId: string, pinnedFolders: string[]) =>
+    invoke<void>('set_notebook_pinned_folders', { notebookId, pinnedFolders }),
 };
 
 // Memos

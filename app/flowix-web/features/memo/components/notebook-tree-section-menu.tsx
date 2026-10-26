@@ -198,16 +198,16 @@ export function NotebookTreeSectionMenu({
                 {onCreateMediaLibrary && (
                   <DropdownMenuItem onClick={onCreateMediaLibrary} className={itemClassName}>
                     <GalleryHorizontalEnd className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>{t('memo.create.mediaLibrary')}</span>
+                    <span>{t('memo.create.mediaLibraryMenuLabel')}</span>
                     <span className="ml-auto text-xs text-[var(--muted-foreground)] opacity-50 group-hover:text-[var(--primary-foreground)] group-focus-visible:text-[var(--primary-foreground)]">
-                      {t('memo.create.mediaImageShort')}/{t('memo.create.mediaVideoShort')}
+                      {t('memo.create.mediaLibraryShort')}
                     </span>
                   </DropdownMenuItem>
                 )}
                 {onCreateWorkDocuments && (
                   <DropdownMenuItem onClick={onCreateWorkDocuments} className={itemClassName}>
                     <WorkDocumentsIcon className="h-3.5 w-3.5 opacity-100" />
-                    <span>{t('memo.create.workDocuments')}</span>
+                    <span>{t('memo.create.workDocumentsMenuLabel')}</span>
                     <span className="ml-auto text-xs text-[var(--muted-foreground)] opacity-50 group-hover:text-[var(--primary-foreground)] group-focus-visible:text-[var(--primary-foreground)]">
                       {t('memo.create.workDocumentsTypes')}
                     </span>

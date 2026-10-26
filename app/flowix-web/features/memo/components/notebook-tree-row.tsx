@@ -16,6 +16,7 @@ import {
   FolderOpenIcon,
   MapPinSimpleAreaIcon,
   PencilSimpleIcon,
+  PushPin,
   SquareSplitHorizontalIcon,
   TrashSimpleIcon,
 } from '@phosphor-icons/react';
@@ -66,6 +67,7 @@ function DefaultFolderCheck() {
 }
 
 const NOTEBOOK_AGENT_PROJECT_FOLDER_NAMES = new Set([
+  '.agent',
   '.agents',
   '.codex',
   '.claude',
@@ -104,6 +106,8 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   onDeleteSelected,
   onSetDefaultFolder,
   isDefaultFolder,
+  isPinnedFolder = false,
+  onTogglePinnedFolder,
   onPointerDown,
   onKeyDown,
   onFocus,
@@ -147,6 +151,8 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   onDeleteFile?: (item: DocTreeItem, options?: { silent?: boolean }) => Promise<boolean | void>;
   onSetDefaultFolder?: (folderPath: string) => void;
   isDefaultFolder?: boolean;
+  isPinnedFolder?: boolean;
+  onTogglePinnedFolder?: (folderPath: string) => void | Promise<void>;
   onKeyDown?: (path: string, event: ReactKeyboardEvent<HTMLDivElement>) => void;
   onFocus?: (path: string) => void;
   onKeepAliveChange?: (path: string, active: boolean) => void;
@@ -565,6 +571,9 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
               ? item.name
               : displayTitleFromFilename(item.name))}
           </span>
+          {isFolder && isPinnedFolder && !renaming && (
+            <PushPin weight="fill" className="ml-1 h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)]" aria-hidden="true" />
+          )}
           {isFolder && isDefaultFolder && !renaming && (
             <span className="ml-2 shrink-0 text-xs text-[var(--muted-foreground)] opacity-50 transition-opacity duration-150 group-hover:opacity-0">
               {t('memo.fileTree.defaultNoteFolderLabel')}
@@ -673,6 +682,12 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
           <ContextMenuItem onClick={() => onSetDefaultFolder(item.fullPath)} className={TREE_MENU_ITEM_CLASS}>
             <MapPinSimpleAreaIcon className="mr-2 h-4 w-4" aria-hidden="true" />
             {t(isDefaultFolder ? 'memo.fileTree.clearDefaultCreateFolder' : 'memo.fileTree.setDefaultCreateFolder')}
+          </ContextMenuItem>
+        )}
+        {isFolder && onTogglePinnedFolder && (
+          <ContextMenuItem onClick={() => onTogglePinnedFolder(item.fullPath)} className={TREE_MENU_ITEM_CLASS}>
+            <PushPin weight={isPinnedFolder ? 'fill' : 'regular'} className="mr-2 h-4 w-4" aria-hidden="true" />
+            {t(isPinnedFolder ? 'memo.fileTree.unpinFolder' : 'memo.fileTree.pinFolder')}
           </ContextMenuItem>
         )}
         {isTableDocument && tableViewVisibility && (

@@ -1087,9 +1087,9 @@ export function MemoList({
               >
                 <span className="flex min-w-0 items-center gap-2">
                   <GalleryHorizontalEnd className="h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span className="mention-note-title">{t('memo.create.mediaLibrary')}</span>
+                  <span className="mention-note-title">{t('memo.create.mediaLibraryMenuLabel')}</span>
                 </span>
-                <span className="mention-note-notebook opacity-50">{t('memo.create.mediaImageShort')}/{t('memo.create.mediaVideoShort')}</span>
+                <span className="mention-note-notebook opacity-50">{t('memo.create.mediaLibraryShort')}</span>
               </button>
               <button
                 type="button"
@@ -1102,7 +1102,7 @@ export function MemoList({
               >
                 <span className="flex min-w-0 items-center gap-2">
                   <WorkDocumentsIcon className="h-5 w-5 shrink-0 opacity-100" />
-                  <span className="mention-note-title">{t('memo.create.workDocuments')}</span>
+                  <span className="mention-note-title">{t('memo.create.workDocumentsMenuLabel')}</span>
                 </span>
                 <span className="mention-note-notebook opacity-50">{t('memo.create.workDocumentsTypes')}</span>
               </button>

@@ -42,6 +42,9 @@ pub struct NotebookFileTreePreferences {
     pub section_order: Vec<String>,
     #[serde(default)]
     pub hidden_sections: Vec<String>,
+    /// Notebook-relative folder paths in display order (index 0 is topmost).
+    #[serde(default)]
+    pub pinned_folders: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

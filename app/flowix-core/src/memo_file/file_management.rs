@@ -20,19 +20,71 @@ pub struct FileManagementPolicy {
 }
 
 impl FileManagementPolicy {
-    pub fn is_locked_name(name: &str) -> bool {
-        matches!(name, ".flowix" | ".plugin-output") || name.eq_ignore_ascii_case(".index.yaml")
+    fn is_always_excluded_name(name: &str) -> bool {
+        matches!(name, ".flowix" | ".plugin-output")
     }
 
-    pub fn has_hidden_attribute(path: &Path) -> bool {
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::MetadataExt;
-            return std::fs::symlink_metadata(path)
-                .is_ok_and(|metadata| metadata.file_attributes() & 0x2 != 0);
-        }
-        #[cfg(not(windows))]
-        { let _ = path; false }
+    fn is_excluded_directory_name(name: &str) -> bool {
+        matches!(
+            name,
+            ".git"
+                | "node_modules"
+                | "attachments"
+                | "attachments-cache"
+                | "bower_components"
+                | "__pycache__"
+        ) || (name.starts_with('.') && !Self::is_user_visible_hidden_directory(name))
+    }
+
+    /// Dot-prefixed folders that users commonly work with directly. Other
+    /// dot-prefixed directories are treated as application or tool internals.
+    fn is_user_visible_hidden_directory(name: &str) -> bool {
+        matches!(
+            name,
+            ".agent"
+                | ".agents"
+                | ".codex"
+                | ".claude"
+                | ".dsh"
+                | ".opencode"
+                | ".hermes"
+                | ".continue"
+                | ".aider"
+                | ".roo"
+                | ".amazonq"
+                | ".gemini"
+                | ".qwen"
+                | ".kiro"
+                | ".amp"
+                | ".goose"
+                | ".crush"
+                | ".factory"
+                | ".junie"
+                | ".github"
+                | ".gitlab"
+                | ".vscode"
+                | ".idea"
+                | ".obsidian"
+                | ".husky"
+                | ".devcontainer"
+                | ".changeset"
+                | ".storybook"
+                | ".cursor"
+                | ".windsurf"
+                | ".zed"
+                | ".config"
+                | ".circleci"
+                | ".buildkite"
+                | ".docker"
+                | ".run"
+                | ".fleet"
+                | ".settings"
+                | ".project"
+        )
+    }
+
+    pub fn is_locked_name(name: &str) -> bool {
+        matches!(name, ".flowix" | ".plugin-output") || name.eq_ignore_ascii_case(".index.yaml")
     }
 
     pub fn from_notebook_root(root: &Path) -> Self {
@@ -52,47 +104,82 @@ impl FileManagementPolicy {
             let name = name.to_string_lossy();
             if !relative.is_empty() { relative.push('/'); }
             relative.push_str(&name);
-            if matches!(name.as_ref(), ".flowix" | ".plugin-output") {
+            if Self::is_always_excluded_name(&name) {
                 return true;
             }
-            let is_last = index + 1 == components.len();
-            let legacy_media_sidecar = is_last
-                && Path::new(name.as_ref()).extension().is_some_and(|extension| extension.eq_ignore_ascii_case("yaml"))
-                && Path::new(name.as_ref()).file_stem().is_some_and(|stem| super::media_kind_for_path(Path::new(stem)).is_some());
-            let ignored_name = name.starts_with('.')
-                || matches!(name.as_ref(), "attachments" | "attachments-cache" | "node_modules" | "bower_components" | "__pycache__")
-                || legacy_media_sidecar
-                || (is_last && (matches!(name.as_ref(), "Thumbs.db" | "ehthumbs.db" | "desktop.ini")
-                    || name.ends_with(".tmp") || name.ends_with(".swp") || name.ends_with(".bak")
-                    || name.ends_with(".lock") || name.ends_with('~')));
-            if ignored_name && !self.included_paths.iter().any(|included| included == &relative) {
+            if index + 1 < components.len()
+                && Self::is_excluded_directory_name(&name)
+                && !self.included_paths.iter().any(|included| included == &relative)
+            {
+                return true;
+            }
+        }
+
+        let Some(name) = path.file_name() else { return true; };
+        let name = name.to_string_lossy();
+        let legacy_media_sidecar = Path::new(name.as_ref())
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("yaml"))
+            && Path::new(name.as_ref())
+                .file_stem()
+                .is_some_and(|stem| super::media_kind_for_path(Path::new(stem)).is_some());
+        let ignored_file = name.starts_with('.')
+            || name.eq_ignore_ascii_case(".index.yaml")
+            || legacy_media_sidecar
+            || matches!(name.as_ref(), "Thumbs.db" | "ehthumbs.db" | "desktop.ini")
+            || name.ends_with(".tmp")
+            || name.ends_with(".swp")
+            || name.ends_with(".bak")
+            || name.ends_with(".lock")
+            || name.ends_with('~');
+        ignored_file && !self.included_paths.iter().any(|included| included == &relative)
+    }
+
+    /// Evaluate a path known to represent a directory, including removed
+    /// directory paths that no longer exist on disk.
+    pub fn is_ignored_directory(&self, relative: &Path) -> bool {
+        let mut key = String::new();
+        for component in relative.components() {
+            let Component::Normal(name) = component else { return true; };
+            let name = name.to_string_lossy();
+            if !key.is_empty() { key.push('/'); }
+            key.push_str(&name);
+            if Self::is_always_excluded_name(&name) {
+                return true;
+            }
+            if Self::is_excluded_directory_name(&name)
+                && !self.included_paths.iter().any(|included| included == &key)
+            {
                 return true;
             }
         }
         false
     }
 
-    /// Evaluate the same policy against filesystem hidden attributes as well
-    /// as names. The relative path is always scoped to `root`.
+    /// Evaluate file exclusions and excluded directory names against an
+    /// existing notebook path. The relative path is always scoped to `root`.
     pub fn is_ignored_at(&self, root: &Path, relative: &Path) -> bool {
-        if self.is_ignored(relative) { return true; }
         let mut current = root.to_path_buf();
-        let mut key = String::new();
-        for component in relative.components() {
-            let Component::Normal(name) = component else { return true; };
-            current.push(name);
-            if !key.is_empty() { key.push('/'); }
-            key.push_str(&name.to_string_lossy());
-            if Self::has_hidden_attribute(&current)
-                && !self.included_paths.iter().any(|included| included == &key)
-            { return true; }
+        current.push(relative);
+        if std::fs::symlink_metadata(&current).is_ok_and(|metadata| metadata.is_dir()) {
+            return self.is_ignored_directory(relative);
         }
-        false
+        self.is_ignored(relative)
     }
 
     /// Return whether a path should be omitted from the notebook file tree.
     pub fn is_tree_hidden_at(&self, root: &Path, relative: &Path) -> bool {
         if self.is_ignored_at(root, relative) { return true; }
+        self.is_configured_hidden(relative)
+    }
+
+    /// Return whether a directory should be omitted from the notebook file
+    /// tree, even if the directory has already been removed from disk.
+    pub fn is_tree_hidden_directory(&self, relative: &Path) -> bool {
+        self.is_ignored_directory(relative) || self.is_configured_hidden(relative)
+    }
+
+    fn is_configured_hidden(&self, relative: &Path) -> bool {
         let key = relative.to_string_lossy().replace('\\', "/");
         self.hidden_paths.iter().any(|hidden| {
             key == hidden.as_str()

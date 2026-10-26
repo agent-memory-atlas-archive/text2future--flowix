@@ -829,9 +829,22 @@ export function flattenLoadedTree(
 
 export type FolderTreeSort = 'createdAt' | 'updatedAt' | 'filenameAsc' | 'filenameDesc';
 
-function compareTreeItems(sort: FolderTreeSort, a: DocTreeItem, b: DocTreeItem): number {
+function compareTreeItems(
+  sort: FolderTreeSort,
+  a: DocTreeItem,
+  b: DocTreeItem,
+  pinnedFolderOrder: ReadonlyMap<string, number>,
+): number {
   // Keep directories grouped before documents for every selected sort.
   if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+
+  if (a.type === 'folder' && b.type === 'folder') {
+    const aOrder = pinnedFolderOrder.get(canonicalDirectoryPath(a.fullPath));
+    const bOrder = pinnedFolderOrder.get(canonicalDirectoryPath(b.fullPath));
+    if (aOrder !== undefined && bOrder === undefined) return -1;
+    if (aOrder === undefined && bOrder !== undefined) return 1;
+    if (aOrder !== undefined && bOrder !== undefined && aOrder !== bOrder) return aOrder - bOrder;
+  }
 
   if (sort === 'filenameAsc' || sort === 'filenameDesc') {
     const order = a.name.toLocaleLowerCase().localeCompare(b.name.toLocaleLowerCase())
@@ -855,10 +868,14 @@ function compareTreeItems(sort: FolderTreeSort, a: DocTreeItem, b: DocTreeItem):
 export function flattenVisibleTree(
   state: Pick<FolderTreeState, 'rootChildren' | 'nodes' | 'expanded'>,
   sort: FolderTreeSort = 'createdAt',
+  pinnedFolderPaths: readonly string[] = [],
 ): VisibleTreeNode[] {
   const out: VisibleTreeNode[] = [];
+  const pinnedFolderOrder = new Map<string, number>(
+    pinnedFolderPaths.map((path, index): [string, number] => [canonicalDirectoryPath(path), index]),
+  );
   const walk = (items: DocTreeItem[], depth: number) => {
-    for (const item of [...items].sort((a, b) => compareTreeItems(sort, a, b))) {
+    for (const item of [...items].sort((a, b) => compareTreeItems(sort, a, b, pinnedFolderOrder))) {
       out.push({ item, depth });
       if (item.type !== 'folder') continue;
       const key = canonicalPath(item.fullPath);

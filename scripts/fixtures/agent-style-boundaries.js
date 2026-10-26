@@ -1,5 +1,12 @@
 import { createAgentComposerDom } from '../../app/flowix-web/features/agent/thread-card/composer/composer-dom-factory';
 import { createInlineAtomCloseIcon, createInlineAtomNodeView } from '../../app/flowix-web/features/editor/extensions/shared/inline-atom-nodeview';
+import { Editor, Node } from '@tiptap/core';
+import Document from '@tiptap/extension-document';
+import Paragraph from '@tiptap/extension-paragraph';
+import Text from '@tiptap/extension-text';
+import HardBreak from '@tiptap/extension-hard-break';
+import { Plugin } from '@tiptap/pm/state';
+import { createTerminalInlineAtomCaretDecorations } from '../../app/flowix-web/features/editor/extensions/shared/terminal-inline-atom-caret';
 import '../../app/flowix-web/styles/theme/light.css';
 import '../../app/flowix-web/styles/editor.css';
 import '../../app/flowix-web/styles/editor-frontmatter.css';
@@ -17,6 +24,61 @@ const snapshot = element => {
   const style = getComputedStyle(element);
   return Object.fromEntries(properties.map(key => [key, key === 'textAlign' && style[key] === 'start' ? (style.direction === 'rtl' ? 'right' : 'left') : style[key]]));
 };
+// Use the product's mount contract so paragraph selectors match the app.
+function checkTerminalChipLayout(mode) {
+  const root = document.createElement('section');
+  root.className = 'agent-conversation-surface';
+  root.style.width = '700px';
+  const parts = createAgentComposerDom({ variant: mode === 'inline' ? 'compact' : 'expanded', t: key => key });
+  root.append(parts.composer);
+  document.body.append(root);
+  const chip = Node.create({
+    name: 'layoutProbeChip', group: 'inline', inline: true, atom: true,
+    renderHTML: () => ['span', 'Reference'],
+    addNodeView: () => () => createInlineAtomNodeView({
+      wrapperClassName: 'agent-composer__inline-atom-wrapper', label: 'Reference',
+    }),
+    addProseMirrorPlugins: () => [new Plugin({
+      props: { decorations: state => createTerminalInlineAtomCaretDecorations(state.doc, ['layoutProbeChip']) },
+    })],
+  });
+  const editor = new Editor({
+    element: { mount: parts.input },
+    extensions: [Document, Paragraph, Text, HardBreak, chip],
+    editorProps: { attributes: { class: 'agent-composer__input-content' } },
+  });
+  parts.input.classList.add('agent-composer__input', 'agent-composer__input-content');
+  try {
+    check(editor.view.dom === parts.input, 'Composer probe has an extra editor wrapper');
+    const measure = content => {
+      editor.commands.setContent({ type: 'doc', content: [{ type: 'paragraph', content }] });
+      const paragraph = parts.input.querySelector('p');
+      const trailingBreak = paragraph.querySelector('br.ProseMirror-trailingBreak');
+      return {
+        paragraph: paragraph.getBoundingClientRect().height,
+        composer: parts.composer.getBoundingClientRect().height,
+        breakHidden: trailingBreak && getComputedStyle(trailingBreak).display === 'none',
+      };
+    };
+    const atom = { type: 'layoutProbeChip' };
+    const bare = measure([atom]);
+    check(bare.breakHidden, 'Terminal chip compensation break is visible in ' + mode);
+    for (const text of [' ', '  ', 'text']) {
+      const withText = measure([atom, { type: 'text', text }]);
+      check(Math.abs(bare.paragraph - withText.paragraph) < 0.5 && Math.abs(bare.composer - withText.composer) < 0.5,
+        'Terminal chip height changes with adjacent text in ' + mode);
+    }
+    const empty = measure([]);
+    check(!empty.breakHidden && empty.paragraph > 0, 'Empty composer lost its line box in ' + mode);
+    const newline = measure([atom, { type: 'hardBreak' }]);
+    check(!newline.breakHidden && newline.paragraph > bare.paragraph + 1, 'Explicit composer newline is hidden in ' + mode);
+  } finally {
+    editor.destroy();
+    root.remove();
+    for (const popover of [parts.codexSettingsPopover, parts.composerAddPopover, parts.composerRolePopover]) popover.remove();
+  }
+}
+
 function makeSurface(mode, editorHost) {
   const root = document.createElement('section');
   root.className = mode === 'standalone'
@@ -184,7 +246,8 @@ try {
     Math.abs(codeCaretTop - (expectedOffset - 5)) < 0.5,
     'Insertion caret above a leading code block is not compensated: ' + codeCaretTop + 'px, expected ' + (expectedOffset - 5) + 'px',
   );
-  report.textContent = JSON.stringify({ ok: true, cases: ['standalone', 'fullscreen', 'inline'], checks: ['shared references and remove buttons', 'message typography', 'document typography isolation', 'expanded column widths', 'left-aligned running status', 'remove interaction', 'first-block offset', 'insertion caret offset', 'collapsed card content isolation', 'fullscreen collapse isolation'] });
+  for (const mode of ['standalone', 'fullscreen', 'inline']) checkTerminalChipLayout(mode);
+  report.textContent = JSON.stringify({ ok: true, cases: ['standalone', 'fullscreen', 'inline'], checks: ['shared references and remove buttons', 'message typography', 'document typography isolation', 'expanded column widths', 'left-aligned running status', 'remove interaction', 'first-block offset', 'insertion caret offset', 'collapsed card content isolation', 'fullscreen collapse isolation', 'terminal chip spacing and explicit newlines'] });
 } catch (error) {
   report.textContent = JSON.stringify({ ok: false, error: String(error.stack ?? error) });
 }

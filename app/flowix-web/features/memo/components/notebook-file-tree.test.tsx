@@ -25,6 +25,10 @@ vi.mock('@/lib/i18n', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/lib/i18n')>(),
   useI18n: () => ({ t: translationTestState.t }),
 }));
+vi.mock('@platform/tauri/notebook-change-events', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@platform/tauri/notebook-change-events')>(),
+  subscribeNotebookChanges: () => () => {},
+}));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@features/memo/services/note-link-rewriter', () => ({ updateNoteLinksAfterMove: vi.fn() }));
 vi.mock('@shared/ui/overlay-scrollbar', () => ({

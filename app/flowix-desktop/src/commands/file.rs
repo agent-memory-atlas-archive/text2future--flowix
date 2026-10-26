@@ -266,6 +266,8 @@ fn read_dir_single_level_with_policy(
                 continue;
             }
             let name = entry.file_name().to_string_lossy().to_string();
+            let meta = fs::metadata(&path).ok();
+            let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
 
             if let Some((root, rules)) = policy {
                 if path
@@ -274,26 +276,15 @@ fn read_dir_single_level_with_policy(
                 {
                     continue;
                 }
-            }
-
-            // Notebook metadata and folder collection indexes stay out of
-            // both file trees even when hidden entries are included.
-            if name == ".flowix" || name.eq_ignore_ascii_case(".index.yaml") {
+            } else if FileManagementPolicy::default()
+                .is_tree_hidden_at(dir_path, Path::new(&name))
+            {
                 continue;
             }
 
-            // External file-browser roots do not have a FileManagementPolicy;
-            // hide legacy media-property sidecars here as notebook roots do
-            // through that policy.
+            // External file-browser roots use the default file exclusions too,
+            // but do not load notebook-specific visibility preferences.
             if policy.is_none() && is_legacy_media_property_sidecar(&path) {
-                continue;
-            }
-
-            // FileManagementPolicy controls notebook paths. External browser
-            // roots keep hidden paths out of the tree by default.
-            let meta = fs::metadata(&path).ok();
-            let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
-            if policy.is_none() && name.starts_with('.') {
                 continue;
             }
 
@@ -612,8 +603,11 @@ pub fn get_file_management_candidates(
             }
             let is_directory = metadata.is_dir();
             let name = Path::new(entry.file_name().as_os_str()).to_path_buf();
-            let own_name_ignored = defaults.is_ignored(&name)
-                || FileManagementPolicy::has_hidden_attribute(&path);
+            let own_name_ignored = if is_directory {
+                defaults.is_ignored_at(root, relative)
+            } else {
+                defaults.is_ignored(&name)
+            };
             if FileManagementPolicy::is_locked_name(&entry.file_name().to_string_lossy()) {
                 continue;
             }
@@ -649,9 +643,6 @@ fn collect_notebook_folders(
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') || FileManagementPolicy::has_hidden_attribute(&path) {
-            continue;
-        }
         let Ok(relative) = path.strip_prefix(root) else {
             continue;
         };
@@ -705,8 +696,7 @@ fn collect_notebook_settings_tree(
         };
         let relative_path = relative.to_string_lossy().replace('\\', "/");
         let hidden = policy.is_tree_hidden_at(root, relative);
-        let default_hidden = FileManagementPolicy::default().is_ignored_at(root, relative)
-            || FileManagementPolicy::has_hidden_attribute(&path);
+        let default_hidden = FileManagementPolicy::default().is_ignored_at(root, relative);
         if metadata.is_dir() {
             let is_flowix_dir = relative_path == ".flowix";
             let collapsed = is_flowix_dir || default_hidden || hidden;
@@ -2814,29 +2804,28 @@ mod tests {
     }
 
     #[test]
-    fn notebook_policy_can_include_hidden_directories_but_not_dot_files() {
+    fn notebook_policy_shows_known_user_dot_directories_but_hides_unrelated_ones() {
         let directory = tempfile::tempdir().unwrap();
         let hidden = directory.path().join(".codex");
         fs::create_dir(&hidden).unwrap();
         fs::write(hidden.join("skill.md"), "skill").unwrap();
+        fs::create_dir(directory.path().join(".agent")).unwrap();
+        fs::create_dir(directory.path().join(".cache")).unwrap();
+        fs::create_dir(directory.path().join(".unrelated")).unwrap();
         fs::write(directory.path().join(".gitignore"), "ignored").unwrap();
 
-        let policy = FileManagementPolicy {
-            included_paths: vec![".codex".to_string()],
-            ..Default::default()
-        };
+        let policy = FileManagementPolicy::default();
         let items = read_dir_single_level_with_policy(
             directory.path(),
             None,
             Some((directory.path(), &policy)),
         );
-        assert_eq!(
-            items
-                .iter()
-                .map(|item| item.name.as_str())
-                .collect::<Vec<_>>(),
-            vec![".codex"]
-        );
+        let mut names = items
+            .iter()
+            .map(|item| item.name.as_str())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(names, vec![".agent", ".codex"]);
         let hidden_children =
             read_dir_single_level_with_policy(&hidden, None, Some((directory.path(), &policy)));
         assert_eq!(hidden_children[0].name, "skill.md");

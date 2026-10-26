@@ -359,9 +359,7 @@ impl CollectionCatalog {
                     continue;
                 }
                 if kind.is_dir() {
-                    if !entry.file_name().to_string_lossy().starts_with('.') {
-                        pending.push(path);
-                    }
+                    pending.push(path);
                 } else if collection_type_for_path(&path).is_some() {
                     paths.insert(path);
                 }

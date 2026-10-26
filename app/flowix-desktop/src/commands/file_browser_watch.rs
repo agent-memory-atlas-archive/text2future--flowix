@@ -9,7 +9,7 @@
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -195,10 +195,16 @@ fn schedule_directory_changes(
     let Ok(registry) = registry.lock() else {
         return;
     };
+    let directory_event = event.paths.iter().any(|path| path.is_dir())
+        || matches!(event.kind, EventKind::Remove(notify::event::RemoveKind::Folder));
     for (lease_id, lease) in &registry.leases {
         let mut directories = HashSet::new();
         let mut paths = HashSet::new();
-        for path in event.paths.iter().filter(|path| !should_ignore_path(path, lease)) {
+        for path in event
+            .paths
+            .iter()
+            .filter(|path| !should_ignore_path_for_event(path, lease, directory_event))
+        {
             if let Some(directory) = affected_directory(path, &lease.root_path) {
                 directories.insert(directory);
                 paths.insert((*path).clone());
@@ -216,31 +222,23 @@ fn schedule_directory_changes(
 }
 
 fn should_ignore_path(path: &Path, lease: &WatchLease) -> bool {
-    if lease.root_path.join(".flowix").is_dir() {
-        return path.strip_prefix(&lease.root_path).is_ok_and(|relative| {
-            flowix_core::memo_file::FileManagementPolicy::from_notebook_root(&lease.root_path)
-                .is_ignored_at(&lease.root_path, relative)
-        });
+    should_ignore_path_for_event(path, lease, path.is_dir())
+}
+
+fn should_ignore_path_for_event(path: &Path, lease: &WatchLease, directory_event: bool) -> bool {
+    let Some(relative) = relative_path_under_root(path, &lease.root_path) else {
+        return false;
+    };
+    let policy = if lease.root_path.join(".flowix").is_dir() {
+        flowix_core::memo_file::FileManagementPolicy::from_notebook_root(&lease.root_path)
+    } else {
+        flowix_core::memo_file::FileManagementPolicy::default()
+    };
+    if directory_event {
+        policy.is_tree_hidden_directory(&relative)
+    } else {
+        policy.is_ignored_at(&lease.root_path, &relative)
     }
-    is_internal_flowix_path(path, &lease.root_path)
-        || has_hidden_component(path, &lease.root_path)
-}
-
-fn is_internal_flowix_path(path: &Path, root_path: &Path) -> bool {
-    relative_path_under_root(path, root_path).is_some_and(|relative| {
-        relative.components().any(|component| {
-            matches!(component, Component::Normal(name) if name == ".flowix")
-        })
-    })
-}
-
-/// Test hidden-directory membership relative to the watched root. Hidden
-/// files at the root are intentionally not part of this check; the notebook
-/// tree's hidden-file policy is about directories and their descendants.
-fn has_hidden_component(path: &Path, root_path: &Path) -> bool {
-    relative_path_under_root(path, root_path).is_some_and(|relative| relative.components().any(|component| {
-        matches!(component, Component::Normal(name) if name.to_string_lossy().starts_with('.'))
-    }))
 }
 
 fn relative_path_under_root(path: &Path, root_path: &Path) -> Option<PathBuf> {
@@ -485,25 +483,33 @@ mod tests {
     }
 
     #[test]
-    fn hidden_directory_membership_is_relative_to_the_watch_root() {
+    fn dot_directories_are_not_filtered_by_the_file_browser_watcher() {
         let temp = tempdir().expect("create temp directory");
         let root = temp.path().join("notebook");
         let hidden = root.join(".codex").join("skills").join("SKILL.md");
         std::fs::create_dir_all(hidden.parent().expect("hidden parent"))
             .expect("create hidden directory");
         std::fs::write(&hidden, "skill").expect("create hidden file");
-        assert!(has_hidden_component(&hidden, &root));
-        assert!(!has_hidden_component(&root.join("visible.md"), &root));
+        let lease = WatchLease {
+            window_label: "browser".to_string(),
+            root_path: root.clone(),
+        };
+        assert!(!should_ignore_path(&hidden, &lease));
+        assert!(!should_ignore_path(&root.join("visible.md"), &lease));
     }
 
     #[test]
-    fn hidden_paths_are_ignored_and_agents_are_watched_for_unmanaged_roots() {
+    fn dot_directories_are_watched_and_system_paths_are_filtered() {
         let temp = tempdir().expect("create temp directory");
         let root = temp.path().join("notebook");
         let hidden = root.join(".agent").join("skills").join("skill.md");
         std::fs::create_dir_all(hidden.parent().expect("hidden parent"))
             .expect("create hidden directory");
         std::fs::write(&hidden, "skill").expect("create hidden file");
+        let cache = root.join(".cache").join("generated.md");
+        std::fs::create_dir_all(cache.parent().expect("cache parent"))
+            .expect("create cache directory");
+        std::fs::write(&cache, "generated").expect("create cache file");
         let notebook_lease = WatchLease {
             window_label: "notebook".to_string(),
             root_path: root.clone(),
@@ -513,8 +519,31 @@ mod tests {
             root_path: root,
         };
 
-        assert!(should_ignore_path(&hidden, &notebook_lease));
-        assert!(should_ignore_path(&hidden, &browser_lease));
+        assert!(!should_ignore_path(&hidden, &notebook_lease));
+        assert!(!should_ignore_path(&hidden, &browser_lease));
+        assert!(!should_ignore_path(
+            &root.join(".vscode/settings.json"),
+            &notebook_lease
+        ));
+        assert!(should_ignore_path(&cache, &notebook_lease));
+        assert!(should_ignore_path(
+            &root.join(".unrelated/note.md"),
+            &browser_lease
+        ));
+        assert!(should_ignore_path(
+            &root.join("attachments-cache/file.png"),
+            &browser_lease
+        ));
+        assert!(!should_ignore_path_for_event(
+            &root.join(".agent"),
+            &browser_lease,
+            true
+        ));
+        assert!(should_ignore_path_for_event(
+            &root.join(".cache"),
+            &browser_lease,
+            true
+        ));
         let internal = browser_lease.root_path.join(".flowix").join("notebook.db");
         assert!(should_ignore_path(&internal, &notebook_lease));
         assert!(should_ignore_path(&internal, &browser_lease));

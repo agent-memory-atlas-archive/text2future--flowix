@@ -703,7 +703,9 @@ fn handle_notify_event(
 fn path_allowed_for_watch(root: &Path, path: &Path, directory_event: bool) -> bool {
     let Ok(relative) = path.strip_prefix(root) else { return false; };
     let policy = FileManagementPolicy::from_notebook_root(root);
-    if directory_event || crate::commands::document_list::is_table_document_path(path) {
+    if directory_event {
+        !policy.is_tree_hidden_directory(relative)
+    } else if crate::commands::document_list::is_table_document_path(path) {
         !policy.is_tree_hidden_at(root, relative)
     } else {
         !policy.is_index_ignored_at(root, relative)

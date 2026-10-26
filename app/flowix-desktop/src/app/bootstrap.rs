@@ -580,6 +580,7 @@ pub fn run() {
             commands::kv::set_custom_views,
             commands::kv::get_notebook_file_tree_preferences,
             commands::kv::set_notebook_file_tree_section_order,
+            commands::kv::set_notebook_pinned_folders,
             // 笔�? / Doc ── �?commands/memo/{reads,creates,versions,deletes}.rs
             // 瀛愭ā鍧楄矾寰勫彇, 涓嶈蛋 `commands::memo::xxx` 椤跺眰 re-export 鈹€鈹€
             // `#[tauri::command]` 宏生成的 `__cmd__xxx` wrapper �?��数所�?            // 模块的同�?macro, �?��在�?模块�?�� (`commands::memo::reads::xxx`)

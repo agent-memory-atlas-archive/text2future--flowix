@@ -245,11 +245,13 @@ export function NotebookFolderView({
       const parent = folderPath.slice(0, folderPath.replace(/[\\/]+$/, '').lastIndexOf('/')) || notebook.path;
       await tree.refresh(parent);
       toast.success(t('status.deleteCompleted'));
+      return true;
     } catch (error) {
       logger.warn('deleting notebook folder failed', { error, folderPath });
       const parent = folderPath.slice(0, folderPath.replace(/[\\/]+$/, '').lastIndexOf('/')) || notebook.path;
       await tree.refresh(parent).catch((refreshError) => logger.warn('refreshing folder after failed deletion failed', { refreshError, parent }));
       toast.error(t(String(error).includes('FOLDER_DELETE_PARTIAL') ? 'memo.fileTree.deletePartialFailed' : 'memo.fileTree.deleteFailed'));
+      return false;
     }
   }, [notebook.path, t, tree.refresh]);
 

@@ -180,7 +180,7 @@ interface NotebookFileTreeProps {
     sources: NotebookMoveSource[],
     targetDirectoryPath: string,
   ) => Promise<NotebookMoveResult>;
-  onDeleteFolder?: (folderPath: string) => Promise<void>;
+  onDeleteFolder?: (folderPath: string) => Promise<void | boolean>;
   onDeleteFile?: (item: DocTreeItem, options?: { silent?: boolean }) => Promise<boolean | void>;
   defaultCreateFolder?: string | null;
   onSetDefaultCreateFolder?: (folderPath: string) => void;
@@ -472,7 +472,13 @@ export function NotebookFileTree({
   const [filesCollapsed, setFilesCollapsed] = useState(false);
   const [fileTreeSort, setFileTreeSort] = useState<FolderTreeSort>('createdAt');
   const [repositorySectionHeight, setRepositorySectionHeight] = useState(0);
-  const { sectionOrder, hiddenSections, updateSections } = useNotebookTreeSections(notebookId, isActive);
+  const {
+    sectionOrder,
+    hiddenSections,
+    pinnedFolders,
+    updateSections,
+    updatePinnedFolders,
+  } = useNotebookTreeSections(notebookId, isActive);
   const customizePanelRef = useRef<NotebookTreeCustomizePanelHandle>(null);
   const openCustomizeDisplay = useCallback((rect: DOMRect) => customizePanelRef.current?.open(rect), []);
   const [agentSectionHeight, setAgentSectionHeight] = useState(0);
@@ -515,14 +521,19 @@ export function NotebookFileTree({
   const submittingDraftRef = useRef(false);
   const [keptAlivePaths, setKeptAlivePaths] = useState<Set<string>>(() => new Set());
   const { rootChildren, nodes, expanded } = tree;
+  const pinnedFolderFullPaths = useMemo(() => pinnedFolders.flatMap((path) => {
+    const fullPath = joinNotebookMemoPath(notebookPath, path);
+    return fullPath ? [canonicalDirectoryPath(fullPath)] : [];
+  }), [notebookPath, pinnedFolders]);
+  const pinnedFolderPathSet = useMemo(() => new Set(pinnedFolderFullPaths), [pinnedFolderFullPaths]);
   // Loading/error flags and controller callbacks do not change tree topology.
   const loadedTreeItems = useMemo(
     () => flattenLoadedTree({ rootChildren, nodes }),
     [rootChildren, nodes],
   );
   const visibleTreeItems = useMemo(
-    () => flattenVisibleTree({ rootChildren, nodes, expanded }, fileTreeSort),
-    [rootChildren, nodes, expanded, fileTreeSort],
+    () => flattenVisibleTree({ rootChildren, nodes, expanded }, fileTreeSort, pinnedFolderFullPaths),
+    [rootChildren, nodes, expanded, fileTreeSort, pinnedFolderFullPaths],
   );
   const renderRows = useMemo(
     () => buildNotebookTreeRenderRows(visibleTreeItems, notebookPath, draft),
@@ -860,6 +871,37 @@ export function NotebookFileTree({
   const handleRetryDirectory = useCallback((path: string) => {
     void tree.retryDirectory?.(path);
   }, [tree.retryDirectory]);
+  const handleTogglePinnedFolder = useCallback(async (folderPath: string) => {
+    if (!notebookId) return;
+    const relativePath = notebookRelativeDirectoryPath(notebookPath, folderPath);
+    if (relativePath === null || relativePath === '') return;
+    const key = canonicalPath(relativePath);
+    try {
+      await updatePinnedFolders((paths) => (
+        paths.some((path) => canonicalPath(path) === key)
+          ? paths.filter((path) => canonicalPath(path) !== key)
+          : [relativePath, ...paths]
+      ));
+    } catch {
+      toast.error(t('memo.fileTree.pinnedFolderSaveFailed'));
+    }
+  }, [notebookId, notebookPath, t, updatePinnedFolders]);
+  const removePinnedFolderSubtree = useCallback(async (folderPath: string) => {
+    const relativePath = notebookRelativeDirectoryPath(notebookPath, folderPath);
+    if (relativePath === null || relativePath === '') return;
+    const key = canonicalPath(relativePath);
+    try {
+      await updatePinnedFolders((paths) => {
+        const next = paths.filter((path) => {
+          const candidate = canonicalPath(path);
+          return candidate !== key && !candidate.startsWith(`${key}/`);
+        });
+        return next.length === paths.length ? null : next;
+      });
+    } catch {
+      toast.error(t('memo.fileTree.pinnedFolderSaveFailed'));
+    }
+  }, [notebookPath, t, updatePinnedFolders]);
   const handleCreateViewAtPath = useCallback((parentPath: string, viewType?: TableViewType) => {
     openNewTableDialog(false, parentPath, viewType);
   }, [openNewTableDialog]);
@@ -897,8 +939,9 @@ export function NotebookFileTree({
   }, [requestCreateFolderDraft]);
   const handleFocusPath = useCallback((path: string) => setFocusedTreePath(path), []);
   const handleDeleteFolderPath = useCallback(async (path: string) => {
-    await onDeleteFolder?.(path);
-  }, [onDeleteFolder]);
+    const deleted = await onDeleteFolder?.(path);
+    if (deleted !== false) await removePinnedFolderSubtree(path);
+  }, [onDeleteFolder, removePinnedFolderSubtree]);
   const renderDraft = (draftState: NotebookTreeDraftState, depth: number) => (
     <NotebookTreeDraft
       draft={draftState}
@@ -1054,6 +1097,8 @@ export function NotebookFileTree({
             : undefined}
           onSetDefaultFolder={item.type === 'folder' ? onSetDefaultCreateFolder : undefined}
           isDefaultFolder={item.type === 'folder' && defaultCreateFolder === relativeFolderPath(notebookPath, item.fullPath)}
+          isPinnedFolder={item.type === 'folder' && pinnedFolderPathSet.has(canonicalDirectoryPath(item.fullPath))}
+          onTogglePinnedFolder={item.type === 'folder' && notebookId ? handleTogglePinnedFolder : undefined}
           onKeepAliveChange={handleRowKeepAliveChange}
           onPointerDown={handlePointerDownItem}
         />

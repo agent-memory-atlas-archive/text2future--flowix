@@ -4,7 +4,7 @@
 //! stored in each notebook's `.flowix/system.json`. The legacy global system
 //! store is read only to migrate a notebook the first time it is accessed.
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use tauri::State;
 
@@ -167,17 +167,57 @@ pub fn set_notebook_file_tree_section_order(
         }
     }
     let mut file = load_notebook_system(&notebook_id, &state)?;
-    let previous_hidden = file.file_tree.notebooks.get(&notebook_id)
-        .map(|preferences| preferences.hidden_sections.clone())
-        .unwrap_or_default();
-    file.file_tree.notebooks.insert(
-        notebook_id.clone(),
-        NotebookFileTreePreferences {
-            section_order,
-            hidden_sections: hidden_sections.unwrap_or(previous_hidden),
-        },
-    );
+    let preferences = file.file_tree.notebooks.entry(notebook_id.clone()).or_default();
+    preferences.section_order = section_order;
+    if let Some(hidden_sections) = hidden_sections {
+        preferences.hidden_sections = hidden_sections;
+    }
     persist_notebook_system(&notebook_id, &state, &file)
+}
+
+/// Replace the ordered notebook-relative folder pin list.
+#[tauri::command]
+pub fn set_notebook_pinned_folders(
+    notebook_id: String,
+    pinned_folders: Vec<String>,
+    state: State<AppState>,
+) -> Result<(), String> {
+    let pinned_folders = normalize_pinned_folders(pinned_folders)?;
+    let mut file = load_notebook_system(&notebook_id, &state)?;
+    file.file_tree
+        .notebooks
+        .entry(notebook_id.clone())
+        .or_default()
+        .pinned_folders = pinned_folders;
+    persist_notebook_system(&notebook_id, &state, &file)
+}
+
+fn normalize_pinned_folders(folders: Vec<String>) -> Result<Vec<String>, String> {
+    let mut normalized = Vec::new();
+    for folder in folders {
+        let folder = folder.replace('\\', "/");
+        if folder.is_empty()
+            || folder.starts_with('/')
+            || folder.contains(':')
+            || folder.contains('\0')
+        {
+            return Err("INVALID_NOTEBOOK_FOLDER_PREFERENCE".to_string());
+        }
+        let path = Path::new(&folder);
+        if path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+            || folder
+                .split('/')
+                .any(|component| component.is_empty() || component == "." || component == "..")
+        {
+            return Err("INVALID_NOTEBOOK_FOLDER_PREFERENCE".to_string());
+        }
+        if !normalized.contains(&folder) {
+            normalized.push(folder);
+        }
+    }
+    Ok(normalized)
 }
 
 fn persist_notebook_system(

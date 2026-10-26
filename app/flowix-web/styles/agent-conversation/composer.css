@@ -844,6 +844,19 @@
   content: "\00a0";
 }
 
+/* Terminal atoms already have a zero-width caret landing point. ProseMirror's
+ * additional trailing break must not change the line box when the user deletes
+ * the space after a chip. Empty paragraphs and explicit hard breaks keep their
+ * normal trailing break because they have no terminal atom anchor. */
+.agent-conversation-surface .agent-composer__input-content .terminal-inline-atom-caret-anchor {
+  display: inline;
+}
+
+.agent-conversation-surface .agent-composer__input-content .terminal-inline-atom-caret-anchor + br.ProseMirror-trailingBreak,
+.agent-conversation-surface .agent-composer__input-content .terminal-inline-atom-caret-anchor + img.ProseMirror-separator + br.ProseMirror-trailingBreak {
+  display: none;
+}
+
 /* Composer-specific appearance for inline cards and input tokens. */
 
 .agent-conversation-surface .agent-composer {
