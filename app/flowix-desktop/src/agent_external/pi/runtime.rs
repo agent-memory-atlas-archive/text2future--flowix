@@ -19,6 +19,7 @@ use super::super::{
     persist_and_emit_external_chunk, resolve_and_freeze_runtime_cwd, resolve_run_id,
     AgentChunkMetadata, USER_STOPPED_REASON,
 };
+use super::shell;
 use super::skill_resources::{self, PiStartupResources};
 use super::AGENT_TYPE;
 use crate::agent_session::ThreadManager;
@@ -273,14 +274,39 @@ fn pi_forward_thinking_enabled() -> bool {
         .unwrap_or(false)
 }
 
-fn pi_tools_for_permission_mode(mode: Option<&str>) -> &'static str {
+/// Permission mode chooses the *maximum* tool set; the environment decides
+/// what is actually usable. Intersecting the two keeps a read-only
+/// conversation useful (`ls`/`grep`/`find`) and keeps a shell tool the machine
+/// cannot run out of the model's tool list entirely.
+fn pi_tools_for_permission_mode(mode: Option<&str>, caps: shell::PiCapabilities) -> String {
+    let mut tools = vec!["read", "ls"];
+    // Pi's grep/find have no JS fallback: without rg/fd they try to download
+    // from GitHub and fail the call, so only offer them when they resolve.
+    if caps.ripgrep {
+        tools.push("grep");
+    }
+    if caps.fd {
+        tools.push("find");
+    }
     match mode {
-        Some("read-only") => "read",
-        Some("workspace-write") => "read,edit,write",
+        Some("read-only") => {}
+        Some("workspace-write") => {
+            tools.push("edit");
+            tools.push("write");
+        }
         // Pi's built-in tools have no per-path sandbox. Unknown and legacy
         // modes retain the existing full-access behavior.
-        _ => "read,bash,edit,write",
+        _ => {
+            tools.push("edit");
+            tools.push("write");
+            // Windows has no /bin/bash; without Git Bash Pi's bash tool cannot
+            // start a shell, but its powershell tool always can.
+            if let Some(shell_tool) = caps.shell.tool_name() {
+                tools.push(shell_tool);
+            }
+        }
     }
+    tools.join(",")
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1317,6 +1343,9 @@ impl PiRpcManager {
             .map_err(|error| format!("cannot create Pi config directory: {error}"))?;
 
         let mut command = Command::new(resolve_pi_binary(app)?);
+        // The bash tool reads its environment from this process, so the PATH
+        // resolved from the user's login shell has to be injected here.
+        shell::apply_child_path(&mut command, shell::child_path().await.as_deref());
         let mut tools = config
             .tools
             .split(',')
@@ -2093,9 +2122,15 @@ impl PiRpcManager {
                 )
             })
             .map(str::to_owned);
+        let child_path = shell::child_path().await;
+        let configured_shell = super::config::shell_path()
+            .ok()
+            .flatten()
+            .map(PathBuf::from);
+        let caps = shell::capabilities(child_path.as_deref(), configured_shell.as_deref());
         let config = PiSessionConfig {
             cwd: cwd.clone(),
-            tools: pi_tools_for_permission_mode(permission_mode).into(),
+            tools: pi_tools_for_permission_mode(permission_mode, caps),
             code_mode: message.code_mode_for_runtime(AGENT_TYPE).unwrap_or(false),
             tool_search: pi_features.tool_search,
             provider: provider.clone().filter(|value| !value.trim().is_empty()),
@@ -3102,6 +3137,7 @@ async fn run_pi_fork_extension(
     let operation = async {
         let config_dir = pi_config_dir()?;
         let mut command = Command::new(resolve_pi_binary(app)?);
+        shell::apply_child_path(&mut command, shell::child_path().await.as_deref());
         command
             .args(["--mode", "rpc", "--session-dir"])
             .arg(child_dir)
@@ -3490,10 +3526,75 @@ pub(crate) fn resolve_pi_binary(app: &tauri::AppHandle) -> Result<PathBuf, Strin
 mod tests {
     use super::{
         attach_pi_session_message_ids, pi_active_branch_entries, pi_rpc_message_id,
-        receive_rpc_response, run_startup_cloud_credential_refresh_once,
-        run_startup_cloud_refresh_once, CloudRefreshResults,
+        pi_tools_for_permission_mode, receive_rpc_response,
+        run_startup_cloud_credential_refresh_once, run_startup_cloud_refresh_once,
+        CloudRefreshResults,
     };
+    use crate::agent_external::pi::shell::{PiCapabilities, ShellKind};
     use serde_json::json;
+
+    fn capabilities(shell: ShellKind, ripgrep: bool, fd: bool) -> PiCapabilities {
+        PiCapabilities { shell, ripgrep, fd }
+    }
+
+    #[test]
+    fn full_access_asks_for_the_platform_shell_tool() {
+        let bash = pi_tools_for_permission_mode(
+            Some("danger-full-access"),
+            capabilities(ShellKind::Bash, false, false),
+        );
+        assert!(bash.split(',').any(|tool| tool == "bash"), "{bash}");
+
+        let powershell = pi_tools_for_permission_mode(
+            Some("danger-full-access"),
+            capabilities(ShellKind::PowerShell, false, false),
+        );
+        assert!(powershell.split(',').any(|tool| tool == "powershell"));
+        assert!(!powershell.split(',').any(|tool| tool == "bash"));
+
+        let shellless =
+            pi_tools_for_permission_mode(None, capabilities(ShellKind::None, false, false));
+        assert!(!shellless.split(',').any(|tool| tool == "bash"));
+        assert!(!shellless.split(',').any(|tool| tool == "powershell"));
+    }
+
+    #[test]
+    fn read_only_mode_stays_useful_without_a_shell() {
+        let tools = pi_tools_for_permission_mode(
+            Some("read-only"),
+            capabilities(ShellKind::Bash, true, true),
+        );
+        let parsed: Vec<&str> = tools.split(',').collect();
+        assert_eq!(parsed, vec!["read", "ls", "grep", "find"]);
+    }
+
+    #[test]
+    fn search_tools_are_omitted_when_rg_and_fd_are_missing() {
+        let tools = pi_tools_for_permission_mode(
+            Some("read-only"),
+            capabilities(ShellKind::Bash, false, false),
+        );
+        assert_eq!(tools, "read,ls");
+        // Pi's grep/find try to download from GitHub when the binary is absent,
+        // so a partial availability must be handled per tool.
+        let partial = pi_tools_for_permission_mode(
+            Some("read-only"),
+            capabilities(ShellKind::Bash, true, false),
+        );
+        assert_eq!(partial, "read,ls,grep");
+    }
+
+    #[test]
+    fn write_modes_keep_the_edit_tools_and_drop_the_shell_when_unavailable() {
+        let write = pi_tools_for_permission_mode(
+            Some("workspace-write"),
+            capabilities(ShellKind::Bash, false, false),
+        );
+        assert_eq!(write, "read,ls,edit,write");
+        let legacy =
+            pi_tools_for_permission_mode(None, capabilities(ShellKind::None, false, false));
+        assert_eq!(legacy, "read,ls,edit,write");
+    }
 
     #[tokio::test]
     async fn startup_cloud_refresh_coalesces_failures_and_allows_retry() {
@@ -3504,8 +3605,7 @@ mod tests {
 
         let results = Arc::new(Mutex::new(HashMap::new()));
         let refresh_count = Arc::new(AtomicUsize::new(0));
-        let run = |results: Arc<Mutex<CloudRefreshResults>>,
-                   refresh_count: Arc<AtomicUsize>| async move {
+        let run = |results: Arc<Mutex<CloudRefreshResults>>, refresh_count: Arc<AtomicUsize>| async move {
             run_startup_cloud_refresh_once(&results, 7, || async move {
                 refresh_count.fetch_add(1, Ordering::SeqCst);
                 tokio::task::yield_now().await;

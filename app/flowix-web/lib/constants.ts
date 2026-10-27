@@ -103,6 +103,8 @@ export interface UserSettings {
   memoListView: MemoListView;
   /** Whether newly created notes are automatically opened in the Browser Column. */
   autoOpenCreatedNotesInBrowser: boolean;
+  /** Maximum number of conversations shown in the notebook file tree. */
+  recentAgentConversationsLimit: number;
   /**
    * 快捷键用户覆盖层 — actionId → chord 字符串 (e.g. 'Mod+Shift+K')。
    * 只存与 ActionDefinition.defaultBinding 不同的部分, 缺省走默认。
@@ -237,6 +239,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   region: 'mainland',
   memoListView: 'folders',
   autoOpenCreatedNotesInBrowser: true,
+  recentAgentConversationsLimit: 6,
   // 启动时无任何用户覆盖, 所有 action 走 ActionDefinition.defaultBinding。
   shortcuts: {},
   agents: {

@@ -6,7 +6,7 @@ import { removeAgentConversation } from '@features/agent/use-cases/remove-conver
 import { ConversationActionItems } from './conversation-action-items';
 import { AgentConversationHoverCard } from '@features/agent/components/agent-conversation-hover-card';
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
 import { StarIcon } from '@phosphor-icons/react';
 import { ArrowRight, ChevronRight, MoreHorizontal, Plus } from 'lucide-react';
 import { AgentIcon } from '@features/agent/components/agent-icon';
@@ -18,7 +18,6 @@ import {
 } from '@features/agent/use-cases/new-conversation';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuTrigger } from '@shared/ui/dropdown-menu';
 import {
-  RECENT_CONVERSATIONS_LIMIT,
   loadFavoriteAgentConversations,
   loadRecentAgentConversations,
 } from '@features/agent/components/agent-tasks-recent';
@@ -27,7 +26,7 @@ import { useAgentSessionStore } from '@features/agent/store/agent-session-store'
 import type { AgentConversationInstance } from '@features/agent/store/agent-conversation-types';
 import { isAgentConversationRunning } from '@features/agent/store/conversation-run-index';
 import { openWorkspaceSurface } from '@features/workspace/public/open-surface-api';
-import { useWorkColumnStore } from '@features/workspace/store/work-column-store';
+import { useActiveAgentConversationInstanceId } from '@features/workspace/public/active-conversation-api';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { readFavoriteConversationIds, subscribeToFavoriteConversationChanges, toggleFavoriteConversation } from '@features/agent/conversation-favorites';
@@ -36,6 +35,11 @@ import { createLogger } from '@/lib/logger';
 import { Input } from '@shared/ui/input';
 import { Button } from '@shared/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@shared/ui/dialog';
+import {
+  getRecentAgentConversationsLimit,
+  setRecentAgentConversationsLimit,
+  useRecentAgentConversationsLimit,
+} from '@features/preferences/public/user-settings-api';
 
 import { selectVisibleConversations } from './conversation-list-model';
 import { EMPTY_CONVERSATION_PAGE_STATE, mergeConversationPage, sortFavoriteConversations } from './conversation-list-pagination';
@@ -58,6 +62,7 @@ export function AgentTasksSection({
   sectionActions?: ReactNode;
 }) {
   const { t } = useI18n();
+  const recentConversationLimit = useRecentAgentConversationsLimit();
   const sectionRef = useRef<HTMLElement | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [storedConversations, setStoredConversations] = useState<AgentConversationInstance[]>([]);
@@ -69,6 +74,8 @@ export function AgentTasksSection({
   const [renameTarget, setRenameTarget] = useState<AgentConversationInstance | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [renameSaving, setRenameSaving] = useState(false);
+  const [conversationLimitDialogOpen, setConversationLimitDialogOpen] = useState(false);
+  const [conversationLimitDraft, setConversationLimitDraft] = useState(String(recentConversationLimit));
   const lifecycleVersion = useAgentSessionStore((state) => state.lifecycleVersion);
   const threadTombstones = useAgentSessionStore((state) => state.threadTombstones);
   const startedLiveThreads = useStartedLiveThreads();
@@ -76,11 +83,7 @@ export function AgentTasksSection({
   const conversationRunIndex = useAgentSessionStore((state) => state.threadRunSignatures);
   const latestCompletedRunIds = useAgentSessionStore((state) => state.latestCompletedRunIds);
   const readThroughRunIds = useAgentSessionStore((state) => state.readThroughRunIds);
-  const activeConversationInstanceId = useWorkColumnStore((state) => (
-    state.navigation.target.kind === 'agent-conversation'
-      ? state.navigation.target.instanceId
-      : null
-  ));
+  const activeConversationInstanceId = useActiveAgentConversationInstanceId();
 
   useEffect(() => subscribeToFavoriteConversationChanges(() => {
     setFavoriteIds(readFavoriteConversationIds());
@@ -94,6 +97,7 @@ export function AgentTasksSection({
         agentClient.listConversationInstancesPage,
         () => active,
         (hasMore) => { if (active) setHasMoreConversations(hasMore); },
+        recentConversationLimit,
       );
       if (active) setStoredConversations(recent);
     };
@@ -101,7 +105,27 @@ export function AgentTasksSection({
     setHasMoreConversations(false);
     void load();
     return () => { active = false; };
-  }, [lifecycleVersion, notebookId]);
+  }, [lifecycleVersion, notebookId, recentConversationLimit]);
+
+  useEffect(() => {
+    const openLimitDialog = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== notebookId) return;
+      setConversationLimitDraft(String(getRecentAgentConversationsLimit()));
+      setConversationLimitDialogOpen(true);
+    };
+    window.addEventListener('flowix:configure-agent-conversation-count', openLimitDialog);
+    return () => window.removeEventListener('flowix:configure-agent-conversation-count', openLimitDialog);
+  }, [notebookId]);
+
+  const saveConversationLimit = useCallback((event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const parsed = Number(conversationLimitDraft);
+    if (!Number.isFinite(parsed)) return;
+    const limit = Math.min(50, Math.max(1, Math.floor(parsed)));
+    setConversationLimitDraft(String(limit));
+    void setRecentAgentConversationsLimit(limit);
+    setConversationLimitDialogOpen(false);
+  }, [conversationLimitDraft]);
 
   useEffect(() => {
     let active = true;
@@ -130,13 +154,13 @@ export function AgentTasksSection({
     const favorites = sortFavoriteConversations(conversations.filter((instance) => favoriteIds.has(instance.instanceId)));
     const recent = conversations
       .filter((instance) => !favoriteIds.has(instance.instanceId))
-      .slice(0, RECENT_CONVERSATIONS_LIMIT);
+      .slice(0, recentConversationLimit);
     const combined = [...favorites, ...recent];
     return {
-      items: combined.slice(0, RECENT_CONVERSATIONS_LIMIT),
-      hasMore: hasMoreConversations || combined.length > RECENT_CONVERSATIONS_LIMIT,
+      items: combined.slice(0, recentConversationLimit),
+      hasMore: hasMoreConversations || combined.length > recentConversationLimit,
     };
-  }, [favoriteIds, hasMoreConversations, liveInstances, notebookId, storedConversations, storedFavorites, threadTombstones, startedLiveThreads]);
+  }, [favoriteIds, hasMoreConversations, liveInstances, notebookId, recentConversationLimit, storedConversations, storedFavorites, threadTombstones, startedLiveThreads]);
 
   useLayoutEffect(() => {
     const section = sectionRef.current;
@@ -443,6 +467,31 @@ export function AgentTasksSection({
           {t('memo.fileTree.agentsEmpty')}
         </div>
       ))}
+      <Dialog open={conversationLimitDialogOpen} onOpenChange={setConversationLimitDialogOpen}>
+        <DialogContent className="rounded-xl border border-[var(--border-popup)] bg-[var(--card)] shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
+          <DialogHeader><DialogTitle>{t('memo.fileTree.configureConversationCount')}</DialogTitle></DialogHeader>
+          <form onSubmit={saveConversationLimit} className="space-y-4">
+            <label className="block space-y-2 text-sm text-[var(--muted-foreground)]">
+              <span>{t('memo.fileTree.conversationCountLabel')}</span>
+              <Input
+                autoFocus
+                type="number"
+                min={1}
+                max={50}
+                step={1}
+                required
+                value={conversationLimitDraft}
+                onChange={(event) => setConversationLimitDraft(event.target.value)}
+              />
+              <span className="block text-xs">{t('memo.fileTree.conversationCountHint')}</span>
+            </label>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setConversationLimitDialogOpen(false)}>{t('common.cancel')}</Button>
+              <Button type="submit">{t('document.version.confirm')}</Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
       <Dialog open={renameTarget !== null} onOpenChange={(open) => !open && !renameSaving && setRenameTarget(null)}>
         <DialogContent className="rounded-xl border border-[var(--border-popup)] bg-[var(--card)] shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
           <DialogHeader><DialogTitle>{t('agent.chat.conversation.rename')}</DialogTitle></DialogHeader>

@@ -140,11 +140,9 @@ function createUserMessageAttachments(
     const icon = document.createElement("span");
     icon.className = "agent-thread-card__message-attachment-icon";
     icon.append(createLucideIcon(ImageIcon));
-    const label = document.createElement("span");
-    label.className = "agent-thread-card__message-attachment-label";
-    label.textContent = attachment.name;
-    label.title = attachment.name;
-    card.append(icon, label);
+    // 按图片消息的形态处理：chip 里只有缩略图/图标，不铺文件名文本，
+    // 文件名与路径只进 title / aria-label（读屏与 hover 可查）。
+    card.append(icon);
     container.append(card);
 
     if (

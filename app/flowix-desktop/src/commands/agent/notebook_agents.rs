@@ -141,32 +141,28 @@ fn find_markdown_file(directory: &Path, lower_name: &str, upper_name: &str) -> O
 }
 
 fn parse_frontmatter(content: &str) -> (BTreeMap<String, String>, String) {
-    let normalized = content.replace("\r\n", "\n");
-    if !normalized.starts_with("---\n") {
-        return (BTreeMap::new(), normalized.trim().to_string());
+    match super::skill_frontmatter::parse(content) {
+        Ok((header, body)) => {
+            let fields = header
+                .into_iter()
+                .filter_map(|(key, value)| {
+                    let key = key.as_str()?.to_string();
+                    let value = match value {
+                        serde_yaml::Value::String(text) => text,
+                        serde_yaml::Value::Bool(value) => value.to_string(),
+                        serde_yaml::Value::Number(value) => value.to_string(),
+                        _ => return None,
+                    };
+                    Some((key, value))
+                })
+                .collect();
+            (fields, body)
+        }
+        Err(_) => (
+            BTreeMap::new(),
+            content.replace("\r\n", "\n").trim().to_string(),
+        ),
     }
-    let rest = &normalized[4..];
-    let Some(end) = rest.find("\n---\n") else {
-        return (BTreeMap::new(), normalized.trim().to_string());
-    };
-    let raw_frontmatter = &rest[..end];
-    let body = &rest[end + 5..];
-    let frontmatter = raw_frontmatter
-        .lines()
-        .filter_map(|line| {
-            let (key, raw_value) = line.split_once(':')?;
-            let key = key.trim();
-            if key.is_empty() {
-                return None;
-            }
-            Some((key.to_string(), decode_scalar(raw_value.trim())))
-        })
-        .collect();
-    (frontmatter, body.trim().to_string())
-}
-
-fn decode_scalar(value: &str) -> String {
-    serde_json::from_str::<String>(value).unwrap_or_else(|_| value.to_string())
 }
 
 fn encode_scalar(value: &str) -> String {

@@ -77,7 +77,8 @@ describe("createRuntimeInfoRequester", () => {
     );
 
     await expect(request?.()).resolves.toMatchObject({ sessionId: "native-pi-session" });
-    expect(mocks.getPiSessionId).toHaveBeenCalledWith("thread-1");
+    // 实现改为直接读会话页 revision 里的原生 sessionId，不再反查 threadId 映射。
+    expect(mocks.getPiSessionId).not.toHaveBeenCalled();
   });
 
   it("resolves null without invoking when the thread id is missing for thread-scoped runtimes", async () => {

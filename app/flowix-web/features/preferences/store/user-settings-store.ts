@@ -77,6 +77,13 @@ function normalizeMemoListView(value: unknown): MemoListView {
   return DEFAULT_USER_SETTINGS.memoListView;
 }
 
+function normalizeRecentAgentConversationsLimit(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return DEFAULT_USER_SETTINGS.recentAgentConversationsLimit;
+  }
+  return Math.min(50, Math.max(1, Math.floor(value)));
+}
+
 /**
  * 偏好设置全局单例 store。
  *
@@ -111,6 +118,9 @@ function mergeSettings(base: UserSettings, updates: UserSettingsUpdate): UserSet
     memoListView: normalizeMemoListView(updates.memoListView ?? base.memoListView),
     autoOpenCreatedNotesInBrowser:
       updates.autoOpenCreatedNotesInBrowser ?? base.autoOpenCreatedNotesInBrowser,
+    recentAgentConversationsLimit: normalizeRecentAgentConversationsLimit(
+      updates.recentAgentConversationsLimit ?? base.recentAgentConversationsLimit,
+    ),
     shortcuts: { ...base.shortcuts, ...(updates.shortcuts ?? {}) },
     agents: {
       enabledByType: {
@@ -180,6 +190,7 @@ function sanitizeSettings(settings: UserSettings): UserSettings {
     region: sanitizeRegion(settings.region),
     memoListView: normalizeMemoListView(settings.memoListView),
     autoOpenCreatedNotesInBrowser: settings.autoOpenCreatedNotesInBrowser !== false,
+    recentAgentConversationsLimit: normalizeRecentAgentConversationsLimit(settings.recentAgentConversationsLimit),
     shortcuts: { ...DEFAULT_USER_SETTINGS.shortcuts, ...(settings.shortcuts ?? {}) },
     agents: sanitizeAgentsConfig(settings.agents),
     productUpdates: sanitizeProductUpdatesConfig(settings.productUpdates),
@@ -243,6 +254,7 @@ export interface UserSettingsUpdate {
   language?: AppLanguage;
   memoListView?: MemoListView;
   autoOpenCreatedNotesInBrowser?: boolean;
+  recentAgentConversationsLimit?: number;
   productUpdates?: Partial<ProductUpdatesConfig>;
   /**
    * 快捷键覆盖的浅合并 — 传入的字段会覆盖现有覆盖, 未提及的字段保留。

@@ -2,7 +2,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import type { NotebookChange } from '@platform/tauri/notebook-change-events';
-import { useNotebookTreeSections, type NotebookTreeSection } from './use-notebook-tree-sections';
+import { useNotebookTreeSections, type NotebookTreeHiddenSection, type NotebookTreeSection } from './use-notebook-tree-sections';
 
 const system = vi.hoisted(() => ({
   getNotebookFileTreePreferences: vi.fn(),
@@ -19,9 +19,11 @@ vi.mock('@platform/tauri/notebook-change-events', () => ({
 }));
 
 it('syncs preferences for the same notebook and ignores stale reads after an edit', async () => {
-  const order: NotebookTreeSection[] = ['agents', 'pinned', 'views', 'files', 'repositories'];
-  let resolveRead!: (preferences: { sectionOrder: NotebookTreeSection[]; hiddenSections: NotebookTreeSection[] }) => void;
-  const staleRead = new Promise<{ sectionOrder: NotebookTreeSection[]; hiddenSections: NotebookTreeSection[] }>((resolve) => { resolveRead = resolve; });
+  // 'more' 是新增的 section；顺序数组必须与 DEFAULT_TREE_SECTION_ORDER 等长，
+  // 否则归一化会补位，导致 update 后的期望值与实际值长度不一致。
+  const order: NotebookTreeSection[] = ['agents', 'pinned', 'views', 'files', 'repositories', 'more'];
+  let resolveRead!: (preferences: { sectionOrder: NotebookTreeSection[]; hiddenSections: NotebookTreeHiddenSection[] }) => void;
+  const staleRead = new Promise<{ sectionOrder: NotebookTreeSection[]; hiddenSections: NotebookTreeHiddenSection[] }>((resolve) => { resolveRead = resolve; });
   system.getNotebookFileTreePreferences.mockImplementation((id: string) => id === 'first'
     ? staleRead
     : Promise.resolve({ sectionOrder: order, hiddenSections: [] }));
@@ -30,7 +32,7 @@ it('syncs preferences for the same notebook and ignores stale reads after an edi
   const root = createRoot(host);
   const environment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
   environment.IS_REACT_ACT_ENVIRONMENT = true;
-  let update!: (order: NotebookTreeSection[], hidden: NotebookTreeSection[]) => void;
+  let update!: (order: NotebookTreeSection[], hidden: NotebookTreeHiddenSection[]) => void;
   function Observer({ id, name }: { id: string; name: string }) {
     const preferences = useNotebookTreeSections(id, true);
     if (name === 'guide') update = preferences.updateSections;

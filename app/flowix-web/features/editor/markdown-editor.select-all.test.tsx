@@ -136,6 +136,38 @@ describe('MarkdownEditor select all', () => {
     expect(editor!.isEditable).toBe(true);
   });
 
+  it('resumes saving after Chinese IME composition ends', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const onChange = vi.fn();
+      let editor: Editor | null = null;
+      await act(async () => {
+        root.render(
+          <ShortcutsProvider overrides={{}}>
+            <MarkdownEditor content="Before" onChange={onChange}
+              onBeforeCreate={instance => { editor = instance; }} />
+          </ShortcutsProvider>,
+        );
+      });
+      vi.setSystemTime(600);
+      act(() => {
+        editor!.view.dom.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+        editor!.commands.setTextSelection(editor!.state.doc.content.size - 1);
+        editor!.commands.insertContent('中文');
+        vi.advanceTimersByTime(300);
+      });
+      expect(onChange).not.toHaveBeenCalled();
+      act(() => {
+        editor!.view.dom.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '中文' }));
+        vi.advanceTimersByTime(300);
+      });
+      expect(onChange).toHaveBeenCalledWith('Before中文');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('coalesces continuous edits before serializing Markdown', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

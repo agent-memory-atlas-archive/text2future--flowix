@@ -100,33 +100,7 @@ fn hash_skill_tree(
 fn compatible_skill_contents(contents: &[u8], command_name: &str) -> Result<Vec<u8>, String> {
     let source = std::str::from_utf8(contents)
         .map_err(|error| format!("notebook Pi Skill is not valid UTF-8: {error}"))?;
-    let normalized = source.replace("\r\n", "\n");
-    let (frontmatter, body) = if let Some(rest) = normalized.strip_prefix("---\n") {
-        if let Some(end) = rest.find("\n---\n") {
-            (&rest[..end], &rest[end + 5..])
-        } else {
-            ("", normalized.as_str())
-        }
-    } else {
-        ("", normalized.as_str())
-    };
-    let mut lines = Vec::new();
-    let mut replaced = false;
-    for line in frontmatter.lines() {
-        if line
-            .split_once(':')
-            .is_some_and(|(key, _)| key.trim() == "name")
-        {
-            lines.push(format!("name: {command_name}"));
-            replaced = true;
-        } else if !line.trim().is_empty() {
-            lines.push(line.to_string());
-        }
-    }
-    if !replaced {
-        lines.insert(0, format!("name: {command_name}"));
-    }
-    Ok(format!("---\n{}\n---\n{}", lines.join("\n"), body).into_bytes())
+    crate::commands::agent::skill_frontmatter::render_with_name(source, command_name)
 }
 
 fn stage_skill(

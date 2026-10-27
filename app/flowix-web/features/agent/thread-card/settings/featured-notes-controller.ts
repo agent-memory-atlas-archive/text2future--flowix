@@ -10,11 +10,7 @@ import { parseTableDocumentAsync } from '@features/multidimensional-table/parse-
 import { toast } from '@/lib/toast';
 import { applyPopoverPosition, calculateAnchoredPopoverPosition } from '../popover/popover-position';
 import {
-  FEATURED_NOTE_MOBILE_PAGE_SIZE,
-  FEATURED_NOTE_PAGE_SIZE,
   appendFeaturedNoteIconContent,
-  getFeaturedNotePage,
-  getFeaturedNotePageCountForSize,
   getFeaturedPathNoteCards,
   readFeaturedNotesTableSelection,
   writeFeaturedNotesTableSelection,
@@ -22,21 +18,29 @@ import {
   type FeaturedNotesTableSelection,
 } from "@features/agent/thread-card/settings/featured-note-cards";
 
-const FEATURED_NOTES_MOBILE_QUERY = "(max-width: 767px)";
 const FEATURED_NOTES_VIEW_PICKER_WIDTH_PX = 272;
 const FEATURED_NOTES_VIEW_PICKER_PADDING_PX = 8;
 const FEATURED_NOTES_SCROLLBAR_HIDE_DELAY_MS = 700;
+export interface FeaturedNoteReference {
+  id: string;
+  filename: string;
+  title: string;
+  notebookId?: string;
+  relativePath?: string;
+}
+
 interface FeaturedNotesOptions {
   getNotebookId: () => string | null;
   t: (key: I18nKey, params?: I18nParams) => string;
   isDestroyed: () => boolean;
-  onSelectFeaturedNote?: (ref: { id: string; filename: string; title: string; notebookId?: string; relativePath?: string }) => void;
+  onSelectFeaturedNote?: (ref: FeaturedNoteReference) => void;
 }
 
 /** Owns note queries, filtering UI and its detached popover lifecycle. */
 export class FeaturedNotesController {
   private featuredNotesRequestId = 0;
   private featuredNotesViewportCleanup: (() => void) | null = null;
+  private featuredNotesPanel: HTMLElement | null = null;
   private scrollbarHideTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   constructor(private readonly options: FeaturedNotesOptions) {}
@@ -47,26 +51,46 @@ export class FeaturedNotesController {
   dispose(): void {
     this.disposed = true;
     this.featuredNotesRequestId += 1;
+    this.clearFeaturedNotesView();
+  }
+
+  clear(): void {
+    this.featuredNotesRequestId += 1;
+    this.clearFeaturedNotesView();
+  }
+
+  private clearFeaturedNotesView(): void {
     this.featuredNotesViewportCleanup?.();
+    this.featuredNotesViewportCleanup = null;
+    this.featuredNotesPanel?.remove();
+    this.featuredNotesPanel = null;
   }
 
   async appendFeaturedNotes(empty: HTMLElement): Promise<void> {
+    this.clearFeaturedNotesView();
+    const requestId = ++this.featuredNotesRequestId;
+    if (this.isDestroyed()) return;
     const notebookId = this.getCurrentNotebookId();
     if (!notebookId) return;
 
-    this.featuredNotesViewportCleanup?.();
-    empty.querySelector(".agent-thread-card__featured-notes")?.remove();
-    const requestId = ++this.featuredNotesRequestId;
     const selection = await readFeaturedNotesTableSelection(notebookId);
     if (this.isDestroyed() || requestId !== this.featuredNotesRequestId) return;
     const renderPanel = (notes: FeaturedNoteCard[]): void => {
-      if (this.isDestroyed() || requestId !== this.featuredNotesRequestId || !empty.isConnected) return;
-      let panel: HTMLElement;
-      panel = this.createFeaturedNotesElement(notes, selection, notebookId, () => {
-        panel.remove();
-        void this.appendFeaturedNotes(empty);
+      if (
+        this.isDestroyed()
+        || requestId !== this.featuredNotesRequestId
+        || this.getCurrentNotebookId() !== notebookId
+        || !empty.isConnected
+      ) return;
+      const panel: HTMLElement = this.createFeaturedNotesElement(notes, selection, notebookId, () => {
+        void this.refreshFeaturedNotes(empty, panel);
       });
-      empty.append(panel);
+      this.featuredNotesPanel = panel;
+      if (empty.classList.contains("agent-thread-card__empty--expanded")) {
+        empty.after(panel);
+      } else {
+        empty.append(panel);
+      }
     };
     if (!selection) {
       renderPanel([]);
@@ -84,6 +108,44 @@ export class FeaturedNotesController {
       // otherwise users cannot choose a table to recover the empty state.
       renderPanel([]);
     }
+  }
+
+  /** Refresh the selected table in place so the empty state never collapses while loading. */
+  private async refreshFeaturedNotes(empty: HTMLElement, currentPanel: HTMLElement): Promise<void> {
+    const requestId = ++this.featuredNotesRequestId;
+    const notebookId = this.getCurrentNotebookId();
+    if (!notebookId || this.isDestroyed()) return;
+
+    const selection = await readFeaturedNotesTableSelection(notebookId);
+    if (this.isDestroyed() || requestId !== this.featuredNotesRequestId) return;
+    let notes: FeaturedNoteCard[] = [];
+    if (selection) {
+      try {
+        const indexed = await notesClient.list(notebookId);
+        notes = getFeaturedPathNoteCards(
+          await this.loadSelectedTableNotes(notebookId, selection, indexed),
+          null,
+        );
+      } catch {
+        // Keep the existing cards visible until the next successful refresh.
+        return;
+      }
+    }
+    if (
+      this.isDestroyed()
+      || requestId !== this.featuredNotesRequestId
+      || this.getCurrentNotebookId() !== notebookId
+      || !empty.isConnected
+      || !currentPanel.isConnected
+    ) return;
+
+    this.featuredNotesViewportCleanup?.();
+    this.featuredNotesViewportCleanup = null;
+    const nextPanel: HTMLElement = this.createFeaturedNotesElement(notes, selection, notebookId, () => {
+      void this.refreshFeaturedNotes(empty, nextPanel);
+    });
+    currentPanel.replaceWith(nextPanel);
+    this.featuredNotesPanel = nextPanel;
   }
 
   private async loadSelectedTableNotes(notebookId: string, selection: FeaturedNotesTableSelection, indexed: Awaited<ReturnType<typeof notesClient.list>>) {
@@ -111,14 +173,25 @@ export class FeaturedNotesController {
     panel.className = "agent-thread-card__featured-notes";
     panel.setAttribute("aria-label", this.t("editor.threadCard.featuredNotes"));
 
-    let currentPage = 0;
-    const mobileQuery = window.matchMedia(FEATURED_NOTES_MOBILE_QUERY);
-    const getPageSize = (): number => mobileQuery.matches
-      ? FEATURED_NOTE_MOBILE_PAGE_SIZE
-      : FEATURED_NOTE_PAGE_SIZE;
+    const headingRow = document.createElement("div");
+    headingRow.className = "agent-thread-card__featured-notes-header";
+
+    const settingsButton = document.createElement("button");
+    settingsButton.type = "button";
+    settingsButton.className = "agent-thread-card__featured-notes-settings-button";
+    settingsButton.textContent = this.t("editor.threadCard.featuredNotes.settings");
+    const iconTemplate = document.createElement("template");
+    iconTemplate.innerHTML = renderToStaticMarkup(
+      createElement(ChevronRight, { size: 14, strokeWidth: 2, "aria-hidden": true }),
+    );
+    const settingsIcon = iconTemplate.content.firstElementChild;
+    if (settingsIcon) settingsButton.append(settingsIcon);
+    settingsButton.setAttribute("aria-expanded", "false");
+    headingRow.append(settingsButton);
 
     const navigation = document.createElement("div");
     navigation.className = "agent-thread-card__featured-notes-navigation";
+    navigation.hidden = true;
     const previousButton = this.createFeaturedNotesNavigationButton(
       "left",
       this.t("editor.threadCard.featuredNotes.previous"),
@@ -128,18 +201,21 @@ export class FeaturedNotesController {
       this.t("editor.threadCard.featuredNotes.next"),
     );
     navigation.append(previousButton, nextButton);
-    const settingsButton = document.createElement("button");
-    settingsButton.type = "button";
-    settingsButton.className = "agent-thread-card__featured-notes-settings-button";
-    settingsButton.textContent = this.t("editor.threadCard.featuredNotes.settings");
-    settingsButton.setAttribute("aria-expanded", "false");
     const settingsFooter = document.createElement("div");
     settingsFooter.className = "agent-thread-card__featured-notes-settings-footer";
-    settingsFooter.append(settingsButton, navigation);
+    settingsFooter.append(navigation);
 
-    const settingsPopover = this.createTableSelectionPopover(notebookId, selection, onFilterChange, () => {
-      setSettingsOpen(false);
-    });
+    const settingsPopover = this.createTableSelectionPopover(
+      notebookId,
+      selection,
+      () => {
+        // A save/create action can finish after a different empty surface has mounted.
+        if (this.isDestroyed() || this.featuredNotesPanel !== panel || !panel.isConnected) return;
+        setSettingsOpen(false);
+        onFilterChange();
+      },
+      () => setSettingsOpen(false),
+    );
     document.body.append(settingsPopover);
     const positionSettingsPopover = (): void => {
       if (settingsPopover.hidden || !settingsPopover.isConnected) return;
@@ -180,37 +256,36 @@ export class FeaturedNotesController {
 
     const list = document.createElement("div");
     list.className = "agent-thread-card__featured-notes-list";
-    panel.append(list);
-    panel.append(settingsFooter);
-
-    const renderPage = (): void => {
-      const pageSize = getPageSize();
-      const pageCount = getFeaturedNotePageCountForSize(notes.length, pageSize);
-      currentPage = Math.min(currentPage, pageCount - 1);
-      const pageNotes = getFeaturedNotePage(notes, currentPage, pageSize);
-      list.replaceChildren();
-      list.dataset.cardCount = String(pageNotes.length);
-      for (const note of pageNotes) {
-        list.append(this.createFeaturedNoteCard(note, notebookId));
-      }
-      previousButton.disabled = currentPage === 0;
-      nextButton.disabled = currentPage >= pageCount - 1;
-      previousButton.hidden = pageCount <= 1;
-      nextButton.hidden = pageCount <= 1;
+    list.setAttribute("role", "group");
+    list.setAttribute("aria-label", this.t("editor.threadCard.featuredNotes"));
+    list.append(headingRow);
+    for (const note of notes) {
+      list.append(this.createFeaturedNoteCard(note, notebookId));
+    }
+    panel.append(list, settingsFooter);
+    const updateNavigation = (): void => {
+      const maxScrollLeft = Math.max(0, list.scrollWidth - list.clientWidth);
+      const hasOverflow = maxScrollLeft > 1;
+      navigation.hidden = !hasOverflow;
+      settingsFooter.hidden = !hasOverflow;
+      previousButton.disabled = list.scrollLeft <= 1;
+      nextButton.disabled = list.scrollLeft >= maxScrollLeft - 1;
     };
-
+    const scrollList = (direction: -1 | 1): void => {
+      list.scrollBy({ left: direction * list.clientWidth, behavior: "smooth" });
+    };
     previousButton.addEventListener("click", (event) => {
       event.stopPropagation();
-      currentPage = Math.max(0, currentPage - 1);
-      renderPage();
+      scrollList(-1);
     });
     nextButton.addEventListener("click", (event) => {
       event.stopPropagation();
-      const pageCount = getFeaturedNotePageCountForSize(notes.length, getPageSize());
-      currentPage = Math.min(pageCount - 1, currentPage + 1);
-      renderPage();
+      scrollList(1);
     });
-    const handleViewportChange = (): void => renderPage();
+    list.addEventListener("scroll", updateNavigation, { passive: true });
+    const notesListResizeObserver = new ResizeObserver(updateNavigation);
+    notesListResizeObserver.observe(list);
+    updateNavigation();
     const handleWindowResize = (): void => positionSettingsPopover();
     const handleOutsidePointer = (event: PointerEvent): void => {
       if (settingsPopover.hidden) return;
@@ -225,13 +300,13 @@ export class FeaturedNotesController {
       event.preventDefault();
       setSettingsOpen(false, true);
     };
-    mobileQuery.addEventListener("change", handleViewportChange);
     window.addEventListener("resize", handleWindowResize);
     document.addEventListener("pointerdown", handleOutsidePointer);
     document.addEventListener("keydown", handleEscape);
     this.featuredNotesViewportCleanup = () => {
-      mobileQuery.removeEventListener("change", handleViewportChange);
       popoverResizeObserver.disconnect();
+      notesListResizeObserver.disconnect();
+      list.removeEventListener("scroll", updateNavigation);
       window.removeEventListener("resize", handleWindowResize);
       document.removeEventListener("pointerdown", handleOutsidePointer);
       document.removeEventListener("keydown", handleEscape);
@@ -244,7 +319,6 @@ export class FeaturedNotesController {
       settingsPopover.remove();
       this.featuredNotesViewportCleanup = null;
     };
-    renderPage();
     return panel;
   }
 
@@ -257,6 +331,8 @@ export class FeaturedNotesController {
     const popover = document.createElement("div");
     popover.className = "agent-thread-card__featured-notes-view-picker";
     popover.hidden = true;
+    const isCurrent = (): boolean => !this.isDestroyed()
+      && popover.isConnected && this.getCurrentNotebookId() === notebookId;
     popover.setAttribute("role", "dialog");
     popover.setAttribute("aria-label", this.t("editor.threadCard.featuredNotes.settingsTitle"));
     popover.addEventListener("pointerdown", (event) => event.stopPropagation());
@@ -294,6 +370,7 @@ export class FeaturedNotesController {
       }
       try {
         const docs = await files.listTableDocuments(notebookId);
+        if (!isCurrent()) return;
         const tables = docs.map((doc) => ({
             name: doc.name,
             selection: { relativePath: doc.relativePath, collectionId: doc.collectionId },
@@ -337,18 +414,23 @@ export class FeaturedNotesController {
           button.append(icon, label);
           button.setAttribute("aria-pressed", String(current?.relativePath === entry.selection.relativePath && current.collectionId === entry.selection.collectionId));
           button.addEventListener("mousedown", (event) => event.preventDefault());
-          button.addEventListener("click", async () => {
+          const saveSelection = async (): Promise<void> => {
             button.disabled = true;
             try {
               await writeFeaturedNotesTableSelection(notebookId, entry.selection);
-              onChange();
-            } catch { button.disabled = false; toast.error(this.t("editor.threadCard.featuredNotes.saveFailed")); }
-          });
+              if (isCurrent()) onChange();
+            } catch {
+              if (!isCurrent()) return;
+              button.disabled = false;
+              toast.error(this.t("editor.threadCard.featuredNotes.saveFailed"));
+            }
+          };
+          button.addEventListener("click", () => { void saveSelection(); });
           items.append(button);
         }
         status.remove();
       } catch {
-        status.textContent = this.t("editor.threadCard.featuredNotes.noTables");
+        if (isCurrent()) status.textContent = this.t("editor.threadCard.featuredNotes.noTables");
       }
     })();
     return popover;
@@ -360,7 +442,7 @@ export class FeaturedNotesController {
     create.className = "flex h-8 w-full items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] text-sm text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-50";
     create.classList.add("agent-thread-card__featured-notes-view-create");
     create.textContent = this.t("editor.threadCard.featuredNotes.createTable");
-    create.addEventListener("click", async () => {
+    create.addEventListener("click", () => {
       onCreateTable();
       const notebook = useNoteStore.getState().notebooks.find((item) => item.id === notebookId);
       if (!notebook || notebook.missing) return;
@@ -410,7 +492,9 @@ export class FeaturedNotesController {
     const card = document.createElement("button");
     card.type = "button";
     card.className = "agent-thread-card__featured-note";
-    card.setAttribute("aria-label", [note.title, note.name, note.description].filter(Boolean).join(" — "));
+    const descriptionText = note.description.trim()
+      || this.t("editor.threadCard.featuredNotes.useHint");
+    card.setAttribute("aria-label", [note.title, note.name, descriptionText].filter(Boolean).join(" — "));
 
     const icon = document.createElement("span");
     icon.className = "agent-thread-card__featured-note-icon";
@@ -424,11 +508,8 @@ export class FeaturedNotesController {
     title.textContent = note.title
       ? (note.name ? `${note.title} › ${note.name}` : note.title)
       : note.name;
-    const description = document.createElement("span");
-    description.className = "agent-thread-card__featured-note-description";
-    description.textContent = note.description;
-    content.append(title, description);
-    // 图标独占首行 (原先这一行右侧还有个「试试」按钮, 已移除)。
+    content.append(title);
+    // 图标和标题并排展示; 描述保留在 aria-label 中供辅助技术读取。
     card.append(icon, content);
 
     card.addEventListener("click", (event) => {

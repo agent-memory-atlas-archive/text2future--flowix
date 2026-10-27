@@ -21,6 +21,8 @@ import {
   subscribeAgentPersistenceError,
 } from "@features/agent/public/app-api";
 import { createLogger } from "@/lib/logger";
+import { createErrorReport, reportUncaughtError } from "@/lib/global-error";
+import { GlobalErrorToaster } from "./global-error-toaster";
 import { ActionableNoticeHost } from "@features/notifications/actionable-notice-host";
 import { translate, type AppLanguage } from "@/lib/i18n";
 
@@ -36,6 +38,14 @@ const NotebookSetupNoticeHost = lazy(() => import('@features/memo/components/not
   .then(module => ({ default: module.NotebookSetupNoticeHost })));
 
 const logger = createLogger("app");
+
+/**
+ * React 渲染错误已经由 ErrorBoundary 展示 fallback UI，这里只补上“留痕”：
+ * 进入全局错误缓冲，让崩溃可被诊断，但不额外弹 toast。
+ */
+function handleRenderError(error: Error): void {
+  reportUncaughtError(createErrorReport("boundary", error, "react-boundary"), { notify: false });
+}
 
 function removeAppLoading() {
   document.getElementById("app-loading")?.remove();
@@ -275,10 +285,11 @@ function App() {
   if (isPreferencesWindow) {
     const tab = hash.split("/")[1] || undefined;
     return (
-      <ErrorBoundary language={language}>
+      <ErrorBoundary language={language} onError={handleRenderError}>
         <I18nProvider language={language}>
           <AgentWorkspaceLifecycle />
           <AppToaster language={language} />
+          <GlobalErrorToaster />
           <ThemeProvider>
             <TooltipProvider>
               <ShortcutsProvider overrides={shortcutOverrides}>
@@ -296,12 +307,13 @@ function App() {
   }
 
   return (
-    <ErrorBoundary language={language} resetKeys={[hash]}>
+    <ErrorBoundary language={language} resetKeys={[hash]} onError={handleRenderError}>
       <I18nProvider language={language}>
         <ThemeProvider>
           <StartupGate>
             <AgentWorkspaceLifecycle deferUntilStage3 />
             <AppToaster language={language} />
+            <GlobalErrorToaster />
             <Suspense fallback={null}>
               <AgentWindowEffects />
             </Suspense>

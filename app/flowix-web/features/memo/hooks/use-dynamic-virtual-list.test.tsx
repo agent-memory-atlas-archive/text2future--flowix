@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { useDynamicVirtualList } from './use-dynamic-virtual-list';
+import { installLayoutStub, type LayoutStub } from '../../../test-support/layout-stub';
 
 const items = Array.from({ length: 13 }, (_, index) => ({
   id: `memo-${index}`,
@@ -104,10 +105,13 @@ function SelectionAfterPagingHarness({ items }: { items: TestMemo[] }) {
 }
 
 let root: Root | null = null;
+let layout: LayoutStub | null = null;
 
 afterEach(() => {
   act(() => root?.unmount());
   root = null;
+  layout?.restore();
+  layout = null;
   document.body.replaceChildren();
 });
 
@@ -143,6 +147,11 @@ describe('useDynamicVirtualList', () => {
     });
 
     const scroller = container.firstElementChild as HTMLDivElement;
+    // 虚拟列表靠元素尺寸换算 offset；jsdom 全 0 会让 scrollToOffset 归零，
+    // 必须给出行高与可视高度，滚动位置才可能被保持。
+    layout = installLayoutStub({ defaultBox: { width: 320, height: 100 } });
+    layout.setClientSize(scroller, { width: 320, height: 640 });
+    layout.setScrollSize(scroller, { height: 5_000 });
     scroller.scrollTop = 4_200;
     await act(async () => {
       scroller.dispatchEvent(new Event('scroll'));

@@ -773,6 +773,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       });
     };
     editorDom.addEventListener('compositionstart', handleCompositionStart);
+    editorDom.addEventListener('compositionend', handleCompositionEnd);
 
     const detachLinkHoverTooltip = attachLinkHoverTooltip(
       editor,

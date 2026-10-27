@@ -31,9 +31,9 @@ export function DeletePresetDialog({ preset, tableCount, busy = false, onCancel,
             type="button"
             disabled={busy}
             onClick={onConfirm}
-            className="flex h-[38px] flex-col items-center justify-center gap-0.5 rounded-xl border border-[var(--destructive)] px-3 py-0 text-center transition-colors hover:bg-[var(--destructive)]/5 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex h-[38px] flex-col items-center justify-center gap-0.5 rounded-xl border border-[var(--destructive)] bg-[var(--destructive)] px-3 py-0 text-center text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            <span className="text-sm text-[var(--destructive)]">{t('preferences.documentProperties.deleteConfirmAction')}</span>
+            <span className="text-sm text-white">{t('preferences.documentProperties.deleteConfirmAction')}</span>
           </button>
           <button
             type="button"

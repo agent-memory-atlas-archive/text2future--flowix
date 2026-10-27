@@ -18,13 +18,22 @@ const second: TableRecord = { id: 'second', note_path: 'second.md', updated_at: 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
+/**
+ * 用真实的 PointerEvent 而不是手工挂属性的 Event：拖拽协调器会读 `buttons`
+ * 判断“是否仍按着”，手工 Event 缺这个字段会让 pointermove 直接被忽略。
+ * jsdom 已实现 PointerEvent，无需再打补丁。
+ */
 function pointer(source: HTMLElement, type: string, x: number, y: number) {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperties(event, {
-    pointerId: { value: 1 },
-    button: { value: 0 },
-    clientX: { value: x },
-    clientY: { value: y },
+  const event = new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    pointerId: 1,
+    pointerType: 'mouse',
+    isPrimary: true,
+    button: 0,
+    buttons: type === 'pointerup' ? 0 : 1,
+    clientX: x,
+    clientY: y,
   });
   act(() => source.dispatchEvent(event));
 }
@@ -93,7 +102,7 @@ describe('TableKanbanView pointer movement', () => {
     expect(onOpenRecord).toHaveBeenCalledWith('first');
   });
 
-  it('resolves another lane and passes its select option to the move handler', () => {
+  it('resolves another lane and passes its select option to the move handler', async () => {
     container = document.createElement('div');
     root = createRoot(container);
     const onDropRecord = vi.fn();
@@ -107,12 +116,16 @@ describe('TableKanbanView pointer movement', () => {
     />));
 
     const source = container.querySelector<HTMLElement>('[data-kanban-record="first"]')!;
-    const destination = container.querySelector<HTMLElement>('[data-kanban-lane="done"]')!;
     Object.defineProperty(source, 'setPointerCapture', { configurable: true, value: vi.fn() });
-    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => destination });
+    // 重渲染会替换泳道节点，命中测试必须按选择器实时取，不能缓存引用。
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: () => container!.querySelector<HTMLElement>('[data-kanban-lane="done"]'),
+    });
 
     pointer(source, 'pointerdown', 10, 10);
     pointer(source, 'pointermove', 30, 30);
+    const destination = container.querySelector<HTMLElement>('[data-kanban-lane="done"]')!;
     const preview = destination.querySelector<HTMLElement>('[aria-hidden="true"]');
     expect(preview?.textContent).toContain('first.md');
     expect(preview?.classList.contains('opacity-50')).toBe(true);
@@ -122,7 +135,9 @@ describe('TableKanbanView pointer movement', () => {
     expect(floating?.classList.contains('opacity-50')).toBe(false);
     expect(floating?.style.left).toBe('44px');
     expect(floating?.style.top).toBe('44px');
-    pointer(source, 'pointerup', 30, 30);
+    pointer(container.querySelector<HTMLElement>('[data-kanban-record="first"]')!, 'pointerup', 30, 30);
+    // endDragSession 用 Promise.resolve().then() 派发 onDrop，必须让微任务跑完。
+    await act(async () => {});
 
     expect(onDropRecord).toHaveBeenCalledWith('first', 'done', null);
     expect(document.querySelector('[data-kanban-floating-preview]')).toBeNull();
@@ -151,22 +166,32 @@ describe('TableKanbanView pointer movement', () => {
       configurable: true,
       value: () => ({ top: 50, height: 20 }),
     });
-    let hit: HTMLElement = destination;
-    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => hit });
+    // 拖拽触发重渲染会把泳道整棵子树换成新节点，测试持有的引用会脱离文档
+    // （isConnected === false）。命中测试与断言都必须按选择器实时查询，
+    // 否则会对着一个已经不在页面上的节点断言“没有占位卡”。
+    let hitSelector = '[data-kanban-lane="done"]';
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: () => container!.querySelector<HTMLElement>(hitSelector),
+    });
 
     pointer(source, 'pointerdown', 10, 10);
     pointer(source, 'pointermove', 30, 30);
-    expect(destination.querySelector('.multidimensional-table__kanban-card[aria-hidden="true"]')).not.toBeNull();
+    const destinationLane = container.querySelector<HTMLElement>('[data-kanban-lane="done"]')!;
+    expect(
+      destinationLane.querySelector('.multidimensional-table__kanban-card[aria-hidden="true"]'),
+    ).not.toBeNull();
 
-    hit = source;
+    hitSelector = '[data-kanban-record="first"]';
     pointer(source, 'pointermove', 31, 30);
+    const liveSource = container.querySelector<HTMLElement>('[data-kanban-record="first"]')!;
     const sourceLane = container.querySelector<HTMLElement>('[data-kanban-lane="todo"]')!;
-    expect(source.classList.contains('opacity-50')).toBe(true);
+    expect(liveSource.classList.contains('opacity-50')).toBe(true);
     expect(sourceLane.querySelector('.multidimensional-table__kanban-card[aria-hidden="true"]')).toBeNull();
     expect(sourceLane.querySelector('.multidimensional-table__kanban-empty')).toBeNull();
   });
 
-  it('passes the insertion card when reordering within a lane', () => {
+  it('passes the insertion card when reordering within a lane', async () => {
     container = document.createElement('div');
     root = createRoot(container);
     const onDropRecord = vi.fn();
@@ -181,17 +206,20 @@ describe('TableKanbanView pointer movement', () => {
 
     const source = container.querySelector<HTMLElement>('[data-kanban-record="second"]')!;
     const beforeCard = container.querySelector<HTMLElement>('[data-kanban-record="first"]')!;
-    const lane = container.querySelector<HTMLElement>('[data-kanban-lane="todo"]')!;
     Object.defineProperty(source, 'setPointerCapture', { configurable: true, value: vi.fn() });
     Object.defineProperty(beforeCard, 'getBoundingClientRect', {
       configurable: true,
       value: () => ({ top: 20, height: 20 }),
     });
-    Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => lane });
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: () => container!.querySelector<HTMLElement>('[data-kanban-lane="todo"]'),
+    });
 
     pointer(source, 'pointerdown', 10, 10);
     pointer(source, 'pointermove', 30, 25);
-    pointer(source, 'pointerup', 30, 25);
+    pointer(container.querySelector<HTMLElement>('[data-kanban-record="second"]')!, 'pointerup', 30, 25);
+    await act(async () => {});
 
     expect(onDropRecord).toHaveBeenCalledWith('second', 'todo', 'first');
   });

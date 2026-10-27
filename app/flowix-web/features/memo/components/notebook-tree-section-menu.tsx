@@ -6,6 +6,7 @@ import {
   Check,
   ChevronRight,
   GalleryHorizontalEnd,
+  ListOrdered,
   MoreHorizontal,
   Plus,
   Table2,
@@ -96,6 +97,7 @@ interface NotebookTreeSectionMenuProps {
   sort?: FolderTreeSort;
   onSort?: (sort: FolderTreeSort) => void;
   onCustomizeDisplay?: (anchorRect: DOMRect) => void;
+  onConfigureAgentConversationCount?: () => void;
 }
 
 export function NotebookTreeSectionMenu({
@@ -114,6 +116,7 @@ export function NotebookTreeSectionMenu({
   sort,
   onSort,
   onCustomizeDisplay,
+  onConfigureAgentConversationCount,
 }: NotebookTreeSectionMenuProps) {
   const { t } = useI18n();
   const [sortSubmenuOpen, setSortSubmenuOpen] = useState(false);
@@ -288,7 +291,13 @@ export function NotebookTreeSectionMenu({
             )}
           </div>
         )}
-        {(hasActionsAfterMovement || onCustomizeDisplay || onHideSection) && <DropdownMenuSeparator />}
+        {(hasActionsAfterMovement || onCustomizeDisplay || onHideSection || onConfigureAgentConversationCount) && <DropdownMenuSeparator />}
+        {onConfigureAgentConversationCount && (
+          <DropdownMenuItem onClick={onConfigureAgentConversationCount} className={itemClassName}>
+            <ListOrdered className="h-3.5 w-3.5" aria-hidden="true" />
+            {t('memo.fileTree.configureConversationCount')}
+          </DropdownMenuItem>
+        )}
         {onHideSection && (
           <DropdownMenuItem onClick={onHideSection} className={itemClassName}>
             <EyeSlashIcon className="h-3.5 w-3.5" aria-hidden="true" />

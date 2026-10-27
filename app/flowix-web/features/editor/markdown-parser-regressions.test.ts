@@ -142,3 +142,61 @@ describe('worker parses content that previously forced the browser parser', () =
     expect(JSON.stringify(document)).toContain('noteReference');
   });
 });
+
+describe('ordered list continuation text preservation', () => {
+  it.each(['1) 第一项\n2) 第二项', '7) 第一项\n8) 第二项'])(
+    'continues to parse parenthesized ordered list markers: %s', source => {
+      const editor = createEditor(source);
+      const worker = parseInWorker(source);
+      expect(editor.getJSON()).toEqual(createEditor(worker).getJSON());
+      expect(editor.state.doc.firstChild?.type.name).toBe('orderedList');
+      expect(editor.state.doc.firstChild?.attrs.start).toBe(Number.parseInt(source, 10));
+      expect(editor.state.doc.textContent).toContain('第一项');
+      expect(editor.state.doc.textContent).toContain('第二项');
+      expect(createEditor(editor.getMarkdown()).getJSON()).toEqual(editor.getJSON());
+    },
+  );
+
+  it.each([' ', '\t', '　', '  ', '   '].flatMap(indent =>
+    ['\n', '\r\n'].map(newline => ({ indent, newline })),
+  ))('preserves Chinese initials with $indent indentation and $newline endings', ({ indent, newline }) => {
+    const lines = ['业务组件：凭证引擎', '能力中心：表单', '基础框架：门户'];
+    const source = ['3. 三大稳态', ...lines.map(line => indent + line)].join(newline);
+    const worker = parseInWorker(source);
+    const editor = createEditor(source);
+    expect(editor.getJSON()).toEqual(createEditor(worker).getJSON());
+    for (const line of lines) expect(editor.state.doc.textContent).toContain(line);
+    const saved = editor.getMarkdown();
+    const restored = createEditor(saved);
+    expect(restored.getJSON()).toEqual(editor.getJSON());
+    for (const line of lines) expect(saved).toContain(line);
+  });
+
+  it('keeps multi-digit numbering, mixed nested lists and fenced code indentation', () => {
+    const source = [
+      '10. 父级',
+      '    1. 子级',
+      '       业务组件',
+      '       - 无序子级',
+      '    2. 第二子级',
+      '11. 代码',
+      '',
+      '    ```text',
+      '        保留四空格',
+      '    ```',
+    ].join('\n');
+    const editor = createEditor(source);
+    expect(editor.getJSON()).toEqual(createEditor(parseInWorker(source)).getJSON());
+    const first = editor.state.doc.firstChild!;
+    expect(first.attrs.start).toBe(10);
+    expect(first.firstChild!.lastChild!.type.name).toBe('orderedList');
+    expect(editor.state.doc.textContent).toContain('业务组件');
+    expect(editor.state.doc.textContent).toContain('无序子级');
+    let code = '';
+    editor.state.doc.descendants(node => {
+      if (node.type.name === 'codeBlock') code = node.textContent;
+    });
+    expect(code).toBe('    保留四空格');
+    expect(createEditor(editor.getMarkdown()).getJSON()).toEqual(editor.getJSON());
+  });
+});

@@ -45,6 +45,14 @@
   filter: drop-shadow(0 0 5px color-mix(in oklch, var(--brand) 44%, transparent));
 }
 
+.plugin-markmap-canvas__svg .markmap-foreign,
+.plugin-markmap-canvas__svg .markmap-foreign > div,
+.plugin-markmap-canvas__svg .markmap-foreign > div > div {
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
 .plugin-markmap-canvas__svg .markmap-foreign > div > div {
   padding: 3px 5px;
   border-radius: 6px;

@@ -1,5 +1,5 @@
 import { Fragment } from 'react';
-import { Check, ChevronRight, Ellipsis, Palette } from 'lucide-react';
+import { Check, ChevronRight, Ellipsis, Globe, Palette } from 'lucide-react';
 import { LinkSimpleIcon, FolderOpenIcon, TrashSimpleIcon } from '@phosphor-icons/react';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@shared/ui/dropdown-menu';
 import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
@@ -41,7 +41,17 @@ export function ExternalPathDisplay({ path }: { path: string }) {
   );
 }
 
-export function SurfaceHeaderIcon({ icon }: { icon?: string | null }) {
+export function SurfaceHeaderIcon({ icon, web = false }: { icon?: string | null; web?: boolean }) {
+  if (web) {
+    const imageSource = icon && (/^https?:\/\//i.test(icon)
+      || (icon.length <= 64 * 1024 && /^data:image\/(?:svg\+xml|png|jpe?g|gif|webp|avif)(?:;[^,]*)?,/i.test(icon))) ? icon : null;
+    return <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
+      <Globe aria-hidden="true" className="h-3.5 w-3.5" />
+      {imageSource && <img key={imageSource} src={imageSource} alt=""
+        className="absolute h-3.5 w-3.5 rounded-sm object-contain"
+        onError={(event) => { event.currentTarget.style.display = 'none'; }} />}
+    </span>;
+  }
   if (!icon) return null;
   if (icon.startsWith('http://') || icon.startsWith('https://')) {
     return <img src={icon} alt="" className="h-4 w-4 shrink-0 rounded-sm object-contain" />;

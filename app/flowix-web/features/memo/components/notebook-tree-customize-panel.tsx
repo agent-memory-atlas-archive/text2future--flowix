@@ -4,15 +4,15 @@ import { useI18n } from '@/lib/i18n';
 import { NotebookTreeCustomizeList } from './notebook-tree-customize-list';
 import { Popover, PopoverContent } from '@shared/ui/popover';
 import { DialogHeader, DialogTitle } from '@shared/ui/dialog';
-import type { NotebookTreeSection } from './use-notebook-tree-sections';
+import type { NotebookTreeHiddenSection, NotebookTreeSection } from './use-notebook-tree-sections';
 
 export interface NotebookTreeCustomizePanelHandle { open: (rect: DOMRect) => void }
 
 export function NotebookTreeCustomizePanel({ ref, sectionOrder, hiddenSections, onChange }: {
   ref: Ref<NotebookTreeCustomizePanelHandle>;
   sectionOrder: NotebookTreeSection[];
-  hiddenSections: NotebookTreeSection[];
-  onChange: (order: NotebookTreeSection[], hidden: NotebookTreeSection[]) => void;
+  hiddenSections: NotebookTreeHiddenSection[];
+  onChange: (order: NotebookTreeSection[], hidden: NotebookTreeHiddenSection[]) => void;
 }) {
   const { t } = useI18n();
   const [customizeOpen, setCustomizeOpen] = useState(false);

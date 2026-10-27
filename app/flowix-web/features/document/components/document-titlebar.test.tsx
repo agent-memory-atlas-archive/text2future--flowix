@@ -55,6 +55,20 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove(); })
 
 for (const [platform, Titlebar] of [['mac', DocumentTitlebarMac], ['windows', DocumentTitlebarWin]] as const) {
   describe(`${platform} document titlebar`, () => {
+    it('keeps a web icon visible when the favicon fails to load', async () => {
+      props.document.target = null;
+      props.navigation.title = '技能市场';
+      props.navigation.icon = 'https://skills.flowix.cc/favicon.ico';
+      props.onToggleWebAddressBar = vi.fn();
+      await act(async () => root.render(<Titlebar {...props} />));
+      const image = container.querySelector<HTMLImageElement>('img[src="https://skills.flowix.cc/favicon.ico"]')!;
+      expect(image).not.toBeNull();
+      expect(image.parentElement!.querySelector('svg')).not.toBeNull();
+      await act(async () => image.dispatchEvent(new Event('error')));
+      expect(image.style.display).toBe('none');
+      expect(image.parentElement!.querySelector('svg')).not.toBeNull();
+    });
+
     it.each(['table', 'media_library'] as const)('renders the selected %s folder preference without crashing', async (current) => {
       props.folderCollectionViewType = {
         current, onSelect: vi.fn(), isDefaultFolder: false, onToggleDefaultFolder: vi.fn(),

@@ -315,7 +315,12 @@ class StableCaretView {
     const elements = new Set<Element>([this.view.dom, ...this.view.dom.querySelectorAll('*')]);
     for (const element of this.observedElements) {
       if (!elements.has(element)) {
-        this.resizeObserver?.unobserve(element);
+        // jsdom 与部分第三方 ResizeObserver polyfill 只实现 observe/disconnect。
+        // 缺 unobserve 时直接调用会让 MutationObserver 回调抛错，并中断整次布局同步；
+        // 这里降级为「不解除观察」——元素已脱离 DOM，多留一条观察记录无副作用。
+        if (typeof this.resizeObserver?.unobserve === 'function') {
+          this.resizeObserver.unobserve(element);
+        }
         this.observedElements.delete(element);
       }
     }

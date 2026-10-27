@@ -79,7 +79,7 @@ describe('PluginArtifactRenderer markmap canvas', () => {
       duration: 260,
       fitRatio: 0.88,
       maxInitialScale: 1.2,
-      maxWidth: 360,
+      maxWidth: 560,
       spacingHorizontal: 92,
       spacingVertical: 10,
     });

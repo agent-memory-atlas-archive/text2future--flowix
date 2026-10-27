@@ -516,7 +516,7 @@ mod tests {
         };
         let browser_lease = WatchLease {
             window_label: "browser".to_string(),
-            root_path: root,
+            root_path: root.clone(),
         };
 
         assert!(!should_ignore_path(&hidden, &notebook_lease));

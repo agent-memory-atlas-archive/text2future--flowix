@@ -3,6 +3,20 @@ import { AppServer } from '../src/index.js'
 import { SkillCatalogService } from '../src/protocol.js'
 
 describe('skills/list protocol', () => {
+  it.each(['registry', 'native'])('preserves source path and displayName in the %s thread projection', async (mode) => {
+    const skill = {
+      name: 'story-long-analyze', description: 'Analyze', displayName: '长篇小说拆文',
+      path: '/notebook/.agents/skills/story-long-analyze/SKILL.md', scope: 'repo',
+    }
+    const catalog = new SkillCatalogService({ get: (name: string) => name === 'skills'
+      ? { list: async () => [skill] } : undefined }, {
+      resolveAgent: async () => ({ session: { header: { cwd: '/notebook' } } }),
+    }) as any
+    catalog.dshSessionSkillCatalog = async () => mode === 'native'
+      ? { list: async () => ({ skills: [skill] }) } : undefined
+    expect((await catalog.listForThread('thread-1')).skills).toEqual([skill])
+  })
+
   it('groups normalized metadata by cwd, isolates registry errors and caches reads', async () => {
     const calls: string[] = []
     const registry = {

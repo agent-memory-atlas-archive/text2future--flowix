@@ -929,7 +929,7 @@ export function DocumentListView({ listContext, mediaLibrary = false, workDocume
         </DialogHeader>
         <div className="mt-4 flex justify-end gap-2">
           <Button type="button" variant="ghost" size="sm" className="rounded-lg" disabled={deletingMedia} onClick={() => setMediaToDelete(null)}>{t('dialog.cancel')}</Button>
-          <Button type="button" variant="outline" size="sm" disabled={deletingMedia} onClick={() => void confirmDeleteMedia()} className="rounded-lg hover:border-[var(--destructive)] hover:bg-transparent hover:text-[var(--destructive)]">{t('dialog.delete')}</Button>
+          <Button type="button" variant="outline" size="sm" disabled={deletingMedia} onClick={() => void confirmDeleteMedia()} className="rounded-lg border-[var(--destructive)] bg-[var(--destructive)] text-white hover:opacity-90">{t('dialog.delete')}</Button>
         </div>
       </DialogContent>
     </Dialog>}

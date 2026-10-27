@@ -10,8 +10,7 @@ import type {
 import type { AgentConversationInstance } from '@features/agent/store/agent-conversation-types';
 import { normalizeBackendInstance } from '@features/agent/store/conversation-slice';
 
-export const RECENT_CONVERSATIONS_LIMIT = 10;
-const PAGE_SIZE = RECENT_CONVERSATIONS_LIMIT;
+export const RECENT_CONVERSATIONS_LIMIT = 6;
 
 type ListPage = (
   query: AgentConversationListQuery,
@@ -39,7 +38,9 @@ export async function loadRecentAgentConversations(
   listPage: ListPage,
   isActive: () => boolean = () => true,
   onHasMoreChange?: (hasMore: boolean) => void,
+  limit = RECENT_CONVERSATIONS_LIMIT,
 ): Promise<AgentConversationInstance[]> {
+  const safeLimit = Math.min(50, Math.max(1, Math.floor(limit)));
   let snapshot = EMPTY_CONVERSATION_PAGE_STATE;
   let recent: AgentConversationInstance[] = [];
   let cursor: AgentConversationCursor | null = null;
@@ -47,7 +48,7 @@ export async function loadRecentAgentConversations(
   while (isActive()) {
     let page: AgentConversationListPage;
     try {
-      page = await listPage({ notebookId, agentType: null, cursor }, PAGE_SIZE);
+      page = await listPage({ notebookId, agentType: null, cursor }, safeLimit);
     } catch {
       break; // Keep any already loaded rows when a later page fails.
     }
@@ -59,9 +60,9 @@ export async function loadRecentAgentConversations(
 
       snapshot = mergeConversationPage(snapshot, [instance]);
       recent = snapshot.orderedIdentities.map((id) => snapshot.itemsByIdentity[id]);
-      if (recent.length > RECENT_CONVERSATIONS_LIMIT) {
+      if (recent.length > safeLimit) {
         onHasMoreChange?.(true);
-        return recent.slice(0, RECENT_CONVERSATIONS_LIMIT);
+        return recent.slice(0, safeLimit);
       }
     }
 
@@ -70,5 +71,5 @@ export async function loadRecentAgentConversations(
   }
 
   onHasMoreChange?.(false);
-  return recent.slice(0, RECENT_CONVERSATIONS_LIMIT);
+  return recent.slice(0, safeLimit);
 }

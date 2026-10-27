@@ -714,25 +714,28 @@ export const useAgentDataStore = create<AgentDataStoreState>()(
         },
       })),
 
-      invalidateSkillCatalog: (agentType, notebookId) => set((state) => {
-        const current = state.agents[agentType].catalog.skillsByNotebookId[notebookId];
-        if (!current) return state;
-        return {
-          agents: {
-            ...state.agents,
-            [agentType]: {
-              ...state.agents[agentType],
-              catalog: {
-                ...state.agents[agentType].catalog,
-                skillsByNotebookId: {
-                  ...state.agents[agentType].catalog.skillsByNotebookId,
-                  [notebookId]: { ...current, updatedAt: 0 },
+      invalidateSkillCatalog: (agentType, notebookId) => {
+        pendingSkillLoads.delete(skillLoadKey(agentType, notebookId));
+        set((state) => {
+          const current = state.agents[agentType].catalog.skillsByNotebookId[notebookId];
+          if (!current) return state;
+          return {
+            agents: {
+              ...state.agents,
+              [agentType]: {
+                ...state.agents[agentType],
+                catalog: {
+                  ...state.agents[agentType].catalog,
+                  skillsByNotebookId: {
+                    ...state.agents[agentType].catalog.skillsByNotebookId,
+                    [notebookId]: { ...current, updatedAt: 0 },
+                  },
                 },
               },
             },
-          },
-        };
-      }),
+          };
+        });
+      },
 
       loadModelCatalog: (agentType, loader, options) => {
         const cached = get().agents[agentType].catalog.models;
@@ -794,12 +797,16 @@ export const useAgentDataStore = create<AgentDataStoreState>()(
           });
         }
 
-        const request = loader()
+        const request: Promise<AgentCatalogSkill[]> = loader()
           .then((items) => {
-            get().setSkillCatalog(agentType, notebookId, items);
+            if (pendingSkillLoads.get(key) === request) {
+              get().setSkillCatalog(agentType, notebookId, items);
+            }
             return items;
           })
-          .finally(() => pendingSkillLoads.delete(key));
+          .finally(() => {
+            if (pendingSkillLoads.get(key) === request) pendingSkillLoads.delete(key);
+          });
         pendingSkillLoads.set(key, request);
         return request;
       },

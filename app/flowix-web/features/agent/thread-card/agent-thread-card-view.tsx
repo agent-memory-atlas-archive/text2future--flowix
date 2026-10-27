@@ -499,6 +499,11 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
         this.composerAddMenu?.syncSettingsSubmenuState(open, anchor),
       // 常用笔记卡片 → 直接注入 composer 输入框, 与文档引用走同一条路径。
       onSelectFeaturedNote: (ref) => this.injectMemoReference(ref),
+      onSelectEmptyPrompt: (prompt) => {
+        this.composerController?.setHistoryValue(prompt, { persistDraft: true });
+      },
+      onSelectEmptySkill: (skill) => this.composerController?.selectSkill(skill),
+      onOpenEmptySkills: () => this.composerController?.openSlashMenu(),
       toast: (kind, message) => toast[kind](message),
     });
     const composerModelButton = this.externalAgentSettings.createComposerModelButton();
@@ -635,7 +640,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       topHistoryLoadThresholdPx: TOP_HISTORY_LOAD_THRESHOLD_PX,
       scrollDeltaEpsilonPx: SCROLL_DELTA_EPSILON_PX,
       onAtBottomChange: (atBottom) => {
-        domParts.scrollToLatestButton.hidden = atBottom;
+        domParts.scrollToLatestButton.hidden = atBottom || this.currentMessages().length === 0;
       },
       isDestroyed: () => this.isDestroyed,
       isCollapsed: () => this.collapsed,
@@ -694,9 +699,7 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
       },
       listCodexSkills: async () => {
         if (this.typeKey !== "codex") return [];
-        const ensured = await this.ensureCodexCommandConversation("/skill");
-        const cwd = ensured.runtimeConfig.workspaceSnapshot?.cwd ?? ensured.runtimeConfig.cwd;
-        return listCodexSkills(cwd ?? "");
+        return listCodexSkills(this.notebookPath ?? "");
       },
       listPiSkills: async () => {
         if (this.typeKey !== "pi") return [];
@@ -1852,31 +1855,6 @@ export class AgentThreadCardView implements ProseMirrorNodeView {
   private async ensureDshCommandConversation(command: string) {
     if (this.typeKey !== "dsh") {
       throw new Error("This slash command is only available for DSH");
-    }
-    return ensureAgentThreadCardConversation({
-      prompt: command,
-      fallbackTitle: this.t("editor.threadCard.title"),
-      typeKey: this.typeKey,
-      currentThreadId: this.threadId,
-      currentInstanceId: this.instanceId,
-      currentTitle: this.instance?.title ?? "",
-      runtimeHandleId: this.runtimeHandleId,
-      source: getCurrentThreadCardSource(),
-      buildTitle,
-      onThreadBound: (binding) => {
-        if (this.isDestroyed) return;
-        this.updateAttrs({
-          instanceId: binding.instanceId,
-          threadId: binding.threadId,
-          typeKey: binding.typeKey,
-        });
-      },
-    });
-  }
-
-  private async ensureCodexCommandConversation(command: string) {
-    if (this.typeKey !== "codex") {
-      throw new Error("This slash command is only available for Codex");
     }
     return ensureAgentThreadCardConversation({
       prompt: command,

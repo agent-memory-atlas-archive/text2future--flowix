@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MessageViewportController } from "@features/agent/thread-card/messages/message-viewport-controller";
 
-function createController() {
+function createController(onAtBottomChange?: (atBottom: boolean) => void) {
   const body = document.createElement("div");
   Object.defineProperties(body, {
     clientHeight: { configurable: true, value: 400 },
@@ -12,6 +12,7 @@ function createController() {
     body,
     controller: new MessageViewportController({
       body,
+      onAtBottomChange,
       bottomFollowThresholdPx: 64,
       topHistoryLoadThresholdPx: 64,
       scrollDeltaEpsilonPx: 2,
@@ -83,4 +84,47 @@ it("does not restore a request-time position after a failed history load", () =>
   controller.handleScroll();
   controller.applyAfterRender({ isLoading: false, ...controller.captureRenderScrollState() });
   expect(body.scrollTop).toBe(250);
+});
+
+it("updates bottom visibility after layout changes without a scroll event", async () => {
+  let notifyResize = () => {};
+  const observe = vi.fn();
+  const disconnect = vi.fn();
+  vi.stubGlobal("ResizeObserver", class {
+    constructor(callback: () => void) { notifyResize = callback; }
+    observe = observe;
+    disconnect = disconnect;
+  });
+  try {
+    const onAtBottomChange = vi.fn();
+    const { body, controller } = createController(onAtBottomChange);
+    expect(onAtBottomChange).toHaveBeenLastCalledWith(false);
+
+    // Expanding the viewport removes overflow without changing scrollTop.
+    Object.defineProperty(body, "clientHeight", { configurable: true, value: 1200 });
+    notifyResize();
+    expect(onAtBottomChange).toHaveBeenLastCalledWith(true);
+
+    const list = document.createElement("div");
+    body.append(list);
+    await Promise.resolve();
+    expect(observe).toHaveBeenCalledWith(list);
+
+    // Content growing beyond the viewport makes the button useful again.
+    Object.defineProperty(body, "scrollHeight", { configurable: true, value: 1600 });
+    notifyResize();
+    expect(onAtBottomChange).toHaveBeenLastCalledWith(false);
+    body.scrollTop = 400;
+    notifyResize();
+    expect(onAtBottomChange).toHaveBeenLastCalledWith(true);
+
+    controller.dispose();
+    expect(disconnect).toHaveBeenCalled();
+    observe.mockClear();
+    body.append(document.createElement("div"));
+    await Promise.resolve();
+    expect(observe).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

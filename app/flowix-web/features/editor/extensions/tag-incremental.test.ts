@@ -9,6 +9,13 @@ import { Tag, createTagDecorations, createTagDecorationPlugin, tagDecorationPlug
 const schema = getSchema([StarterKit, Tag]);
 const p = (text: string) => schema.node('paragraph', null, text ? schema.text(text) : undefined);
 const positions = (state: EditorState) => tagDecorationPluginKey.getState(state)!.find().map(({ from, to }) => [from, to]);
+
+/**
+ * 每个 tag 现在产出 4 条 inline decoration：prefix 与 content 各有一层文字
+ * span 和一层背景框 span（见 tag.ts 里 nodeName 分层的注释）。
+ * 断言按“tag 数 × 4”写，避免以后再加一层包装又要改数字。
+ */
+const DECORATIONS_PER_TAG = 4;
 function expectFullResult(state: EditorState) {
   expect(positions(state)).toEqual(createTagDecorations(state).find().map(({ from, to }) => [from, to]));
 }
@@ -27,7 +34,8 @@ describe('incremental tag decorations', () => {
     apply(state.tr.split(5));
     apply(state.tr.join(state.doc.child(0).nodeSize));
     apply(state.tr.replaceWith(0, state.doc.content.size, [p('#new'), schema.node('codeBlock', null, schema.text('#code'))]));
-    expect(positions(state)).toHaveLength(3);
+    // 段落里 1 个 tag；codeBlock 内的 #code 不算。
+    expect(positions(state)).toHaveLength(DECORATIONS_PER_TAG);
   });
 
   it('updates block type changes and tags around inline hard breaks', () => {
@@ -36,7 +44,7 @@ describe('incremental tag decorations', () => {
       p('plain'),
     ]), plugins: [createTagDecorationPlugin()] });
     expectFullResult(state);
-    expect(positions(state)).toHaveLength(6);
+    expect(positions(state)).toHaveLength(2 * DECORATIONS_PER_TAG);
     state = state.apply(state.tr.setBlockType(0, state.doc.child(0).nodeSize, schema.nodes.codeBlock));
     expectFullResult(state);
     expect(positions(state)).toHaveLength(0);

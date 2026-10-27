@@ -1,10 +1,10 @@
-use std::path::Path;
-
 use serde_json::Value;
+use std::path::Path;
 use tauri::State;
 
-use crate::commands::helpers::is_registered_notebook_root;
+use super::skill_package::*;
 
+use crate::commands::helpers::is_registered_notebook_root;
 /// Return Codex metadata resolved for a registered notebook root.
 #[tauri::command]
 pub async fn codex_project_capabilities(
@@ -19,6 +19,19 @@ pub async fn codex_project_capabilities(
     state
         .codex_app_server
         .project_capabilities(path, force_reload.unwrap_or(false))
+        .await
+}
+
+#[tauri::command]
+pub async fn codex_project_skills(
+    cwd: String,
+    force_reload: Option<bool>,
+    state: State<'_, crate::app::state::AppState>,
+) -> Result<Value, String> {
+    let path = registered_root(&cwd, &state)?;
+    state
+        .codex_app_server
+        .project_skills(path, force_reload.unwrap_or(false))
         .await
 }
 
@@ -105,6 +118,9 @@ pub async fn codex_project_skill_write(
     name: String,
     description: String,
     instructions: String,
+    display_name: Option<String>,
+    skill_markdown: Option<String>,
+    files: Option<Vec<ProjectSkillResourceFile>>,
     state: State<'_, crate::app::state::AppState>,
 ) -> Result<Value, String> {
     let root = registered_root(&cwd, &state)?;
@@ -119,21 +135,70 @@ pub async fn codex_project_skill_write(
     if description.len() > 500 || instructions.is_empty() || instructions.len() > 100_000 {
         return Err("Skill description or instructions exceed the allowed size".to_string());
     }
-    let folder = root.join(".agents").join("skills").join(&name);
-    std::fs::create_dir_all(&folder)
-        .map_err(|e| format!("failed to create project Skill folder: {e}"))?;
-    if !crate::config::path_is_inside(&folder, root) {
-        return Err("project Skill folder resolves outside the notebook".to_string());
+    let display_name = display_name.unwrap_or_else(|| name.clone());
+    if display_name.trim().is_empty() || display_name.len() > 200 {
+        return Err("Skill display name is invalid".to_string());
     }
-    if folder.join("SKILL.md").exists() {
-        return Err("a project Skill with this name already exists".to_string());
+    let content = if let Some(markdown) = skill_markdown {
+        validate_source_skill_markdown(&name, &markdown)?;
+        markdown
+    } else {
+        let yaml_description = serde_json::to_string(&description).map_err(|e| e.to_string())?;
+        let yaml_display_name = serde_json::to_string(&display_name).map_err(|e| e.to_string())?;
+        format!(
+            "---\nname: {name}\ndisplay-name: {yaml_display_name}\ndescription: {yaml_description}\n---\n\n{}\n",
+            instructions.trim()
+        )
+    };
+    let resources = decode_skill_resources(files.unwrap_or_default())?;
+    let path = write_project_skill_bundle(root, &name, &content, &resources)?;
+    Ok(serde_json::json!({ "path": path }))
+}
+
+#[tauri::command]
+pub async fn codex_project_skill_install_zip(
+    cwd: String,
+    name: String,
+    archive: ProjectSkillArchive,
+    state: State<'_, crate::app::state::AppState>,
+) -> Result<Value, String> {
+    let root = registered_root(&cwd, &state)?.to_path_buf();
+    let url = validate_skill_archive_request(&name, &archive)?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|error| format!("failed to prepare Skill download: {error}"))?;
+    let mut response = client
+        .get(url)
+        .header(reqwest::header::CACHE_CONTROL, "no-cache")
+        .send()
+        .await
+        .map_err(|error| format!("failed to download Skill ZIP: {error}"))?;
+    if response.status() != reqwest::StatusCode::OK {
+        return Err(format!("Skill ZIP download returned {}", response.status()));
     }
-    let yaml_description = serde_json::to_string(&description).map_err(|e| e.to_string())?;
-    let content = format!(
-        "---\nname: {name}\ndescription: {yaml_description}\n---\n\n{}\n",
-        instructions.trim()
-    );
-    std::fs::write(folder.join("SKILL.md"), content)
-        .map_err(|e| format!("failed to write project Skill: {e}"))?;
-    Ok(serde_json::json!({ "path": folder.join("SKILL.md") }))
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_SKILL_PACKAGE_BYTES as u64)
+    {
+        return Err("Skill ZIP download exceeds the allowed size".to_string());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format!("failed to read Skill ZIP download: {error}"))?
+    {
+        if bytes.len().saturating_add(chunk.len()) > MAX_SKILL_PACKAGE_BYTES {
+            return Err("Skill ZIP download exceeds the allowed size".to_string());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let path = tokio::task::spawn_blocking(move || {
+        install_project_skill_zip(&root, &name, &bytes, &archive)
+    })
+    .await
+    .map_err(|error| format!("Skill ZIP installation failed: {error}"))??;
+    Ok(serde_json::json!({ "path": path }))
 }

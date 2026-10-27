@@ -8,10 +8,15 @@ import { initTauriClient } from "@platform/tauri/client";
 import { getPlatform } from "@/lib/shortcuts/platform";
 
 import { createLogger } from '@/lib/logger';
+import { installGlobalErrorHandlers } from '@/lib/global-error';
 const logger = createLogger('desktop entry');
 const isMac = navigator.platform.toUpperCase().includes("MAC");
 document.documentElement.dataset.platform = isMac ? "mac" : "non-mac";
 document.documentElement.dataset.os = getPlatform();
+
+// React 渲染之前的异常不经过任何错误边界；必须在启动最早期安装，
+// 否则初始化阶段的崩溃既无日志也无提示。
+installGlobalErrorHandlers();
 
 // The desktop bridge is initialized by the desktop entry.
 try {

@@ -4,13 +4,15 @@ import { subscribeNotebookChanges } from '@platform/tauri/notebook-change-events
 import { createLogger } from '@/lib/logger';
 
 const logger = createLogger('notebook-tree-sections');
-export type NotebookTreeSection = 'agents' | 'pinned' | 'views' | 'files' | 'repositories';
-const sectionListeners = new Set<(notebookId: string, order: NotebookTreeSection[], hidden: NotebookTreeSection[]) => void>();
+export type NotebookTreeSection = 'agents' | 'pinned' | 'views' | 'files' | 'repositories' | 'more';
+export type NotebookTreeHiddenSection = NotebookTreeSection;
+const sectionListeners = new Set<(notebookId: string, order: NotebookTreeSection[], hidden: NotebookTreeHiddenSection[]) => void>();
 const pinnedFolderListeners = new Set<(notebookId: string, pinnedFolders: string[]) => void>();
 
-const DEFAULT_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'views', 'files', 'repositories'];
-const PREVIOUS_DEFAULT_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'files', 'views'];
+const DEFAULT_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'views', 'files', 'repositories', 'more'];
+const PREVIOUS_DEFAULT_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'views', 'files', 'repositories'];
 const LEGACY_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'views', 'files'];
+const PREVIOUS_LEGACY_TREE_SECTION_ORDER: NotebookTreeSection[] = ['agents', 'pinned', 'files', 'views'];
 
 function normalizeTreeSectionOrder(value: unknown): NotebookTreeSection[] {
   if (!Array.isArray(value)) return DEFAULT_TREE_SECTION_ORDER;
@@ -18,18 +20,18 @@ function normalizeTreeSectionOrder(value: unknown): NotebookTreeSection[] {
     DEFAULT_TREE_SECTION_ORDER.includes(item as NotebookTreeSection)
     && items.indexOf(item) === index
   ));
-  if (order.length === 5) return order;
-  if (order.length === 4) {
-    if (order.every((item, index) => item === PREVIOUS_DEFAULT_TREE_SECTION_ORDER[index])) {
-      return DEFAULT_TREE_SECTION_ORDER;
-    }
-    if (order.every((item, index) => item === LEGACY_TREE_SECTION_ORDER[index])) {
-      return DEFAULT_TREE_SECTION_ORDER;
-    }
-    return [...order, 'repositories'];
+  if (order.length === DEFAULT_TREE_SECTION_ORDER.length) return order;
+  if (order.length === PREVIOUS_DEFAULT_TREE_SECTION_ORDER.length) {
+    return [...order, ...DEFAULT_TREE_SECTION_ORDER.filter((item) => !order.includes(item))];
   }
-  const legacyOrder = order.filter((item): item is 'files' | 'views' => item === 'files' || item === 'views');
-  if (legacyOrder.length === 2) return ['agents', 'pinned', ...legacyOrder, 'repositories'];
+  if (order.length === LEGACY_TREE_SECTION_ORDER.length) {
+    if (order.every((item, index) => item === LEGACY_TREE_SECTION_ORDER[index])
+      || order.every((item, index) => item === PREVIOUS_LEGACY_TREE_SECTION_ORDER[index])) {
+      return DEFAULT_TREE_SECTION_ORDER;
+    }
+    const legacyOrder = order.filter((item): item is 'files' | 'views' => item === 'files' || item === 'views');
+    if (legacyOrder.length === 2) return ['agents', 'pinned', ...legacyOrder, 'repositories', 'more'];
+  }
   return [...DEFAULT_TREE_SECTION_ORDER.filter((item) => !order.includes(item)), ...order];
 }
 
@@ -58,7 +60,7 @@ function rebasePinnedFolderPaths(paths: string[], previousPath: string, nextPath
 
 export function useNotebookTreeSections(notebookId: string | null, isActive: boolean) {
   const [sectionOrder, setSectionOrder] = useState<NotebookTreeSection[]>(DEFAULT_TREE_SECTION_ORDER);
-  const [hiddenSections, setHiddenSections] = useState<NotebookTreeSection[]>([]);
+  const [hiddenSections, setHiddenSections] = useState<NotebookTreeHiddenSection[]>([]);
   const [pinnedFolders, setPinnedFolders] = useState<string[]>([]);
   const pinnedFoldersRef = useRef<string[]>([]);
   const pinnedSessionRef = useRef<{
@@ -79,7 +81,7 @@ export function useNotebookTreeSections(notebookId: string | null, isActive: boo
     pinnedSessionRef.current = session;
     let sectionsUpdated = false;
     let pinnedFoldersUpdated = false;
-    const receiveSections = (id: string, order: NotebookTreeSection[], hidden: NotebookTreeSection[]) => {
+    const receiveSections = (id: string, order: NotebookTreeSection[], hidden: NotebookTreeHiddenSection[]) => {
       if (id !== notebookId) return;
       sectionsUpdated = true;
       setSectionOrder(order);
@@ -107,7 +109,10 @@ export function useNotebookTreeSections(notebookId: string | null, isActive: boo
       if (cancelled) return;
       if (!sectionsUpdated) {
         setSectionOrder(normalizeTreeSectionOrder(preferences.sectionOrder));
-        setHiddenSections((preferences.hiddenSections ?? []).filter((item): item is NotebookTreeSection => DEFAULT_TREE_SECTION_ORDER.includes(item as NotebookTreeSection)));
+        setHiddenSections([...new Set((preferences.hiddenSections ?? []).flatMap((item): NotebookTreeHiddenSection[] => {
+          if (item === 'skillMarket') return ['more'];
+          return DEFAULT_TREE_SECTION_ORDER.includes(item as NotebookTreeSection) ? [item as NotebookTreeSection] : [];
+        }))]);
       }
       if (!pinnedFoldersUpdated) {
         const paths = normalizePinnedFolderPaths(preferences.pinnedFolders);
@@ -126,7 +131,7 @@ export function useNotebookTreeSections(notebookId: string | null, isActive: boo
     };
   }, [isActive, notebookId]);
 
-  const updateSections = useCallback((order: NotebookTreeSection[], hidden: NotebookTreeSection[]) => {
+  const updateSections = useCallback((order: NotebookTreeSection[], hidden: NotebookTreeHiddenSection[]) => {
     setSectionOrder(order);
     setHiddenSections(hidden);
     if (!notebookId) return;

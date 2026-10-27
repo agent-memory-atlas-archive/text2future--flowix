@@ -16,7 +16,7 @@ use crate::system_data::{
 
 const FEATURED_NOTES_ALLOWED_OPERATORS: [&str; 3] = ["equals", "contains", "excludes"];
 const CUSTOM_VIEW_ALLOWED_OPERATORS: [&str; 2] = ["equals", "contains"];
-const FILE_TREE_SECTIONS: [&str; 5] = ["agents", "pinned", "views", "files", "repositories"];
+const FILE_TREE_SECTIONS: [&str; 6] = ["agents", "pinned", "views", "files", "repositories", "more"];
 
 #[tauri::command]
 pub fn get_tag_system_metadata(
@@ -155,13 +155,16 @@ pub fn set_notebook_file_tree_section_order(
             .iter()
             .any(|section| section_order.iter().filter(|item| item.as_str() == *section).count() != 1)
     {
-        return Err("file tree section order must contain agents, pinned, views, files, and repositories once each".to_string());
+        return Err("file tree section order must contain agents, pinned, views, files, repositories, and more once each".to_string());
     }
     if let Some(hidden) = &hidden_sections {
-        if hidden.iter().any(|section| !FILE_TREE_SECTIONS.contains(&section.as_str()))
+        if hidden.iter().any(|section| {
+            !FILE_TREE_SECTIONS.contains(&section.as_str()) && section.as_str() != "skillMarket"
+        })
             || FILE_TREE_SECTIONS
                 .iter()
                 .any(|section| hidden.iter().filter(|item| item.as_str() == *section).count() > 1)
+            || hidden.iter().filter(|section| section.as_str() == "skillMarket").count() > 1
         {
             return Err("invalid file tree hidden sections".to_string());
         }

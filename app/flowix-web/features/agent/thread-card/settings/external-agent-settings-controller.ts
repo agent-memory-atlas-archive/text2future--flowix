@@ -1,3 +1,5 @@
+import { AgentEmptyStateController, type AgentEmptyStatePresentation } from "./agent-empty-state-controller";
+export type { AgentEmptyStatePresentation } from "./agent-empty-state-controller";
 import { resolveAgentPreferenceRuntimeConfig } from "@features/agent/store/agent-user-preferences";
 import cursorOutlineSvg from "@/assets/cursor-outline.svg?raw";
 import folderOutlineSvg from "@/assets/folder-outline.svg?raw";
@@ -34,7 +36,6 @@ import { loadPiCloudModelCatalog } from "@features/agent/services/pi-cloud-model
 import { useAgentRuntimeStore } from "@features/agent/store/agent-runtime-store";
 import { useAgentSessionStore } from "@features/agent/store/agent-session-store";
 import { useNoteStore } from "@features/memo/store/note-store";
-import { FeaturedNotesController } from './featured-notes-controller';
 import { resolvePrimaryWorkspace } from "@features/agent/runtime/primary-workspace";
 import { normalizeWorkspacePath } from "@features/agent/runtime/workspace-path";
 import { normalizeAgentRuntimeStatus } from "@features/agent/runtime/agent-runtime-status";
@@ -53,7 +54,6 @@ import {
 import {
   createCodexSettingsItem,
   createExternalAgentEmptyControl,
-  createExternalAgentEmptyIcon,
   createExternalAgentWorkspaceControl,
   createExternalAgentWorkspaceDisplay,
   updateExternalAgentEmptyControl,
@@ -64,6 +64,7 @@ import {
   createPlusIcon,
   createTrashIcon,
 } from "@features/agent/thread-card/agent-thread-card-icons";
+import type { ComposerSlashSkill } from "@features/agent/thread-card/composer/composer-slash-command-controller";
 import {
   createPiModelPicker,
   isFlowixCloudModelOption,
@@ -155,8 +156,6 @@ function modelProviderIcon(iconUrl?: string): HTMLImageElement | undefined {
   return image;
 }
 
-export type AgentEmptyStatePresentation = "inline-card" | "expanded";
-
 const CLAUDE_MODEL_OPTIONS: AgentModelOption[] = [
   { id: "claude-opus-4-8", label: "claude-opus-4-8" },
   { id: "claude-sonnet-5", label: "claude-sonnet-5" },
@@ -188,6 +187,12 @@ export interface ExternalAgentSettingsControllerOptions {
    * `ComposerController.insertMemoReference`。
    */
   onSelectFeaturedNote?: (ref: { id: string; filename: string; title: string; notebookId?: string; relativePath?: string }) => void;
+  /** Expanded empty-state prompt chips seed the shared composer without sending. */
+  onSelectEmptyPrompt?: (prompt: string) => void;
+  /** Expanded empty-state skill chips use the same token insertion as the slash menu. */
+  onSelectEmptySkill?: (skill: ComposerSlashSkill) => void;
+  /** Opens the shared slash picker with all commands and skills. */
+  onOpenEmptySkills?: () => void;
   /**
    * 仓库列表增删后的轻提示。 由宿主注入而不是直接 import toast, 让本
    * controller 保持对 UI 反馈层的解耦 (测试里也可以只断言调用)。
@@ -246,7 +251,7 @@ export class ExternalAgentSettingsController {
   private localSupportedModels: AgentModelOption[] = [];
   private readonly unlistenCodexSettings: UnlistenFn;
   private readonly unlistenPiCatalog: () => void;
-  private readonly featuredNotes: FeaturedNotesController;
+  private readonly emptyState: AgentEmptyStateController;
 
   readonly boundPosition = (): void => {
     this.schedulePosition();
@@ -261,11 +266,21 @@ export class ExternalAgentSettingsController {
     this.isDestroyed = options.isDestroyed;
     this.consumeOutsidePointer = options.consumeOutsidePointer;
     this.onPopoverStateChange = options.onPopoverStateChange;
-    this.featuredNotes = new FeaturedNotesController({
+    this.emptyState = new AgentEmptyStateController({
+      getTypeKey: options.getTypeKey,
+      getInstanceId: options.getInstanceId,
+      getLanguage: options.getLanguage,
       getNotebookId: () => this.getCurrentNotebookId(),
+      getNotebookPath: () => this.getCurrentNotebookPath(),
       t: options.t,
       isDestroyed: options.isDestroyed,
       onSelectFeaturedNote: options.onSelectFeaturedNote,
+      onSelectEmptyPrompt: options.onSelectEmptyPrompt,
+      onSelectEmptySkill: options.onSelectEmptySkill,
+      onOpenEmptySkills: options.onOpenEmptySkills,
+      appendRuntimeSettings: (root, presentation) => this.appendEmptyRuntimeSettings(root, presentation),
+      refreshRuntimeSettings: () => this.refreshEmptySettings(),
+      clearRuntimeSettings: (root) => this.clearEmptyRuntimeSettings(root),
     });
     this.toast = options.toast;
     this.unlistenCodexSettings = subscribe<Record<string, unknown>>(
@@ -539,23 +554,20 @@ export class ExternalAgentSettingsController {
   createEmptySettings(
     options: { presentation?: AgentEmptyStatePresentation } = {},
   ): HTMLElement {
-    const presentation = options.presentation ?? "inline-card";
-    const showControls = presentation === "inline-card";
+    return this.emptyState.create(options.presentation ?? "inline-card");
+  }
+
+  private clearEmptyRuntimeSettings(empty: HTMLElement): void {
+    if (this.anchor && empty.contains(this.anchor)) this.setSettingsPopoverOpen(false);
     this.workspaceDisplay = null;
     this.modelButton = null;
     this.piModelNotice = null;
     this.reasoningButton = null;
     this.modeButton = null;
     this.permissionButton = null;
-    const empty = document.createElement("div");
-    empty.className = [
-      "agent-thread-card__empty",
-      "agent-thread-card__empty--codex-settings",
-      `agent-thread-card__empty--${presentation}`,
-    ].join(" ");
+  }
 
-    // 两种展示模式共用 Agent 标识与精选笔记；卡片内模式额外显示设置控件。
-    empty.append(createExternalAgentEmptyIcon(this.getTypeKey()));
+  private appendEmptyRuntimeSettings(empty: HTMLElement, presentation: AgentEmptyStatePresentation): void {
     if (this.getTypeKey() === "pi") {
       const modelNotice = document.createElement("button");
       modelNotice.type = "button";
@@ -587,7 +599,7 @@ export class ExternalAgentSettingsController {
       empty.append(unavailableNotice);
 
       void useAgentRuntimeStore.getState().refreshIfStale().then(() => {
-        if (this.isDestroyed()) return;
+        if (this.isDestroyed() || !empty.isConnected) return;
         const status = useAgentRuntimeStore.getState().statusByType.pi;
         if (!status) return;
         const runtimeStatus = normalizeAgentRuntimeStatus(status);
@@ -597,7 +609,7 @@ export class ExternalAgentSettingsController {
         }
       });
     }
-    if (showControls) {
+    if (presentation === "inline-card") {
       const controls = document.createElement("div");
       controls.className = "agent-conversation__controls";
       empty.append(controls);
@@ -642,8 +654,14 @@ export class ExternalAgentSettingsController {
         if (button) controls.append(button);
       }
     }
-    void this.featuredNotes.appendFeaturedNotes(empty);
-    return empty;
+  }
+
+  private getCurrentNotebookPath(): string | null {
+    const notebookId = this.getCurrentNotebookId();
+    const notebook = useNoteStore.getState().notebooks.find((item) => item.id === notebookId)
+      ?? useNoteStore.getState().selectedNotebook;
+    const path = notebook?.path?.trim() || this.getCurrentWorkspacePath();
+    return path || null;
   }
 
   private getCurrentNotebookId(): string | null {
@@ -1520,7 +1538,7 @@ export class ExternalAgentSettingsController {
   }
 
   dispose(): void {
-    this.featuredNotes.dispose();
+    this.emptyState.dispose();
     this.unlistenCodexSettings();
     this.unlistenPiCatalog();
     this.setSettingsPopoverOpen(false);

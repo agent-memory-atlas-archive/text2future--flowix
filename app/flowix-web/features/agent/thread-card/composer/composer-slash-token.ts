@@ -25,8 +25,8 @@ export interface ComposerSlashTokenValue {
   agentType?: AgentTypeKey;
 }
 
-const SLASH_TOKEN_RE = /^\[((?:\\.|[^\]\n])*)\]\(flowix:\/\/slash\/(?:(deepseek-harness|codex|pi)\/)?([a-z0-9._:-]+)\)/i;
-const SLASH_TOKEN_GLOBAL_RE = /\[((?:\\.|[^\]\n])*)\]\(flowix:\/\/slash\/(?:(deepseek-harness|codex|pi)\/)?([a-z0-9._:-]+)\)/gi;
+const SLASH_TOKEN_RE = /^\[((?:\\.|[^\]\n])*)\]\(flowix:\/\/slash\/(?:(dsh|deepseek-harness|codex|pi)\/)?([a-z0-9._:-]+)\)/i;
+const SLASH_TOKEN_GLOBAL_RE = /\[((?:\\.|[^\]\n])*)\]\(flowix:\/\/slash\/(?:(dsh|deepseek-harness|codex|pi)\/)?([a-z0-9._:-]+)\)/gi;
 const LEGACY_DSH_COMMANDS = new Set([
   "compact",
   "skill",
@@ -88,7 +88,7 @@ function slashTokenLabel(command: string): string {
   return `/${command}`;
 }
 
-function createSkillLibraryIcon(): SVGSVGElement {
+export function createSkillLibraryIcon(): SVGSVGElement {
   const template = document.createElement("template");
   template.innerHTML = skillLibraryIconSvg;
   return template.content.firstElementChild as SVGSVGElement;
@@ -157,8 +157,9 @@ export const ComposerSlashToken = Node.create<ComposerSlashTokenOptions>({
     const href = String(token.href ?? "");
     const path = href.replace(/^flowix:\/\/slash\//i, "");
     const parts = path.split("/");
-    const agentType = parts[0] === "dsh" || parts[0] === "codex" || parts[0] === "pi"
-      ? parts[0]
+    const scope = parts[0] === "deepseek-harness" ? "dsh" : parts[0];
+    const agentType = scope === "dsh" || scope === "codex" || scope === "pi"
+      ? scope
       : undefined;
     const command = (agentType ? parts[1] : parts[0]) ||
       String(token.text ?? "").replace(/^\//, "");
@@ -343,6 +344,7 @@ export function composerSlashMarkdownToPrompt(markdown: string): string {
       if (
         scopedAgent &&
         scopedAgent.toLowerCase() !== "dsh" &&
+        scopedAgent.toLowerCase() !== "deepseek-harness" &&
         scopedAgent.toLowerCase() !== "codex" &&
         scopedAgent.toLowerCase() !== "pi" ||
         (!scopedAgent && !LEGACY_DSH_COMMANDS.has(command.toLowerCase()))

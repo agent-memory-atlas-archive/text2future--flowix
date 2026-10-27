@@ -347,7 +347,7 @@ function AgentRepositoryItem({
           </DialogHeader>
           <div className="mt-4 flex justify-end gap-2">
             <button type="button" onClick={() => setDeleting(null)} className="h-8 rounded-lg px-3 text-sm hover:bg-[var(--muted)]">{t('dialog.cancel')}</button>
-            <button type="button" onClick={() => void confirmDelete()} className="h-8 rounded-lg border border-[var(--border)] px-3 text-sm hover:border-[var(--destructive)] hover:bg-[var(--destructive)] hover:text-white">{t('dialog.delete')}</button>
+            <button type="button" onClick={() => void confirmDelete()} className="h-8 rounded-lg border border-[var(--destructive)] bg-[var(--destructive)] px-3 text-sm text-white hover:opacity-90">{t('memo.fileTree.delete')}</button>
           </div>
         </DialogContent>
       </Dialog>

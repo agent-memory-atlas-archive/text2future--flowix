@@ -74,6 +74,8 @@ export function normalizeSkill(skill, cwd) {
   const result = {
     name: String(source.name || source.id || 'unnamed-skill'),
     description: String(source.description || ''),
+    ...(stringValue(source.displayName) || stringValue(source['display-name']) || stringValue(interfaceInfo?.displayName)
+      ? { displayName: stringValue(source.displayName) || stringValue(source['display-name']) || stringValue(interfaceInfo?.displayName) } : {}),
     ...(stringValue(source.shortDescription) ? { shortDescription: stringValue(source.shortDescription) } : {}),
     ...(stringValue(source.path) || stringValue(source.filePath) || stringValue(source.location) ? { path: stringValue(source.path) || stringValue(source.filePath) || stringValue(source.location) } : {}),
     scope: scopeOf(source, cwd),
@@ -207,6 +209,9 @@ export class SkillCatalogService {
             return {
               name: String(skill.name || ''),
               description: String(skill.description || ''),
+              ...(stringValue(skill.path) ? { path: stringValue(skill.path) } : {}),
+              ...(stringValue(skill.displayName) || stringValue(skill.interface?.displayName)
+                ? { displayName: stringValue(skill.displayName) || stringValue(skill.interface?.displayName) } : {}),
               ...(scope ? { scope } : {}),
               ...(skill.whenToUse === undefined ? {} : { whenToUse: String(skill.whenToUse) }),
               ...(skill.modelInvocable === undefined ? {} : { modelInvocable: Boolean(skill.modelInvocable) }),
@@ -227,6 +232,8 @@ export class SkillCatalogService {
         .map(skill => ({
           name: skill.name,
           description: skill.description,
+          ...(skill.path ? { path: skill.path } : {}),
+          ...(skill.displayName ? { displayName: skill.displayName } : {}),
           scope: skill.scope,
           ...(skill.whenToUse === undefined ? {} : { whenToUse: skill.whenToUse }),
           ...(skill.modelInvocable === undefined ? {} : { modelInvocable: skill.modelInvocable }),

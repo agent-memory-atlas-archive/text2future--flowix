@@ -4,9 +4,9 @@ import { getNotebookIconMarkup } from "@features/memo/components/notebook-icon";
 import type { MemoItem } from "@/types/memo-item";
 import type { NoteEntry } from "@platform/tauri/client/notes";
 
-// Keep one row visible: one or two cards are centered, three fill the row,
-// and any additional cards move to the next page.
+// Show three quick-note cards per page at every viewport width.
 export const FEATURED_NOTE_PAGE_SIZE = 3;
+/** @deprecated Kept as an alias for callers that still distinguish narrow screens. */
 export const FEATURED_NOTE_MOBILE_PAGE_SIZE = 3;
 
 /**

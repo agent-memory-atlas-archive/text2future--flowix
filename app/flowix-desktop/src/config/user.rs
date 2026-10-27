@@ -219,6 +219,9 @@ pub struct PreferenceFile {
     /// Whether newly created notes are automatically opened in the Browser Column.
     #[serde(default = "default_true")]
     pub auto_open_created_notes_in_browser: bool,
+    /// Maximum number of recent agent conversations shown in the notebook file tree.
+    #[serde(default = "default_recent_agent_conversations_limit")]
+    pub recent_agent_conversations_limit: u8,
     /// User shortcut overrides keyed by action id.
     #[serde(default)]
     pub shortcuts: HashMap<String, String>,
@@ -242,6 +245,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_recent_agent_conversations_limit() -> u8 {
+    6
+}
+
 impl Default for PreferenceFile {
     fn default() -> Self {
         Self {
@@ -255,6 +262,7 @@ impl Default for PreferenceFile {
             memo_card_variant: String::default(),
             memo_list_view: "folders".to_string(),
             auto_open_created_notes_in_browser: true,
+            recent_agent_conversations_limit: 6,
             shortcuts: HashMap::default(),
             properties: PropertiesConfig::default(),
             agents: AgentsConfig::default(),

@@ -12,6 +12,7 @@ import { useAgentSessionStore } from "@features/agent/store/agent-session-store"
 import { ensureAgentPreferencesReady } from "@features/agent/store/agent-data-store";
 import { useNoteStore } from "@features/memo/store/note-store";
 import { agentClient } from "@features/agent/store/agent-client";
+import { withNotebookSkillDisplayNames } from "./notebook-skill-display-names";
 
 export const DSH_AGENT_TYPE = "dsh" as const satisfies AgentTypeKey;
 
@@ -223,6 +224,8 @@ export async function listDshSkills(input: {
 }): Promise<ReadonlyArray<{
   name: string;
   description: string;
+  displayName?: string;
+  path?: string;
   scope?: string;
   whenToUse?: string;
   modelInvocable?: boolean;
@@ -231,7 +234,17 @@ export async function listDshSkills(input: {
     input.threadId,
     buildDshCommandMessage("/skill", input.runtimeConfig),
   );
-  return Array.isArray(result?.skills) ? result.skills : [];
+  const workspace = normalizeConversationWorkspaceState(input.runtimeConfig)?.desired
+    ?? normalizeWorkspaceSnapshot(input.runtimeConfig?.workspaceSnapshot);
+  const notebookId = input.runtimeConfig?.notebookId ?? workspace?.notebookId;
+  const noteState = useNoteStore.getState();
+  const notebook = notebookId
+    ? noteState.notebooks.find((item) => item.id === notebookId)
+    : noteState.selectedNotebook;
+  return withNotebookSkillDisplayNames(
+    workspace?.notebookPath ?? notebook?.path ?? "",
+    Array.isArray(result?.skills) ? result.skills : [],
+  );
 }
 
 export function dshCommandResult(result: unknown): {

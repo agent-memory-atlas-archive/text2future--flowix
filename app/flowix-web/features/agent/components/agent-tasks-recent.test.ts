@@ -4,7 +4,11 @@ import type {
   AgentConversationListPage,
   AgentConversationListQuery,
 } from '@platform/tauri/client/agent';
-import { loadFavoriteAgentConversations, loadRecentAgentConversations } from './agent-tasks-recent';
+import {
+  loadFavoriteAgentConversations,
+  loadRecentAgentConversations,
+  RECENT_CONVERSATIONS_LIMIT,
+} from './agent-tasks-recent';
 
 function conversation(instanceId: string, updatedAt: number, notebookId = 'nb-1'): AgentConversationInstance {
   return {
@@ -40,7 +44,7 @@ describe('loadRecentAgentConversations', () => {
     expect(listPage).toHaveBeenCalledTimes(2);
   });
 
-  it('loads up to the ten newest conversations regardless of date', async () => {
+  it('loads up to the configured number of newest conversations regardless of date', async () => {
     const listPage = vi.fn<(query: AgentConversationListQuery, limit: number) => Promise<AgentConversationListPage>>()
       .mockResolvedValue(page([
         conversation('newest', 300),
@@ -52,10 +56,13 @@ describe('loadRecentAgentConversations', () => {
 
     expect(result.map((item) => item.instanceId)).toEqual(['newest', 'middle', 'third']);
     expect(listPage).toHaveBeenCalledOnce();
-    expect(listPage).toHaveBeenCalledWith({ notebookId: 'nb-1', agentType: null, cursor: null }, 10);
+    expect(listPage).toHaveBeenCalledWith(
+      { notebookId: 'nb-1', agentType: null, cursor: null },
+      RECENT_CONVERSATIONS_LIMIT,
+    );
   });
 
-  it('keeps older conversations in the result when fewer than ten are available', async () => {
+  it('keeps older conversations in the result when fewer than the limit are available', async () => {
     const listPage = vi.fn<(query: AgentConversationListQuery, limit: number) => Promise<AgentConversationListPage>>()
       .mockResolvedValue(page([
         conversation('today', 120),
@@ -69,7 +76,7 @@ describe('loadRecentAgentConversations', () => {
     expect(listPage).toHaveBeenCalledOnce();
   });
 
-  it('keeps up to ten conversations even when none are from today', async () => {
+  it('keeps up to the limit even when none are from today', async () => {
     const listPage = vi.fn<(query: AgentConversationListQuery, limit: number) => Promise<AgentConversationListPage>>()
       .mockResolvedValue(page([
         conversation('latest', 99),
@@ -109,18 +116,48 @@ describe('loadRecentAgentConversations', () => {
     expect(listPage).toHaveBeenCalledTimes(2);
     expect(listPage).toHaveBeenNthCalledWith(2, {
       notebookId: 'nb-1', agentType: null, cursor: first.nextCursor,
-    }, 10);
+    }, RECENT_CONVERSATIONS_LIMIT);
   });
-  it('stops at ten conversations when more are available', async () => {
+  it('stops at the limit when more are available', async () => {
     const items = Array.from({ length: 12 }, (_, index) => conversation(`thread-${index}`, 100 - index));
     const listPage = vi.fn().mockResolvedValue(page(items, true));
     const result = await loadRecentAgentConversations('nb-1', listPage);
-    expect(result.map((item) => item.instanceId)).toEqual(items.slice(0, 10).map((item) => item.instanceId));
+    expect(result.map((item) => item.instanceId)).toEqual(
+      items.slice(0, RECENT_CONVERSATIONS_LIMIT).map((item) => item.instanceId),
+    );
     expect(listPage).toHaveBeenCalledOnce();
   });
 
-});
 
+  it('honours an explicit limit coming from user settings', async () => {
+    const items = Array.from({ length: 12 }, (_, index) => conversation(`thread-${index}`, 100 - index));
+    const listPage = vi.fn().mockResolvedValue(page(items, true));
+
+    const result = await loadRecentAgentConversations('nb-1', listPage, () => true, undefined, 4);
+
+    expect(result.map((item) => item.instanceId)).toEqual(
+      items.slice(0, 4).map((item) => item.instanceId),
+    );
+    expect(listPage).toHaveBeenCalledWith(
+      { notebookId: 'nb-1', agentType: null, cursor: null },
+      4,
+    );
+  });
+
+  it('clamps an out-of-range limit instead of passing it to the backend', async () => {
+    const items = Array.from({ length: 12 }, (_, index) => conversation(`thread-${index}`, 100 - index));
+    const listPage = vi.fn().mockResolvedValue(page(items, true));
+
+    const result = await loadRecentAgentConversations('nb-1', listPage, () => true, undefined, 0);
+
+    expect(listPage).toHaveBeenCalledWith(
+      { notebookId: 'nb-1', agentType: null, cursor: null },
+      1,
+    );
+    expect(result).toHaveLength(1);
+  });
+
+});
 
 describe('loadFavoriteAgentConversations', () => {
   it('loads all favorites in one request and keeps only the selected notebook', async () => {

@@ -610,7 +610,7 @@ describe("unified tool message rendering", () => {
     expect(s.content.querySelector('a[href^="file:"]')).toBeNull();
   });
 
-  it("renders one attachment chip per user-message image below the bubble", () => {
+  it("renders one image-style attachment chip per user-message image inside the bubble", () => {
     const result = createAgentThreadCardMessageElement({
       message: {
         id: "user-images",
@@ -645,7 +645,9 @@ describe("unified tool message rendering", () => {
     const bubble = element?.querySelector(".agent-thread-card__message-user-bubble");
     const attachments = element?.querySelector(".agent-thread-card__message-attachments");
     expect(bubble?.textContent).toContain("Inspect these images");
-    expect(bubble?.contains(attachments ?? null)).toBe(false);
+    // 参照图片消息：附件是气泡内容的一部分（缩略图随气泡走）；
+    // 文件名不进 DOM，只保留在 title / aria-label 上。
+    expect(bubble?.contains(attachments ?? null)).toBe(true);
     expect(attachments?.children).toHaveLength(2);
     expect(attachments?.textContent).not.toContain("图片 1");
     expect(attachments?.textContent).toBe("");

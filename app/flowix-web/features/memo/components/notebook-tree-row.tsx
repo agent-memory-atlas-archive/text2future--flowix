@@ -51,7 +51,8 @@ const TREE_MENU_ITEM_CLASS =
 
 const TREE_EDGE_GUTTER = 6;
 const INDENT_PER_LEVEL = 20;
-const FOLDER_SINGLE_CLICK_DELAY_MS = 300;
+/** 单击选中文件夹的延迟：需要小于系统双击间隔，否则双击会先触发选中。 */
+export const FOLDER_SINGLE_CLICK_DELAY_MS = 300;
 
 function DefaultFolderCheck() {
   return (
@@ -796,8 +797,8 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
             <button type="button" disabled={deleting} onClick={() => setConfirmDelete(false)} className="h-8 rounded-lg px-3 text-sm hover:bg-[var(--muted)]">
               {t('dialog.cancel')}
             </button>
-            <button type="button" disabled={deleting} onClick={() => void confirmFolderDelete()} className="h-8 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 text-sm text-[var(--foreground)] hover:border-[var(--destructive)] hover:bg-[var(--destructive)] hover:text-white disabled:opacity-50">
-              {t('dialog.delete')}
+            <button type="button" disabled={deleting} onClick={() => void confirmFolderDelete()} className="h-8 rounded-lg border border-[var(--destructive)] bg-[var(--destructive)] px-3 text-sm text-white hover:opacity-90 disabled:opacity-50">
+              {t('memo.fileTree.delete')}
             </button>
           </div>
         </DialogContent>

@@ -217,12 +217,6 @@ html:not([data-theme="dark"]):not([data-theme="mist"])
   object-fit: cover;
 }
 
-.agent-conversation-surface .agent-thread-card__message-attachment-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 .agent-conversation-surface .agent-thread-card__message-mode-tag {
   display: flex;

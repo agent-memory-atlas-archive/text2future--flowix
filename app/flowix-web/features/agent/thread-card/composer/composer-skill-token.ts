@@ -36,11 +36,16 @@ export function formatCodexSkillDisplayName(name: string): string {
   return normalized.replace(/^\$/, "").trim();
 }
 
+/** Prefer a skill's human-readable display name, falling back to its command name. */
+export function preferredComposerSkillName(name: string, displayName?: string | null): string {
+  return displayName?.trim() || name.trim();
+}
+
 export function displayNameForComposerSkill(
   name: string,
   displayName?: string | null,
 ): string {
-  return formatCodexSkillDisplayName(displayName?.trim() || name);
+  return displayName?.trim() || formatCodexSkillDisplayName(name);
 }
 
 export const ComposerSkillToken = Node.create({

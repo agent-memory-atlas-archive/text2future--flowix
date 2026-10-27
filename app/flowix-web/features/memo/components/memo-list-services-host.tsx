@@ -648,7 +648,7 @@ export function MemoListServicesHost({
             <button type="button" onClick={() => setDeleteMedia(null)} className="h-8 rounded-lg px-3 text-sm hover:bg-[var(--muted)]">
               {t('dialog.cancel')}
             </button>
-            <button type="button" onClick={handleMediaDeleteConfirm} className="h-8 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 text-sm text-[var(--foreground)] hover:border-[var(--destructive)] hover:bg-transparent hover:text-[var(--destructive)]">
+            <button type="button" onClick={handleMediaDeleteConfirm} className="h-8 rounded-lg border border-[var(--destructive)] bg-[var(--destructive)] px-3 text-sm text-white hover:opacity-90">
               {t('dialog.delete')}
             </button>
           </div>

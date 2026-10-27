@@ -44,12 +44,31 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   };
 }
 
-// jsdom 缺少滚动 API；锚点定位等逻辑只关心调用不抛错，滚动位置无需断言。
+// jsdom 缺少滚动 API。`scrollTo` 必须真的写入 scrollTop/scrollLeft：虚拟列表
+// 通过 scrollToOffset → scrollTo 驱动滚动，做成空函数会让所有“滚动到某处”的
+// 断言永远停在初始值（测试绿/红都不可信）。依赖滚动的测试需要用
+// test-support/layout-stub 提供元素尺寸，否则 virtualizer 会算成 0 并归零。
 if (typeof Element !== 'undefined') {
   if (typeof Element.prototype.scrollTo !== 'function') {
-    (Element.prototype as unknown as { scrollTo: () => void }).scrollTo = () => {};
+    const scrollTo = function (this: Element, ...args: unknown[]): void {
+      const [first, second] = args;
+      const options = (typeof first === 'object' && first !== null)
+        ? first as { top?: number; left?: number }
+        : null;
+      this.scrollTop = options ? options.top ?? 0 : Number(first ?? 0);
+      this.scrollLeft = options ? options.left ?? 0 : Number(second ?? 0);
+    };
+    (Element.prototype as unknown as { scrollTo: typeof scrollTo }).scrollTo = scrollTo;
   }
   if (typeof Element.prototype.scrollIntoView !== 'function') {
     (Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {};
   }
+}
+
+// jsdom 未实现 Pointer Capture。拖拽组件在 pointerdown 时调用 setPointerCapture，
+// 缺失会抛 TypeError 并中断整个拖拽会话，表现为“指针事件完全没反应”。
+if (typeof Element !== 'undefined' && typeof Element.prototype.setPointerCapture !== 'function') {
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+  Element.prototype.hasPointerCapture = () => false;
 }

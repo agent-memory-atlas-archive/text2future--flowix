@@ -58,6 +58,9 @@ export class CommandService {
         .filter(skill => skill?.invocation?.userInvocable !== false)
         .map(skill => ({
           name: String(skill.name), description: String(skill.description || ''),
+          ...(skill.path ? { path: String(skill.path) } : {}),
+          ...(skill.displayName || skill.interface?.displayName
+            ? { displayName: String(skill.displayName || skill.interface.displayName) } : {}),
           ...(skill.whenToUse === undefined ? {} : { whenToUse: String(skill.whenToUse) }),
           ...(skill.invocation?.modelInvocable === undefined ? {} : { modelInvocable: Boolean(skill.invocation.modelInvocable) }),
         }))

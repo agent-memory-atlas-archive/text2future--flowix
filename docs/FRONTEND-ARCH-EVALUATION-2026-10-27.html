@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flowix 前端架构评审与评分 · 2026-10-27</title>
+<style>
+  :root{
+    --bg:#f5f4f0;
+    --card:#ffffff;
+    --ink:#1b1a17;
+    --ink-2:#4a4740;
+    --ink-3:#7d7970;
+    --line:#e4e1d8;
+    --line-2:#eeece5;
+    --good:#2f6b4f;
+    --warn:#a8622a;
+    --bad:#a33b30;
+    --accent:#25415c;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Noto Sans SC",sans-serif;
+    font-size:15px;line-height:1.75;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1020px;margin:0 auto;padding:56px 32px 96px}
+  header{border-bottom:1px solid var(--line);padding-bottom:32px;margin-bottom:40px}
+  .kicker{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+  h1{font-size:34px;line-height:1.3;margin:12px 0 10px;letter-spacing:-.02em;font-weight:700}
+  .sub{color:var(--ink-2);font-size:15px;max-width:70ch}
+  .meta{margin-top:18px;display:flex;flex-wrap:wrap;gap:8px}
+  .tag{font-size:12px;color:var(--ink-2);background:#efedE6;border:1px solid var(--line);border-radius:999px;padding:3px 10px}
+
+  .score-hero{
+    display:grid;grid-template-columns:190px 1fr;gap:28px;align-items:center;
+    background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px;margin-bottom:14px;
+  }
+  .score-num{font-family:var(--mono);font-size:64px;line-height:1;font-weight:600;letter-spacing:-.04em}
+  .score-num span{font-size:20px;color:var(--ink-3);font-weight:400}
+  .score-grade{margin-top:8px;font-size:13px;color:var(--ink-2)}
+  .grade-b{display:inline-block;background:#eaf0eb;color:var(--good);border-radius:4px;padding:1px 7px;font-weight:600;font-size:12px;margin-right:6px}
+  .hero-note{font-size:14.5px;color:var(--ink-2)}
+  .hero-note b{color:var(--ink)}
+
+  table{width:100%;border-collapse:collapse;background:var(--card);font-size:14px}
+  .table-card{border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:26px 0 42px}
+  th,td{padding:12px 16px;text-align:left;border-bottom:1px solid var(--line-2);vertical-align:top}
+  th{font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3);font-weight:600;background:#fbfaf7}
+  tr:last-child td{border-bottom:none}
+  td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .bar{position:relative;height:6px;background:#eeece5;border-radius:3px;width:110px;overflow:hidden}
+  .bar i{position:absolute;inset:0 auto 0 0;border-radius:3px;display:block}
+  .b-hi{background:var(--good)}.b-mid{background:var(--warn)}.b-lo{background:var(--bad)}
+
+  section{margin:56px 0 0}
+  h2{font-size:22px;margin:0 0 6px;letter-spacing:-.01em;display:flex;align-items:baseline;gap:12px}
+  h2 .idx{font-family:var(--mono);font-size:12px;color:var(--ink-3);font-weight:500;letter-spacing:.06em}
+  h2 .pt{font-family:var(--mono);font-size:13px;color:var(--ink-3);margin-left:auto;font-weight:400}
+  .lead{color:var(--ink-2);font-size:14.5px;margin:0 0 20px;max-width:78ch}
+  h3{font-size:14px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin:26px 0 10px;font-weight:600}
+
+  ul{margin:0;padding-left:18px}
+  li{margin:7px 0;color:var(--ink-2)}
+  li b,li strong{color:var(--ink);font-weight:600}
+  code{font-family:var(--mono);font-size:12.5px;background:#f1efe9;border:1px solid var(--line-2);border-radius:3px;padding:1px 4px;color:#4b453a;word-break:break-word}
+  .ev{font-family:var(--mono);font-size:12px;color:var(--ink-3);white-space:nowrap}
+  .plus li::marker{color:var(--good)}
+  .minus li::marker{color:var(--bad)}
+
+  .callout{
+    background:#fbfaf7;border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:0 8px 8px 0;padding:14px 18px;margin:18px 0;font-size:14px;color:var(--ink-2);
+  }
+  .callout b{color:var(--ink)}
+  .callout.warn{border-left-color:var(--warn)}
+  .callout.bad{border-left-color:var(--bad)}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .mini{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+  .mini .k{font-family:var(--mono);font-size:24px;font-weight:600;letter-spacing:-.03em}
+  .mini .l{font-size:12.5px;color:var(--ink-3);margin-top:2px}
+
+  .roadmap{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--card)}
+  .step{display:grid;grid-template-columns:74px 1fr;gap:0;border-bottom:1px solid var(--line-2)}
+  .step:last-child{border-bottom:none}
+  .step .p{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:.06em;padding:18px 0 18px 18px;color:var(--ink-3)}
+  .step .p.hi{color:var(--bad)}.step .p.mid{color:var(--warn)}.step .p.lo{color:var(--good)}
+  .step .c{padding:16px 20px 18px 10px}
+  .step .c h4{margin:0 0 6px;font-size:14.5px;font-weight:600}
+  .step .c p{margin:0 0 6px;font-size:13.5px;color:var(--ink-2)}
+  .step .c .goal{font-size:12.5px;color:var(--ink-3);font-family:var(--mono)}
+  footer{margin-top:64px;padding-top:22px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-3)}
+  @media (max-width:720px){
+    .score-hero{grid-template-columns:1fr;gap:12px}
+    .grid2{grid-template-columns:1fr}
+    .step{grid-template-columns:1fr}
+    .step .p{padding:14px 18px 0}
+    .step .c{padding:6px 18px 16px}
+    .wrap{padding:32px 18px 64px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker">Frontend Architecture Review</div>
+  <h1>Flowix 前端架构评审与评分</h1>
+  <p class="sub">评审对象为 <code>app/flowix-web/</code>（React 19 + Tiptap + Zustand + Tauri IPC）。结论不基于文档自述，而基于依赖图全量扫描、门禁脚本实跑与代码抽样阅读；文档中与实际不符之处已单独标注。</p>
+  <div class="meta">
+    <span class="tag">1,071 生产文件 / 169,719 行</span>
+    <span class="tag">405 测试文件 / 3,036 用例</span>
+    <span class="tag">20 个 feature</span>
+    <span class="tag">评审日期 2026-10-27</span>
+  </div>
+</header>
+
+<div class="score-hero">
+  <div>
+    <div class="score-num">65<span> / 100</span></div>
+    <div class="score-grade"><span class="grade-b">B</span>良好（64.5/100）· 工程纪律强于架构纪律</div>
+  </div>
+  <div class="hero-note">
+    <b>一句话结论：</b>这是一个「基建水准明显高于平均、模块边界明显弱于平均」的代码库。严格 TS（<code>any</code> 归零）、CAS 落盘、启动预算、6 万行测试说明团队有能力做硬工程；但 57% 的跨 feature 引用仍在穿私有路径、36 对循环依赖、agent 一个模块吃掉 30% 代码量，说明分层契约还停留在门禁文件里，没有变成日常写码习惯。<br><br>
+    <b>与仓库既有评审（72 分）的差异：</b>口径不同。本报告把「错误处理机制」与「一致性/扩展性」单列并提高权重，且对「可维护性」按实测的 461 条 lint 抑制与 16 个千行文件从严计分，因此总分低 7 分，但问题清单基本互为印证。
+  </div>
+</div>
+
+<div class="table-card">
+<table>
+  <thead>
+    <tr><th style="width:21%">维度</th><th style="width:9%">权重</th><th style="width:15%">得分</th><th style="width:11%">折合</th><th>核心判断</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>架构简洁性</b><br><span class="ev">模块划分 / 分层 / 依赖</span></td>
+      <td class="n">25%</td>
+      <td><div class="bar"><i class="b-mid" style="width:65%"></i></div><span class="ev">6.5 / 10</span></td>
+      <td class="n">16.3</td>
+      <td>三层蓝图清晰、低层零反向依赖；但一半以上的耦合绕开门面，且存在 36 对环。</td>
+    </tr>
+    <tr>
+      <td><b>代码健壮性</b><br><span class="ev">异常 / 边界 / 容错</span></td>
+      <td class="n">20%</td>
+      <td><div class="bar"><i class="b-mid" style="width:75%"></i></div><span class="ev">7.5 / 10</span></td>
+      <td class="n">15.0</td>
+      <td>类型与保存链路接近生产级；命令式编辑器与异步兜底是两块裸奔区。</td>
+    </tr>
+    <tr>
+      <td><b>可维护性</b><br><span class="ev">可读性 / 命名 / 复杂度 / 重复</span></td>
+      <td class="n">20%</td>
+      <td><div class="bar"><i class="b-mid" style="width:65%"></i></div><span class="ev">6.5 / 10</span></td>
+      <td class="n">13.0</td>
+      <td>平均 158 行/文件、命名统一；但 16 个千行文件 + 461 条抑制，且单测 31 个用例失败。</td>
+    </tr>
+    <tr>
+      <td><b>错误处理机制</b><br><span class="ev">捕获 / 反馈 / 日志</span></td>
+      <td class="n">20%</td>
+      <td><div class="bar"><i class="b-lo" style="width:60%"></i></div><span class="ev">6.0 / 10</span></td>
+      <td class="n">12.0</td>
+      <td>边界组件写得好，但「最后一公里」断了：无全局兜底、日志不落盘、文案三套并存。</td>
+    </tr>
+    <tr>
+      <td><b>一致性与扩展性</b><br><span class="ev">模式统一 / 可扩展点</span></td>
+      <td class="n">15%</td>
+      <td><div class="bar"><i class="b-lo" style="width:55%"></i></div><span class="ev">5.5 / 10</span></td>
+      <td class="n">8.3</td>
+      <td>同一件事存在 2–4 种做法；新增一种 surface 要改 11 个文件、9 个 switch。</td>
+    </tr>
+    <tr style="background:#fbfaf7">
+      <td><b>合计</b></td>
+      <td class="n">100%</td>
+      <td><b style="font-family:var(--mono);font-size:16px">6.45 / 10</b></td>
+      <td class="n"><b>64.5</b></td>
+      <td><b>B（良好）。设计意图成立，执行力未收敛。</b></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ============ 1 ============ -->
+<section>
+  <h2><span class="idx">01</span>架构简洁性<span class="pt">6.5 / 10</span></h2>
+  <p class="lead">分三层：<code>app</code>（组合根）→ <code>features/*</code>（业务能力）→ <code>lib/shared/platform</code>（基础）。规则由 <code>architecture.config.json</code> 驱动，<code>scripts/check-architecture.mjs</code> 执行，存量记入基线。这套设计是成立的，问题全部出在「规则执行率」与「模块粒度」。</p>
+
+  <h3>站得住的部分</h3>
+  <ul class="plus">
+    <li><b>低层零反向依赖</b>：<code>lib/shared/platform</code> 中对 <code>@features/</code>、<code>@app/</code> 的引用为 0，分层方向没有倒灌。</li>
+    <li><b>规则是配置驱动而非白名单</b>：新增 feature 自动纳入约束；<code>no-restricted-imports</code> 从文件系统动态推导私有子路径，改名不会让规则静默失效。</li>
+    <li><b>Tauri 收口干净</b>：327 处 <code>invoke</code> 中 317 处在 <code>platform/tauri</code>，平台外仅 10 处，这是很多 Tauri 项目做不到的。</li>
+    <li><b>门面按能力拆分，没有 barrel</b>：不存在 <code>public/index.ts</code> 一把梭，对启动体积友好——这与启动预算降到 324 KB gzip 是同一套工程判断。</li>
+  </ul>
+
+  <h3>问题</h3>
+  <ul class="minus">
+    <li><b>边界合规率只有 42.7%</b>。实测 806 条跨 feature 引用中，走 <code>public/</code> 的 344 条，直连私有路径的 <b>462 条</b>。门面存在，但不是主要通道。</li>
+    <li><b>存量违规被制度化冻结</b>：<code>architecture-baseline.json</code> 记了 <b>443 条</b>私有引用 + <b>36 对</b>双向依赖；<code>eslint-suppressions.json</code> 另有 <b>409 条</b> <code>no-restricted-imports</code>。同一笔债记了两遍，且没有「每周必须还 N 条」的节奏。</li>
+    <li><b>两条门禁当前都是红的</b>：<code>check:arch</code> 报 3 条新增违规；<code>eslint</code> 实测 <b>7 error / 201 warning</b>，且 7 个 error <b>全部</b>是跨 feature 私有导入，集中在 2 个文件——其中 <code>surface/workspace-web-surface-renderer.tsx</code> 一个文件占 5 条。「门禁存在」不等于「门禁守住了」。</li>
+    <li><b>违规不是历史遗留，而是正在产生</b>：<code>workspace-web-surface-renderer.tsx</code> 是 surface 渲染的协调入口，属于较新的代码。它一次穿墙 5 处，说明边界规则在「写新代码时」没有被内化，只在「提交时」被检查。</li>
+    <li><b>模块粒度失衡</b>：agent 69,680 行（占前端 30%）、<code>agent/thread-card</code> 单目录 34,817 行、<code>agent/store</code> 20,616 行。一个 feature 内部再长出 14 个子目录、5 层深度，本质上已经不是「一个模块」。</li>
+    <li><b>组合根渗业务</b>：<code>app/main-window-effects.tsx</code> 里承载 memo 事件 → 缓存失效 → todo 计数刷新等业务链，另有 24 条 composition-private 基线。app 名义上是装配层，实际是第五个业务模块。</li>
+    <li><b>foundation 有漏点</b>：<code>lib/store/settings-store.ts</code> 让「基础层」持有应用状态，<code>lib/types/agent-workspace.ts</code> 是 agent 领域 DTO 下沉到了 lib。</li>
+  </ul>
+
+  <div class="callout warn">
+    <b>判断：</b>分层骨架是这几年少见的好设计，但「合规率 42.7%」意味着它现在主要起<b>记录</b>作用，而不是<b>约束</b>作用。继续按这个速度加功能，基线会从「债」变成「宪法」。
+  </div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section>
+  <h2><span class="idx">02</span>代码健壮性<span class="pt">7.5 / 10</span></h2>
+  <p class="lead">这一维是全场最强项。类型纪律、持久化并发、乐观更新回滚都有真实设计，不是「写了 try/catch」式的健壮。</p>
+
+  <h3>站得住的部分</h3>
+  <ul class="plus">
+    <li><b>类型纪律接近满分</b>：<code>any</code> 实测 <b>0 处</b>、<code>@ts-ignore</code> <b>0 处</b>、非空断言仅 6 处；<code>strict</code> + <code>noUnusedLocals</code> + <code>noFallthroughCasesInSwitch</code> 全开，<code>no-explicit-any</code> 设为 error。这在 17 万行规模里非常罕见。</li>
+    <li><b>保存链路是真防护</b>：<code>document-commit-queue.ts</code> 每文档单写者 + latest-value 槽；<code>save-queue.ts</code> 用 CAS（<code>expectedContent</code> + revision）拒绝丢失更新，写后再排最新内容，并配恢复草稿。并发冲突是「有解」而不是「靠运气」。</li>
+    <li><b>agent 提交有回滚语义</b>：<code>composer-submission-controller.ts</code> 乐观更新失败后恢复草稿，并区分「已受理 / 被拒」；启动与聚焦后做对账补偿（<code>use-agent-events.ts</code>）。</li>
+    <li><b>有超时意识</b>：历史读取 30s 超时；单条消息渲染有降级路径，坏数据不会拖垮整个会话列表。</li>
+    <li><b>三态覆盖到位的地方做得完整</b>：<code>document-container.tsx</code> 有 loading/empty/error + 重试；<code>document-save-status.tsx</code> 有冲突三选一；CSV 预览三态齐全。</li>
+  </ul>
+
+  <h3>问题</h3>
+  <ul class="minus">
+    <li><b>Tiptap 是最大的裸奔区</b>：<code>markdown-editor.tsx:651</code> 用 <code>new Editor(...)</code> 命令式创建，没有 try/catch，也没有编辑器级错误态。ProseMirror 的 NodeView / dispatch 异常发生在 React 之外，结果是「编辑区空白 + 无任何提示」。</li>
+    <li><b>索引访问不安全</b>：<code>noUncheckedIndexedAccess</code> 未开，<code>arr[i]</code> 仍被推断为 <code>T</code> 而非 <code>T | undefined</code>；<code>as unknown as</code> 有 118 处（生产 47 处，集中在 <code>frontmatter-model.ts</code>）。</li>
+    <li><b>异步失败无人接</b>：729 处 <code>void promise</code>，仅 15% 同行接了 <code>.catch</code>；剩下的既没有全局 rejection 兜底，也没有统一上报（详见第 4 节）。</li>
+    <li><b><code>save-barrier.ts</code> 无超时</b>：单 pending + <code>flush</code> 轮询，一旦某次保存悬挂，<code>flush</code> 会永久等待；且只覆盖 3 处，主编辑器不在其中（主编辑器靠 commit-queue 兜，属于设计分工，但边界没写清）。</li>
+    <li><b>错误对象不成型</b>：359 处 <code>throw new Error</code>，自定义错误类只有 6 个。很多「该重试 / 该提示 / 该忽略」的判断只能靠字符串匹配。</li>
+  </ul>
+</section>
+
+<!-- ============ 3 ============ -->
+<section>
+  <h2><span class="idx">03</span>可维护性<span class="pt">6.5 / 10</span></h2>
+  <p class="lead">日常改动体验是好的：文件小、命名统一、测试就在旁边。真正拉低分数的是「少数巨型文件 + 被合法化的 lint 债务 + 门槛全红」这个组合——lint 7 error、架构检查 3 条新增、单测 31 个失败，三条防线同时失效。</p>
+
+  <h3>站得住的部分</h3>
+  <ul class="plus">
+    <li><b>文件规模分布健康</b>：<b>57%</b> 的文件 &lt;100 行，平均 158 行；&lt;300 行占 87%。这说明作者有拆文件的习惯。</li>
+    <li><b>命名有纪律</b>：32 个 store 全部导出为 <code>use*Store</code>，没有混入 Provider 模式；action 命名虽不统一（<code>set/load/open/flush</code> 混用），但整体可读。</li>
+    <li><b>测试文化是真实的</b>：405 个测试文件、3,036 个用例、62,168 行，测试∶生产 = 0.37∶1；<code>save-queue</code>、<code>buffer-registry</code>、<code>agent-session-actions</code>（3,153 行）等核心链路都有测。3005 个用例是通过的，说明主体健康，问题在最后一公里没有维护。</li>
+    <li><b>i18n 骨架完整</b>：en-US / zh-CN 各 2,263 个 key，差集为 0。</li>
+  </ul>
+
+  <h3>问题</h3>
+  <ul class="minus">
+    <li><b>16 个文件超过 1,000 行</b>，最大的 <code>table-document-view.tsx</code> 3,352 行（同时 24 条 lint 抑制、0 个测试）；<code>external-agent-settings-controller.ts</code> 2,457 行、<code>preferences/sections/agent.tsx</code> 2,085 行、<code>agent-thread-card-view.tsx</code> 2,076 行。复杂度最高的三个正好也是没测试的三个。</li>
+    <li><b>lint 债务 461 条 / 198 文件</b>，其中 409 条是边界违规（见第 1 节）。抑制文件把架构问题伪装成 lint 噪音，新人读代码时看到的是「这里被允许了」而不是「这里欠着」。</li>
+    <li><b>没有覆盖率闸门，且当前测试是红的</b>：<code>vitest.config.ts</code> 全文无 <code>coverage</code> 段；实跑 <code>vitest run</code> 结果为 <b>13 个文件 / 31 个用例失败</b>（405 文件 / 3,036 用例 / 114 秒）。失败集中在 <code>stable-caret.ts</code> 与 jsdom 环境（<code>resizeObserver?.unobserve is not a function</code>），属环境兼容问题而非产品缺陷，但它让「测试作为回归闸门」整体失效——<b>红着的测试等于没有测试</b>。</li>
+    <li><b>注释中英混杂</b>：9,427 行注释里中文 3,197 行，且常有同文件混用；另有 882 行硬编码中文字符串没走 i18n（i18n 处于「半迁移」状态）。</li>
+    <li><b>文档和代码脱节</b>：<code>CLAUDE.md</code> 写的目录树是 <code>main.tsx / components/editor/</code>，实际是 <code>entrypoints/desktop.tsx / features/editor/</code>；文中 <code>lib/tauri/client.ts</code> 这个路径不存在。全文 0 次提及 ESLint 与模块边界规则，而这两条已经挂在 pre-commit 上。</li>
+    <li><b>死代码</b>：<code>shared/ui</code> 30 个组件里 2 个全仓 0 引用（<code>surface-suspense-host.tsx</code>、<code>textarea.tsx</code>），生产依赖里 5 个零引用包。</li>
+  </ul>
+</section>
+
+<!-- ============ 4 ============ -->
+<section>
+  <h2><span class="idx">04</span>错误处理机制<span class="pt">6.0 / 10</span></h2>
+  <p class="lead">链路是「捕获 → 转换 → 呈现 → 记录」四段。这个项目前两段有设计、第三段不统一、第四段基本缺失。</p>
+
+  <h3>站得住的部分</h3>
+  <ul class="plus">
+    <li><b>错误边界实现质量高</b>：<code>shared/error-boundary.tsx</code> 有 <code>getDerivedStateFromError</code>、<code>componentDidCatch</code> 走 logger、<code>resetKeys</code> 变化自动重置并强制重挂载、手动重试按钮。<code>SurfaceBoundary</code> 还有测试。</li>
+    <li><b>边界下沉到了面板级</b>：主列表、工作区、浏览列、状态栏、每个 surface 各一个边界——单个 surface 崩不会带走整页。这是正确方向。</li>
+    <li><b>文案映射有兜底</b>：<code>friendly-error-message.ts</code> 按 timeout / 429 / 网络 / 鉴权归一，最终回退调用方的 fallback key，不会出现空文案。</li>
+    <li><b>保存错误有专门 UI</b>：保存状态条 + 冲突三选一，属于「错误即交互」的正确做法。</li>
+  </ul>
+
+  <h3>问题</h3>
+  <ul class="minus">
+    <li><b>没有全局兜底</b>：全仓 <code>window.onerror</code> / <code>unhandledrejection</code> 命中数为 <b>0</b>。promise 被 reject 后既没有 toast、没有崩溃页、也没有日志汇总——线上出问题等于黑盒。</li>
+    <li><b>边界只有 9 处，且没有单卡片粒度</b>：<code>ErrorBoundary</code> 3 处、<code>SurfaceBoundary</code> 4 处、局部 2 处。memo 列表整列共用一个边界，一条坏数据可以让整列消失。</li>
+    <li><b>日志不落地</b>：<code>lib/logger.ts</code> 只有 4 个级别 + <code>console</code>，debug 仅 DEV；没有脱敏、不写文件、不上报。注释要求「不要记录路径」，但 <code>save-queue.ts</code> 直接记了 <code>ctx.path</code>。</li>
+    <li><b>文案出口不唯一</b>：<code>toast.error</code> <b>399 处</b>，<code>friendlyErrorMessage</code> 只有 <b>106 处</b>。也就是说大部分错误把后端原始 message 直接怼给用户。另有 <code>platform/tauri/errors.ts</code> 第三套域内映射。</li>
+    <li><b>静默吞错 12%</b>：436 个 catch 块里 15 个空、51 个只 <code>console</code>；<code>.catch</code> 里静默 54 处。多数是清理/降级场景，风险低，但完全不可观测。</li>
+    <li><b>关键交互缺恢复路径</b>：agent 发送失败只「toast + 恢复草稿」，没有「重发」按钮；流中断只置 reconnect notice，无自动续传。</li>
+    <li><b>上报钩子是死的</b>：<code>ErrorBoundary</code> 提供 <code>onError</code> 回调，但 <code>app.tsx</code> 两处调用都没传。</li>
+  </ul>
+
+  <div class="callout bad">
+    <b>最该修的一条：</b>挂上 <code>unhandledrejection</code> + <code>window.onerror</code>，并给 <code>ErrorBoundary</code> 接 <code>onError</code>。这两件事加起来不到 40 行代码，却能把「729 处 void promise 中 85% 无人接」的暴露面从「整站黑盒」降到「可观测」——性价比是所有建议里最高的。
+  </div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section>
+  <h2><span class="idx">05</span>整体一致性与扩展性<span class="pt">5.5 / 10</span></h2>
+  <p class="lead">同一个问题在不同 feature 里有不同答案。这在 20 个模块、多个作者、两年演进的规模下几乎必然发生，但这里缺的是「收敛动作」，而不是「收敛意识」——设计 token、surface 注册表、public API 都做了，就是没推广开。</p>
+
+  <h3>站得住的部分</h3>
+  <ul class="plus">
+    <li><b>设计 token 有真源</b>：<code>styles/theme/*.css</code> 5 套主题 × 54 个变量，<code>tailwind.config.js</code> 映射了约 20 个语义色。基础设施是在的。</li>
+    <li><b>surface 是真注册表</b>：19 种 kind 集中注册，<code>satisfies Record</code> 能在编译期兜住「注册了但没实现」。</li>
+    <li><b>IPC 有统一客户端</b>：299 个文件走 <code>@platform/tauri/client</code>，不各写各的 fetch 封装。</li>
+    <li><b>plugin 是声明式、受限执行</b>：manifest v2 + 6 个 renderer id，未知 format 在安装前拒绝。作为「产物插件」模型是成熟的。</li>
+    <li><b>启动体积有预算并被执行</b>：324 KB gzip / 340 KB 预算，靠 manifest 复算静态闭包而不是靠肉眼。这条其实属于工程基建的亮点。</li>
+  </ul>
+
+  <h3>问题</h3>
+  <ul class="minus">
+    <li><b>store 是「形式统一、写法分裂」</b>：32 个 zustand store 存在三种范式——<code>note-store.ts</code>（930 行，内联 repository + 直接引用 3 个别的 store）、<code>agent-session-store.ts</code>（647 行，persist + subscribeWithSelector + 7 个 slice）、<code>document-store.ts</code>（257 行薄壳，委托 service）。<code>devtools</code> 使用数为 0。</li>
+    <li><b>跨模块通信有四套并存</b>：直接 <code>getState()</code>（1,761 处）、<code>lib/event-dispatcher</code>、<code>lib/memo-dispatcher</code>、Tauri <code>event-bus</code>（29 处 / 75 个订阅）。哪种场景该用哪套，没有规则。</li>
+    <li><b>设计 token 被大面积绕过</b>：arbitrary value <b>3,849 处</b>，其中 <code>text-[var(--foreground)]</code> 455 处、<code>text-[var(--muted-foreground)]</code> 634 处——而映射好的 <code>text-foreground</code> 只用了 8 次。<b>token 建好了，但没人用语义类。</b></li>
+    <li><b>CSS 无预算</b>：42 个文件 / 17,429 行 / <b>391 个 <code>!important</code></b>。JS 有 340 KB 闸门，CSS 没有对应约束。</li>
+    <li><b>同一件事多种实现</b>：文件树 2 套（<code>notebook-file-tree</code> 1,671 行 vs <code>folder-file-tree</code> 658 行）、拖拽排序 3 套、通知 4 套（sonner / actionable-notice-store / created-document-notices / SurfaceNotice）、loading skeleton 6 份。</li>
+    <li><b>扩展成本高</b>：新增一种文件 surface 要改约 <b>11 个文件</b> + 9 处 <code>switch</code>（<code>surface-registry.ts</code>、<code>surface-contract.ts</code>、renderer-registry、resolvers…）。有注册表，但没有单点注册。</li>
+    <li><b>plugin 不能扩展 UI</b>：只能产出既有 renderer 的产物，无法新增 surface 或注册组件——作为「插件平台」是封闭的。</li>
+    <li><b>概念长期撕裂</b>：Note 6,741 次 / Document 3,881 次 / File 2,686 次 / Memo 1,448 次；<code>note-store</code> 与 <code>document-store</code> 并存。<code>features/document</code> 里提到 note 266 次，<code>features/memo</code> 里提到 document 316 次。</li>
+  </ul>
+</section>
+
+<!-- ============ 横向 ============ -->
+<section>
+  <h2><span class="idx">06</span>三个跨维度的系统性问题</h2>
+  <p class="lead">上面五节的问题，本质上收敛为三件事。改这三件，五个维度的分数会一起动。</p>
+
+  <div class="grid2" style="margin-top:18px">
+    <div class="mini">
+      <div class="k">1</div>
+      <div class="l" style="font-size:14px;color:var(--ink);margin-top:6px"><b>「规则」和「习惯」之间没有桥</b></div>
+      <p style="font-size:13.5px;color:var(--ink-2);margin:8px 0 0">门禁、基线、抑制文件都做了，但三者把同一笔债记了三遍，且没有递减机制。结果是：规则全绿时，债务仍在增长。缺的不是工具，是<b>清偿节奏</b>。</p>
+    </div>
+    <div class="mini">
+      <div class="k">2</div>
+      <div class="l" style="font-size:14px;color:var(--ink);margin-top:6px"><b>缺少 domain 层，业务模型散在 feature 里</b></div>
+      <p style="font-size:13.5px;color:var(--ink-2);margin:8px 0 0">note/document/workspace 是被 8 个 feature 共享的核心概念，却各自持有 store 与类型。这会同时制造：462 条私有引用、36 对环、Note/Document 命名撕裂、以及 4 套通知。<b>一个 domain 层能同时解掉这四个症状。</b></p>
+    </div>
+    <div class="mini">
+      <div class="k">3</div>
+      <div class="l" style="font-size:14px;color:var(--ink);margin-top:6px"><b>复杂度向三个文件集中</b></div>
+      <p style="font-size:13.5px;color:var(--ink-2);margin:8px 0 0">3,352 / 2,457 / 2,085 行的三个文件，同时是「最大文件 + lint 抑制最多 + 无测试」三重交集。它们不是历史遗留，而是当前仍在生长的热点（table / agent settings / agent thread card）。</p>
+    </div>
+    <div class="mini">
+      <div class="k">4</div>
+      <div class="l" style="font-size:14px;color:var(--ink);margin-top:6px"><b>错误链路断在「记录」和「恢复」</b></div>
+      <p style="font-size:13.5px;color:var(--ink-2);margin:8px 0 0">捕获有、提示有、转换半有、记录几乎没有、恢复基本没有。用户看到的是「toast 一闪 + 原始英文报错」，开发者看到的是「控制台，然后什么也没留下」。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 改进 ============ -->
+<section>
+  <h2><span class="idx">07</span>改进建议（按投入产出排序）</h2>
+  <p class="lead">原则：先做「小改动、大杠杆」，再做「结构改动」。每条都给了可验收的指标，避免又变成一份写完就归档的文档。</p>
+
+  <div class="roadmap" style="margin-top:20px">
+    <div class="step">
+      <div class="p hi">P0 · 本周</div>
+      <div class="c">
+        <h4>1. 补全局错误兜底，把黑洞变成可观测</h4>
+        <p><code>entrypoints/desktop.tsx</code> 注册 <code>window.onerror</code> + <code>unhandledrejection</code>；<code>app.tsx</code> 两处 <code>ErrorBoundary</code> 传入 <code>onError</code>；<code>logger</code> 增加一个 sink（先写 <code>console</code> + 内存环形缓冲，后续接文件/上报）。</p>
+        <p class="goal">验收：故意抛一个未捕获 promise rejection，能在日志里看到结构化记录，且用户侧有降级提示。改动量 &lt; 80 行。</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="p hi">P0 · 本周</div>
+      <div class="c">
+        <h4>2. 修绿当前两条红灯，并给基线加「只减」机制</h4>
+        <p>先修 3 条架构违规 + 7 条 lint error（两者其实是同一批穿墙引用，共 2 个文件）。然后让 <code>check-architecture.mjs</code> 输出「剩余债务数 + 较上次的变化」，CI 对「债务数上升」直接失败（现在只对新增违规失败）。</p>
+        <p class="goal">验收：<code>npm run lint</code> 与 <code>check:arch</code> 同时为绿；443 → 不超过 443，且每次 PR 能看见这个数字。目标：3 个月内降到 300 以下。</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="p hi">P0 · 本周</div>
+      <div class="c">
+        <h4>3. 给三个巨型文件上「禁止增长」闸门</h4>
+        <p>先不拆（拆要排期），但加一条脚本：<code>table-document-view.tsx</code> ≤ 3,352、<code>external-agent-settings-controller.ts</code> ≤ 2,457、<code>agent-thread-card-view.tsx</code> ≤ 2,076，超一行就失败。同时给它们各补 3 个行为测试（先锁住现有行为，再谈拆分）。</p>
+        <p class="goal">验收：三个文件行数曲线由升转平；三个月内各降 40%。</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="p mid">P1 · 1–2 月</div>
+      <div class="c">
+        <h4>4. 建 <code>domain/</code> 层，收敛 note / document / workspace</h4>
+        <p>把被 &gt;3 个 feature 共享的实体、类型、纯函数（不含 React、不含 store）下沉到 <code>domain/</code>；先搬 <code>note-store</code> 与 <code>document-store</code> 共用的模型，再让 feature 通过 domain 读取，而不是互相 import store。这是唯一能同时消解 462 条私有引用、36 对环、Note/Document 内耗的杠杆点。</p>
+        <p class="goal">验收：私有跨 feature 引用 462 → &lt;250；<code>cycles</code> 36 → &lt;20；<code>note-store</code> 被外部 feature 引用从 39 处降到个位数。</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="p mid">P1 · 1–2 月</div>
+      <div class="c">
+        <h4>5. 统一错误呈现：一个出口、一个映射</h4>
+        <p>抽 <code>presentError(err, { fallbackKey })</code>，内部完成：错误归一 → 分类映射 → toast/内联二选一 → 日志。禁止组件里直接 <code>toast.error(err.message)</code>；用 lint 规则限制 <code>toast.error</code> 的直接调用点。合并 <code>error-message</code> / <code>friendly-error-message</code> / <code>platform/tauri/errors</code> 三套映射。</p>
+        <p class="goal">验收：<code>toast.error</code> 直接调用从 399 处降到 &lt;100；错误文案 100% 走映射。</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="p mid">P1 · 1–2 月</div>
+      <div class="c">
+        <h4>6. 给测试加闸门，并补编辑器错误态</h4>
+        <p>先把 31 个失败用例修绿（多数是 jsdom 缺 <code>ResizeObserver.unobserve</code>，补一个 setup polyfill 即可）；再加 coverage，先只对 <code>features/*/store</code>、<code>use-cases</code> 设 lines 70%（避免一刀切）；同时给 <code>markdown-editor.tsx</code> 的 <code>new Editor</code> 包 try/catch 并渲染 editor-level error 态。</p>
+        <p class="goal">验收：<code>vitest run</code> 全绿并稳定；CI 出现覆盖率报告；编辑器初始化失败时有可见提示而不是空白。</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="p lo">P2 · 季度</div>
+      <div class="c">
+        <h4>7. 样式收口：让 token 真的被使用</h4>
+        <p>把高频 arbitrary value 批量替换为语义类（<code>text-[var(--foreground)]</code> → <code>text-foreground</code>，455 处；<code>muted-foreground</code> 634 处）；加 CSS 预算（体积 + <code>!important</code> 数量，391 → 0）；把 6 份 loading skeleton 合成一个带 variant 的组件。</p>
+        <p class="goal">验收：arbitrary value 3,849 → &lt;1,000；<code>!important</code> 清零；新增 CSS 不得超出预算。</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="p lo">P2 · 季度</div>
+      <div class="c">
+        <h4>8. 消重：文件树 / 拖拽 / 通知各收敛到一套</h4>
+        <p>文件树统一到一套（保留哪套取决于 surface 复用面）；拖拽 3 套合并为一个 hook；通知统一到 <code>actionable-notice</code> + sonner 两层（持久通知 vs 瞬时提示），删掉重复 store。</p>
+        <p class="goal">验收：同类实现数量从 2–4 套降到 1 套；<code>shared/ui</code> 死组件清零。</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="p lo">P2 · 季度</div>
+      <div class="c">
+        <h4>9. 把 surface 扩展点收敛为单点注册</h4>
+        <p>用「注册表 + 契约对象」替代 11 文件 / 9 switch：一个 <code>defineSurface({ kind, resolve, render, title, adapter })</code> 完成注册，其余位置只做查表。同步更新 <code>CLAUDE.md</code>（当前目录树与 IPC 路径已过期，且未提及 lint 与边界规则）。</p>
+        <p class="goal">验收：新增一种 surface 只改 1–2 个文件；文档与代码一致。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <b>如果只能做一件事：</b>做第 4 条（domain 层）。它同时是架构、可维护性、一致性三个维度的病根；其余建议是在给症状止疼。
+  </div>
+</section>
+
+<!-- ============ 附录 ============ -->
+<section>
+  <h2><span class="idx">08</span>附录：实测数据</h2>
+  <div class="table-card" style="margin-top:18px">
+  <table>
+    <thead><tr><th style="width:46%">指标</th><th style="width:20%">实测值</th><th>说明 / 对分数的意义</th></tr></thead>
+    <tbody>
+      <tr><td>生产 TS/TSX</td><td class="n">1,071 文件 / 169,719 行</td><td>中等偏大规模，已超出「靠约定可维护」的临界点</td></tr>
+      <tr><td>测试规模</td><td class="n">405 文件 / 3,036 用例 / 62,168 行</td><td>测试∶生产 = 0.37∶1，高于同类桌面应用</td></tr>
+      <tr><td>测试实跑</td><td class="n">13 文件 / 31 用例失败</td><td>114 秒跑完；失败多为 jsdom 环境兼容 → 当前 CI 红</td></tr>
+      <tr><td>跨 feature 引用合规率</td><td class="n">344 / 806 = 42.7%</td><td>57.3% 走私有路径，是架构维度主要扣分项</td></tr>
+      <tr><td>架构基线</td><td class="n">443 引用 + 36 环</td><td>存量债务规模；当前另有 3 条新增违规（红灯）</td></tr>
+      <tr><td>ESLint 抑制</td><td class="n">461 条 / 198 文件</td><td>其中 409 条为 <code>no-restricted-imports</code></td></tr>
+      <tr><td>ESLint 实跑结果</td><td class="n">7 error / 201 warning</td><td>7 个 error 全为边界违规，集中在 2 个文件 → <code>npm run lint</code> 红</td></tr>
+      <tr><td><code>any</code> / <code>@ts-ignore</code></td><td class="n">0 / 0</td><td>类型纪律的硬证据</td></tr>
+      <tr><td>千行以上文件</td><td class="n">16 个</td><td>最大 3,352 行；前三名均无测试</td></tr>
+      <tr><td>Zustand store</td><td class="n">32 个 / 3 种写法</td><td>形式统一（均 <code>use*Store</code>），实现分裂</td></tr>
+      <tr><td>全局异步兜底</td><td class="n">0 处</td><td><code>unhandledrejection</code> / <code>window.onerror</code> 均未注册</td></tr>
+      <tr><td>错误边界使用点</td><td class="n">9 处</td><td>覆盖到面板级，未到卡片级</td></tr>
+      <tr><td>静默 catch 占比</td><td class="n">66 / 436 = 15%</td><td>15 个空 catch + 51 个仅 console</td></tr>
+      <tr><td>错误文案出口</td><td class="n">toast 399 / 映射 106</td><td>多数错误直出原始 message</td></tr>
+      <tr><td>arbitrary value</td><td class="n">3,849 处</td><td>其中 2,590 处是 <code>var()</code>，token 被绕过</td></tr>
+      <tr><td>CSS</td><td class="n">42 文件 / 17,429 行 / 391 <code>!important</code></td><td>统计口径为 <code>styles/</code> 全目录；无预算约束（JS 侧有 340 KB 闸门）</td></tr>
+      <tr><td>启动图</td><td class="n">324 KB gzip / 预算 340 KB</td><td>工程基建亮点，属加分项</td></tr>
+      <tr><td>注释语言</td><td class="n">中 3,197 / 英 6,230 行</td><td>同文件混用常见；另 882 行硬编码中文未走 i18n</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<footer>
+  评审方法：全量 import 图解析（alias + 相对路径，排除测试）、门禁脚本实跑（<code>check-architecture.mjs</code>）、规模与模式静态统计、关键路径代码阅读（error-boundary / save-queue / document-commit-queue / composer-submission / markdown-editor / surface-registry）。<br>
+  统计口径差异说明：依赖数含协调层（app / shell / surface / workspace）向内引用；测试代码不计入规模与依赖统计。
+</footer>
+
+</div>
+</body>
+</html>

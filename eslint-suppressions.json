@@ -30,11 +30,6 @@
       "count": 3
     }
   },
-  "app/flowix-web/features/agent/components/agent-tasks-section.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "app/flowix-web/features/agent/components/use-agent-conversation-surface.ts": {
     "no-restricted-imports": {
       "count": 1
@@ -187,9 +182,6 @@
   "app/flowix-web/features/agent/thread-card/settings/featured-notes-controller.ts": {
     "no-restricted-imports": {
       "count": 2
-    },
-    "prefer-const": {
-      "count": 1
     }
   },
   "app/flowix-web/features/agent/thread-card/settings/notebook-agent-settings-dialog.tsx": {
@@ -994,11 +986,6 @@
   "app/flowix-web/features/surface/workspace-surface-runtime.ts": {
     "no-restricted-imports": {
       "count": 1
-    }
-  },
-  "app/flowix-web/features/surface/workspace-web-surface-renderer.tsx": {
-    "no-restricted-imports": {
-      "count": 3
     }
   },
   "app/flowix-web/features/work-documents/model.ts": {

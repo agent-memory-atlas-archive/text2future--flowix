@@ -52,6 +52,7 @@ export interface WorkspaceSurfaceRenderContext extends Pick<SurfaceViewContext,
   onRendererError?: () => void;
   registerLifecycle?: (lifecycle: SurfaceLifecycle | null, owner?: object) => void;
   webNavigation?: WorkspaceWebNavigationPort;
+  webAddressBarVisible?: boolean;
   onCollectionActiveViewChange?: (viewId: string) => void;
   /** Browser's file tree/source shell for the file kinds that use it. */
   wrapInFileBrowser?: (content: ReactNode) => ReactNode;

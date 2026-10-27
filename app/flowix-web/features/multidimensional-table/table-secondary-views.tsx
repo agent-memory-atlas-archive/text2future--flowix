@@ -387,7 +387,9 @@ export function TableKanbanView({ groupField, titleField, records, groups, rende
       const records = payload.items.filter(isKanbanRecordDragResource);
       if (records.length === payload.items.length) {
         if (records.length !== 1) return { accepted: false, reason: 'unsupported-resource' };
-        if (!config.canDropExternal) return { accepted: false, reason: 'read-only' };
+        // 内部卡片移动只取决于“能否落盘”——canDropExternal 管的是外部笔记拖入，
+        // 用它拦内部拖拽会让传了 onDropRecord 的看板变成整块只读。
+        if (!config.onDropRecord) return { accepted: false, reason: 'read-only' };
         if (location.groupId !== KANBAN_UNASSIGNED_GROUP_ID
           && (!config.groupField.options?.some((option) => option.id === location.groupId) || !config.groupField.property_key)) {
           return { accepted: false, reason: 'unavailable' };

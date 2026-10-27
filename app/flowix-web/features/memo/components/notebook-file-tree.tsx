@@ -76,6 +76,7 @@ import {
 import { useDynamicVirtualList } from '@features/memo/hooks/use-dynamic-virtual-list';
 import { useNotebookViewData } from './use-notebook-view-data';
 import { AgentRepositoriesSection } from './notebook-repositories-section';
+import { NotebookMoreSection } from './notebook-more-section';
 import { TREE_EDGE_GUTTER, INDENT_PER_LEVEL, TREE_ROW_GAP, TREE_ROW_HEIGHT, TREE_ROW_SIZE } from './notebook-tree-layout';
 import { useNotebookTreeInteraction } from './use-notebook-tree-interaction';
 import { useNotebookTreeDragController } from './use-notebook-tree-drag-controller';
@@ -472,6 +473,7 @@ export function NotebookFileTree({
   const [filesCollapsed, setFilesCollapsed] = useState(false);
   const [fileTreeSort, setFileTreeSort] = useState<FolderTreeSort>('createdAt');
   const [repositorySectionHeight, setRepositorySectionHeight] = useState(0);
+  const [moreSectionHeight, setMoreSectionHeight] = useState(0);
   const {
     sectionOrder,
     hiddenSections,
@@ -495,6 +497,7 @@ export function NotebookFileTree({
   const visibleSectionOrder = useMemo(() => sectionOrder.filter((section) => (
     !hiddenSections.includes(section) && (section === 'files'
     || section === 'repositories'
+    || section === 'more'
     || (section === 'agents' && Boolean(notebookId) && agentSectionHeight > 0)
     || (section === 'pinned' && (pinnedItems.length > 0 || pinnedHasPrevious || pinnedHasMore))
     || section === 'views')
@@ -539,6 +542,9 @@ export function NotebookFileTree({
     () => buildNotebookTreeRenderRows(visibleTreeItems, notebookPath, draft),
     [draft, notebookPath, visibleTreeItems],
   );
+  const moreSectionPosition = visibleSectionOrder.indexOf('more');
+  const moreCompactTopSpacing = moreSectionPosition > 0
+    && visibleSectionOrder[moreSectionPosition - 1] === 'repositories';
   const pinnedSectionHeight = pinnedItems.length > 0 || pinnedHasPrevious || pinnedHasMore
     ? TREE_HEADER_HEIGHT + (pinnedCollapsed ? 0 : pinnedItems.length * TREE_ROW_SIZE + (pinnedHasPrevious || pinnedHasMore ? TREE_ROW_SIZE : 0)) + 12
     : 0;
@@ -549,6 +555,7 @@ export function NotebookFileTree({
     views: viewsSectionHeight,
     files: TREE_HEADER_HEIGHT,
     repositories: repositorySectionHeight,
+    more: moreSectionHeight - (moreCompactTopSpacing ? 10 : 0),
   };
   const treeContentOffset = TREE_HEADER_HEIGHT + sectionOrder
     .slice(0, sectionOrder.indexOf('files'))
@@ -1169,6 +1176,7 @@ export function NotebookFileTree({
                   onMoveUp={() => moveTreeSection('agents', -1)}
                   onMoveDown={() => moveTreeSection('agents', 1)}
                   onCustomizeDisplay={openCustomizeDisplay}
+                  onConfigureAgentConversationCount={() => window.dispatchEvent(new CustomEvent('flowix:configure-agent-conversation-count', { detail: notebookId }))}
                 />
               )}
             />
@@ -1480,6 +1488,23 @@ export function NotebookFileTree({
               onOpenInNewTab={onNoteOpenInNewTab ? handleOpenPathInNewTab : undefined}
               viewMode="links"
               onOpenRepositoryList={() => setRepositoriesPageOpen(true)}
+            />
+          )}
+          {!hiddenSections.includes('more') && (
+            <NotebookMoreSection
+              order={sectionOrder.indexOf('more') + 1}
+              onHeightChange={setMoreSectionHeight}
+              compactTopSpacing={moreCompactTopSpacing}
+              sectionActions={(
+                <NotebookTreeSectionMenu
+                  onHideSection={() => hideTreeSection('more')}
+                  canMoveUp={visibleSectionOrder.indexOf('more') > 0}
+                  canMoveDown={visibleSectionOrder.indexOf('more') < visibleSectionOrder.length - 1}
+                  onMoveUp={() => moveTreeSection('more', -1)}
+                  onMoveDown={() => moveTreeSection('more', 1)}
+                  onCustomizeDisplay={openCustomizeDisplay}
+                />
+              )}
             />
           )}
               </div>

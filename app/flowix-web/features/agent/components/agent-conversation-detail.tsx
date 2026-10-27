@@ -334,35 +334,6 @@ function AgentConversationDetailContent({
     return { threadId: currentThreadId, runtimeConfig };
   }, []);
 
-  const ensureCodexCommandConversation = useCallback(async (command: string) => {
-    if (typeKeyRef.current !== 'codex') {
-      throw new Error('This slash command is only available for Codex');
-    }
-    const currentInstance = instanceRef.current;
-    if (!currentInstance) throw new Error('Agent session instance was not found');
-    let currentThreadId = threadIdRef.current;
-    if (!currentThreadId || needsAgentConversationInitialization(currentInstance)) {
-      if (!runtimeHandleRef.current) {
-        runtimeHandleRef.current = createExternalAgentRuntimeHandle();
-      }
-      const ensured = await ensureAgentConversationDetailThread({
-        instanceId: currentInstance.instanceId,
-        typeKey: 'codex',
-        prompt: command,
-        runtimeHandleId: runtimeHandleRef.current,
-      });
-      currentThreadId = ensured.threadId;
-      threadIdRef.current = currentThreadId;
-      return {
-        threadId: currentThreadId,
-        runtimeConfig: ensured.runtimeConfig,
-      };
-    }
-    const runtimeConfig = ensureConversationWorkspaceSnapshot(currentInstance.instanceId);
-    markConversationWorkspaceStarted(currentInstance.instanceId);
-    return { threadId: currentThreadId, runtimeConfig };
-  }, []);
-
   const composerRuntimeState = useCallback(() => {
     const id = threadIdRef.current;
     return getComposerRuntimeState(typeKeyRef.current,
@@ -502,6 +473,15 @@ function AgentConversationDetailContent({
       onSelectFeaturedNote: (ref) => {
         composerControllerRef.current?.insertMemoReference(ref);
       },
+      onSelectEmptyPrompt: (prompt) => {
+        composerControllerRef.current?.setHistoryValue(prompt, { persistDraft: true });
+      },
+      onSelectEmptySkill: (skill) => {
+        composerControllerRef.current?.selectSkill(skill);
+      },
+      onOpenEmptySkills: () => {
+        composerControllerRef.current?.openSlashMenu();
+      },
       toast: (kind, message) => toast[kind](message),
     });
     externalSettingsRef.current = externalSettings;
@@ -545,7 +525,7 @@ function AgentConversationDetailContent({
         topHistoryLoadThresholdPx: TOP_HISTORY_LOAD_THRESHOLD_PX,
         scrollDeltaEpsilonPx: SCROLL_DELTA_EPSILON_PX,
         onAtBottomChange: (atBottom) => {
-          composerParts.scrollToLatestButton.hidden = atBottom;
+          composerParts.scrollToLatestButton.hidden = atBottom || messagesRef.current.length === 0;
         },
         isDestroyed: () => destroyedRef.current,
         isCollapsed: () => false,
@@ -609,9 +589,17 @@ function AgentConversationDetailContent({
         },
         listCodexSkills: async () => {
           if (typeKeyRef.current !== 'codex') return [];
-          const ensured = await ensureCodexCommandConversation('/skill');
-          const cwd = ensured.runtimeConfig.workspaceSnapshot?.cwd ?? ensured.runtimeConfig.cwd;
-          return listCodexSkills(cwd ?? '');
+          const current = instanceRef.current;
+          const runtime = current?.runtimeConfig;
+          const notebookId = runtime?.notebookId
+            ?? runtime?.workspaceSnapshot?.notebookId
+            ?? current?.source.notebookId;
+          const notebookPath = runtime?.workspaceSnapshot?.notebookPath
+            || (notebookId
+              ? useNoteStore.getState().notebooks.find((item) => item.id === notebookId)?.path
+              : undefined)
+            || useNoteStore.getState().selectedNotebook?.path;
+          return listCodexSkills(notebookPath ?? '');
         },
         listPiSkills: async () => {
           if (typeKeyRef.current !== 'pi') return [];

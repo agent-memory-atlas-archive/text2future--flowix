@@ -337,6 +337,16 @@ export class ComposerController {
     this.updateMultiLineState();
   }
 
+  selectSkill(skill: ComposerSlashSkill): void {
+    if (this.disposed || this.editor.isDestroyed || !skill.name.trim()) return;
+    this.slashCommands.selectSkill(skill);
+  }
+
+  openSlashMenu(): void {
+    if (this.disposed || this.editor.isDestroyed) return;
+    this.slashCommands.openSlashMenu();
+  }
+
   insertMemoReference(ref: MemoRef): void {
     if (this.editor.isDestroyed || !ref.notebookId || !ref.relativePath) return;
 

@@ -3,15 +3,23 @@ import {
   getComposerSlashToken,
   insertComposerSlashToken,
   removeComposerSlashToken,
+  createSkillLibraryIcon,
 } from "@features/agent/thread-card/composer/composer-slash-token";
 import {
   displayNameForComposerSkill,
   insertComposerSkillToken,
+  preferredComposerSkillName,
 } from "@features/agent/thread-card/composer/composer-skill-token";
 import type { AgentTypeKey } from "@/types/agent";
+import { translate } from "@/lib/i18n";
+import { getCurrentAppLanguage } from "@features/preferences/public/runtime-api";
 
 import { COMPOSER_SLASH_COMMANDS, type ComposerSlashCommand } from "./composer-commands";
 import { useAgentDataStore } from "@features/agent/store/agent-data-store";
+import {
+  NOTEBOOK_SKILLS_CHANGED_EVENT,
+  type NotebookSkillsChangedDetail,
+} from "@features/agent/services/notebook-skills-events";
 export { COMPOSER_SLASH_COMMANDS, type ComposerSlashCommand } from "./composer-commands";
 
 const MENU_SCROLLBAR_HIDE_DELAY_MS = 700;
@@ -24,6 +32,7 @@ export interface ComposerSlashSkill {
   scope?: string;
   whenToUse?: string;
   modelInvocable?: boolean;
+  enabled?: boolean;
 }
 
 function composerSkillScopeLabel(scope?: string): string | undefined {
@@ -47,6 +56,29 @@ type ComposerSlashMenuItem =
   | { kind: "skill"; value: ComposerSlashSkill };
 
 export { formatCodexSkillDisplayName } from "@features/agent/thread-card/composer/composer-skill-token";
+
+const COMMAND_TITLE_KEYS = {
+  compact: "editor.threadCard.composer.slash.compact",
+  skill: "editor.threadCard.composer.slash.skill",
+  goal: "editor.threadCard.composer.slash.goal",
+  plan: "editor.threadCard.composer.slash.plan",
+  model: "editor.threadCard.composer.slash.model",
+  permission: "editor.threadCard.composer.slash.permission",
+  export: "editor.threadCard.composer.slash.export",
+} as const;
+
+function createSlashMenuIcon(): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("agent-composer-slash-menu__icon");
+  for (const d of ["M7 3h10a4 4 0 0 1 4 4v10a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V7a4 4 0 0 1 4-4Z", "M15 9 9 15"]) {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", d);
+    svg.append(path);
+  }
+  return svg;
+}
 
 export interface ComposerSlashCommandControllerOptions {
   editor: Editor;
@@ -94,11 +126,13 @@ export class ComposerSlashCommandController {
   private filtered: readonly ComposerSlashMenuItem[] = [];
   private skills: readonly ComposerSlashSkill[] = [];
   private skillsStatus: "idle" | "loading" | "ready" | "error" = "idle";
-  private skillsPromise: Promise<readonly ComposerSlashSkill[]> | null = null;
+  private skillsScopeId: string | null = null;
+  private skillsRequestId = 0;
   private activeIndex = 0;
   private isKeyboardNavigation = true;
   private dismissedValue: string | null = null;
   private slashActive = false;
+  private forcedSlashMenuRequested = false;
   private disposed = false;
   private menuScrollbarHideTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -142,6 +176,7 @@ export class ComposerSlashCommandController {
     document.addEventListener("pointerdown", this.handleOutsidePointerDown, true);
     window.addEventListener("resize", this.updateMenuPosition);
     window.addEventListener("scroll", this.updateMenuPosition, true);
+    window.addEventListener(NOTEBOOK_SKILLS_CHANGED_EVENT, this.handleNotebookSkillsChanged);
     this.refresh();
   }
 
@@ -157,54 +192,78 @@ export class ComposerSlashCommandController {
     document.removeEventListener("pointerdown", this.handleOutsidePointerDown, true);
     window.removeEventListener("resize", this.updateMenuPosition);
     window.removeEventListener("scroll", this.updateMenuPosition, true);
+    window.removeEventListener(NOTEBOOK_SKILLS_CHANGED_EVENT, this.handleNotebookSkillsChanged);
     this.closeMenu();
     removeComposerSlashToken(this.editor);
-
   }
 
-  refresh(): void {
+  private readonly handleNotebookSkillsChanged = (event: Event): void => {
+    const detail = (event as CustomEvent<NotebookSkillsChangedDetail>).detail;
+    const scope = this.getSkillsScopeId?.()?.trim() || "global";
+    if (!detail || (scope !== detail.notebookId && scope !== detail.notebookPath)) return;
+    this.skillsRequestId += 1;
+    this.skillsStatus = "idle";
+    if (this.menu) this.refresh(true);
+  };
+
+  refresh(preserveSelection = false): void {
     // Keep the agent scope at the controller boundary so unscoped/custom
     // descriptors cannot accidentally make a command available to another
     // Agent.
     if (this.disposed || !this.agentType || getComposerSlashToken(this.editor)) {
       this.slashActive = false;
+      this.forcedSlashMenuRequested = false;
       this.closeMenu();
       return;
     }
 
+    const scopeId = this.getSkillsScopeId?.()?.trim() || "global";
+    if (scopeId !== this.skillsScopeId) {
+      this.skillsScopeId = scopeId;
+      this.skillsRequestId += 1;
+      this.skills = [];
+      this.skillsStatus = "idle";
+    }
+    const previousItem = preserveSelection ? this.filtered[this.activeIndex] : undefined;
     const { selection, doc } = this.editor.state;
     const value = this.editor.getMarkdown().trim();
     const cursorAtEnd = selection.empty && selection.from === doc.content.size - 1;
     const match = cursorAtEnd ? /^\/([a-z0-9._-]*)$/i.exec(value) : null;
-    if (!match) {
+    const isForcedSlashMenuRequested = this.forcedSlashMenuRequested && !match;
+    if (!match && !isForcedSlashMenuRequested) {
       this.slashActive = false;
       this.closeMenu();
       return;
     }
-    if (value === this.dismissedValue) {
+    if (match && value === this.dismissedValue) {
       this.closeMenu();
       return;
     }
 
     // Refresh once per slash entry, including after a transient failure.
     // Filtering an open slash must not start another catalog request.
-    if ((this.agentType === "dsh" || this.agentType === "pi") && !this.slashActive &&
+    const isSlashMenuEntry = Boolean(match) || isForcedSlashMenuRequested;
+    if (isSlashMenuEntry && !this.slashActive &&
       (this.skillsStatus === "ready" || this.skillsStatus === "error")) {
       this.skillsStatus = "idle";
     }
-    this.slashActive = true;
-    const query = match[1].toLowerCase();
+    this.slashActive = isSlashMenuEntry;
+    const query = match ? match[1].toLowerCase() : "";
     const commands: readonly ComposerSlashMenuItem[] = this.commands
       .filter((command) => !command.agentType || command.agentType === this.agentType)
       // Skills are now direct candidates in this list; the old `/skill`
       // submenu entry would only duplicate that behavior.
       .filter((command) => command.execution !== "dsh-skill" && command.execution !== "codex-skill")
       .map((command) => ({ kind: "command" as const, value: command }));
-    const skills: readonly ComposerSlashMenuItem[] = this.skillsStatus === "ready"
-      ? this.skills.map((skill) => ({ kind: "skill" as const, value: skill }))
+    const skillsAreVisible = this.skillsStatus === "ready" ||
+      (this.skillsStatus === "loading" && this.skills.length > 0);
+    const skills: readonly ComposerSlashMenuItem[] = skillsAreVisible
+      // Shared caches can contain the full settings catalog, including disabled skills.
+      ? this.skills.filter((skill) => skill.enabled !== false)
+        .map((skill) => ({ kind: "skill" as const, value: skill }))
       : [];
     this.filtered = [...commands, ...skills].filter((item) => {
-      const value = item.kind === "command" ? item.value.name : item.value.name;
+      const value = item.value.name;
       const label = item.kind === "skill"
         ? `${item.value.displayName ?? ""} ${item.value.description} ${item.value.shortDescription ?? ""} ${composerSkillScopeLabel(item.value.scope) ?? ""}`
         : item.value.description;
@@ -213,18 +272,23 @@ export class ComposerSlashCommandController {
     if (
       this.filtered.length === 0 &&
       this.skillsStatus !== "idle" &&
-      this.skillsStatus !== "loading"
+      this.skillsStatus !== "loading" &&
+      this.skillsStatus !== "error"
     ) {
       this.closeMenu();
       return;
     }
-    this.activeIndex = 0;
-    this.isKeyboardNavigation = true;
+    const previousIndex = previousItem ? this.filtered.findIndex((item) =>
+      item.kind === previousItem.kind && item.value.name === previousItem.value.name,
+    ) : -1;
+    this.activeIndex = previousIndex >= 0 ? previousIndex : 0;
+    if (!preserveSelection) this.isKeyboardNavigation = true;
     this.openMenu();
     void this.ensureSkillsLoaded();
   }
 
   private readonly handleEditorUpdate = (): void => {
+    this.forcedSlashMenuRequested = false;
     this.dismissedValue = null;
     this.refresh();
   };
@@ -295,6 +359,7 @@ export class ComposerSlashCommandController {
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopImmediatePropagation();
+        this.forcedSlashMenuRequested = false;
         this.dismissedValue = this.editor.getMarkdown().trim();
         this.slashActive = false;
         this.closeMenu();
@@ -318,6 +383,7 @@ export class ComposerSlashCommandController {
     if (!this.menu) return;
     const target = event.target as Node | null;
     if (target && (this.composer.contains(target) || this.menu.contains(target))) return;
+    this.forcedSlashMenuRequested = false;
     this.dismissedValue = this.editor.getMarkdown().trim();
     this.slashActive = false;
     this.closeMenu();
@@ -353,20 +419,28 @@ export class ComposerSlashCommandController {
   private renderMenuItems(): void {
     const menu = this.menu;
     if (!menu) return;
+    menu.setAttribute("aria-busy", String(this.skillsStatus === "loading"));
     menu.classList.toggle("is-keyboard-navigation", this.isKeyboardNavigation);
     menu.replaceChildren();
 
-    const appendSkillSection = (): void => {
+    const appendSection = (
+      label: "editor.threadCard.composer.slash.quickCommands" | "editor.threadCard.composer.slash.allSkills",
+    ): void => {
       const section = document.createElement("div");
       section.className = "agent-composer-slash-menu__section";
       section.setAttribute("role", "presentation");
-      section.textContent = "技能";
+      section.textContent = translate(getCurrentAppLanguage(), label);
       menu.append(section);
     };
+    let renderedCommandSection = false;
     let renderedSkillSection = false;
     this.filtered.forEach((candidate, index) => {
+      if (candidate.kind === "command" && !renderedCommandSection) {
+        appendSection("editor.threadCard.composer.slash.quickCommands");
+        renderedCommandSection = true;
+      }
       if (candidate.kind === "skill" && !renderedSkillSection) {
-        appendSkillSection();
+        appendSection("editor.threadCard.composer.slash.allSkills");
         renderedSkillSection = true;
       }
 
@@ -374,31 +448,42 @@ export class ComposerSlashCommandController {
       item.type = "button";
       item.className = "agent-composer-slash-menu__item";
       item.classList.toggle("agent-composer-slash-menu__item--active", index === this.activeIndex);
-      if (candidate.kind === "skill") item.classList.add("agent-composer-slash-menu__item--skill");
+      item.classList.add(candidate.kind === "skill"
+        ? "agent-composer-slash-menu__item--skill"
+        : "agent-composer-slash-menu__item--command");
       item.setAttribute("role", "option");
       item.setAttribute("aria-selected", String(index === this.activeIndex));
+      const icon = candidate.kind === "skill"
+        ? createSkillLibraryIcon()
+        : createSlashMenuIcon();
+      icon.classList.remove("agent-composer__skill-token-icon");
+      icon.classList.add("agent-composer-slash-menu__icon");
+      if (candidate.kind === "skill") {
+        icon.classList.add("agent-composer-slash-menu__icon--skill");
+        if (candidate.value.scope === "repo" || candidate.value.scope === "workspace") {
+          icon.classList.add("agent-composer-slash-menu__icon--project");
+        }
+      }
+      item.append(icon);
       const name = document.createElement("span");
       name.className = "agent-composer-slash-menu__name";
       name.textContent = candidate.kind === "command"
-        ? `/${candidate.value.name}`
+        ? translate(getCurrentAppLanguage(), COMMAND_TITLE_KEYS[candidate.value.name as keyof typeof COMMAND_TITLE_KEYS] ?? "editor.threadCard.composer.slash.skill")
         : this.agentType === "codex"
           ? displayNameForComposerSkill(candidate.value.name, candidate.value.displayName)
-          : candidate.value.displayName || candidate.value.name;
-      const description = document.createElement("span");
-      description.className = "agent-composer-slash-menu__description";
-      description.textContent = candidate.kind === "command"
-        ? candidate.value.description
-        : candidate.value.shortDescription || candidate.value.description || candidate.value.whenToUse || "";
+          : preferredComposerSkillName(candidate.value.name, candidate.value.displayName);
       if (candidate.kind === "skill") {
         const scopeLabel = composerSkillScopeLabel(candidate.value.scope);
+        item.append(name);
         if (scopeLabel) {
           const scope = document.createElement("span");
           scope.className = "agent-composer-slash-menu__scope";
           scope.textContent = scopeLabel;
           item.append(scope);
         }
+      } else {
+        item.append(name);
       }
-      item.append(name, description);
       item.addEventListener("mousemove", (event) => this.handleItemMouseMove(event, index));
       item.addEventListener("pointerdown", (event) => event.preventDefault());
       item.addEventListener("click", () => {
@@ -409,13 +494,14 @@ export class ComposerSlashCommandController {
     });
 
     if (!renderedSkillSection && (this.skillsStatus === "loading" || this.skillsStatus === "error")) {
-      appendSkillSection();
+      appendSection("editor.threadCard.composer.slash.allSkills");
     }
     if (this.skillsStatus === "loading") {
       const loading = document.createElement("div");
-      loading.className = "agent-composer-slash-menu__empty";
+      loading.className = "agent-composer-slash-menu__empty agent-composer-slash-menu__empty--loading";
+      loading.setAttribute("role", "status");
       loading.textContent = "正在加载 Skill…";
-      menu.append(loading);
+      menu.prepend(loading);
     } else if (this.skillsStatus === "error") {
       const error = document.createElement("div");
       error.className = "agent-composer-slash-menu__empty";
@@ -455,6 +541,7 @@ export class ComposerSlashCommandController {
   private select(command: ComposerSlashCommand): void {
     if ((command.interaction === "direct" || command.execution === "host-action") &&
       this.canExecuteCommand && !this.canExecuteCommand(command)) return;
+    this.forcedSlashMenuRequested = false;
     this.closeMenu();
     if (command.name === "model" && command.execution === "host-action") {
       this.clearInput();
@@ -494,34 +581,50 @@ export class ComposerSlashCommandController {
         : this.listDshSkills;
     if (!listSkills) {
       this.skillsStatus = "ready";
+      this.refresh();
       return;
     }
     const scopeId = this.getSkillsScopeId?.()?.trim() || "global";
+    const requestId = ++this.skillsRequestId;
+    const isCurrentRequest = (): boolean => !this.disposed && requestId === this.skillsRequestId &&
+      (this.getSkillsScopeId?.()?.trim() || "global") === scopeId;
     const cached = useAgentDataStore.getState().agents[this.agentType].catalog.skillsByNotebookId[scopeId];
-    if (cached) this.skills = cached.items;
-    this.skillsStatus = cached ? "ready" : "loading";
-    this.renderMenuItems();
-    this.skillsPromise = useAgentDataStore.getState().loadSkillCatalog(
+    this.skills = cached?.items ?? [];
+    this.skillsStatus = "loading";
+    this.refresh(true);
+    const skillsPromise = useAgentDataStore.getState().loadSkillCatalog(
       this.agentType,
       scopeId,
       async () => [...await listSkills()],
     );
     try {
-      const skills = await this.skillsPromise;
-      const currentScopeId = this.getSkillsScopeId?.()?.trim() || "global";
-      if (this.disposed || currentScopeId !== scopeId) return;
+      const skills = await skillsPromise;
+      if (!isCurrentRequest()) {
+        this.refreshForChangedSkillScope();
+        return;
+      }
       this.skills = skills;
       this.skillsStatus = "ready";
     } catch (error) {
-      if (this.disposed) return;
+      if (!isCurrentRequest()) {
+        this.refreshForChangedSkillScope();
+        return;
+      }
       this.skillsStatus = this.skills.length ? "ready" : "error";
       console.warn(`Failed to load ${this.agentType} skills`, error);
     }
-    this.activeIndex = Math.min(this.activeIndex, Math.max(0, this.filtered.length - 1));
-    this.refresh();
+    this.refresh(true);
   }
 
-  private selectSkill(skill: ComposerSlashSkill): void {
+  private refreshForChangedSkillScope(): void {
+    const currentScopeId = this.getSkillsScopeId?.()?.trim() || "global";
+    if (!this.disposed && this.menu && currentScopeId !== this.skillsScopeId) {
+      this.refresh(true);
+    }
+  }
+
+  selectSkill(skill: ComposerSlashSkill): void {
+    this.forcedSlashMenuRequested = false;
     this.closeMenu();
     if (this.agentType === "codex") {
       insertComposerSkillToken(this.editor, skill.name, skill.displayName);
@@ -531,6 +634,17 @@ export class ComposerSlashCommandController {
       insertComposerSlashToken(this.editor, skill.name, "dsh");
     }
     this.onCommandChange();
+  }
+
+  /** Open the shared slash picker without changing the current draft. */
+  openSlashMenu(): void {
+    if (this.disposed || this.editor.isDestroyed || !this.agentType) return;
+    this.forcedSlashMenuRequested = true;
+    this.dismissedValue = null;
+    this.activeIndex = 0;
+    this.isKeyboardNavigation = true;
+    this.focusInput();
+    this.refresh();
   }
 
   removeSelectedToken(): void {

@@ -22,6 +22,7 @@ const MARKMAP_BRANCH_COLORS = [
   'var(--plugin-markmap-branch-3)',
   'var(--plugin-markmap-branch-4)',
 ];
+const MARKMAP_NODE_MAX_WIDTH = 560;
 
 export interface PluginArtifactRendererHandle {
   fit?: () => void;
@@ -79,7 +80,7 @@ function MarkmapRenderer({ content, rendererRef }: RendererProps) {
         fitRatio: 0.88,
         initialExpandLevel: -1,
         maxInitialScale: 1.2,
-        maxWidth: 360,
+        maxWidth: MARKMAP_NODE_MAX_WIDTH,
         nodeMinHeight: 24,
         paddingX: 12,
         pan: true,

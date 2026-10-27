@@ -2,12 +2,51 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ArrowUpRight, ChevronLeft, ChevronRight, Globe, RotateCw, X } from 'lucide-react';
-import { canonicalUrl } from '@features/workspace/model/surface-identity';
-import type { WorkspaceWebRuntime } from '@features/workspace/model/surface-contract';
-import { createWorkspaceWebRuntime, navigateWorkspaceWebRuntime, moveWorkspaceWebHistory, reloadWorkspaceWebRuntime } from '@features/workspace/model/web-navigation';
+import { canonicalUrl } from '@/lib/url';
+import {
+  createWorkspaceWebRuntime,
+  moveWorkspaceWebHistory,
+  navigateWorkspaceWebRuntime,
+  reloadWorkspaceWebRuntime,
+  replaceWorkspaceWebRuntimeUrl,
+} from '@features/workspace/public/surface-runtime-api';
+import type { WorkspaceWebRuntime } from '@features/workspace/public/surface-runtime-api';
+import {
+  getSelectedNotebookSnapshot,
+  subscribeSelectedNotebook,
+} from '@features/memo/public/selected-notebook-api';
+import { agent } from '@platform/tauri/client';
+import type { ProjectSkillSource } from '@platform/tauri/client/agent';
+import {
+  NOTEBOOK_SKILLS_CHANGED_EVENT,
+  notifyNotebookSkillsChanged,
+} from '@features/agent/public/notebook-skills-api';
+import { useI18n } from '@/lib/i18n';
+import { toast } from '@/lib/toast';
 import { openUrl } from '@platform/tauri/opener';
+import { SkillMarketLoadingSkeleton } from '@shared/ui/skill-market-loading-skeleton';
 import { styleAccessibleIframeScrollbar } from '@shared/ui/iframe-scrollbar';
 import type { WorkspaceSurfaceRendererData, WorkspaceSurfaceRenderContext, WorkspaceWebNavigationPort } from './workspace-surface-renderer-contract';
+
+import { skillMarketLanguageForUrl, skillMarketOriginForUrl, skillMarketUrlForLanguage } from './skill-market-origin';
+import { isSkillInstallationUnavailable } from './skill-market-install-error';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isValidSkillSource(value: unknown): value is ProjectSkillSource | null | undefined {
+  return value === undefined || value === null || (isRecord(value)
+    && typeof value.repository === 'string' && value.repository.length <= 200
+    && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value.repository)
+    && typeof value.directory === 'string' && value.directory.length <= 512
+    && (value.revision === undefined || value.revision === null
+      || (typeof value.revision === 'string' && /^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$/.test(value.revision))));
+}
+
+function isValidSkillArchive(value: unknown, id: string, origin: string): value is { url: string; source?: ProjectSkillSource | null } {
+  return isRecord(value) && value.url === `${origin}/skills/archives/${id}.zip` && isValidSkillSource(value.source);
+}
 
 /** Work owns a view-local web session; Browser injects its tab runtime port. */
 function useLocalWebNavigation(url: string) {
@@ -34,7 +73,11 @@ function useLocalWebNavigation(url: string) {
 
 function browserTitleForUrl(url: string): string {
   try {
-    return new URL(url).hostname || url;
+    const parsed = new URL(url);
+    if (skillMarketOriginForUrl(url, import.meta.env.DEV)) {
+      return skillMarketLanguageForUrl(url) === 'en-US' ? 'Skill Market' : '技能市场';
+    }
+    return parsed.hostname || url;
   } catch {
     return url;
   }
@@ -53,6 +96,7 @@ export function WebRenderer({ surface, context }: {
   surface: Extract<WorkspaceSurfaceRendererData, { kind: 'web' }>;
   context: WorkspaceSurfaceRenderContext;
 }) {
+  const { language } = useI18n();
   const local = useLocalWebNavigation(surface.url);
   const port = context.webNavigation ?? local.port;
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -61,10 +105,190 @@ export function WebRenderer({ surface, context }: {
   const lastLoadedUrlRef = useRef(runtime && !runtime.isLoading ? runtime.currentUrl : null);
   const currentUrl = runtime?.currentUrl ?? surface.url;
   const reloadToken = runtime?.reloadToken ?? 0;
+  const skillMarketOrigin = skillMarketOriginForUrl(currentUrl, import.meta.env.DEV);
+  const isSkillMarket = skillMarketOrigin !== null;
+  const isEnglishMarket = isSkillMarket && language === 'en-US';
   const [address, setAddress] = useState(currentUrl);
   const [pageTitle, setPageTitle] = useState(() => browserTitleForUrl(currentUrl));
   const [addressError, setAddressError] = useState<string | null>(null);
   const [showEmbedTimeout, setShowEmbedTimeout] = useState(false);
+
+  useEffect(() => {
+    const localizedUrl = skillMarketUrlForLanguage(currentUrl, language, import.meta.env.DEV);
+    if (localizedUrl && localizedUrl !== currentUrl) {
+      const current = port.getRuntime();
+      port.setRuntime(current ? replaceWorkspaceWebRuntimeUrl(current, localizedUrl) : createWorkspaceWebRuntime(localizedUrl));
+      port.updateMetadata({ title: browserTitleForUrl(localizedUrl), icon: browserFaviconForUrl(localizedUrl) });
+    }
+  }, [currentUrl, language, port]);
+
+  useEffect(() => {
+    const frame = iframeRef.current;
+    if (!skillMarketOrigin || !frame) return;
+    const sendTheme = () => {
+      const target = frame.contentWindow;
+      if (!target) return;
+      try {
+        // An iframe starts as same-origin about:blank while its cross-origin
+        // navigation is pending. Don't post to that document with the market
+        // origin as the target; it produces a postMessage origin error.
+        if (target.location.origin !== skillMarketOrigin) return;
+      } catch {
+        // Reading location is blocked once the expected cross-origin page loads.
+      }
+      const root = document.documentElement;
+      const style = getComputedStyle(root);
+      const colors: Record<string, string> = {};
+      for (const token of ['background', 'document-bg', 'foreground', 'document-foreground', 'card', 'muted', 'muted-foreground', 'hover-bg', 'border', 'primary', 'primary-foreground', 'ring']) {
+        const value = style.getPropertyValue(`--${token}`).trim();
+        if (value) colors[token] = value;
+      }
+      target.postMessage({ type: 'flowix:skill-market:language', language }, skillMarketOrigin);
+      target.postMessage({
+        type: 'flowix:skill-market:theme',
+        colorScheme: style.colorScheme.includes('dark') ? 'dark' : 'light',
+        colors,
+      }, skillMarketOrigin);
+    };
+    const handleReady = (event: MessageEvent<unknown>) => {
+      if (event.origin === skillMarketOrigin && event.source === frame.contentWindow
+        && isRecord(event.data) && event.data.type === 'flowix:skill-market:ready') sendTheme();
+    };
+    const observer = new MutationObserver(sendTheme);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'style', 'class'] });
+    frame.addEventListener('load', sendTheme);
+    window.addEventListener('message', handleReady);
+    sendTheme();
+    return () => {
+      observer.disconnect();
+      frame.removeEventListener('load', sendTheme);
+      window.removeEventListener('message', handleReady);
+    };
+  }, [currentUrl, skillMarketOrigin, reloadToken, language]);
+
+  useEffect(() => {
+    let active = true;
+    const frame = iframeRef.current;
+    if (!skillMarketOrigin || !frame?.contentWindow) return;
+
+    let contextGeneration = 0;
+    const sendMarketContext = async () => {
+      const generation = ++contextGeneration;
+      const selectedNotebook = getSelectedNotebookSnapshot();
+      const notebookAvailable = Boolean(selectedNotebook?.path && !selectedNotebook.missing);
+      let installedSkillIds: string[] = [];
+      if (notebookAvailable && selectedNotebook) {
+        try {
+          const skills = await agent.readNotebookAgentSkills(selectedNotebook.path);
+          installedSkillIds = skills.map((skill) => skill.id);
+        } catch {
+          // The install command performs its own registered-notebook check.
+        }
+      }
+      const currentNotebook = getSelectedNotebookSnapshot();
+      if (!active || !frame.contentWindow || generation !== contextGeneration
+        || currentNotebook?.id !== selectedNotebook?.id || currentNotebook?.path !== selectedNotebook?.path
+        || currentNotebook?.missing !== selectedNotebook?.missing) return;
+      frame.contentWindow.postMessage({
+        type: 'flowix:skill-market:context',
+        language,
+        notebookId: notebookAvailable ? selectedNotebook?.id ?? null : null,
+        notebookAvailable,
+        notebookName: selectedNotebook?.name ?? '',
+        installedSkillIds,
+      }, skillMarketOrigin);
+    };
+
+    const handleMarketMessage = (event: MessageEvent<unknown>) => {
+      if (event.origin !== skillMarketOrigin || event.source !== frame.contentWindow || !isRecord(event.data)) return;
+      if (event.data.type === 'flowix:skill-market:ready') {
+        const title = language === 'en-US' ? 'Skill Market' : '技能市场';
+        setPageTitle(title);
+        port.updateMetadata({ title, icon: browserFaviconForUrl(currentUrl) });
+        void sendMarketContext();
+        return;
+      }
+      if (event.data.type !== 'flowix:skill-market:install') return;
+
+      const requestId = typeof event.data.requestId === 'string' && event.data.requestId.length <= 128
+        ? event.data.requestId
+        : '';
+      const notebookId = typeof event.data.notebookId === 'string' ? event.data.notebookId : '';
+      const skill = isRecord(event.data.skill) ? event.data.skill : null;
+      const id = typeof skill?.id === 'string' ? skill.id : '';
+      const displayName = typeof skill?.displayName === 'string' ? skill.displayName.trim() : '';
+      const archive = skill?.archive;
+      const validSkill = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)
+        && id.length <= 64
+        && displayName.length > 0
+        && displayName.length <= 200
+        && isValidSkillArchive(archive, id, skillMarketOrigin);
+
+      const respond = (result: Record<string, unknown>) => {
+        if (!active || !frame.contentWindow || !requestId) return;
+        frame.contentWindow.postMessage({
+          type: 'flowix:skill-market:install-result',
+          requestId,
+          notebookId,
+          ...result,
+        }, skillMarketOrigin);
+      };
+
+      if (!notebookId) {
+        respond({ success: false, code: 'no_notebook', message: '请先选择笔记本后再安装。' });
+        return;
+      }
+      if (!requestId || !validSkill) {
+        respond({ success: false, code: 'invalid_package', message: '技能内容格式无效。' });
+        return;
+      }
+
+      void (async () => {
+        const notebook = getSelectedNotebookSnapshot();
+        if (!notebook?.path || notebook.missing || notebook.id !== notebookId) {
+          respond({ success: false, code: 'notebook_changed', message: '笔记本已切换，请在当前笔记本重新安装。' });
+          return;
+        }
+        try {
+          if (!isValidSkillArchive(archive, id, skillMarketOrigin)) return;
+          await agent.installCodexProjectSkillZip(notebook.path, id, archive);
+          toast.success(language === 'en-US' ? 'Installed successfully' : '安装成功');
+          notifyNotebookSkillsChanged({ notebookId: notebook.id, notebookPath: notebook.path });
+          respond({ success: true, notebookName: notebook.name });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/already exists/i.test(message)) {
+            respond({
+              success: false,
+              code: 'already_exists',
+              notebookName: notebook.name,
+              message: '同名技能文件已存在，本次未安装；如正在安装，请稍后重试。',
+            });
+          } else if (isSkillInstallationUnavailable(message)) {
+            respond({ success: false, code: 'installation_unsupported', message: '版本过低，请升级后再试' });
+          } else {
+            console.error('Failed to install skill from the Flowix Skill Market:', error);
+            respond({ success: false, message: message.trim() ? `技能安装失败：${message}` : '技能下载或安装失败，请检查网络及笔记本目录权限后重试。' });
+          }
+        }
+      })();
+    };
+
+    const handleSkillsChanged = () => { void sendMarketContext(); };
+    window.addEventListener(NOTEBOOK_SKILLS_CHANGED_EVENT, handleSkillsChanged);
+    window.addEventListener('message', handleMarketMessage);
+    const unsubscribeNotebook = subscribeSelectedNotebook(() => {
+      void sendMarketContext();
+    });
+    void sendMarketContext();
+
+    return () => {
+      active = false;
+      window.removeEventListener(NOTEBOOK_SKILLS_CHANGED_EVENT, handleSkillsChanged);
+      window.removeEventListener('message', handleMarketMessage);
+      unsubscribeNotebook();
+    };
+  }, [currentUrl, skillMarketOrigin, port, reloadToken, language]);
 
   useEffect(() => {
     setAddress(currentUrl);
@@ -156,11 +380,14 @@ export function WebRenderer({ surface, context }: {
     } else {
       reportRuntime({ isLoading: false, error: null });
     }
+    const resolvedPageTitle = skillMarketOriginForUrl(loadedUrl, import.meta.env.DEV)
+      ? browserTitleForUrl(loadedUrl)
+      : pageTitle || browserTitleForUrl(loadedUrl);
     port.updateMetadata({
-      title: pageTitle || browserTitleForUrl(loadedUrl),
+      title: resolvedPageTitle,
       icon: browserFaviconForUrl(loadedUrl),
     });
-    setPageTitle(pageTitle || browserTitleForUrl(loadedUrl));
+    setPageTitle(resolvedPageTitle);
   }, [currentUrl, pageTitle, reportRuntime, port]);
 
   useEffect(() => {
@@ -178,12 +405,12 @@ export function WebRenderer({ surface, context }: {
         : isLoading
           ? {
               status: 'loading',
-              loadingMode: lastLoadedUrlRef.current === currentUrl ? 'background' : 'blocking',
+              loadingMode: isSkillMarket || lastLoadedUrlRef.current === currentUrl ? 'background' : 'blocking',
               retainContent: true,
             }
           : { status: 'ready' },
     });
-  }, [context.reportPresentation, currentUrl, pageTitle, port.reload, runtime?.error, runtime?.isLoading]);
+  }, [context.reportPresentation, currentUrl, isSkillMarket, pageTitle, port.reload, runtime?.error, runtime?.isLoading]);
 
   const handleOpenInSystemBrowser = useCallback(() => {
     void openUrl(currentUrl).catch(() => {
@@ -193,7 +420,7 @@ export function WebRenderer({ surface, context }: {
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-[var(--background)]">
-      <form
+      {context.webAddressBarVisible !== false && <form
         onSubmit={handleNavigate}
         className="flex shrink-0 items-center gap-1 border-b border-[var(--divider)] bg-[var(--bg-titlebar)] px-2 py-1.5"
       >
@@ -252,41 +479,44 @@ export function WebRenderer({ surface, context }: {
           />
         )}
         {runtime?.error && <span className="shrink-0 text-[10px] text-[var(--destructive)]">{runtime.error}</span>}
-      </form>
-      {addressError && <div className="shrink-0 px-3 py-1 text-[10px] text-[var(--destructive)]">{addressError}</div>}
-      <div className="relative min-h-0 min-w-0 flex-1 bg-white">
+      </form>}
+      {context.webAddressBarVisible !== false && addressError && <div className="shrink-0 px-3 py-1 text-[10px] text-[var(--destructive)]">{addressError}</div>}
+      <div className="relative min-h-0 min-w-0 flex-1 bg-[var(--background)]">
         <iframe
           key={`${context.viewId}:${currentUrl}:${reloadToken}`}
           ref={iframeRef}
-          title={surface.title ?? browserTitleForUrl(currentUrl)}
+          title={isSkillMarket ? (isEnglishMarket ? 'Skill Market' : '技能市场') : surface.title ?? browserTitleForUrl(currentUrl)}
           src={currentUrl}
           onLoad={handleIframeLoad}
           onError={() => {
-            reportRuntime({ isLoading: false, error: '网页加载失败' });
+            reportRuntime({ isLoading: false, error: isEnglishMarket ? 'Unable to load this page' : '网页加载失败' });
             setShowEmbedTimeout(true);
           }}
           className="h-full w-full border-0"
           referrerPolicy="no-referrer"
         />
+        {isSkillMarket && (runtime?.isLoading ?? true) && !runtime?.error && !showEmbedTimeout && (
+          <div className="absolute inset-0 z-10"><SkillMarketLoadingSkeleton /></div>
+        )}
         {showEmbedTimeout && (
           <div className="absolute inset-0 flex items-center justify-center bg-white/90 px-6 backdrop-blur-sm">
             <div className="relative flex max-w-sm flex-col items-center gap-4 rounded-xl border border-[var(--border)] bg-[var(--background)] px-8 py-7 text-center shadow-lg">
               <button
                 type="button"
-                aria-label="关闭提示"
-                title="关闭提示"
+                aria-label={isEnglishMarket ? 'Dismiss' : '关闭提示'}
+                title={isEnglishMarket ? 'Dismiss' : '关闭提示'}
                 onClick={() => setShowEmbedTimeout(false)}
                 className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted-foreground)] hover:bg-[var(--muted)]"
               >
                 <X className="h-4 w-4" />
               </button>
-              <p className="text-sm text-[var(--muted-foreground)]">网页可能禁止嵌入或加载超时</p>
+              <p className="text-sm text-[var(--muted-foreground)]">{isEnglishMarket ? 'This page may block embedding or may have timed out.' : '网页可能禁止嵌入或加载超时'}</p>
               <button
                 type="button"
                 onClick={handleOpenInSystemBrowser}
                 className="inline-flex h-8 items-center rounded-lg border border-[var(--border)] px-3 text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
               >
-                在系统浏览器中打开
+                {isEnglishMarket ? 'Open in your browser' : '在系统浏览器中打开'}
               </button>
             </div>
           </div>

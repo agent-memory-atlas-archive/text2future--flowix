@@ -6,6 +6,7 @@ import { beginDragSession, cancelDragSession, endDragSession } from '@shared/dra
 import { createTableDocument, type TableRecord } from './model';
 import { planTableNoteDrop } from './table-note-drop';
 import { TableGalleryView } from './table-secondary-views';
+import { installLayoutStub } from '../../test-support/layout-stub';
 
 it('shows a same-size translucent card at the sorted destination even when the pointer is over another position', async () => {
   const documentModel = createTableDocument('gallery');
@@ -21,6 +22,7 @@ it('shows a same-size translucent card at the sorted destination even when the p
   const container = document.createElement('div');
   document.body.append(container);
   const root = createRoot(container);
+  const layout = installLayoutStub();
   const onDrop = vi.fn();
   try {
     act(() => root.render(<TableGalleryView
@@ -42,6 +44,9 @@ it('shows a same-size translucent card at the sorted destination even when the p
       onExternalNoteDrop={onDrop}
     />));
     const firstCard = container.querySelector<HTMLElement>('[data-gallery-record="automatic"]')!;
+    // jsdom 下 rect 全 0，而 dropPositionAt 会用容器矩形做边界裁剪，
+    // 任何非 0 坐标都会被判成“在容器外”，命中测试直接返回 null。
+    layout.setBox(container.firstElementChild as HTMLElement, { left: 0, top: 0, width: 320, height: 800 });
     Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => firstCard });
     Object.defineProperty(firstCard, 'getBoundingClientRect', { configurable: true, value: () => ({ left: 0, top: 0, width: 160, height: 210 }) });
     act(() => beginDragSession({
@@ -57,6 +62,7 @@ it('shows a same-size translucent card at the sorted destination even when the p
     expect(container.querySelector('[data-gallery-preview]')).toBeNull();
   } finally {
     act(() => { cancelDragSession(); root.unmount(); });
+    layout.restore();
     container.remove();
     Reflect.deleteProperty(document, 'elementFromPoint');
   }

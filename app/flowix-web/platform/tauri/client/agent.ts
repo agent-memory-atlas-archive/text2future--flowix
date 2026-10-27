@@ -42,6 +42,23 @@ export interface NotebookAgentFile {
   frontmatter: Record<string, string>;
 }
 
+export interface ProjectSkillSource {
+  repository: string;
+  directory: string;
+  revision?: string | null;
+}
+
+export interface ProjectSkillArchive {
+  url: string;
+  source?: ProjectSkillSource | null;
+}
+
+export interface ProjectSkillResourceFile {
+  path: string;
+  content: string;
+  encoding: 'utf8' | 'base64';
+}
+
 export interface NotebookMcpDefinition {
   command?: string;
   args?: string[];
@@ -347,7 +364,7 @@ export const agent = {
   executeDeepSeekHarnessCommand: (threadId: string, command: string, message: AgentUserMessage) =>
     invoke<unknown>('execute_deepseek_harness_command', { threadId, command, message }),
   listDeepSeekHarnessSkills: (threadId: string, message: AgentUserMessage) =>
-    invoke<{ skills: Array<{ name: string; description: string; scope?: string; whenToUse?: string; modelInvocable?: boolean }> }>(
+    invoke<{ skills: Array<{ name: string; description: string; displayName?: string; path?: string; scope?: string; whenToUse?: string; modelInvocable?: boolean }> }>(
       'deepseek_harness_skill_catalog',
       { threadId, message },
     ),
@@ -460,6 +477,8 @@ export const agent = {
     invoke<CodexRuntimeInfo>('codex_runtime_info', { threadId: threadId ?? null }),
   getCodexProjectCapabilities: (cwd: string, forceReload = false) =>
     invoke<CodexProjectCapabilities>('codex_project_capabilities', { cwd, forceReload }),
+  getCodexProjectSkills: (cwd: string, forceReload = false) =>
+    invoke<unknown>('codex_project_skills', { cwd, forceReload }),
   writeCodexProjectConfig: (cwd: string, edits: Array<{ keyPath: string; value: unknown; mergeStrategy: 'replace' | 'upsert' }>, expectedVersion?: string | null) =>
     invoke<{ status: string; version: string; filePath: string; overriddenMetadata?: unknown }>('codex_project_config_write', { cwd, edits, expectedVersion: expectedVersion ?? null }),
   setCodexSkillEnabled: (cwd: string, name: string, enabled: boolean) =>
@@ -469,8 +488,19 @@ export const agent = {
   reloadCodexMcp: (cwd: string) => invoke<unknown>('codex_mcp_reload', { cwd }),
   upsertCodexProjectMcp: (cwd: string, name: string, definition: Record<string, unknown>, expectedVersion?: string | null) =>
     invoke<unknown>('codex_project_mcp_upsert', { cwd, name, definition, expectedVersion: expectedVersion ?? null }),
-  writeCodexProjectSkill: (cwd: string, name: string, description: string, instructions: string) =>
-    invoke<{ path: string }>('codex_project_skill_write', { cwd, name, description, instructions }),
+  installCodexProjectSkillZip: (cwd: string, name: string, archive: ProjectSkillArchive) =>
+    invoke<{ path: string }>('codex_project_skill_install_zip', { cwd, name, archive }),
+  writeCodexProjectSkill: (
+    cwd: string,
+    name: string,
+    description: string,
+    instructions: string,
+    displayName = name,
+    skillMarkdown?: string,
+    files: ProjectSkillResourceFile[] = [],
+  ) => invoke<{ path: string }>('codex_project_skill_write', {
+    cwd, name, description, instructions, displayName, skillMarkdown, files,
+  }),
   readNotebookAgentWorkspace: (cwd: string) =>
     invoke<NotebookAgentWorkspace>('notebook_agent_workspace_read', { cwd }),
   readNotebookAgentSkills: (cwd: string) =>

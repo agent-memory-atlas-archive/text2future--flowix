@@ -99,6 +99,19 @@ pub fn features() -> Result<PiFeatures, String> {
     Ok(features)
 }
 
+/// Pi reads `shellPath` from `settings.json` before its own discovery, so the
+/// host must honour it when deciding whether the `bash` tool can work here.
+pub fn shell_path() -> Result<Option<String>, String> {
+    let dir = pi_config_dir()?;
+    let settings = read_json(&dir.join("settings.json"))?;
+    Ok(settings
+        .get("shellPath")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned))
+}
+
 pub fn save_features(features: PiFeatures) -> Result<(), String> {
     let dir = pi_config_dir()?;
     fs::create_dir_all(&dir).map_err(|error| error.to_string())?;

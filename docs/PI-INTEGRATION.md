@@ -67,11 +67,39 @@ selected provider ID and model ID together. The reasoning selector uses Pi's
 `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max` levels. Pi RPC
 does not provide sandbox approval modes; it lets the host select built-in tools
 with `--tools`. Flowix exposes three permission choices in the conversation
-input: `read-only` enables `read`, `workspace-write` enables `read`, `edit`, and
-`write`, and `danger-full-access` enables all four (`read`, `bash`, `edit`, and
-`write`). The default remains `danger-full-access`. These choices limit which
-tools Pi can invoke; they do not provide operating-system-level filesystem
-isolation or per-path write restrictions.
+input. These choices limit which tools Pi can invoke; they do not provide
+operating-system-level filesystem isolation or per-path write restrictions.
+
+## Tool selection and the local execution environment
+
+The permission mode sets the maximum tool set; the machine decides what is
+actually usable. Flowix intersects the two before every run instead of passing
+a fixed list:
+
+- `read` and `ls` are always enabled. `ls` has no external dependency, so a
+  read-only conversation can still list directories.
+- `grep` and `find` are enabled only when `rg` / `fd` resolve on the session
+  PATH or in the Pi `bin` directory. Pi's implementations have no JavaScript
+  fallback: when the binary is missing they download from GitHub and fail the
+  call, which is not acceptable in an offline or restricted network.
+- `read-only` stops there. `workspace-write` adds `edit` and `write`.
+  `danger-full-access` adds `edit`, `write`, and the platform shell tool.
+- The shell tool is `bash` on platforms where Pi can resolve one and
+  `powershell` on native Windows without Git Bash. Pi resolves `bash` from
+  `shellPath`, Git Bash under Program Files, then `bash.exe` on `PATH`; its
+  `powershell` tool needs no installation.
+
+Pi runs as an RPC subprocess and every shell command inherits that process
+environment, so Flowix injects the PATH itself: on macOS and Linux the PATH is
+read once from the user's login shell (`$SHELL -ilc`, 1.2 s timeout, cached for
+the process lifetime) and merged ahead of the inherited PATH. Without this a
+`.app` launched from Finder only sees the launchd PATH and cannot find
+Homebrew, nvm, or uv binaries. Windows GUI processes already inherit the full
+user environment, so no login-shell lookup is performed there.
+
+The `shellPath` value in Pi's `settings.json` takes precedence over
+auto-detection. Flowix reads it when computing the tool list but does not write
+it.
 
 History is read from Pi's native session through the `get_messages` RPC after
 opening the conversation's session directory with `--continue`. A dedicated

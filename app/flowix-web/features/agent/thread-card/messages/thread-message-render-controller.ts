@@ -1,3 +1,4 @@
+import { disposeEmptyState, reuseEmptyState } from "./empty-state-lifecycle";
 import { beginMessageRenderTrace } from "./message-viewport-diagnostics";
 import { createMessageActionStates } from "./message-action-state";
 import { messageRenderKey } from "@features/agent/message/render-identity";
@@ -183,6 +184,7 @@ export class ThreadMessageRenderController {
     if (!input.shouldRenderMessages) {
       recordMessageRenderPlan("hidden", input.messages.length);
       this.disposeRenderedMessages();
+      this.removeRenderedEmptyState();
       this.body.replaceChildren();
       /*
        * body.replaceChildren() 会把 loadingIndicator 一起擦掉。下次切回可见
@@ -382,6 +384,16 @@ export class ThreadMessageRenderController {
   }
 
   private renderEmptyState(input: ThreadMessageRenderInput): void {
+    if (
+      !input.isInitialHistoryLoading
+      && !input.isThreadCachePresentationHidden
+      && !input.isThreadCacheLoading
+      && this.renderedEmptyState?.parentNode === this.body
+      && reuseEmptyState(this.renderedEmptyState)
+    ) {
+      recordMessageRenderPlan("noop", input.messages.length);
+      return;
+    }
     recordMessageRenderPlan("replace-empty", input.messages.length);
     this.removeRenderedEmptyState();
     this.resetRenderedMessageCache();
@@ -476,6 +488,7 @@ export class ThreadMessageRenderController {
   private removeRenderedEmptyState(): void {
     const emptyState = this.renderedEmptyState;
     this.renderedEmptyState = null;
+    if (emptyState) disposeEmptyState(emptyState);
 
     // Usually the reference above is enough. A controller can be recreated
     // against the same body, though, so also remove orphaned placeholders
@@ -490,6 +503,7 @@ export class ThreadMessageRenderController {
         child.classList.contains("agent-thread-card__empty") ||
         child.classList.contains("agent-thread-card__skeleton")
       ) {
+        disposeEmptyState(child);
         child.remove();
       }
     }

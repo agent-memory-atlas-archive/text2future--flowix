@@ -1,6 +1,6 @@
 import { ColumnResizeHandle } from './column-resize-handle';
 import { focusWorkspaceHostFromEvent } from '@features/workspace/public/host-api';
-import { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import {
   hideBrowserColumn,
   openBrowserColumnContentInWorkColumn,
@@ -46,6 +46,8 @@ export const BrowserColumn = memo(function BrowserColumn({
 }: BrowserColumnProps) {
   const { t } = useI18n();
   const { current, webRuntime } = useBrowserColumnViewModel();
+  const [addressBarSurfaceId, setAddressBarSurfaceId] = useState<string | null>(null);
+  const webAddressBarVisible = Boolean(current && addressBarSurfaceId === current.id);
   const { isFocused } = useBrowserColumnFocusViewModel();
   const selectedNotebook = useShellSelectedNotebook();
   const handleCreateNote = useCallback(async (templateId?: string) => {
@@ -127,6 +129,8 @@ export const BrowserColumn = memo(function BrowserColumn({
       <ColumnResizeHandle label="调整浏览器列宽度" width={width} direction={-1} onResize={onResize} />
       <BrowserColumnHeader
         current={current}
+        webAddressBarVisible={webAddressBarVisible}
+        onToggleWebAddressBar={() => setAddressBarSurfaceId(webAddressBarVisible ? null : current?.id ?? null)}
         activeSurfaceChrome={activeSurfaceChrome}
         surfaceCapabilities={activeSurfaceCapabilities}
         onToggleMemoEditorMode={handleToggleMemoEditorMode}
@@ -143,6 +147,7 @@ export const BrowserColumn = memo(function BrowserColumn({
             key={activeSurface.instanceKey}
             surface={activeSurface}
             focused={isFocused}
+            webAddressBarVisible={webAddressBarVisible}
           />
         ) : (
           <WorkspaceSurfaceStateView

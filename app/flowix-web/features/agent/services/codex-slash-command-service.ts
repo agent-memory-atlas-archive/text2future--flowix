@@ -2,9 +2,11 @@ import type { ComposerSlashSkill } from "@features/agent/thread-card/composer/co
 import type { AgentEvent } from "@/types/agent";
 import { agent } from "@platform/tauri/client/agent";
 import { useAgentSessionStore } from "@features/agent/store/agent-session-store";
+import { withNotebookSkillDisplayNames } from "./notebook-skill-display-names";
 
 type CodexSkillRecord = {
   name?: unknown;
+  displayName?: unknown;
   description?: unknown;
   shortDescription?: unknown;
   interface?: unknown;
@@ -31,8 +33,13 @@ export interface CodexSkillCatalogItem {
  * and older/forward-compatible envelopes used by Codex app-server versions.
  */
 export function parseCodexSkills(value: unknown): readonly ComposerSlashSkill[] {
+  return composerSkillsFromCatalog(parseCodexSkillCatalog(value));
+}
+
+function composerSkillsFromCatalog(catalog: readonly CodexSkillCatalogItem[]): readonly ComposerSlashSkill[] {
   const seen = new Set<string>();
-  return parseCodexSkillCatalog(value)
+  return catalog
+    .filter((skill) => skill.enabled !== false)
     .filter((skill) => {
       if (seen.has(skill.name)) return false;
       seen.add(skill.name);
@@ -101,9 +108,8 @@ function asCatalogItem(value: unknown): CodexSkillCatalogItem | null {
   return {
     name,
     description: typeof record.description === "string" ? record.description : "",
-    displayName: typeof skillInterface?.displayName === "string"
-      ? skillInterface.displayName
-      : undefined,
+    displayName: (typeof record.displayName === "string" ? record.displayName.trim() : "")
+      || (typeof skillInterface?.displayName === "string" ? skillInterface.displayName : undefined),
     shortDescription: typeof skillInterface?.shortDescription === "string"
       ? skillInterface.shortDescription
       : typeof record.shortDescription === "string"
@@ -120,15 +126,14 @@ function asCatalogItem(value: unknown): CodexSkillCatalogItem | null {
 /** Read project-scoped Codex skills without creating a model turn. */
 export async function listCodexSkills(cwd: string): Promise<readonly ComposerSlashSkill[]> {
   if (!cwd.trim()) return [];
-  return parseCodexSkills(await listCodexSkillCatalog(cwd));
+  return composerSkillsFromCatalog(await listCodexSkillCatalog(cwd));
 }
 
 /** Read the full Codex skill catalog, including source metadata used by settings. */
 export async function listCodexSkillCatalog(cwd: string): Promise<readonly CodexSkillCatalogItem[]> {
   if (!cwd.trim()) return [];
-  const capabilities = await agent.getCodexProjectCapabilities(cwd);
-  if (!capabilities.skills.ok) throw new Error(capabilities.skills.error ?? "Failed to load Codex skills");
-  return parseCodexSkillCatalog(capabilities.skills.value);
+  const catalog = await agent.getCodexProjectSkills(cwd, true);
+  return withNotebookSkillDisplayNames(cwd, parseCodexSkillCatalog(catalog));
 }
 
 /** Native Codex commands occupy the same thread as model turns and must keep

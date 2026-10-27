@@ -41,6 +41,7 @@ export function getWorkColumnSurfaceDefinition(
   registerLifecycle?: (lifecycle: SurfaceLifecycle | null, owner?: object) => void,
   focused = false,
   onRendererError?: () => void,
+  webAddressBarVisible = false,
 ): WorkColumnSurfaceDefinition {
   const data = workspaceSurfaceRendererDataFromWorkSurface(surface);
   const definition = getWorkspaceSurfaceRendererDefinition(data);
@@ -57,6 +58,7 @@ export function getWorkColumnSurfaceDefinition(
         readOnly: 'props' in surface && 'readOnly' in surface.props ? Boolean(surface.props.readOnly) : false,
         reportPresentation: reportPresentation ?? ((update) => reportWorkspaceSurfacePresentation(surface.instanceKey, update)),
         onRendererError,
+        webAddressBarVisible,
         registerLifecycle,
       }}
     />,
@@ -110,7 +112,7 @@ function transitionForSurface(surface: WorkColumnSurface): { id: number; finishO
   return typeof id === 'number' ? { id, finishOnMount } : null;
 }
 
-function WorkColumnSurfaceMount({ surface, focused }: { surface: WorkColumnSurface; focused: boolean }) {
+function WorkColumnSurfaceMount({ surface, focused, webAddressBarVisible }: { surface: WorkColumnSurface; focused: boolean; webAddressBarVisible: boolean }) {
   const transition = transitionForSurface(surface);
   const transitionId = transition?.id ?? null;
   const finishTransitionOnMount = transition?.finishOnMount ?? false;
@@ -146,15 +148,15 @@ function WorkColumnSurfaceMount({ surface, focused }: { surface: WorkColumnSurfa
   }),
     [presentationOwner, retainInitialContent, surface.instanceKey]);
 
-  return getWorkColumnSurfaceDefinition(surface, reportPresentation, registerLifecycle, focused, onRendererError).render();
+  return getWorkColumnSurfaceDefinition(surface, reportPresentation, registerLifecycle, focused, onRendererError, webAddressBarVisible).render();
 }
 
-export function WorkColumnSurfaceHost({ surface, focused = false }: { surface: WorkColumnSurface; focused?: boolean }) {
+export function WorkColumnSurfaceHost({ surface, focused = false, webAddressBarVisible = false }: { surface: WorkColumnSurface; focused?: boolean; webAddressBarVisible?: boolean }) {
   const instanceKey = `${surface.kind}:${surface.instanceKey}`;
-  return <WorkColumnSurfaceMount key={instanceKey} surface={surface} focused={focused} />;
+  return <WorkColumnSurfaceMount key={instanceKey} surface={surface} focused={focused} webAddressBarVisible={webAddressBarVisible} />;
 }
 
-export function WorkColumnContentHost({ content, focused = false, startupIdentity = '' }: { content: WorkColumnContentPresentation; focused?: boolean; startupIdentity?: string }) {
+export function WorkColumnContentHost({ content, focused = false, startupIdentity = '', webAddressBarVisible = false }: { content: WorkColumnContentPresentation; focused?: boolean; startupIdentity?: string; webAddressBarVisible?: boolean }) {
   if (content.status === 'empty') {
     reportEmptyWorkspaceSurfaceForIdentity('main-third', startupIdentity);
     const baseAppearance = content.tone === 'agent' ? workspaceSurfaceAppearance('agent-conversation')
@@ -167,5 +169,5 @@ export function WorkColumnContentHost({ content, focused = false, startupIdentit
     />;
   }
 
-  return <WorkColumnSurfaceHost surface={content.surface} focused={focused} />;
+  return <WorkColumnSurfaceHost surface={content.surface} focused={focused} webAddressBarVisible={webAddressBarVisible} />;
 }

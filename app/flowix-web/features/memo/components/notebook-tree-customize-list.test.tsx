@@ -2,7 +2,7 @@ import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NotebookTreeCustomizeList } from './notebook-tree-customize-list';
-import type { NotebookTreeSection } from './use-notebook-tree-sections';
+import type { NotebookTreeHiddenSection, NotebookTreeSection } from './use-notebook-tree-sections';
 
 vi.mock('@/lib/i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 
@@ -20,7 +20,7 @@ describe('NotebookTreeCustomizeList', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     function Harness() {
       const [order, setOrder] = useState<NotebookTreeSection[]>(['agents', 'pinned', 'files']);
-      const [hidden, setHidden] = useState<NotebookTreeSection[]>(['files']);
+      const [hidden, setHidden] = useState<NotebookTreeHiddenSection[]>(['files']);
       return <NotebookTreeCustomizeList sectionOrder={order} hiddenSections={hidden} onChange={(nextOrder, nextHidden) => {
         save(nextOrder, nextHidden);
         setOrder(nextOrder);

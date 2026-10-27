@@ -84,6 +84,7 @@ export type TurnPage = {
 export type DshSkill = {
   name: string
   description: string
+  displayName?: string
   path?: string
   scope?: 'user' | 'repo' | 'system' | 'admin' | 'workspace' | 'managed'
   enabled?: boolean

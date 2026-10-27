@@ -54,6 +54,8 @@ export function useDocumentTitlebarColors(target: DocumentTitlebarTarget) {
   const [colors, setColors] = useState<NoteColor[]>(() => readBufferColors(target) ?? projectedColors ?? []);
   const pending = useRef(0);
   const revision = useRef(0);
+  /** 最近一次「落盘失败」对应的 revision；非空即存在未保存的本地选择。 */
+  const failedRevision = useRef<number | null>(null);
   const mounted = useRef(false);
   const { path, displayId } = target.fileIdentity;
 
@@ -74,7 +76,10 @@ export function useDocumentTitlebarColors(target: DocumentTitlebarTarget) {
   }), [displayId, syncBufferColors]);
 
   useEffect(() => {
-    if (!target.indexable || pending.current > 0 || syncBufferColors()) return;
+    // 存在未保存成功的本地选择时，任何外部投影（store 刷新、慢读取回调）
+    // 都不应把 UI 改回磁盘值，否则用户刚选的颜色会“自己跳回去”。
+    if (!target.indexable || pending.current > 0 || failedRevision.current !== null) return;
+    if (syncBufferColors()) return;
     if (projectedColors) {
       setColors((previous) => equalColors(previous, projectedColors) ? previous : projectedColors);
       return;
@@ -92,18 +97,28 @@ export function useDocumentTitlebarColors(target: DocumentTitlebarTarget) {
 
   const changeColors = (next: NoteColor[]) => {
     if (!target.indexable) return;
-    ++revision.current;
+    const rev = ++revision.current;
     pending.current += 1;
     setColors(next);
-    void saveColors(target, next).catch((error) => {
-      logger.error('save colors failed', { error, path });
-      if (mounted.current) {
-        toast.error(t('media.properties.saveFailed'));
-      }
-    }).finally(() => {
-      pending.current -= 1;
-      if (mounted.current && pending.current === 0) syncBufferColors();
-    });
+    void saveColors(target, next).then(
+      () => {
+        pending.current -= 1;
+        // 只有“最新一次修改”落盘成功才解除未保存态并用 buffer 校准 UI。
+        // 更早的成功不能清掉后续失败留下的未保存标记。
+        if (rev === revision.current) failedRevision.current = null;
+        if (mounted.current && pending.current === 0 && failedRevision.current === null) {
+          syncBufferColors();
+        }
+      },
+      (error) => {
+        pending.current -= 1;
+        failedRevision.current = rev;
+        logger.error('save colors failed', { error, path });
+        if (mounted.current) {
+          toast.error(t('media.properties.saveFailed'));
+        }
+      },
+    );
   };
 
   return { colors, changeColors };

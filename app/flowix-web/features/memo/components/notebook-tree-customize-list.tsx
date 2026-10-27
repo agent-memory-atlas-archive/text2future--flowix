@@ -3,18 +3,18 @@ import { GripVertical } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { FlowixCheckbox } from '@shared/ui/flowix-checkbox';
-import type { NotebookTreeSection } from './use-notebook-tree-sections';
+import type { NotebookTreeHiddenSection, NotebookTreeSection } from './use-notebook-tree-sections';
 
 /** Shared rows for the onboarding guide and Customize display. */
 export function NotebookTreeCustomizeList({ sectionOrder, hiddenSections, onChange, itemClassName }: {
   sectionOrder: NotebookTreeSection[];
-  hiddenSections: NotebookTreeSection[];
-  onChange: (order: NotebookTreeSection[], hidden: NotebookTreeSection[]) => void;
+  hiddenSections: NotebookTreeHiddenSection[];
+  onChange: (order: NotebookTreeSection[], hidden: NotebookTreeHiddenSection[]) => void;
   itemClassName?: string;
 }) {
   const { t } = useI18n();
   const listRef = useRef<HTMLDivElement>(null);
-  const updateCustomizeSectionVisibility = useCallback((section: NotebookTreeSection, visible: boolean) => {
+  const updateCustomizeSectionVisibility = useCallback((section: NotebookTreeHiddenSection, visible: boolean) => {
     onChange(sectionOrder, visible ? hiddenSections.filter((item) => item !== section) : [...hiddenSections, section]);
   }, [hiddenSections, sectionOrder, onChange]);
   const updateCustomizeSectionOrder = useCallback((order: NotebookTreeSection[]) => {
@@ -33,6 +33,7 @@ export function NotebookTreeCustomizeList({ sectionOrder, hiddenSections, onChan
           views: t('memo.fileTree.viewsSectionTitle'),
           files: t('memo.fileTree.sectionTitle'),
           repositories: t('memo.fileTree.repositoriesTitle'),
+          more: t('memo.fileTree.moreTitle'),
         };
         const selected = !hiddenSections.includes(section);
         return <div key={section} data-customize-section={section} className={cn('group relative flex h-8 items-center gap-2 rounded-lg px-2 transition-colors hover:bg-[var(--muted)]', draggedSection.current === section && 'opacity-50', itemClassName)}>

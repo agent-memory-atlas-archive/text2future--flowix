@@ -1,4 +1,4 @@
-import { ChevronsRight, ChevronLeft, ChevronRight, Ellipsis, FilePlus2, MessageCirclePlus } from 'lucide-react';
+import { ChevronsRight, ChevronLeft, ChevronRight, Ellipsis, Link2, FilePlus2, MessageCirclePlus } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { BrowserColumnEntry } from '@features/workspace/public/browser-column-api';
 import { navigateBrowserColumnHistory, useBrowserColumnViewModel, canOpenBrowserColumnTargetInWorkColumn } from '@features/workspace/public/browser-column-api';
@@ -150,6 +150,8 @@ function BrowserColumnMediaMoreActions({
 }
 export interface BrowserColumnHeaderProps {
   current: BrowserColumnEntry | null;
+  webAddressBarVisible?: boolean;
+  onToggleWebAddressBar?: () => void;
   activeSurfaceChrome: BrowserColumnSurfaceChrome;
   surfaceCapabilities?: readonly string[];
   onToggleMemoEditorMode: (surfaceId: string) => void | Promise<void>;
@@ -207,6 +209,14 @@ export function BrowserColumnHeader(props: BrowserColumnHeaderProps) {
         />
       ) : <span className="truncate text-sm" title={title} data-tauri-drag-region>{title}</span>}
     </div>
+    {current?.target.kind === 'web' && <button
+      type="button"
+      className={actionButtonClass}
+      aria-label={props.webAddressBarVisible ? '隐藏网址条' : '显示网址条'}
+      title={props.webAddressBarVisible ? '隐藏网址条' : '显示网址条'}
+      aria-expanded={Boolean(props.webAddressBarVisible)}
+      onClick={props.onToggleWebAddressBar}
+    ><Link2 className="h-4 w-4" /></button>}
     <AgentThreadCardFullscreenExitButton host="browser-column" className="agent-thread-card-fullscreen-exit-btn" />
     {current?.target.kind === 'file-browser'
       && current.target.activeFilePath
@@ -232,7 +242,7 @@ export function BrowserColumnHeader(props: BrowserColumnHeaderProps) {
             onToggleMemoEditorMode={props.onToggleMemoEditorMode}
             iconButtonClass={actionButtonClass}
           />
-            : <DropdownMenu><DropdownMenuTrigger asChild><button type="button" className={actionButtonClass} aria-label={t('document.titlebar.moreTooltip')} title={t('document.titlebar.moreTooltip')}><Ellipsis className="h-4 w-4" /></button></DropdownMenuTrigger>
+            : current?.target.kind === 'web' ? null : <DropdownMenu><DropdownMenuTrigger asChild><button type="button" className={actionButtonClass} aria-label={t('document.titlebar.moreTooltip')} title={t('document.titlebar.moreTooltip')}><Ellipsis className="h-4 w-4" /></button></DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-[210px] rounded-xl p-1">
                 {current && <DropdownMenuItem disabled={!canOpenBrowserColumnTargetInWorkColumn(current.target)} onClick={() => void props.onOpenInWorkColumn(current.id)}>{t('tabWindow.context.openInWorkColumn')}</DropdownMenuItem>}
                 <DropdownMenuItem disabled={!props.canCreate} onClick={() => props.onCreateNote()}><FilePlus2 className="mr-2 h-4 w-4" />{t('tabWindow.context.newNote')}</DropdownMenuItem>

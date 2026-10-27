@@ -1,4 +1,5 @@
 mod runtime;
+mod shell;
 mod skill_resources;
 
 pub(crate) use runtime::resolve_pi_binary;

@@ -186,7 +186,7 @@ function createBrowserWebNavigationPort(surfaceId: string): WorkspaceWebNavigati
   };
 }
 
-function BrowserRegisteredSurfaceView({ surface, focused }: { surface: BrowserColumnSurface; focused: boolean }) {
+function BrowserRegisteredSurfaceView({ surface, focused, webAddressBarVisible = false }: { surface: BrowserColumnSurface; focused: boolean; webAddressBarVisible?: boolean }) {
   const presentationIdentity = surface.kind === 'collection'
     ? `${surface.notebookId}:${surface.folderPath}`
     : surface.kind === 'file-browser'
@@ -227,10 +227,10 @@ function BrowserRegisteredSurfaceView({ surface, focused }: { surface: BrowserCo
   const data = useMemo(() => browserSurfaceData(surface), [surface]);
   const context = useMemo(() => ({ host: 'browser-column' as const, viewId: surface.surfaceId, focused,
       initialFocus: surface.kind === 'file-browser' ? surface.documentProps.initialFocus : undefined,
-      webNavigation, onCollectionActiveViewChange,
+      webNavigation, webAddressBarVisible, onCollectionActiveViewChange,
       readOnly: surface.kind === 'file-browser' && Boolean(surface.documentProps.readOnly),
       reportPresentation, registerLifecycle }),
-    [surface, focused, webNavigation, onCollectionActiveViewChange, reportPresentation, registerLifecycle]);
+    [surface, focused, webNavigation, webAddressBarVisible, onCollectionActiveViewChange, reportPresentation, registerLifecycle]);
   return <WorkspaceSurfaceRendererView surface={data} context={context} />;
 }
 
@@ -245,6 +245,6 @@ export function browserColumnSurfaceSupports(surface: BrowserColumnSurface, capa
   return getBrowserColumnSurfaceDefinition(surface).capabilities.includes(capability);
 }
 
-export const BrowserColumnSurfaceHost = memo(function BrowserColumnSurfaceHost({ surface, focused = false }: { surface: BrowserColumnSurface; focused?: boolean }) {
-  return <BrowserRegisteredSurfaceView key={`${surface.kind}:${surface.instanceKey}`} surface={surface} focused={focused} />;
+export const BrowserColumnSurfaceHost = memo(function BrowserColumnSurfaceHost({ surface, focused = false, webAddressBarVisible = false }: { surface: BrowserColumnSurface; focused?: boolean; webAddressBarVisible?: boolean }) {
+  return <BrowserRegisteredSurfaceView key={`${surface.kind}:${surface.instanceKey}`} surface={surface} focused={focused} webAddressBarVisible={webAddressBarVisible} />;
 });

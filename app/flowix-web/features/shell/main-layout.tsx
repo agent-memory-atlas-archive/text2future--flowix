@@ -651,7 +651,16 @@ export function MainLayout({
       toast.error(t('memo.fileTree.preferenceSaveFailed'));
     }
   }, [t]);
+  const [addressBarWorkSurfaceId, setAddressBarWorkSurfaceId] = useState<string | null>(null);
+  const workWebSurfaceId = workColumnPresentation.content.status === 'surface'
+    && workColumnPresentation.content.surface.kind === 'web'
+    ? workColumnPresentation.content.surface.instanceKey : null;
+  const workWebAddressBarVisible = workWebSurfaceId !== null && addressBarWorkSurfaceId === workWebSurfaceId;
   const documentTitlebarProps = {
+    webAddressBarVisible: workWebAddressBarVisible,
+    onToggleWebAddressBar: workWebSurfaceId === null ? undefined : () => {
+      setAddressBarWorkSurfaceId(workWebAddressBarVisible ? null : workWebSurfaceId);
+    },
     reserveWindowsControls: !browserColumnVisible,
     surfaceChrome: workHeaderStyle === 'media' ? 'media' as const : 'document' as const,
     showEditorFontSwitcher: workColumnPresentation.content.status === 'surface'
@@ -965,6 +974,7 @@ export function MainLayout({
                 resetKeys={[JSON.stringify(navigationState.target)]}
               >
                 <WorkColumnContentHost
+                  webAddressBarVisible={workWebAddressBarVisible}
                   content={workColumnPresentation.content}
                   focused={!hasMultipleDocumentsSelected && focusedHostId === 'main-third'}
                   startupIdentity={JSON.stringify(navigationState.target)}

@@ -12,9 +12,19 @@ import {
   type ComposerSlashCommand,
 } from './composer-slash-command-controller';
 import { ComposerSlashToken } from './composer-slash-token';
+import { useAgentDataStore } from '@features/agent/store/agent-data-store';
+import { notifyNotebookSkillsChanged } from '@features/agent/services/notebook-skills-events';
+import { listCodexSkills } from '@features/agent/services/codex-slash-command-service';
+import { agent } from '@platform/tauri/client/agent';
+import { displayNameForComposerSkill } from './composer-skill-token';
+import type { ComposerSlashSkill } from './composer-slash-command-controller';
 
 function setup(options: {
-  agentType?: 'dsh' | 'codex';
+  agentType?: 'dsh' | 'codex' | 'pi';
+  getSkillsScopeId?: () => string;
+  listDshSkills?: () => Promise<readonly ComposerSlashSkill[]>;
+  listCodexSkills?: () => Promise<readonly ComposerSlashSkill[]>;
+  listPiSkills?: () => Promise<readonly ComposerSlashSkill[]>;
   onModelSelect?: () => void;
   onPermissionSelect?: () => void;
   onDirectCommand?: (command: ComposerSlashCommand) => void;
@@ -52,6 +62,10 @@ function setup(options: {
     composer,
     editor,
     agentType: options.agentType ?? 'dsh',
+    getSkillsScopeId: options.getSkillsScopeId,
+    listDshSkills: options.listDshSkills,
+    listCodexSkills: options.listCodexSkills,
+    listPiSkills: options.listPiSkills,
     onModelSelect: options.onModelSelect,
     onPermissionSelect: options.onPermissionSelect,
     onDirectCommand: options.onDirectCommand,
@@ -99,6 +113,12 @@ describe('ComposerSlashCommandController', () => {
       .toBe('control-in-app-browser');
   });
 
+  it('preserves explicit display names containing colons or dollar signs', () => {
+    expect(displayNameForComposerSkill('story-long-analyze', '小说:深度分析')).toBe('小说:深度分析');
+    expect(displayNameForComposerSkill('pricing', '$Budget')).toBe('$Budget');
+    expect(displayNameForComposerSkill('figma:figma-use', '  ')).toBe('figma-use');
+  });
+
   it('focuses the Tiptap editor when the input row padding is pressed', () => {
     const { input, editor, controller } = setup();
     const row = input.parentElement;
@@ -120,16 +140,17 @@ describe('ComposerSlashCommandController', () => {
   it('opens on slash and filters static commands', () => {
     const { editor, controller } = setup();
     type(editor, '/');
+    // 菜单按当前界面语言展示标题（zh-CN），命令 id 不再直接呈现给用户。
     expect([...document.querySelectorAll('.agent-composer-slash-menu__name')]
       .map((node) => node.textContent)).toEqual([
-        '/compact', '/goal', '/plan', '/model', '/permission', '/export',
+        '压缩上下文', '目标', '计划模式', '模型', '权限', '导出',
       ]);
     expect([...document.querySelectorAll('.agent-composer-slash-menu__description')]
       .every((node) => !node.textContent?.endsWith('。'))).toBe(true);
 
     type(editor, '/pla');
     expect(document.querySelectorAll('.agent-composer-slash-menu__item')).toHaveLength(1);
-    expect(document.querySelector('.agent-composer-slash-menu__name')?.textContent).toBe('/plan');
+    expect(document.querySelector('.agent-composer-slash-menu__name')?.textContent).toBe('计划模式');
     controller.dispose();
   });
 
@@ -157,7 +178,7 @@ describe('ComposerSlashCommandController', () => {
     expect(composer.querySelector('.agent-thread-card__slash-token')?.textContent).toBe(translate(getCurrentAppLanguage(), 'editor.threadCard.composer.longTask'));
     expect(composer.querySelector('.agent-thread-card__slash-token--control')).not.toBeNull();
     const wrapper = composer.querySelector('.agent-thread-card__slash-token-wrapper');
-    expect(wrapper?.childNodes).toHaveLength(3);
+    expect(wrapper?.querySelectorAll('[data-inline-atom-card]')).toHaveLength(1);
     expect(wrapper?.firstChild?.textContent).toBe('\u200B');
     expect(wrapper?.lastChild?.textContent).toBe('\u200B');
 
@@ -247,14 +268,14 @@ describe('ComposerSlashCommandController', () => {
       movementX: 4,
       movementY: 0,
     }));
-    expect(activeName()).toBe('/plan');
+    expect(activeName()).toBe('计划模式');
     expect(document.querySelector('.agent-composer-slash-menu')?.classList.contains(
       'is-keyboard-navigation',
     )).toBe(false);
 
     // Keyboard navigation takes ownership of the shared active index.
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
-    expect(activeName()).toBe('/model');
+    expect(activeName()).toBe('模型');
     expect(document.querySelector('.agent-composer-slash-menu')?.classList.contains(
       'is-keyboard-navigation',
     )).toBe(true);
@@ -265,7 +286,7 @@ describe('ComposerSlashCommandController', () => {
       movementX: 0,
       movementY: 0,
     }));
-    expect(activeName()).toBe('/model');
+    expect(activeName()).toBe('模型');
 
     // Once the pointer really moves, hover selection is enabled again.
     getItems()[5].dispatchEvent(new MouseEvent('mousemove', {
@@ -273,7 +294,7 @@ describe('ComposerSlashCommandController', () => {
       movementX: 1,
       movementY: 0,
     }));
-    expect(activeName()).toBe('/export');
+    expect(activeName()).toBe('导出');
     expect(document.querySelector('.agent-composer-slash-menu')?.classList.contains(
       'is-keyboard-navigation',
     )).toBe(false);
@@ -284,9 +305,10 @@ describe('ComposerSlashCommandController', () => {
   it('selects a command by mouse click', () => {
     const { editor, controller } = setup();
     type(editor, '/');
+    // 菜单按界面语言展示标题（zh-CN 为「目标」），不再包含命令名。
     const item = [...document.querySelectorAll<HTMLButtonElement>(
       '.agent-composer-slash-menu__item',
-    )].find((candidate) => candidate.textContent?.includes('/goal'));
+    )].find((candidate) => candidate.textContent?.includes('目标'));
     item?.click();
 
     expect(editor.getMarkdown()).toBe('[/goal](flowix://slash/dsh/goal) ');
@@ -329,10 +351,10 @@ describe('ComposerSlashCommandController', () => {
     type(editor, '/');
     expect([...document.querySelectorAll('.agent-composer-slash-menu__name')]
       .map((node) => node.textContent)).toEqual([
-        '/compact', '/goal', '/plan', '/model', '/permission',
+        '压缩上下文', '目标', '计划模式', '模型', '权限',
       ]);
     expect([...document.querySelectorAll('.agent-composer-slash-menu__name')]
-      .map((node) => node.textContent)).not.toContain('/export');
+      .map((node) => node.textContent)).not.toContain('导出');
     expect(document.querySelector('.agent-composer-slash-menu')).not.toBeNull();
     controller.dispose();
     editor.destroy();
@@ -363,6 +385,36 @@ describe('ComposerSlashCommandController', () => {
 
     controller.dispose();
     editor.destroy();
+  });
+
+  it('hides disabled Codex skills from the shared full catalog cache', async () => {
+    const scope = 'codex-disabled-skill-cache';
+    const store = useAgentDataStore.getState();
+    store.setSkillCatalog('codex', scope, [
+      { name: 'disabled-review', description: 'Disabled', enabled: false },
+      { name: 'enabled-review', description: 'Enabled', enabled: true },
+      { name: 'legacy-review', description: 'No enabled field' },
+    ]);
+    const listCodexSkills = vi.fn(async () => []);
+    const { editor, controller } = setup({
+      agentType: 'codex',
+      getSkillsScopeId: () => scope,
+      listCodexSkills,
+    });
+    const skillNames = () => [...document.querySelectorAll('.agent-composer-slash-menu__item--skill .agent-composer-slash-menu__name')]
+      .map((node) => node.textContent);
+
+    try {
+      controller.openSlashMenu();
+      expect(skillNames()).toEqual(['enabled-review', 'legacy-review']);
+      await vi.waitFor(() => expect(document.querySelector('.agent-composer-slash-menu')?.getAttribute('aria-busy')).toBe('false'));
+      expect(skillNames()).toEqual(['enabled-review', 'legacy-review']);
+      expect(listCodexSkills).not.toHaveBeenCalled();
+      expect(useAgentDataStore.getState().agents.codex.catalog.skillsByNotebookId[scope].items).toHaveLength(3);
+    } finally {
+      controller.dispose();
+      editor.destroy();
+    }
   });
 
   it('loads skills in the first-level menu', async () => {
@@ -405,6 +457,11 @@ describe('ComposerSlashCommandController', () => {
     expect(document.querySelector('.agent-composer-slash-menu__scope')?.textContent).toBe('项目');
     type(nextEditor, '');
     type(nextEditor, '/');
+    await vi.waitFor(() => expect(document.querySelector('.agent-composer-slash-menu')?.getAttribute('aria-busy')).toBe('false'));
+    expect(listDshSkills).toHaveBeenCalledOnce();
+    useAgentDataStore.getState().invalidateSkillCatalog('dsh', 'global');
+    type(nextEditor, '');
+    type(nextEditor, '/');
     await vi.waitFor(() => expect(listDshSkills).toHaveBeenCalledTimes(2));
     nextController.dispose();
     nextEditor.destroy();
@@ -427,5 +484,159 @@ describe('ComposerSlashCommandController', () => {
     expect(document.querySelector('.agent-composer-slash-menu')).toBeNull();
     controller.dispose();
     editor.destroy();
+  });
+});
+
+
+describe('slash picker asynchronous catalog lifecycle', () => {
+  it.each(['slash', 'more'])('keeps project display-name through the %s menu data pipeline', async (entry) => {
+    const root = '/notes/开发任务管理';
+    vi.spyOn(agent, 'getCodexProjectSkills').mockResolvedValue({ skills: [{
+      name: 'story-long-analyze', description: 'Analyze stories',
+      path: `${root}/.agents/skills/story-long-analyze/SKILL.md`,
+    }] });
+    vi.spyOn(agent, 'readNotebookAgentSkills').mockResolvedValue([{
+      id: 'story-long-analyze', name: '长篇小说拆文', enabled: true,
+      description: 'Analyze stories', body: 'Instructions',
+      path: '.agents/skills/story-long-analyze/SKILL.md',
+      frontmatter: { name: 'story-long-analyze', 'display-name': '长篇小说拆文' },
+    }]);
+    const { editor, controller } = setup({
+      agentType: 'codex', getSkillsScopeId: () => `project-display-name-${entry}`,
+      listCodexSkills: () => listCodexSkills(root),
+    });
+    (editor.view as unknown as { scrollToSelection: () => void }).scrollToSelection = () => undefined;
+    try {
+      if (entry === 'slash') type(editor, '/');
+      else controller.openSlashMenu();
+      await vi.waitFor(() => expect(
+        document.querySelector('.agent-composer-slash-menu__item--skill .agent-composer-slash-menu__name')?.textContent,
+      ).toBe('长篇小说拆文'));
+    } finally {
+      controller.dispose();
+      editor.destroy();
+    }
+  });
+
+  it('does not let an in-flight pre-install request replace the installed catalog', async () => {
+    const scope = 'install-during-skill-load';
+    const pending = deferred();
+    const listDshSkills = vi.fn()
+      .mockImplementationOnce(() => pending.promise)
+      .mockResolvedValueOnce([{ name: 'installed-skill', description: 'Installed' }]);
+    const { editor, controller } = setup({ getSkillsScopeId: () => scope, listDshSkills });
+    try {
+      controller.openSlashMenu();
+      notifyNotebookSkillsChanged({ notebookId: scope, notebookPath: '/notebook' });
+      pending.resolve([{ name: 'old-skill', description: 'Before install' }]);
+      await vi.waitFor(() => expect(document.querySelector('.agent-composer-slash-menu')?.textContent).toContain('installed-skill'));
+      expect(listDshSkills).toHaveBeenCalledTimes(2);
+      expect(document.querySelector('.agent-composer-slash-menu')?.textContent).not.toContain('old-skill');
+    } finally {
+      controller.dispose();
+      editor.destroy();
+    }
+  });
+
+  it('reloads an open picker after installation invalidates a fresh catalog', async () => {
+    const scope = 'installed-skill-refresh';
+    useAgentDataStore.getState().setSkillCatalog('dsh', scope, [
+      { name: 'existing-skill', description: 'Existing' },
+    ]);
+    const listDshSkills = vi.fn(async () => [
+      { name: 'existing-skill', description: 'Existing' },
+      { name: 'new-skill', displayName: '新安装技能', description: 'Installed' },
+    ]);
+    const { editor, controller } = setup({ getSkillsScopeId: () => scope, listDshSkills });
+    try {
+      controller.openSlashMenu();
+      await vi.waitFor(() => expect(document.querySelector('.agent-composer-slash-menu')?.getAttribute('aria-busy')).toBe('false'));
+      expect(listDshSkills).not.toHaveBeenCalled();
+      notifyNotebookSkillsChanged({ notebookId: scope, notebookPath: '/notebook' });
+      await vi.waitFor(() => expect(document.querySelector('.agent-composer-slash-menu')?.textContent).toContain('新安装技能'));
+      expect(listDshSkills).toHaveBeenCalledOnce();
+      expect(document.querySelector('.agent-composer-slash-menu')?.getAttribute('aria-busy')).toBe('false');
+    } finally {
+      controller.dispose();
+      editor.destroy();
+    }
+  });
+
+  function deferred() {
+    let resolve!: (skills: readonly ComposerSlashSkill[]) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<readonly ComposerSlashSkill[]>((yes, no) => {
+      resolve = yes;
+      reject = no;
+    });
+    return { promise, resolve, reject };
+  }
+
+  it('shows cached skills and loading immediately, preserving keyboard selection on completion', async () => {
+    const scope = 'review-cached-loading';
+    const store = useAgentDataStore.getState();
+    store.setSkillCatalog('dsh', scope, [{ name: 'cached-review', description: 'Cached skill' }]);
+    store.invalidateSkillCatalog('dsh', scope);
+    const request = deferred();
+    const { editor, controller, input } = setup({
+      getSkillsScopeId: () => scope,
+      listDshSkills: () => request.promise,
+    });
+    try {
+      controller.openSlashMenu();
+      expect(document.querySelector('.agent-composer-slash-menu')?.textContent).toContain('cached-review');
+      expect(document.querySelector('.agent-composer-slash-menu')?.firstElementChild?.getAttribute('role')).toBe('status');
+      expect(document.querySelector('.agent-composer-slash-menu')?.textContent).toContain('正在加载 Skill');
+      expect(document.querySelector('.agent-composer-slash-menu')?.getAttribute('aria-busy')).toBe('true');
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      const selected = document.querySelector('[aria-selected="true"]')?.textContent;
+      request.resolve([{ name: 'fresh-review', description: 'Fresh skill' }]);
+      await vi.waitFor(() => expect(document.querySelector('.agent-composer-slash-menu')?.textContent).toContain('fresh-review'));
+      expect(document.querySelector('[aria-selected="true"]')?.textContent).toBe(selected);
+      expect(document.querySelector('.agent-composer-slash-menu')?.getAttribute('aria-busy')).toBe('false');
+      expect(editor.getMarkdown()).toBe('');
+    } finally {
+      controller.dispose();
+      editor.destroy();
+    }
+  });
+
+  it('ignores an old notebook response and completes the new notebook request', async () => {
+    let scope = 'review-scope-a';
+    const first = deferred();
+    const second = deferred();
+    const { editor, controller } = setup({
+      agentType: 'pi', getSkillsScopeId: () => scope,
+      listPiSkills: () => scope.endsWith('-a') ? first.promise : second.promise,
+    });
+    try {
+      controller.openSlashMenu();
+      scope = 'review-scope-b';
+      controller.refresh();
+      first.resolve([{ name: 'old-notebook', description: 'Old' }]);
+      await Promise.resolve();
+      expect(document.querySelector('.agent-composer-slash-menu')?.textContent).not.toContain('old-notebook');
+      second.resolve([{ name: 'new-notebook', description: 'New' }]);
+      await vi.waitFor(() => expect(document.querySelector('.agent-composer-slash-menu')?.textContent).toContain('new-notebook'));
+    } finally {
+      controller.dispose();
+      editor.destroy();
+    }
+  });
+
+  it('shows a load failure even when the agent has no static commands', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const request = deferred();
+    const { editor, controller } = setup({
+      agentType: 'pi', getSkillsScopeId: () => 'review-empty-error', listPiSkills: () => request.promise,
+    });
+    try {
+      controller.openSlashMenu();
+      request.reject(new Error('catalog unavailable'));
+      await vi.waitFor(() => expect(document.querySelector('.agent-composer-slash-menu')?.textContent).toContain('加载失败'));
+    } finally {
+      controller.dispose();
+      editor.destroy();
+    }
   });
 });

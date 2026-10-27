@@ -39,6 +39,9 @@ export class MessageViewportController {
   private readonly getConversationMessageState: () => ConversationMessageStateSnapshot | null;
   private readonly loadMoreMessages: (threadId: string) => void;
 
+  private resizeObserver: ResizeObserver | null = null;
+  private contentObserver: MutationObserver | null = null;
+
   private prevCollapsed = false;
   private shouldFollowBottom = true;
   private userDetachedFromBottom = false;
@@ -55,6 +58,27 @@ export class MessageViewportController {
     this.getConversationMessageState = options.getConversationMessageState;
     this.loadMoreMessages = options.loadMoreMessages;
     this.notifyAtBottom();
+    // Layout can reach the bottom without a scroll event (viewport expansion,
+    // folded tool output, or asynchronously loaded message content).
+    if (typeof ResizeObserver !== "undefined") {
+      this.resizeObserver = new ResizeObserver(() => this.notifyAtBottom());
+      this.observeContentSize();
+      this.contentObserver = new MutationObserver(() => this.observeContentSize());
+      this.contentObserver.observe(this.body, { childList: true });
+    }
+  }
+
+  private observeContentSize(): void {
+    this.resizeObserver?.disconnect();
+    this.resizeObserver?.observe(this.body);
+    for (const child of this.body.children) {
+      this.resizeObserver?.observe(child);
+    }
+  }
+
+  dispose(): void {
+    this.resizeObserver?.disconnect();
+    this.contentObserver?.disconnect();
   }
 
   handleScroll(): void {

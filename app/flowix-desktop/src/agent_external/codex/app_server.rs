@@ -713,6 +713,20 @@ impl CodexAppServerManager {
         ))
     }
 
+    /// Read skills independently of model, plugin and MCP discovery.
+    pub async fn project_skills(
+        &self,
+        cwd: &std::path::Path,
+        force_reload: bool,
+    ) -> Result<Value, String> {
+        self.ensure_connection().await?;
+        self.request(
+            "skills/list",
+            json!({ "cwds": [cwd.to_string_lossy()], "forceReload": force_reload }),
+        )
+        .await
+    }
+
     /// Read the Codex capabilities that are effective for one project root.
     /// This is a metadata-only operation: it does not create a thread or spend
     /// model tokens. Keep the cwd explicit so project-local config and skills

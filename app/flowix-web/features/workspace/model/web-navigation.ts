@@ -12,6 +12,14 @@ export function navigateWorkspaceWebRuntime(current: WorkspaceWebRuntime, url: s
     reloadToken: current.reloadToken + 1, isLoading: true, error: null };
 }
 
+/** Automatic redirects replace the current entry so Back can leave the page. */
+export function replaceWorkspaceWebRuntimeUrl(current: WorkspaceWebRuntime, url: string): WorkspaceWebRuntime {
+  const history = [...current.history];
+  history[current.historyIndex] = url;
+  return { ...current, currentUrl: url, history,
+    reloadToken: current.reloadToken + 1, isLoading: true, error: null };
+}
+
 export function moveWorkspaceWebHistory(current: WorkspaceWebRuntime, direction: -1 | 1): WorkspaceWebRuntime | null {
   const historyIndex = current.historyIndex + direction;
   if (historyIndex < 0 || historyIndex >= current.history.length) return null;

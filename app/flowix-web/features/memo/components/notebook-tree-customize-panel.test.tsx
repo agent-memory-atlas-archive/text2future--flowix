@@ -2,7 +2,7 @@ import { act, createRef, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NotebookTreeCustomizePanel, type NotebookTreeCustomizePanelHandle } from './notebook-tree-customize-panel';
-import type { NotebookTreeSection } from './use-notebook-tree-sections';
+import type { NotebookTreeHiddenSection, NotebookTreeSection } from './use-notebook-tree-sections';
 
 vi.mock('@/lib/i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 vi.mock('@shared/ui/popover', () => ({
@@ -23,7 +23,7 @@ const panel = createRef<NotebookTreeCustomizePanelHandle>();
 const onChange = vi.fn();
 function Harness() {
   const [order, setOrder] = useState<NotebookTreeSection[]>(['files', 'views', 'pinned']);
-  const [hidden, setHidden] = useState<NotebookTreeSection[]>(['pinned']);
+  const [hidden, setHidden] = useState<NotebookTreeHiddenSection[]>(['pinned']);
   return <NotebookTreeCustomizePanel ref={panel} sectionOrder={order} hiddenSections={hidden} onChange={(nextOrder, nextHidden) => {
     onChange(nextOrder, nextHidden);
     setOrder(nextOrder);

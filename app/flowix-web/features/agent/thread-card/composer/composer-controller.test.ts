@@ -259,6 +259,11 @@ describe("ComposerController note references", () => {
       { contentType: "markdown" },
     );
     expect(controller.getPrompt()).toBe("/goal define the milestone");
+    editor.commands.setContent(
+      "[/goal](flowix://slash/dsh/goal) define the milestone",
+      { contentType: "markdown" },
+    );
+    expect(controller.getPrompt()).toBe("/goal define the milestone");
 
     editor.commands.setContent(
       "[/feedback](flowix://slash/feedback) ignored",

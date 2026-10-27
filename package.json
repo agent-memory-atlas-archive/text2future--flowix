@@ -1,7 +1,7 @@
 {
   "name": "flowix",
   "private": true,
-  "version": "1.5.13",
+  "version": "1.5.14",
   "license": "AGPL-3.0-only",
   "type": "module",
   "packageManager": "npm@10.8.2",
@@ -13,6 +13,7 @@
     "test:rust": "cargo test --manifest-path app/Cargo.toml --workspace --lib",
     "smoke": "node scripts/smoke/run-smoke.mjs",
     "lint": "eslint .",
+    "verify": "tsc --noEmit && eslint . && node scripts/check-architecture.mjs && node scripts/check-frontend-debt.mjs && vitest run",
     "check:layers": "node scripts/check-layer-boundaries.mjs",
     "check:arch": "node scripts/check-architecture.mjs",
     "check:arch:baseline": "node scripts/check-architecture.mjs --update-baseline",

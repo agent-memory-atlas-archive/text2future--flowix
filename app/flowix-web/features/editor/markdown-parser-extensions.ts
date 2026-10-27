@@ -1,5 +1,5 @@
 import { VideoEmbedMarkdownExtension } from './extensions/video-embed/markdown';
-import { BulletList, ListItem, OrderedList } from '@tiptap/extension-list';
+import { BulletList, ListItem } from '@tiptap/extension-list';
 import { TaskList } from '@tiptap/extension-task-list';
 import { TableRow } from '@tiptap/extension-table-row';
 import { TableHeader } from '@tiptap/extension-table-header';
@@ -19,6 +19,7 @@ import { MathBlockMarkdownExtension } from '@features/editor/extensions/math-blo
 import { WebCardMarkdownExtension } from '@features/editor/extensions/web-card-markdown';
 import { MarkdownParagraph, MarkdownTaskItem } from './markdown-parser-common-extensions';
 import { AgentThreadCardMarkdownExtension } from '@features/agent/thread-card/agent-thread-card-markdown-spec';
+import { FlowixOrderedList } from './markdown-ordered-list';
 import { guardListMarkdownTokenizer } from './markdown-list-tokenizer';
 
 /**
@@ -26,10 +27,6 @@ import { guardListMarkdownTokenizer } from './markdown-list-tokenizer';
  * Rejecting non-list blocks up front is what keeps parsing linear in block
  * count; see `markdown-list-tokenizer.ts`.
  */
-const GuardedOrderedList = guardListMarkdownTokenizer(
-  OrderedList,
-  /^\s*(?:[-+*]|\d{1,9}[.)])\s+/,
-);
 const GuardedTaskList = guardListMarkdownTokenizer(
   TaskList,
   /^\s*[-+*]\s+\[[ xX]\]\s+/,
@@ -57,7 +54,7 @@ export function createMarkdownParserExtensions() {
     MarkdownParagraph,
     ListItem,
     BulletList,
-    GuardedOrderedList,
+    FlowixOrderedList,
     GuardedTaskList,
     MarkdownTaskItem,
     MarkdownEscape,

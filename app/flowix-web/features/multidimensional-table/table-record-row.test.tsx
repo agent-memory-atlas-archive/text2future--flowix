@@ -162,7 +162,8 @@ describe('folder table note switching', () => {
     renderPopupContent = true;
     const view = renderRow('draft', undefined, false, false);
     expect(view.container.querySelector('[role="listbox"]')).toBeNull();
-    expect(view.container.querySelector('textarea[aria-label="新建或选择笔记"]')).toBeTruthy();
+    // allowSwitchNote=false 时 picker 退化为“只建标题”，aria-label 随之变成「笔记名称」。
+    expect(view.container.querySelector('textarea[aria-label="笔记名称"]')).toBeTruthy();
     expect(view.container.querySelector('input[type="search"]')).toBeNull();
   });
 

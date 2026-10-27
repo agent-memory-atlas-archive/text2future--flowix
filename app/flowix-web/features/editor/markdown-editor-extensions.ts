@@ -1,3 +1,4 @@
+import { FlowixOrderedList } from './markdown-ordered-list';
 import { VideoEmbed } from './extensions/video-embed/node';
 import { Editor, Extension, renderNestedMarkdownContent } from '@tiptap/core';
 import type { JSONContent } from '@tiptap/core';
@@ -38,12 +39,6 @@ import { StableCaret } from '@features/editor/extensions/stable-caret';
 import { MarkdownParagraph, MarkdownTaskItem } from './markdown-parser-common-extensions';
 import { isEmptyMarkdownPlaceholderOnly } from './markdown-normalization';
 import type { WorkspaceHostId } from '@features/workspace/public/host-api';
-
-interface NestedListMarkdownContext {
-  parentType?: string;
-  index: number;
-  meta?: { parentAttrs?: { start?: number } };
-}
 
 type MarkdownRenderContext = {
   parentType?: string | null;
@@ -233,21 +228,20 @@ const PreservedListItem = ListItem.extend({
       return '-';
     }
 
-    return renderNestedMarkdownContent(
-      node,
-      h,
-      (context: NestedListMarkdownContext) => {
-        if (context.parentType === 'bulletList') {
-          return '- ';
-        }
-        if (context.parentType === 'orderedList') {
-          const start = context.meta?.parentAttrs?.start || 1;
-          return `${start + context.index}. `;
-        }
-        return '- ';
-      },
-      ctx,
-    );
+    const start = ctx?.meta?.parentAttrs?.start || 1;
+    const prefix = ctx?.parentType === 'orderedList' ? `${start + ctx.index}. ` : '- ';
+    // Match continuation indentation to the marker width, including multi-digit
+    // numbers. Fixed two-space serialization corrupts nested code on reload.
+    const indent = ' '.repeat(prefix.length);
+    const first = h.renderChildren([content[0]]);
+    let output = prefix + first.split('\n').join(`\n${indent}`);
+    content.slice(1).forEach((child, index) => {
+      const rendered = h.renderChild?.(child, index + 1) ?? h.renderChildren([child]);
+      if (rendered === undefined || rendered === null) return;
+      const nested = rendered.split('\n').map(line => indent + line).join('\n');
+      output += child.type === 'paragraph' ? `\n\n${nested}` : `\n${nested}`;
+    });
+    return output;
   },
 });
 
@@ -321,9 +315,11 @@ export function createMarkdownEditorExtensions({
       codeBlock: false,
       paragraph: false,
       listItem: false,
+      orderedList: false,
     }),
     PreservedParagraph,
     PreservedListItem,
+    FlowixOrderedList,
     MarkdownEscape,
     HTMLStrongFallback,
     LegacyAdjacentStrongMarkdown,
