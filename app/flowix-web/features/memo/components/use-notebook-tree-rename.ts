@@ -9,6 +9,7 @@ import { replaceExternalDocumentPath } from '@features/workspace/public/note-nav
 import { renameMarkdownTitle } from '@features/document/public/file-operations-api';
 import { renameWorkspaceFile } from '@features/workspace/public/shell-api';
 import { resourceKindFromPath } from '@features/editor/code-file';
+import { fileTreeRenameFailureKey } from './file-tree-failure';
 import type { FolderTreeController } from './use-folder-tree';
 import type { DocTreeItem, TableDocumentListItem, MediaLibraryListItem } from '@platform/tauri/client';
 
@@ -75,9 +76,7 @@ export function useNotebookTreeRename({ notebookId, notebookPath, tree, tableDoc
       toast.success(t('memo.fileTree.renamed', { name: trimmed }));
       return true;
     } catch (error) {
-      toast.error(t(String(error).includes('FILE_EXISTS')
-        ? 'memo.fileTree.nameConflict'
-        : 'memo.fileTree.renameFailed'));
+      toast.error(t(fileTreeRenameFailureKey(error)));
       return false;
     }
   }, [notebookPath, notebookId, tableDocumentByPath, mediaLibraryByPath, t, tree]);

@@ -17,7 +17,7 @@ import {
   createAndOpenAgentConversation,
   requestNewConversationAgentSelection,
 } from '@features/agent/use-cases/new-conversation';
-import { useWorkspaceRestoreStore } from '@features/workspace/store/workspace-restore-store';
+import { useActiveAgentConversationInstanceId } from '@features/workspace/public/active-conversation-api';
 import { openWorkspaceSurface } from '@features/workspace/public/open-surface-api';
 import { useNoteStore } from '@features/memo/store/note-store';
 import { isAgentConversationRunning } from '@features/agent/store/conversation-run-index';
@@ -76,7 +76,8 @@ interface AgentConversationListProps {
 /**
  * The "Conversations" navigation view. It deliberately lists conversation
  * instances rather than notes: one note may contain more than one agent thread.
- * A row opens the dedicated right-panel conversation surface directly; the
+ * A row opens the conversation in the Browser column (same as the 对话 section
+ * in the file tree); the Work column stays reachable from the row menu. The
  * source note is retained only as conversation metadata/context, not navigated.
  */
 export function AgentConversationList({ isActive = true, onBack }: AgentConversationListProps) {
@@ -90,12 +91,9 @@ export function AgentConversationList({ isActive = true, onBack }: AgentConversa
   // index by scanning every loaded conversation.
   const conversationRunIndex = useAgentSessionStore((state) => state.threadRunSignatures);
   const currentNotebookId = useNoteStore((state) => state.selectedNotebook?.id ?? null);
-  const selectedInstanceId = useWorkspaceRestoreStore(
-    (state) => state.agentConversation.selectedInstanceId,
-  );
-  const conversationDetailOpen = useWorkspaceRestoreStore(
-    (state) => state.agentConversation.detailOpen,
-  );
+  // Highlight follows whatever surface is showing the conversation (Browser or
+  // Work), not just the restored Work-column selection: rows open in Browser.
+  const activeConversationInstanceId = useActiveAgentConversationInstanceId();
   const {
     conversationPage,
     isLoading,
@@ -205,10 +203,10 @@ export function AgentConversationList({ isActive = true, onBack }: AgentConversa
   ), [conversationPage, currentNotebookId, instances, threadTombstones, startedLiveThreads]);
 
   useEffect(() => {
-    if (!conversationDetailOpen || !selectedInstanceId) return;
-    const selected = conversations.find((instance) => instance.instanceId === selectedInstanceId);
-    if (selected?.threadId) markThreadRead(selected.threadId);
-  }, [conversationDetailOpen, conversations, markThreadRead, selectedInstanceId]);
+    if (!activeConversationInstanceId) return;
+    const active = conversations.find((instance) => instance.instanceId === activeConversationInstanceId);
+    if (active?.threadId) markThreadRead(active.threadId);
+  }, [activeConversationInstanceId, conversations, markThreadRead]);
 
   const conversationListItems = useMemo(() => buildConversationListItems(
     conversations, favoriteIds, { isLoadingMore, loadMoreError },
@@ -264,21 +262,28 @@ export function AgentConversationList({ isActive = true, onBack }: AgentConversa
     }
   }, []);
 
-  const revealConversation = useCallback(async (instance: AgentConversationInstance) => {
+  /**
+   * Rows mirror the file tree's 对话 section: a click opens the conversation in
+   * the Browser column. Work stays reachable through the row menu.
+   */
+  const revealConversation = useCallback((instance: AgentConversationInstance) => {
+    prepareConversation(instance);
     if (instance.threadId) markThreadRead(instance.threadId);
-
-    prepareConversation(instance);
-
-    await openWorkspaceSurface({ host: 'main-third', target: { kind: 'agent-conversation', instanceId: instance.instanceId } });
-  }, [markThreadRead, prepareConversation]);
-
-  const openConversationInBrowserColumn = useCallback((instance: AgentConversationInstance) => {
-    prepareConversation(instance);
     void openWorkspaceSurface({ host: 'browser-column', target: { kind: 'agent-conversation', instanceId: instance.instanceId } }).catch((error) => {
       logger.error('Failed to open conversation in browser column', { error });
       toast.error(error instanceof Error ? error.message : String(error));
     });
-  }, [prepareConversation]);
+  }, [markThreadRead, prepareConversation]);
+
+  /** Menu escape hatch: the row click no longer targets Work. */
+  const openConversationInWorkColumn = useCallback((instance: AgentConversationInstance) => {
+    prepareConversation(instance);
+    if (instance.threadId) markThreadRead(instance.threadId);
+    void openWorkspaceSurface({ host: 'main-third', target: { kind: 'agent-conversation', instanceId: instance.instanceId } }).catch((error) => {
+      logger.error('Failed to open conversation in work column', { error });
+      toast.error(error instanceof Error ? error.message : String(error));
+    });
+  }, [markThreadRead, prepareConversation]);
 
   // 独立对话没有文档来源，但归属当前选中的 notebook。
   const createConversation = useCallback(
@@ -439,7 +444,7 @@ export function AgentConversationList({ isActive = true, onBack }: AgentConversa
 
                 const instance = item.instance;
                 const agent = getAgentType(instance.agentType);
-                const selected = instance.instanceId === selectedInstanceId;
+                const selected = instance.instanceId === activeConversationInstanceId;
                 const running = isAgentConversationRunning(instance, conversationRunIndex);
                 return (
                   <ContextMenu key={item.key}>
@@ -457,7 +462,7 @@ export function AgentConversationList({ isActive = true, onBack }: AgentConversa
                           >
                             <button
                               type="button"
-                              onClick={() => void revealConversation(instance)}
+                              onClick={() => revealConversation(instance)}
                               title={t('status.agent.openConversation')}
                               className="flex min-w-0 flex-1 items-center gap-2 py-1 text-left text-[var(--foreground)]"
                             >
@@ -468,7 +473,7 @@ export function AgentConversationList({ isActive = true, onBack }: AgentConversa
                                 <AgentIcon typeKey={agent.id} alt="" className="h-4 w-4 object-contain" />
                                 {(running || (!!instance.threadId
                                   && latestCompletedRunIds[instance.threadId] !== readThroughRunIds[instance.threadId]
-                                  && !(conversationDetailOpen && selectedInstanceId === instance.instanceId))) && (
+                                  && activeConversationInstanceId !== instance.instanceId)) && (
                                   <span
                                     aria-hidden="true"
                                     className={cn(
@@ -505,7 +510,8 @@ export function AgentConversationList({ isActive = true, onBack }: AgentConversa
                               <DropdownMenuContent align="end" className="w-[160px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
                                 <ConversationActionItems
                                   favorite={favoriteIds.has(instance.instanceId)}
-                                  onOpen={() => openConversationInBrowserColumn(instance)}
+                                  openHost="main-third"
+                                  onOpen={() => openConversationInWorkColumn(instance)}
                                   onFavorite={() => toggleFavorite(instance.instanceId)}
                                   onRename={() => renameConversation(instance)}
                                   onArchive={() => void removeConversation(instance, 'archive')}
@@ -539,7 +545,8 @@ export function AgentConversationList({ isActive = true, onBack }: AgentConversa
                       <ConversationActionItems
                         context
                         favorite={favoriteIds.has(instance.instanceId)}
-                        onOpen={() => openConversationInBrowserColumn(instance)}
+                        openHost="main-third"
+                        onOpen={() => openConversationInWorkColumn(instance)}
                         onFavorite={() => toggleFavorite(instance.instanceId)}
                         onRename={() => renameConversation(instance)}
                         onArchive={() => void removeConversation(instance, 'archive')}

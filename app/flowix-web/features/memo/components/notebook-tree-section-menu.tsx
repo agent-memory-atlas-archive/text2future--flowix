@@ -209,7 +209,8 @@ export function NotebookTreeSectionMenu({
                 )}
                 {onCreateWorkDocuments && (
                   <DropdownMenuItem onClick={onCreateWorkDocuments} className={itemClassName}>
-                    <WorkDocumentsIcon className="h-3.5 w-3.5 opacity-100" />
+                    {/* 图形占 18×18 视框 ~76%：元素盒保持 h-3.5 对齐文字列，scale-[1.2] 光学放大到与 lucide 等大 */}
+                    <WorkDocumentsIcon className="h-3.5 w-3.5 opacity-100 scale-[1.2]" />
                     <span>{t('memo.create.workDocumentsMenuLabel')}</span>
                     <span className="ml-auto text-xs text-[var(--muted-foreground)] opacity-50 group-hover:text-[var(--primary-foreground)] group-focus-visible:text-[var(--primary-foreground)]">
                       {t('memo.create.workDocumentsTypes')}

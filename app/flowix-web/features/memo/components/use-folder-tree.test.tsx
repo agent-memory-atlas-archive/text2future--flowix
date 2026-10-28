@@ -501,6 +501,58 @@ describe('flattenVisibleTree', () => {
       'older-note.md',
     ]);
   });
+
+  it('隐藏文件夹恒定聚在普通文件夹之前, 降序也不甩到末尾', () => {
+    const state: FolderTreeState = {
+      rootChildren: [
+        { ...dir('/root/notes', 'notes'), createdMs: 80 },
+        { ...dir('/root/.trash', '.trash'), createdMs: 1 },
+        { ...dir('/root/archive', 'archive'), createdMs: 2 },
+        { ...dir('/root/.plugin-output', '.plugin-output'), createdMs: 90 },
+      ],
+      nodes: new Map(),
+      expanded: new Set(),
+      loading: false,
+      loadingDirectories: new Set(),
+      directoryErrors: new Set(),
+      error: null,
+    };
+
+    // createdAt: 隐藏组整体置顶, 组内仍按「新→旧」。
+    expect(flattenVisibleTree(state).map(({ item }) => item.name)).toEqual([
+      '.plugin-output',
+      '.trash',
+      'notes',
+      'archive',
+    ]);
+    // filenameDesc: 组内与普通组都反序, 隐藏组的位置不变。
+    expect(flattenVisibleTree(state, 'filenameDesc').map(({ item }) => item.name)).toEqual([
+      '.trash',
+      '.plugin-output',
+      'notes',
+      'archive',
+    ]);
+  });
+
+  it('手工置顶的文件夹优先于隐藏文件夹置顶', () => {
+    const state: FolderTreeState = {
+      rootChildren: [
+        { ...dir('/root/notes', 'notes'), createdMs: 80 },
+        { ...dir('/root/.trash', '.trash'), createdMs: 1 },
+        { ...dir('/root/archive', 'archive'), createdMs: 2 },
+      ],
+      nodes: new Map(),
+      expanded: new Set(),
+      loading: false,
+      loadingDirectories: new Set(),
+      directoryErrors: new Set(),
+      error: null,
+    };
+
+    expect(
+      flattenVisibleTree(state, 'createdAt', ['/root/archive']).map(({ item }) => item.name),
+    ).toEqual(['archive', '.trash', 'notes']);
+  });
 });
 
 describe('flattenLoadedTree', () => {

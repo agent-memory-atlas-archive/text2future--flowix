@@ -60,6 +60,17 @@ pub(crate) fn mark_self_write_missing_for(app: &AppHandle, path: &Path) {
     }
 }
 
+/// Announce the folder a backend command is about to create a document in.
+/// Call this before writing the file so the native create event is recognized
+/// even when it reaches the watcher first.
+pub(crate) fn mark_self_create_dir_for(app: &AppHandle, dir: &Path) {
+    if let Some(w) = current_watcher(app) {
+        if let Ok(g) = w.read() {
+            g.mark_self_create_dir(dir);
+        }
+    }
+}
+
 /// 原子写一篇笔记，并自动登记自身写入标记（写前 + 写后各一次）。
 ///
 /// 文件监听器仅凭内容哈希精确匹配判定自身写入（路径匹配不够）：写前标记关闭 notify

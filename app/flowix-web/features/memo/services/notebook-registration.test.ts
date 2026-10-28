@@ -5,10 +5,23 @@ const repository = vi.hoisted(() => ({
   list: vi.fn(), getImportStatus: vi.fn(),
 }));
 vi.mock('@features/memo/services/note-repository', () => ({ notebookRepository: repository }));
+// createNotebookRegistration now best-effort creates a default note folder via
+// the desktop files client; stub it so these repository-focused tests stay
+// isolated from Tauri IPC.
+const files = vi.hoisted(() => ({
+  createFolder: vi.fn(), getNotebookViewPreferences: vi.fn(), setNotebookViewPreferences: vi.fn(),
+}));
+vi.mock('@platform/tauri/client/desktop', () => ({ files }));
 import { createNotebookRegistration } from './notebook-creation-service';
 
 describe('notebook registration critical path', () => {
-  beforeEach(() => vi.resetAllMocks());
+  beforeEach(() => {
+    vi.resetAllMocks();
+    files.getNotebookViewPreferences.mockResolvedValue({
+      defaultCreateFolder: null,
+      fileManagement: { includedPaths: [], hiddenPaths: [], excludedIndexPaths: [] },
+    });
+  });
 
   it('creates the default notebook in one IPC without precreating its directory', async () => {
     const notebook = { id: 'new', path: 'C:/Notes/Book' };

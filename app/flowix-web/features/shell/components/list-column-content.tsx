@@ -41,7 +41,9 @@ export function ListColumnContent({
     drawer.style.visibility = 'visible';
     const animation = drawer.animate(
       [{ transform: from }, { transform: drawerOpen ? 'translateX(0)' : 'translateX(100%)' }],
-      { duration: 240, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' },
+      // Keep in sync with --flowix-motion-duration / --flowix-motion-easing
+      // in styles/index.css.
+      { duration: 180, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
     );
     animation.onfinish = () => {
       drawer.style.visibility = drawerOpen ? 'visible' : 'hidden';

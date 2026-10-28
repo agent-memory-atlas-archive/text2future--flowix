@@ -59,7 +59,8 @@ export function NotebookCreateContextMenuItems({
         </ContextMenuItem>
         {onCreateWorkDocuments && <ContextMenuItem onClick={onCreateWorkDocuments} className={VIEW_MENU_ITEM_CLASS}>
           <span className="flex min-w-0 items-center gap-2">
-            <WorkDocumentsIcon className="h-5 w-5 shrink-0 opacity-100" />
+            {/* 图形占 18×18 视框 ~76%：元素盒保持 h-4 对齐文字列，scale-[1.2] 光学放大到与 lucide 等大 */}
+            <WorkDocumentsIcon className="h-4 w-4 shrink-0 opacity-100 scale-[1.2]" />
             <span className="mention-note-title">{t('memo.create.workDocumentsMenuLabel')}</span>
           </span>
           <span className="mention-note-notebook justify-self-end text-right opacity-50">{t('memo.create.workDocumentsTypes')}</span>

@@ -173,22 +173,6 @@ export function AgentTasksSection({
     return () => observer.disconnect();
   }, [onHeightChange, tasks.items.length]);
 
-  const openConversation = useCallback(async (instance: AgentConversationInstance) => {
-    useAgentSessionStore.getState().setConversationRegistry((registry) => ({
-      ...registry,
-      instances: { ...registry.instances, [instance.instanceId]: instance },
-    }));
-    if (instance.threadId) {
-      useAgentSessionStore.getState().markThreadRead(instance.threadId);
-      useAgentSessionStore.getState().setSessionMeta((meta) => ({
-        ...meta,
-        activeThreadIds: { ...meta.activeThreadIds, [instance.agentType]: instance.threadId! },
-        activeAgentTypeKey: instance.agentType,
-      }));
-    }
-    await openWorkspaceSurface({ host: 'main-third', target: { kind: 'agent-conversation', instanceId: instance.instanceId } });
-  }, []);
-
   const prepareConversation = useCallback((instance: AgentConversationInstance) => {
     useAgentSessionStore.getState().setConversationRegistry((registry) => ({
       ...registry,
@@ -203,10 +187,26 @@ export function AgentTasksSection({
     }
   }, []);
 
-  const openConversationInBrowserColumn = useCallback((instance: AgentConversationInstance) => {
+  /**
+   * A file-tree conversation row opens in the Browser column. Every other tree
+   * row (note, folder, collection…) keeps opening in Work, so the split lives
+   * here rather than in the shared navigation use-cases.
+   */
+  const openConversation = useCallback((instance: AgentConversationInstance) => {
     prepareConversation(instance);
+    if (instance.threadId) useAgentSessionStore.getState().markThreadRead(instance.threadId);
     void openWorkspaceSurface({ host: 'browser-column', target: { kind: 'agent-conversation', instanceId: instance.instanceId } }).catch((error) => {
       logger.error('Failed to open conversation in browser column', { error });
+      toast.error(error instanceof Error ? error.message : String(error));
+    });
+  }, [prepareConversation]);
+
+  /** Menu escape hatch: the row click no longer targets Work. */
+  const openConversationInWorkColumn = useCallback((instance: AgentConversationInstance) => {
+    prepareConversation(instance);
+    if (instance.threadId) useAgentSessionStore.getState().markThreadRead(instance.threadId);
+    void openWorkspaceSurface({ host: 'main-third', target: { kind: 'agent-conversation', instanceId: instance.instanceId } }).catch((error) => {
+      logger.error('Failed to open conversation in work column', { error });
       toast.error(error instanceof Error ? error.message : String(error));
     });
   }, [prepareConversation]);
@@ -381,7 +381,7 @@ export function AgentTasksSection({
                   <button
                     type="button"
                     title={instance.title?.trim() || t('common.untitled')}
-                    onClick={() => { void openConversation(instance); }}
+                    onClick={() => openConversation(instance)}
                     className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
                   >
                     <span className="relative flex h-4 w-4 shrink-0 items-center justify-center">
@@ -416,7 +416,8 @@ export function AgentTasksSection({
                     <DropdownMenuContent align="end" className="w-[160px] space-y-0.5 rounded-xl border-[var(--border-popup)] p-1 shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]">
                       <ConversationActionItems
                         favorite={favoriteIds.has(instance.instanceId)}
-                        onOpen={() => openConversationInBrowserColumn(instance)}
+                        openHost="main-third"
+                        onOpen={() => openConversationInWorkColumn(instance)}
                         onFavorite={() => toggleFavorite(instance.instanceId)}
                         onRename={() => renameConversation(instance)}
                         onArchive={() => void removeConversation(instance, 'archive')}

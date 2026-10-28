@@ -92,6 +92,9 @@ export function ListColumn({
             { opacity: 0, transform: 'translate3d(-12px, 0, 0) scale(0.98)' },
           ],
       {
+        // Asymmetric on purpose: opening feels softer slightly slower than the
+        // 180ms base, closing feels responsive slightly faster. Easing must
+        // stay in sync with --flowix-motion-easing in styles/index.css.
         duration: previewPhase === 'open' ? 200 : 160,
         easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
         fill: 'both',
@@ -138,7 +141,7 @@ export function ListColumn({
         'relative flex h-full shrink-0 flex-col will-change-[width]',
         isDraggingListDivider
           ? 'transition-none'
-          : 'transition-[width] duration-150 ease-out',
+          : 'transition-[width] flowix-motion',
         previewVisible ? 'overflow-visible' : 'overflow-hidden',
       )}
       style={{ width: hidden ? 0 : memoColWidth }}
@@ -155,7 +158,7 @@ export function ListColumn({
           'flex min-w-0 flex-col',
           previewVisible
             ? cn(
-                'absolute left-0 top-0 m-1 h-[calc(100%-0.5rem)] w-[280px] overflow-hidden rounded-xl transition-[left] flowix-note-navigation-motion',
+                'absolute left-0 top-0 m-1 h-[calc(100%-0.5rem)] w-[280px] overflow-hidden rounded-xl transition-[left] flowix-motion',
                 noteNavigationPhase === 'open' ? 'z-[110]' : 'z-[90]',
                 'border border-[var(--border-popup)] bg-[var(--list-bg)]',
                 'shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.24)]',

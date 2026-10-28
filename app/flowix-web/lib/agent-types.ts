@@ -7,6 +7,7 @@ export type { AgentTypeKey };
 // 实际静态资源:
 //   - codex.svg               Codex CLI 品牌图标(从桌面导入)
 //   - icon-claude-code.svg    Claude Code 品牌图标
+//   - icon-pi.svg             Pi 品牌图标(矢量, 带透明通道)
 import iconCodex from '@/assets/codex.svg';
 import iconClaudeCode from '@/assets/icon-claude-code.svg';
 import iconHermesAgent from '@/assets/icon-hermes-agent.svg';

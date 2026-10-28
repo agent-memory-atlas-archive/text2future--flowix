@@ -94,6 +94,41 @@ if (startupGrammarKeys.length > 0) {
   failures.push(`Shiki grammars entered desktop startup: ${startupGrammarKeys.join(', ')}`);
 }
 
+// CSS 总量预算（T4-0 配套，见 docs/architecture-78-to-85-plan.md）。
+// 口径：manifest 所有 chunk 的 css 数组去重后汇总（与 JS 启动图同一套 manifest
+// 复算方法，避免源码级统计的坑）。2026-10-27 实测基线 559,001 raw / 83,321 gzip
+// （含入口 index-*.css 499 KB raw / 70.5 KB gzip、katex、csv/docx preview）。
+// 预算 = 实测 × 1.02，棘轮只允许下降；要加新样式先腾旧样式，不要抬数字。
+const CSS_RAW_BUDGET = 570_000;
+const CSS_GZIP_BUDGET = 85_000;
+const cssFiles = new Set();
+for (const chunk of Object.values(manifest)) {
+  for (const css of chunk.css ?? []) cssFiles.add(css);
+}
+let cssRawBytes = 0;
+let cssGzipBytes = 0;
+const cssReport = [];
+for (const css of cssFiles) {
+  const bytes = readFileSync(resolve(DIST, css));
+  const gzip = gzipSync(bytes).byteLength;
+  cssRawBytes += bytes.byteLength;
+  cssGzipBytes += gzip;
+  cssReport.push([css, bytes.byteLength, gzip]);
+}
+if (cssRawBytes > CSS_RAW_BUDGET) {
+  failures.push(`all CSS is ${cssRawBytes} bytes, budget is ${CSS_RAW_BUDGET}`);
+}
+if (cssGzipBytes > CSS_GZIP_BUDGET) {
+  failures.push(`all CSS gzip is ${cssGzipBytes} bytes, budget is ${CSS_GZIP_BUDGET}`);
+}
+if (process.argv.includes('--css-report')) {
+  cssReport.sort((a, b) => b[2] - a[2]);
+  console.log('CSS chunks by gzip:');
+  for (const [file, raw, gzip] of cssReport) {
+    console.log(`  ${file}  ${raw} raw / ${gzip} gzip`);
+  }
+}
+
 const optionalHeavyChunks = ['mermaid', 'shiki', 'katex', 'cytoscape'];
 for (const name of optionalHeavyChunks) {
   if (new RegExp(`modulepreload[^>]+${name}`, 'i').test(html)) {
@@ -150,5 +185,6 @@ if (failures.length) {
 }
 
 console.log(
-  `✓ Web bundle budget passed (startup JS: ${startupRawBytes} raw / ${startupGzipBytes} gzip; Inter fonts: ${interFonts.length}/12)`,
+  `✓ Web bundle budget passed (startup JS: ${startupRawBytes} raw / ${startupGzipBytes} gzip; ` +
+    `all CSS: ${cssRawBytes} raw / ${cssGzipBytes} gzip; Inter fonts: ${interFonts.length}/12)`,
 );

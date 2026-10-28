@@ -1,21 +1,13 @@
 'use client';
 
-import { ColumnResizeHandle } from './components/column-resize-handle';
-import { focusWorkspaceHostFromEvent } from '@features/workspace/public/host-api';
+import { MainListColumnSection } from './components/main-list-column-section';
+import { MainWorkColumns } from './components/main-work-columns';
+import { MainLayoutStartupFailureOverlay } from './components/main-layout-startup-failure-overlay';
 
-import { createLogger } from '@/lib/logger';
-import { canonicalPath, canonicalDirectoryPath, notebookRelativeDirectoryPath, parentDirectoryPath } from '@/lib/path';
-import {
-  setMemoListViewPreference,
-  useMemoListViewPreference,
-} from '@features/preferences/public/runtime-api';
-const logger = createLogger('main-layout');
+import { setMemoListViewPreference, useMemoListViewPreference } from '@features/preferences/public/runtime-api';
 
-import { lazy, Suspense, useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  DocumentTitlebarWin,
-  resolveDocumentTitlebarTarget,
-  DocumentTitlebarMac,
   navigateDocumentHistory,
   useDocumentCommands,
   useShellDocumentHistory,
@@ -27,84 +19,46 @@ import {
   type DocumentHistoryEntry,
 } from '@features/document/public/shell-api';
 import {
-  MemoList,
   MemoListServicesHost,
-  NoteNavigationDrawer,
   useShellMemoViewModel,
   useAccessSpaceSelectionCount,
   useAccessSpaceSelectedPaths,
   useAccessSpaceSelectionContentKinds,
   type Notebook,
 } from '@features/memo/public/shell-api';
-import { WorkColumnSelectionView } from './components/work-column-selection-view';
-import { WorkColumnTitlebar } from '@features/shell/components/work-column-titlebar';
-
-// Agent 标题栏按需加载：只在工作区当前目标是 Agent 会话时渲染，冷启动打开
-// 文档时用不到。它背后是 agent-session-store（约 220 文件 / 3.3 万行）。
-const AgentConversationTitlebar = lazy(() =>
-  import('@features/agent/public/titlebar-api').then((module) => ({
-    default: module.AgentConversationTitlebar,
-  })),
-);
 import { useSettingsStore } from '@/lib/store/settings-store';
 import { useWorkspaceStartupStore, isWorkspaceInteractive } from '@/lib/store/workspace-startup-store';
 import { useShallow } from 'zustand/react/shallow';
-import {
-  product,
-  windows,
-  boot,
-} from '@platform/tauri/client';
-import { files } from '@platform/tauri/client/desktop';
-import { subscribe } from '@platform/tauri/event-bus';
+import { isWindowsPlatform } from '@/lib/path';
 import { WindowsTitlebarControls } from '@shared/window-titlebar-controls';
 import { SurfaceBoundary } from '@shared/surface-boundary';
 import { NotebookDeleteDialog } from '@features/shell/components/notebook-delete-dialog';
 import { ExternalFileDropOverlay } from '@features/shell/components/drag-overlay/external-file-drop-overlay';
 import { useMainMiddleColumnController } from '@features/shell/hooks/use-main-middle-column-controller';
 import { useMainPanelController } from '@features/shell/hooks/use-main-panel-controller';
-import { ListColumn } from '@features/shell/components/list-column';
-import { ListColumnContent } from '@features/shell/components/list-column-content';
+import { useDefaultCreateFolder } from '@features/shell/hooks/use-default-create-folder';
+import { useExternalFileDeletion } from '@features/shell/hooks/use-external-file-deletion';
+import { useMediaActions } from '@features/shell/hooks/use-media-actions';
+import { useWorkColumnPresentation } from '@features/shell/hooks/use-work-column-presentation';
+import { useDocumentTitlebarProps } from '@features/shell/hooks/use-document-titlebar-props';
+import { useProductIntro } from '@features/shell/hooks/use-product-intro';
 import { useI18n } from '@/lib/i18n';
-import { toast } from '@/lib/toast';
-import { openPath } from '@platform/tauri/opener';
-import { Button } from '@shared/ui/button';
 import type { AppUpdaterState } from '@features/shell/hooks/use-app-updater';
-import {
-  WorkColumnContentHost,
-  resolveWorkColumnRuntimePresentation,
-  resolveWorkColumnPresentation,
-  useWorkspaceSurfacePresentation,
-  type DocumentSurfaceContext,
-} from '@features/surface/public/shell-api';
+import type { DocumentSurfaceContext } from '@features/surface/public/shell-api';
 import type { PluginDescriptor } from '@platform/tauri/client';
 import {
   useShellWorkspaceViewModel,
   BROWSER_COLUMN_MIN_WIDTH,
-  clearBrowserColumnExternalPath,
   type WorkColumnTarget,
 } from '@features/workspace/public/shell-api';
-import { MainStatusBarHost } from '@features/shell/components/main-status-bar-host';
-import { CenteredLoadingSpinner } from '@shared/ui/centered-loading-spinner';
 import type { Editor } from '@tiptap/core';
+import { MainStatusBarHost } from '@features/shell/components/main-status-bar-host';
 import { OnboardingScreen } from '@features/onboarding';
 import { finishOnboardingNotebook } from '@features/shell/use-cases/finish-onboarding';
 import { documentHistoryEntryKey } from '@features/document/public/shell-api';
-import { clearWorkspaceTargetForDeletedFile, deleteMainExternalDocument, historyEntryFromWorkColumnTarget } from '@features/workspace/public/shell-api';
+import { historyEntryFromWorkColumnTarget } from '@features/workspace/public/shell-api';
 
 const DOCUMENT_PANEL_MIN_WIDTH = BROWSER_COLUMN_MIN_WIDTH;
-const PRODUCT_INTRO_AUTO_SHOWN_KEY = 'flowix:product-intro:auto-shown';
-
-
-const BrowserColumn = lazy(() =>
-  import('@features/shell/components/browser-column').then((module) => ({
-    default: module.BrowserColumn,
-  })),
-);
-
-function isWindowsPlatform(): boolean {
-  return /Windows/i.test(navigator.userAgent) || /Win/i.test(navigator.platform);
-}
-
 
 function isDifferentHistoryTarget(
   entry: DocumentHistoryEntry,
@@ -149,8 +103,6 @@ export function MainLayout({
 }) {
   const { t, language } = useI18n();
   const [recentExportPath, setRecentExportPath] = useState<string | null>(null);
-  const [productIntroOpen, setProductIntroOpen] = useState(false);
-  const productIntroAutoShownRef = useRef(false);
   const {
     notebookToDelete,
     notebookCreateRequest,
@@ -171,34 +123,13 @@ export function MainLayout({
     presentPendingAppUpdateResult,
     completeOnboarding,
   } = system;
-  const showProductIntroAfterOnboarding = useCallback(() => {
-    if (productIntroAutoShownRef.current) return;
-    productIntroAutoShownRef.current = true;
-
-    try {
-      if (window.localStorage.getItem(PRODUCT_INTRO_AUTO_SHOWN_KEY) === 'true') return;
-      window.localStorage.setItem(PRODUCT_INTRO_AUTO_SHOWN_KEY, 'true');
-    } catch {
-      // Keep the in-memory guard so a storage failure cannot reopen it repeatedly.
-    }
-
-    setProductIntroOpen(true);
-  }, []);
-
-  useEffect(() => {
-    if (!hasPendingAppUpdateResult
-      || onboardingLoading
-      || onboardingOpen
-      || productIntroOpen) return;
-    const frame = window.requestAnimationFrame(() => presentPendingAppUpdateResult());
-    return () => window.cancelAnimationFrame(frame);
-  }, [
-    hasPendingAppUpdateResult,
-    onboardingLoading,
-    onboardingOpen,
-    productIntroOpen,
-    presentPendingAppUpdateResult,
-  ]);
+  const { productIntroOpen, setProductIntroOpen, showProductIntroAfterOnboarding } =
+    useProductIntro({
+      hasPendingAppUpdateResult,
+      onboardingLoading,
+      onboardingOpen,
+      presentPendingAppUpdateResult,
+    });
   // 切片订阅：每个 useStore 只取真正用到的字段，setter 走 useShallow 聚合。
   // 替代原来的 `useNoteStore()` / `useDocumentStore()` / `useSettingsStore()`
   // 全量订阅 —— 任何 set 都会让 MainLayout 整树重渲，跨菜单栏 / 状态栏 /
@@ -216,48 +147,8 @@ export function MainLayout({
     loadNotes,
     triggerRefresh,
   } = useShellMemoViewModel();
-  const [defaultCreateFolderState, setDefaultCreateFolderState] = useState<{
-    notebookId: string;
-    path: string | null;
-  } | null>(null);
-  const defaultCreateFolder = defaultCreateFolderState !== null
-    && selectedNotebook != null
-    && defaultCreateFolderState.notebookId === selectedNotebook.id
-    ? defaultCreateFolderState.path
-    : null;
-  useEffect(() => {
-    let current = true;
-    const refreshDefaultFolder = () => {
-      if (!selectedNotebook) return;
-      void files.getNotebookViewPreferences(selectedNotebook.path).then((preferences) => {
-        if (current) setDefaultCreateFolderState({
-          notebookId: selectedNotebook.id,
-          path: preferences.defaultCreateFolder ?? null,
-        });
-      }).catch((error) => {
-        logger.warn('load notebook default create folder for titlebar failed', { error, notebookId: selectedNotebook.id });
-        if (current) setDefaultCreateFolderState({ notebookId: selectedNotebook.id, path: null });
-      });
-    };
-    if (!selectedNotebook) {
-      setDefaultCreateFolderState(null);
-      return () => { current = false; };
-    }
-    refreshDefaultFolder();
-    const unsubscribe = subscribe<{ notebookPath: string; defaultCreateFolderChanged: boolean }>(
-      'notebook-view-preferences-changed',
-      ({ notebookPath, defaultCreateFolderChanged }) => {
-        if (defaultCreateFolderChanged
-          && canonicalDirectoryPath(notebookPath) === canonicalDirectoryPath(selectedNotebook.path)) {
-          refreshDefaultFolder();
-        }
-      },
-    );
-    return () => {
-      current = false;
-      unsubscribe();
-    };
-  }, [selectedNotebook?.id, selectedNotebook?.path]);
+  const { defaultCreateFolderState, defaultCreateFolder, handleToggleDefaultFolder } =
+    useDefaultCreateFolder(selectedNotebook);
   const memoListView = useMemoListViewPreference();
   const isAgentConversationView = middleColumnView === 'conversations';
   const {
@@ -325,7 +216,6 @@ export function MainLayout({
   const accessSpaceSelectedPaths = useAccessSpaceSelectedPaths();
   const accessSpaceSelectionContentKinds = useAccessSpaceSelectionContentKinds();
   const hasMultipleDocumentsSelected = accessSpaceSelectionCount > 1;
-  const selectionLabel = t('memo.fileTree.selectedDocumentCount', { count: accessSpaceSelectionCount });
   const workColumnTarget = navigationState.target;
   const mediaTarget = workColumnTarget.kind === 'media' ? workColumnTarget : null;
   const activePlugin = workColumnTarget.kind === 'plugin-workbench'
@@ -346,6 +236,7 @@ export function MainLayout({
     closeNoteNavigation,
     completeNoteNavigationClose,
     isDraggingListDivider,
+    isMemoListAnimating,
     isMemoListHidden,
     memoColWidth,
     noteNavigationPhase,
@@ -423,48 +314,7 @@ export function MainLayout({
     onExported: handleDocumentExported,
   });
 
-  const handleDeleteExternalFile = useCallback(async (expectedFilePath: string, notebookPath: string | null) => {
-    try {
-      const outcome = await deleteMainExternalDocument(expectedFilePath);
-      if (outcome === 'unsaved') {
-        toast.error(t('document.external.deleteFileUnsaved'));
-        return;
-      }
-      if (outcome !== 'deleted') {
-        if (!notebookPath) {
-          toast.error('无法确定多维表格所属的笔记本，无法删除。');
-          return;
-        }
-        const deleted = await files.delete(expectedFilePath, notebookPath);
-        if (!deleted) throw new Error('删除多维表格失败');
-        try {
-          clearBrowserColumnExternalPath(expectedFilePath);
-          await clearWorkspaceTargetForDeletedFile(expectedFilePath);
-        } catch (cleanupError) {
-          logger.warn('[MainLayout] File deleted, but workspace display cleanup failed:', {
-            error: cleanupError,
-            filePath: expectedFilePath,
-          });
-          toast.error(t('document.external.deleteFileViewCleanupFailed'));
-        }
-      }
-      toast.success(t('status.deleteCompleted'));
-    } catch (error) {
-      logger.warn('[MainLayout] Failed to delete external file:', { error: error });
-      toast.error(t('document.external.deleteFileFailed'));
-    }
-  }, [t]);
-
-  useEffect(() => {
-    const handleRequest = (event: Event) => {
-      const detail = (event as CustomEvent<{ filePath?: unknown; notebookPath?: unknown }>).detail;
-      if (typeof detail?.filePath === 'string' && detail.filePath) {
-        void handleDeleteExternalFile(detail.filePath, typeof detail.notebookPath === 'string' ? detail.notebookPath : null);
-      }
-    };
-    window.addEventListener('flowix:request-delete-external-file', handleRequest);
-    return () => window.removeEventListener('flowix:request-delete-external-file', handleRequest);
-  }, [handleDeleteExternalFile]);
+  const { handleDeleteExternalFile } = useExternalFileDeletion();
 
   // The DocumentContainer owns the import hook because it needs the editor's contentRef and saveDoc.
   // The titlebar renders the path, so it receives the container API through this bridge.
@@ -510,47 +360,11 @@ export function MainLayout({
     void navigateDocumentHistory('forward');
   }, []);
 
-  const handleCopyMediaLink = useCallback(async () => {
-    if (!mediaTarget) return;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(mediaTarget.filePath);
-      } else {
-        const textarea = document.createElement('textarea');
-        textarea.value = mediaTarget.filePath;
-        textarea.setAttribute('readonly', '');
-        textarea.style.position = 'fixed';
-        textarea.style.opacity = '0';
-        textarea.style.pointerEvents = 'none';
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-      }
-      toast.success(t('document.command.copySuccess'));
-    } catch (error) {
-      logger.warn('[MainLayout] Failed to copy media link:', { error: error });
-      toast.error(t('document.command.copyFailed'));
-    }
-  }, [mediaTarget, t]);
-
-  const handleRevealMedia = useCallback(() => {
-    if (!mediaTarget) return;
-    void product.revealInFileManager(mediaTarget.filePath).catch((error) => {
-      logger.warn('[MainLayout] Failed to reveal media in file manager:', { error: error });
-      toast.error(t('memo.fileTree.openFailed'));
-    });
-  }, [mediaTarget, t]);
-
-  const handleRequestDeleteMedia = useCallback(() => {
-    if (!mediaTarget?.notebookPath) return;
-    window.dispatchEvent(new CustomEvent('flowix:request-delete-media', {
-      detail: {
-        filePath: mediaTarget.filePath,
-        notebookPath: mediaTarget.notebookPath,
-      },
-    }));
-  }, [mediaTarget]);
+  const {
+    handleCopyMediaLink,
+    handleRevealMedia,
+    handleRequestDeleteMedia,
+  } = useMediaActions(mediaTarget);
 
   const handleSetMainEditorMode = useCallback((mode: DocumentEditorMode) => {
     if (!mainMemoEditorIdentity || mainEditorMode === mode) return;
@@ -593,164 +407,57 @@ export function MainLayout({
           },
         } : null
     : null;
-  const visibleNavigationState = selectedNotebook && (
-    navigationState.target.kind === 'media'
-    && navigationState.target.notebookId !== selectedNotebook.id
-  ) ? { ...navigationState, target: { kind: 'empty' as const } } : navigationState;
-  const workColumnPresentation = resolveWorkColumnPresentation({
-    navigation: visibleNavigationState,
-    document: workColumnDocument,
-    pluginWorkbench: activePlugin
-      ? {
-          plugin: activePlugin,
-          notebookPath: selectedNotebook?.path,
-          currentNotePath: currentDocumentPath,
-          currentNoteContent: currentDocumentContentRef.current,
-        }
-      : null,
-    emptyMessage: t('shell.emptyDocument'),
-  });
-  const workSurfaceViewId = workColumnPresentation.content.status === 'surface'
-    ? workColumnPresentation.content.surface.instanceKey
-    : '';
-  const workRuntimePresentation = useWorkspaceSurfacePresentation(workSurfaceViewId);
-  const workSurfaceBlockingLoading = workRuntimePresentation.state?.status === 'loading'
-    && workRuntimePresentation.state.loadingMode === 'blocking';
-  const workSurfaceFailed = workRuntimePresentation.state?.status === 'error'
-    || workRuntimePresentation.state?.status === 'unavailable';
-  const effectiveWorkPresentation = resolveWorkColumnRuntimePresentation(
+  const {
     workColumnPresentation,
     workRuntimePresentation,
-    workColumnDocument?.identity,
-  );
-  const workCapabilities = effectiveWorkPresentation.capabilities;
-  const workHeaderStyle = effectiveWorkPresentation.chrome;
-  const isAgentConversationDetail = workColumnPresentation.header.kind === 'agent';
-  const handleToggleDefaultFolder = useCallback(async (target: {
-    filePath: string;
-    notebookPath: string;
-    notebookId: string;
-  }) => {
-    const folderPath = parentDirectoryPath(target.filePath, target.notebookPath);
-    const relativeFolder = notebookRelativeDirectoryPath(target.notebookPath, folderPath);
-    if (relativeFolder === null) return;
-    try {
-      const preferences = await files.getNotebookViewPreferences(target.notebookPath);
-      const isDefaultFolder = (preferences.defaultCreateFolder ?? null) === relativeFolder;
-      const nextDefaultFolder = isDefaultFolder ? null : relativeFolder;
-      await files.setNotebookViewPreferences(target.notebookPath, {
-        ...preferences,
-        defaultCreateFolder: nextDefaultFolder,
-      });
-      setDefaultCreateFolderState({ notebookId: target.notebookId, path: nextDefaultFolder });
-      toast.success(t(isDefaultFolder
-        ? 'memo.fileTree.defaultCreateFolderCleared'
-        : 'memo.fileTree.defaultCreateFolderSet'));
-    } catch (error) {
-      logger.warn('set default create folder from collection titlebar failed', { error, folderPath });
-      toast.error(t('memo.fileTree.preferenceSaveFailed'));
-    }
-  }, [t]);
-  const [addressBarWorkSurfaceId, setAddressBarWorkSurfaceId] = useState<string | null>(null);
-  const workWebSurfaceId = workColumnPresentation.content.status === 'surface'
-    && workColumnPresentation.content.surface.kind === 'web'
-    ? workColumnPresentation.content.surface.instanceKey : null;
-  const workWebAddressBarVisible = workWebSurfaceId !== null && addressBarWorkSurfaceId === workWebSurfaceId;
-  const documentTitlebarProps = {
-    webAddressBarVisible: workWebAddressBarVisible,
-    onToggleWebAddressBar: workWebSurfaceId === null ? undefined : () => {
-      setAddressBarWorkSurfaceId(workWebAddressBarVisible ? null : workWebSurfaceId);
-    },
-    reserveWindowsControls: !browserColumnVisible,
-    surfaceChrome: workHeaderStyle === 'media' ? 'media' as const : 'document' as const,
-    showEditorFontSwitcher: workColumnPresentation.content.status === 'surface'
-      && workCapabilities.includes('edit')
-      && workColumnPresentation.content.surface.kind === 'md',
-    showEditorModeToggle: workColumnPresentation.content.status === 'surface'
-      && (workColumnPresentation.content.surface.kind === 'md' || workColumnPresentation.content.surface.kind === 'html-file'),
-    editorMode: mainEditorMode,
-    onSetEditorMode: handleSetMainEditorMode,
-    document: {
-      target: workColumnPresentation.header.kind === 'document'
-        && workColumnPresentation.header.document.externalFilePath
-        && workColumnPresentation.content.status === 'surface'
-        && 'fileIdentity' in workColumnPresentation.content.surface
-        ? resolveDocumentTitlebarTarget(
-            workColumnPresentation.content.surface.fileIdentity,
-            activeExternalSession,
-            selectedNotebook?.path ?? null,
-          )
-        : null,
-    },
-    sidebar: {
-      hidden: isMemoListHidden,
-      noteNavigationVisible,
-      onToggle: handleToggleMemoList,
-    },
-    navigation: {
-      canNavigateBack,
-      canNavigateForward,
-      onNavigateBack: handleNavigateBack,
-      onNavigateForward: handleNavigateForward,
-      title: workRuntimePresentation.title,
-      icon: workRuntimePresentation.icon,
-    },
-    contentCapabilities: {
-      copyFullText: workCapabilities.includes('copy-content'),
-      memoColors: workCapabilities.includes('memo-colors'),
-      exportContent: workCapabilities.includes('export-content'),
-      saveAsTemplate: workCapabilities.includes('save-template'),
-      versionHistory: workCapabilities.includes('version-history'),
-    },
-    actions: {
-      onCopyLink: handleCopyLink,
-      onCopyFullText: handleCopyFullText,
-      onExportMarkdown: handleExportMarkdown,
-      onSaveAsTemplate: handleSaveAsTemplate,
-      onExportWord: handleExportWord,
-      onExportPdf: handleExportPdf,
-      onDeleteExternalFile: () => {
-        const header = workColumnPresentation.header;
-        if (header.kind === 'document' && header.document.externalFilePath) {
-          void handleDeleteExternalFile(header.document.externalFilePath, selectedNotebook?.path ?? null);
-        }
-      },
-    },
+    workSurfaceBlockingLoading,
+    workSurfaceFailed,
+    workCapabilities,
+    workHeaderStyle,
+    isAgentConversationDetail,
+  } = useWorkColumnPresentation({
+    navigation: navigationState,
+    selectedNotebook,
+    workColumnDocument,
+    activePlugin,
+    currentDocumentPath,
+    currentDocumentContentRef,
+  });
+  const documentTitlebarProps = useDocumentTitlebarProps({
+    workColumnPresentation,
+    workRuntimePresentation,
+    workCapabilities,
+    workHeaderStyle,
+    navigationState,
+    browserColumnVisible,
+    mainEditorMode,
+    handleSetMainEditorMode,
+    isMemoListHidden,
+    noteNavigationVisible,
+    handleToggleMemoList,
+    canNavigateBack,
+    canNavigateForward,
+    handleNavigateBack,
+    handleNavigateForward,
+    handleCopyLink,
+    handleCopyFullText,
+    handleExportMarkdown,
+    handleSaveAsTemplate,
+    handleExportWord,
+    handleExportPdf,
+    handleDeleteExternalFile,
     mediaActions: mediaTarget ? {
       onCopyLink: handleCopyMediaLink,
       onRevealInFileManager: handleRevealMedia,
       onRequestDelete: handleRequestDeleteMedia,
     } : undefined,
-    folderCollectionViewType: navigationState.target.kind === 'collection'
-      && canonicalPath(navigationState.target.filePath).endsWith('/.index.yaml')
-      && navigationState.target.notebookId
-      ? {
-          current: navigationState.target.collectionType,
-          isDefaultFolder: defaultCreateFolderState?.notebookId === navigationState.target.notebookId
-            && notebookRelativeDirectoryPath(
-              navigationState.target.notebookPath,
-              parentDirectoryPath(navigationState.target.filePath, navigationState.target.notebookPath),
-            ) === defaultCreateFolder,
-          onToggleDefaultFolder: () => {
-            const target = navigationState.target;
-            if (target.kind === 'collection') void handleToggleDefaultFolder({
-              filePath: target.filePath,
-              notebookPath: target.notebookPath,
-              notebookId: target.notebookId,
-            });
-          },
-          onSelect: (type: 'table' | 'media_library') => {
-            const target = navigationState.target;
-            if (target.kind !== 'collection' || target.collectionType === type) return;
-            void handleSwitchFolderCollectionType({
-              filePath: target.filePath,
-              notebookPath: target.notebookPath,
-              notebookId: target.notebookId,
-            }, type);
-          },
-        }
-      : undefined,
-  };
+    defaultCreateFolderState,
+    defaultCreateFolder,
+    handleToggleDefaultFolder,
+    handleSwitchFolderCollectionType,
+    activeExternalSession,
+    selectedNotebook,
+  });
 
   return (
     <div
@@ -767,248 +474,68 @@ export function MainLayout({
       <div className="flex flex-1 overflow-hidden">
         <div className="flex flex-col flex-1 overflow-hidden">
           <div className={`relative flex flex-1 h-full overflow-hidden ${isWindowsPlatform() ? 'rounded-b-[12px]' : 'rounded-b-[18px]'} border-b border-[var(--divider)]`}>
-          <NoteNavigationDrawer
-            phase={noteNavigationPhase}
+          <MainListColumnSection
+            noteNavigationPhase={noteNavigationPhase}
             selectedNotebook={selectedNotebook}
-            onOpenPreferences={(tab) => void windows.openPreferences(tab)}
             activePluginId={activePluginId}
-            onOpenPlugin={handleOpenPlugin}
-            onRequestClose={closeNoteNavigation}
-            onCloseComplete={completeNoteNavigationClose}
-            onCompanionSurfaceEnter={handleMemoListPreviewCompanionEnter}
-            onCompanionSurfaceLeave={handleMemoListPreviewCompanionLeave}
-          />
-          {/* List column: one mounted subtree shared by the docked sidebar and hover preview. */}
-          <ListColumn
-            hidden={isMemoListHidden}
-            previewVisible={memoListPreviewVisible}
-            previewPhase={memoListPreviewPhase === 'open' ? 'open' : 'closing'}
+            handleOpenPlugin={handleOpenPlugin}
+            closeNoteNavigation={closeNoteNavigation}
+            completeNoteNavigationClose={completeNoteNavigationClose}
+            handleMemoListPreviewCompanionEnter={handleMemoListPreviewCompanionEnter}
+            handleMemoListPreviewCompanionLeave={handleMemoListPreviewCompanionLeave}
+            isMemoListHidden={isMemoListHidden}
+            memoListPreviewVisible={memoListPreviewVisible}
+            memoListPreviewPhase={memoListPreviewPhase}
             memoColWidth={memoColWidth}
             isDraggingListDivider={isDraggingListDivider}
-            selectedNotebook={selectedNotebook}
+            collapseMemoList={collapseMemoList}
+            resizeMemoList={resizeMemoList}
+            setIsDraggingListDivider={setIsDraggingListDivider}
+            handleToggleNoteNavigation={handleToggleNoteNavigation}
+            handleMemoListPreviewEnter={handleMemoListPreviewEnter}
+            handleMemoListPreviewLeave={handleMemoListPreviewLeave}
+            language={language}
+            middleColumnView={middleColumnView}
+            memoListView={memoListView}
+            setMiddleColumnView={setMiddleColumnView}
+            isAgentConversationView={isAgentConversationView}
+            shouldRenderAgentConversationList={shouldRenderAgentConversationList}
+            agentConversationListNode={agentConversationListNode}
+          />
+          <MainWorkColumns
+            navigationState={navigationState}
+            browserColumnVisible={browserColumnVisible}
+            browserColumnLayout={browserColumnLayout}
+            browserColumnLayoutKey={browserColumnLayoutKey}
+            handleBrowserColumnResize={handleBrowserColumnResize}
+            toolbarCollapsed={toolbarCollapsed}
+            setToolbarCollapsed={setToolbarCollapsed}
+            focusedHostId={focusedHostId}
+            isMemoListHidden={isMemoListHidden}
+            isMemoListAnimating={isMemoListAnimating}
             noteNavigationPhase={noteNavigationPhase}
-            onCollapseMemoList={collapseMemoList}
-            onOpenPreferences={(tab) => void windows.openPreferences(tab)}
-            onPreviewEnter={handleMemoListPreviewEnter}
-            onPreviewLeave={handleMemoListPreviewLeave}
-            onPointerDown={(event) => {
-              if (event.button !== 0) return;
-              const target = event.target;
-              if (target instanceof Element && target.closest('[data-folder-selection]')) return;
-              focusWorkspaceHostFromEvent(event, 'main-third');
-            }}
-          >
-            <SurfaceBoundary
-              name="memo-list"
-              language={language}
-              resetKeys={[selectedNotebook?.id ?? null]}
-            >
-            <ListColumnContent
-              activeView={middleColumnView === 'conversations'
-                ? 'conversations'
-                : memoListView === 'folders' ? 'folders' : 'cards'}
-              onViewChange={(view) => {
-                if (view === 'conversations') {
-                  setMiddleColumnView('conversations');
-                  return;
-                }
-                void setMemoListViewPreference(view === 'folders' ? 'folders' : 'detailed');
-                setMiddleColumnView('notes');
-              }}
-              navigationDrawerOpen={noteNavigationPhase !== 'closed'}
-              onToggleNavigationDrawer={handleToggleNoteNavigation}
-              conversationList={shouldRenderAgentConversationList ? agentConversationListNode : undefined}
-            >
-              <MemoList
-                navigationDrawerEnabled
-                navigationDrawerOpen={noteNavigationPhase !== 'closed'}
-                onToggleNavigationDrawer={handleToggleNoteNavigation}
-                isActive={!isAgentConversationView}
-                dataLoadingEnabled={!isAgentConversationView}
-              />
-            </ListColumnContent>
-            </SurfaceBoundary>
-          </ListColumn>
-          {/* List <-> Memo detail divider */}
-          {!isMemoListHidden && (
-            <div className="relative z-[60] h-full w-px shrink-0 bg-[var(--divider)]">
-              <ColumnResizeHandle label="调整列表列宽度" width={memoColWidth} onResize={resizeMemoList} onDraggingChange={setIsDraggingListDivider} />
-            </div>
-          )}
-          {/* Keep the drop overlay outside the scrolling columns so it covers the viewport. */}
-          <div
-            data-workspace-drop-overlay-host
-            className="relative isolate flex min-h-0 min-w-0 flex-1 overflow-hidden"
-          >
-          <div
-            data-document-columns-layout="split"
-            className="relative isolate flex min-h-0 min-w-0 flex-1 flex-row overflow-x-auto overflow-y-hidden"
-          >
-          {/* Memo detail */}
-            <div
-              className="relative h-full min-w-0 flex flex-col bg-[var(--document-bg)]"
-              style={browserColumnVisible
-                ? {
-                    minWidth: DOCUMENT_PANEL_MIN_WIDTH,
-                    flex: `0 0 ${browserColumnLayout.mainColumnWidth}px`,
-                  }
-                : { minWidth: DOCUMENT_PANEL_MIN_WIDTH, flex: 1 }}
-              data-workspace-host="main-third"
-              data-workspace-focused={focusedHostId === 'main-third' ? '' : undefined}
-              onPointerDown={(event) => focusWorkspaceHostFromEvent(event, 'main-third')}
-              onFocusCapture={(event) => focusWorkspaceHostFromEvent(event, 'main-third')}
-            >
-            {isMemoListHidden && (
-              <button
-                type="button"
-                data-memo-list-preview-edge-trigger
-                onMouseEnter={handleMemoListPreviewTriggerEnter}
-                onMouseLeave={handleMemoListPreviewTriggerLeave}
-                // Clicking the collapsed edge follows the hover interaction:
-                // open the floating preview instead of restoring the full
-                // list column.
-                onClick={handleMemoListPreviewEnter}
-                aria-label={t('document.titlebar.showSidebar')}
-                title={t('document.titlebar.showSidebarTooltip')}
-                className="group absolute bottom-0 left-0 top-0 z-[60] flex w-4 items-center justify-center text-[var(--muted-foreground)] opacity-30 transition-[color,opacity] duration-150 hover:text-[var(--foreground)] hover:opacity-50 focus-visible:outline-none focus-visible:text-[var(--brand)] focus-visible:opacity-100"
-              >
-                <span className="flex translate-x-0 flex-col items-center gap-[6px]" aria-hidden="true">
-                  <span className="h-1 w-1 rounded-full bg-current" />
-                  <span className="h-1 w-1 rounded-full bg-current" />
-                  <span className="h-1 w-1 rounded-full bg-current" />
-                </span>
-              </button>
-            )}
-            {/* Fixed top navigation bar */}
-            {hasMultipleDocumentsSelected ? (
-              <WorkColumnTitlebar
-                isWindows={isWindowsPlatform()}
-                reserveWindowsControls={!browserColumnVisible}
-                showTrafficLightSpacer={isMemoListHidden && noteNavigationPhase === 'closed'}
-              >
-                {null}
-              </WorkColumnTitlebar>
-            ) : workColumnPresentation.header.kind === 'agent' ? (
-              // 占位用同一套 titlebar 容器（含 Windows 控件预留与红绿灯 spacer），
-              // 保证 chunk 到达前后没有高度跳变；内容为空即可。
-              <Suspense
-                fallback={(
-                  <WorkColumnTitlebar
-                    isWindows={isWindowsPlatform()}
-                    reserveWindowsControls={!browserColumnVisible}
-                    showTrafficLightSpacer={isMemoListHidden && noteNavigationPhase === 'closed'}
-                    className="agent-conversation-titlebar"
-                  >
-                    {null}
-                  </WorkColumnTitlebar>
-                )}
-              >
-                <AgentConversationTitlebar
-                  instanceId={workColumnPresentation.header.instanceId}
-                  reserveWindowsControls={!browserColumnVisible}
-                  isMiddleColumnCollapsed={isMemoListHidden}
-                  isSidebarVisible={noteNavigationPhase !== 'closed'}
-                  onExpandSidebar={handleToggleMemoList}
-                  canNavigateBack={canNavigateBack}
-                  canNavigateForward={canNavigateForward}
-                  onNavigateBack={handleNavigateBack}
-                  onNavigateForward={handleNavigateForward}
-                />
-              </Suspense>
-            ) : isWindowsPlatform() ? (
-              <DocumentTitlebarWin {...documentTitlebarProps} />
-            ) : (
-              <DocumentTitlebarMac {...documentTitlebarProps} />
-            )}
-
-            {/* Content area */}
-            {hasMultipleDocumentsSelected && (
-              <WorkColumnSelectionView paths={accessSpaceSelectedPaths} contentKinds={accessSpaceSelectionContentKinds} label={selectionLabel} />
-            )}
-            <div className="relative isolate flex-1 min-w-0 overflow-hidden" hidden={hasMultipleDocumentsSelected}
-              style={hasMultipleDocumentsSelected ? { display: 'none' } : undefined}>
-              {recentExportPath && workColumnPresentation.header.kind === 'document' && (
-                <div className="absolute inset-x-0 top-0 z-50 flex h-[50px] items-center justify-center gap-2 border-b border-[var(--border)] bg-[color-mix(in_oklch,var(--card)_78%,transparent)] px-4 backdrop-blur-md">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="rounded-lg"
-                    onClick={() => {
-                      void product.revealInFileManager(recentExportPath).catch(() => {
-                        toast.error(t('memo.fileTree.openFailed'));
-                      });
-                    }}
-                  >
-                    {t('document.exportNotice.openFolder')}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="rounded-lg"
-                    onClick={() => {
-                      void openPath(recentExportPath).catch(() => {
-                        toast.error(t('memo.fileTree.openFailed'));
-                      });
-                    }}
-                  >
-                    {t('memo.fileTree.openDefaultApp')}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="rounded-lg"
-                    onClick={() => setRecentExportPath(null)}
-                    aria-label={t('document.exportNotice.close')}
-                    title={t('document.exportNotice.close')}
-                  >
-                    {t('document.exportNotice.close')}
-                  </Button>
-                </div>
-              )}
-              <SurfaceBoundary
-                name="work-column"
-                language={language}
-                resetKeys={[JSON.stringify(navigationState.target)]}
-              >
-                <WorkColumnContentHost
-                  webAddressBarVisible={workWebAddressBarVisible}
-                  content={workColumnPresentation.content}
-                  focused={!hasMultipleDocumentsSelected && focusedHostId === 'main-third'}
-                  startupIdentity={JSON.stringify(navigationState.target)}
-                />
-              </SurfaceBoundary>
-              {((isDocumentTransitioning && !workSurfaceFailed)
-                || workSurfaceBlockingLoading
-                || (navigationState.phase === 'loading' && navigationState.showWorkColumnLoading)) && (
-                <CenteredLoadingSpinner
-                  className="pointer-events-none absolute inset-0 z-40"
-                  label={notebookSwitching ? t('memo.navigation.preparingNotebook') : undefined}
-                />
-              )}
-            </div>
-          </div>
-          {browserColumnVisible && (
-            <Suspense fallback={null}>
-              <SurfaceBoundary
-                name="browser-column"
-                language={language}
-                resetKeys={[browserColumnLayoutKey]}
-              >
-                <BrowserColumn
-                  width={browserColumnLayout.browserColumnWidth}
-                  layoutKey={browserColumnLayoutKey}
-                  onResize={handleBrowserColumnResize}
-                  toolbarCollapsed={toolbarCollapsed}
-                  onToolbarCollapsedChange={setToolbarCollapsed}
-                />
-              </SurfaceBoundary>
-            </Suspense>
-          )}
-          </div>
-          </div>
+            handleMemoListPreviewTriggerEnter={handleMemoListPreviewTriggerEnter}
+            handleMemoListPreviewTriggerLeave={handleMemoListPreviewTriggerLeave}
+            handleMemoListPreviewEnter={handleMemoListPreviewEnter}
+            hasMultipleDocumentsSelected={hasMultipleDocumentsSelected}
+            accessSpaceSelectionCount={accessSpaceSelectionCount}
+            accessSpaceSelectedPaths={accessSpaceSelectedPaths}
+            accessSpaceSelectionContentKinds={accessSpaceSelectionContentKinds}
+            workColumnPresentation={workColumnPresentation}
+            documentTitlebarProps={documentTitlebarProps}
+            canNavigateBack={canNavigateBack}
+            canNavigateForward={canNavigateForward}
+            handleNavigateBack={handleNavigateBack}
+            handleNavigateForward={handleNavigateForward}
+            handleToggleMemoList={handleToggleMemoList}
+            recentExportPath={recentExportPath}
+            onDismissExportNotice={() => setRecentExportPath(null)}
+            isDocumentTransitioning={isDocumentTransitioning}
+            workSurfaceBlockingLoading={workSurfaceBlockingLoading}
+            workSurfaceFailed={workSurfaceFailed}
+            notebookSwitching={notebookSwitching}
+            language={language}
+          />
           </div>
           {/* Status bar */}
           <SurfaceBoundary name="status-bar" language={language}>
@@ -1045,29 +572,10 @@ export function MainLayout({
       {(startupStatus.phase === 'failed'
         || workspaceStartup.status === 'failed'
         || (memoStartupPhase === 'error' && (!showMemoListSurface || isMemoListHidden))) && (
-        <div className="absolute inset-0 z-[100] flex items-center justify-center bg-[var(--frame-bg)]">
-          {startupStatus.phase === 'failed' ? (
-            <div className="flex max-w-md flex-col items-center gap-3 px-6 text-center text-sm text-[var(--muted-foreground)]" role="alert">
-              {t(startupStatus.stage === 'workspacePreparation'
-                ? 'memo.navigation.workspacePreparationFailed'
-                : 'memo.navigation.startupMigrationFailed')}
-              {startupStatus.error && <span className="max-h-40 overflow-auto break-words">{startupStatus.error}</span>}
-              <Button size="sm" className="rounded-lg" onClick={() => {
-                void boot.retryStartup().then(() => window.location.reload()).catch((error) => {
-                  useWorkspaceStartupStore.setState({ nativeError: String(error) });
-                });
-              }}>{t('error.retry')}</Button>
-            </div>
-          ) : (
-            <div className="flex max-w-md flex-col items-center gap-3 px-6 text-center" role="alert">
-              <span className="text-sm text-[var(--muted-foreground)]">{t(workspaceStartup.status === 'failed'
-                ? 'memo.navigation.workspacePreparationFailed'
-                : 'memo.list.loadFailed')}</span>
-              {workspaceStartup.error && <span className="max-h-40 overflow-auto break-words text-sm text-[var(--muted-foreground)]">{workspaceStartup.error}</span>}
-              <Button size="sm" className="rounded-lg" onClick={() => window.location.reload()}>{t('error.retry')}</Button>
-            </div>
-          )}
-        </div>
+        <MainLayoutStartupFailureOverlay
+          startupStatus={startupStatus}
+          workspaceStartup={workspaceStartup}
+        />
       )}
 
       {onboardingOpen && (

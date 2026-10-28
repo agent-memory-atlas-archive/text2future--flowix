@@ -829,6 +829,16 @@ export function flattenLoadedTree(
 
 export type FolderTreeSort = 'createdAt' | 'updatedAt' | 'filenameAsc' | 'filenameDesc';
 
+/** 目录名取自 fullPath 末段, 避免 name 字段在不同来源下夹带路径。 */
+function folderNameOf(item: DocTreeItem): string {
+  return item.fullPath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? item.name;
+}
+
+/** 隐藏文件夹 = 名称以 `.` 开头 (`.trash` / `.plugin-output`)。`.`、`..` 不是真实条目。 */
+function isHiddenFolderName(name: string): boolean {
+  return name.startsWith('.') && name !== '.' && name !== '..';
+}
+
 function compareTreeItems(
   sort: FolderTreeSort,
   a: DocTreeItem,
@@ -844,6 +854,11 @@ function compareTreeItems(
     if (aOrder !== undefined && bOrder === undefined) return -1;
     if (aOrder === undefined && bOrder !== undefined) return 1;
     if (aOrder !== undefined && bOrder !== undefined && aOrder !== bOrder) return aOrder - bOrder;
+    // 手工置顶之后, 隐藏文件夹恒定聚在普通文件夹之前 ── 不受排序规则
+    // 与升/降序影响; 隐藏文件夹之间仍按同一排序规则排。
+    const aHidden = isHiddenFolderName(folderNameOf(a));
+    const bHidden = isHiddenFolderName(folderNameOf(b));
+    if (aHidden !== bHidden) return aHidden ? -1 : 1;
   }
 
   if (sort === 'filenameAsc' || sort === 'filenameDesc') {

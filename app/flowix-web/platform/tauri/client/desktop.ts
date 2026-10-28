@@ -279,7 +279,7 @@ export const files = {
   renameFolder: (folderPath: string, name: string, spacePath: string) =>
     invokeDocumentMutation<PathMutationResult>('rename_folder', { folderPath, name, spacePath }).then(acceptPathMutationResult),
   createFolder: (spacePath: string, name: string, parentId?: string) =>
-    invoke<DocTreeItem | null>('create_folder', { spacePath, name, parentId }),
+    invoke<DocTreeItem>('create_folder', { spacePath, name, parentId }),
   createDocument: (spacePath: string, name: string, parentId?: string) =>
     invoke<DocTreeItem>('create_document', { spacePath, name, parentId }),
 };

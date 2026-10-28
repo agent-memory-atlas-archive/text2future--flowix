@@ -41,8 +41,8 @@ handler. Other protocols are rejected. File queries do not become part of the pa
 
 ## Scrollbar behavior
 
-Local asset frames style their existing native scrollbars. No overlay host, shadow scrollbar, content wrapper, overflow change or wheel interception is added. This avoids native/custom duplication and preserves the browser's vertical/horizontal scrolling and thumb dragging.
+Local asset frames are restyled by the same frame script as remote pages, so their bars are overlays too: the native bar is set to zero width and an overlay thumb is painted from inside the document. No content wrapper, no `overflow` rewrite, no wheel interception, and still one bar per scrolling region — see [FRAME_SCROLLBAR.md](./FRAME_SCROLLBAR.md).
 
-Thumbs are transparent while idle. A captured scroll event reveals the actual scrolling element for 700 ms, extending that element's timer on further scrolling. Viewport events cover html/body propagation and quirks mode; nested and dynamically inserted scroll regions are handled independently. The shared helper supplies the editor's 6px WebKit styling and platform-specific thumb colors. Theme changes update the same stylesheet. Unload removes the stylesheet, listeners and timers and restores temporary attributes.
+Thumbs are transparent while idle and fade in on scroll for 700 ms, extending on further scrolling. Viewport events cover html/body propagation and quirks mode; nested and dynamically inserted scroll regions are handled independently. The host only supplies the palette; the frame owns geometry and timing.
 
-Styling is installed as soon as parent configuration is available, without waiting for external document dependencies. Remote sites remain excluded, and the local frame keeps its opaque sandbox origin. Changes to the native initialization script require rebuilding/restarting the desktop application; frontend hot reload alone cannot replace it.
+The preview keeps its opaque sandbox origin, and the host never reads its document. Changes to the native initialization script require rebuilding/restarting the desktop application; frontend hot reload alone cannot replace it.

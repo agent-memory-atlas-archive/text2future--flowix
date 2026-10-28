@@ -323,19 +323,11 @@ export const MemoTitleEditor = forwardRef<MemoTitleEditorHandle, MemoTitleEditor
 
   useLayoutEffect(() => {
     if (!autoFocus || !editable) return;
-    const element = useDocumentSelection ? documentTitleRef.current : textareaRef.current;
-    if (!element) return;
-    element.focus();
-    if (useDocumentSelection) {
-      const selection = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(element);
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-    } else {
-      (element as HTMLTextAreaElement).select();
-    }
-  }, [autoFocus, displayId, editable, useDocumentSelection]);
+    // A freshly created note lands on its title. Place a collapsed caret at the
+    // end instead of selecting the whole title, so the title text stays visible
+    // and a stray keystroke cannot silently replace it.
+    focusEnd();
+  }, [autoFocus, displayId, editable, focusEnd]);
 
   const getDocumentSelection = useCallback(() => {
     const element = documentTitleRef.current;

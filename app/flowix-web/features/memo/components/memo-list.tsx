@@ -20,11 +20,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { useShallow } from 'zustand/react/shallow';
 import {
   ArrowDownUp,
-  ChevronDown,
   Check,
   SwatchBook,
   Loader2,
-  MoreHorizontal,
   SquarePen,
   Table2,
   GalleryHorizontalEnd,
@@ -188,7 +186,6 @@ export function MemoList({
   const showFolderView = memoListView === 'folders' && Boolean(selectedNotebook);
   const NotebookLoadingState = memoListView === 'folders' ? FileTreeLoadingSkeleton : ListSurfaceLoadingState;
   const [createTypeMenuOpen, setCreateTypeMenuOpen] = useState(false);
-  const [createMoreMenuOpen, setCreateMoreMenuOpen] = useState(false);
   const [documentCreateRequest, setDocumentCreateRequest] = useState<NotebookDocumentCreateRequest | null>(null);
   const [createTemplates, setCreateTemplates] = useState<NoteTemplate[]>([]);
   // A stale Zustand snapshot can survive a Vite HMR update with this field
@@ -236,7 +233,6 @@ export function MemoList({
   }, [selectedNotebookId]);
   const handleCreateTypeMenuOpenChange = useCallback((open: boolean) => {
     setCreateTypeMenuOpen(open);
-    if (!open) setCreateMoreMenuOpen(false);
   }, []);
   useEffect(() => {
     const handleOpenCreateTableDialog = (event: Event) => {
@@ -1046,69 +1042,51 @@ export function MemoList({
         </DropdownMenuItem>
       ))}
       {memoListView === 'folders' && (
-        <MemoNavigationSubmenu
-          label={t('memo.create.newView')}
-          icon={<MoreHorizontal className="h-4 w-4" aria-hidden="true" />}
-          open={createMoreMenuOpen}
-          onOpenChange={setCreateMoreMenuOpen}
-          emptyText=""
-          loadingText=""
-          hideHeader
-          onCloseMenu={() => handleCreateTypeMenuOpenChange(false)}
-          submenuClassName="w-[176px]"
-          submenuContent={(
-            <div className="flex flex-col gap-0.5">
-              {MEMO_CREATE_VIEW_OPTIONS.map(({ type, labelKey }) => (
-                <button
-                  key={type}
-                  type="button"
-                  disabled={!selectedNotebook}
-                  className="memo-navigation-submenu-item mention-note-item !h-7 !min-h-7 !rounded-lg !py-0 !pl-[6px] !pr-2 hover:bg-[var(--brand)] focus-visible:bg-[var(--brand)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => {
-                    openDocumentCreateDialog('table', type);
-                  }}
-                >
-                  <span className="flex min-w-0 items-center gap-2">
-                    {type === 'table' ? <Table2 className="h-4 w-4 shrink-0" aria-hidden="true" /> : <span className="h-4 w-4 shrink-0" aria-hidden="true" />}
-                    <span className="mention-note-title">{t(labelKey)}</span>
-                  </span>
-                  <span className="mention-note-notebook opacity-50">{t('memo.create.note')}</span>
-                </button>
-              ))}
-              <button
-                type="button"
-                disabled={!selectedNotebook}
-                className="memo-navigation-submenu-item mention-note-item !h-7 !min-h-7 !rounded-lg !py-0 !pl-[6px] !pr-2 hover:bg-[var(--brand)] focus-visible:bg-[var(--brand)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  openDocumentCreateDialog('media-library');
-                }}
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  <GalleryHorizontalEnd className="h-4 w-4 shrink-0" aria-hidden="true" />
-                  <span className="mention-note-title">{t('memo.create.mediaLibraryMenuLabel')}</span>
-                </span>
-                <span className="mention-note-notebook opacity-50">{t('memo.create.mediaLibraryShort')}</span>
-              </button>
-              <button
-                type="button"
-                disabled={!selectedNotebook || selectedNotebook.missing}
-                className="memo-navigation-submenu-item mention-note-item !h-7 !min-h-7 !rounded-lg !py-0 !pl-[6px] !pr-2 hover:bg-[var(--brand)] focus-visible:bg-[var(--brand)] focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  openDocumentCreateDialog('work-documents');
-                }}
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  <WorkDocumentsIcon className="h-5 w-5 shrink-0 opacity-100" />
-                  <span className="mention-note-title">{t('memo.create.workDocumentsMenuLabel')}</span>
-                </span>
-                <span className="mention-note-notebook opacity-50">{t('memo.create.workDocumentsTypes')}</span>
-              </button>
-            </div>
-          )}
-        />
+        <>
+          <DropdownMenuLabel className="px-[0.375rem] pb-[0.35rem] pt-[0.35rem] text-xs font-normal leading-[1.2] text-[var(--muted-foreground)]">
+            {t('memo.create.newView')}
+          </DropdownMenuLabel>
+          {MEMO_CREATE_VIEW_OPTIONS.map(({ type, labelKey }) => (
+            <DropdownMenuItem
+              key={type}
+              disabled={!selectedNotebook}
+              onClick={() => {
+                openDocumentCreateDialog('table', type);
+              }}
+              className="group h-7 items-center gap-2 rounded-lg px-2 py-0 hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
+            >
+              {type === 'table'
+                ? <Table2 className="h-4 w-4 shrink-0" aria-hidden="true" />
+                : <span className="h-4 w-4 shrink-0" aria-hidden="true" />}
+              <span className="min-w-0 flex-1 truncate text-left">{t(labelKey)}</span>
+              <span className="shrink-0 text-xs opacity-50">{t('memo.create.viewShort')}</span>
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuItem
+            disabled={!selectedNotebook}
+            onClick={() => {
+              openDocumentCreateDialog('media-library');
+            }}
+            className="group h-7 items-center gap-2 rounded-lg px-2 py-0 hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
+          >
+            <GalleryHorizontalEnd className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate text-left">{t('memo.create.mediaLibraryMenuLabel')}</span>
+            <span className="shrink-0 text-xs opacity-50">{t('memo.create.mediaLibraryShort')}</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={!selectedNotebook || selectedNotebook.missing}
+            onClick={() => {
+              openDocumentCreateDialog('work-documents');
+            }}
+            className="group h-7 items-center gap-2 rounded-lg px-2 py-0 hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]"
+          >
+            {/* 图形只占 18×18 视框的 ~76%（lucide 占 ~83–92%）：元素盒保持 h-4 与其他项对齐文字列，
+                用 scale-[1.2] 光学放大（不占布局），使图形与旁边 lucide 图标视觉等大。 */}
+            <WorkDocumentsIcon className="h-4 w-4 shrink-0 opacity-100 scale-[1.2]" />
+            <span className="min-w-0 flex-1 truncate text-left">{t('memo.create.workDocumentsMenuLabel')}</span>
+            <span className="shrink-0 text-xs opacity-50">{t('memo.create.workDocumentsTypes')}</span>
+          </DropdownMenuItem>
+        </>
       )}
       {memoListView === 'folders' && newConversationSelection.options.length > 0 && (
         <>
@@ -1263,38 +1241,26 @@ export function MemoList({
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {memoListView === 'folders' ? (
-            <div className="flex h-[30px] items-center overflow-hidden rounded-xl bg-[var(--primary)] text-[var(--primary-foreground)] hover:opacity-90">
-              <Tooltip content={t('memo.create.note')} shortcut="memo.create">
-                <Button
-                  size="icon"
-                  disabled={!selectedNotebook || isCreatingMemo}
-                  aria-busy={isCreatingMemo}
-                  aria-label={t('memo.create.note')}
-                  onClick={() => { void handleCreateMemo(); }}
-                  className="h-[30px] w-[25px] justify-start rounded-none border-0 bg-transparent pl-[7px] pr-[2px] text-[var(--primary-foreground)] hover:bg-white/10"
-                >
-                  {isCreatingMemo
-                    ? <Loader2 className="h-4 w-4 flowix-spin" aria-hidden="true" />
-                    : <SquarePen className="h-4 w-4" aria-hidden="true" />}
-                </Button>
+            /* 文件树只有一个「新建」入口: 点击直接展开类型菜单, 再做二次选择。 */
+            <DropdownMenu open={createTypeMenuOpen} onOpenChange={handleCreateTypeMenuOpenChange}>
+              <Tooltip content={t('memo.create.chooseType')} shortcut="memo.create">
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="icon"
+                    disabled={!selectedNotebook || isCreatingMemo}
+                    aria-busy={isCreatingMemo}
+                    aria-label={t('memo.create.chooseType')}
+                    aria-haspopup="menu"
+                    className="h-[30px] w-[30px] justify-center rounded-xl border border-transparent bg-[var(--primary)] p-0 text-[var(--primary-foreground)] hover:opacity-90"
+                  >
+                    {isCreatingMemo
+                      ? <Loader2 className="h-4 w-4 flowix-spin" aria-hidden="true" />
+                      : <SquarePen className="h-4 w-4" aria-hidden="true" />}
+                  </Button>
+                </DropdownMenuTrigger>
               </Tooltip>
-              <DropdownMenu open={createTypeMenuOpen} onOpenChange={handleCreateTypeMenuOpenChange}>
-                <Tooltip content={t('memo.create.chooseType')}>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      size="icon"
-                      disabled={isCreatingMemo}
-                      aria-label={t('memo.create.chooseType')}
-                      aria-haspopup="menu"
-                      className="h-[30px] w-[16px] justify-end rounded-none border-0 bg-transparent pr-[4px] text-[var(--primary-foreground)] hover:bg-white/10"
-                    >
-                      <ChevronDown className="size-[12px]" aria-hidden="true" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                </Tooltip>
-                {createTypeMenuContent}
-              </DropdownMenu>
-            </div>
+              {createTypeMenuContent}
+            </DropdownMenu>
           ) : (
             <DropdownMenu open={createTypeMenuOpen} onOpenChange={handleCreateTypeMenuOpenChange}>
               <Tooltip content={t('memo.create.chooseType')} shortcut="memo.create">

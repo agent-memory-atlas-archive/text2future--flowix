@@ -34,8 +34,9 @@ export async function selectAndOpenAgentConversation(
     }
   }
 
-  // A list click targets Work. Browser placement is a separate explicit
-  // openWorkspaceSurface request.
+  // Work placement only: both conversation lists default to the Browser column
+  // and open it through a separate explicit openWorkspaceSurface request. This
+  // path serves Work-targeted opens (row menu) and workspace restore.
   const host = await openAgentTarget(normalized, {
     ...options,
     destination: options?.destination ?? 'main-third',

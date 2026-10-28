@@ -6,7 +6,7 @@ import { createWorkspaceWebRuntime } from '@features/workspace/model/web-navigat
 import type { WorkspaceWebNavigationPort } from './workspace-surface-renderer-contract';
 
 vi.mock('@platform/tauri/opener', () => ({ openUrl: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('@shared/ui/iframe-scrollbar', () => ({ styleAccessibleIframeScrollbar: vi.fn() }));
+vi.mock('@shared/ui/web-frame-scrollbar', () => ({ connectWebFrameScrollbar: vi.fn(() => () => {}) }));
 
 let root: Root;
 let host: HTMLDivElement;

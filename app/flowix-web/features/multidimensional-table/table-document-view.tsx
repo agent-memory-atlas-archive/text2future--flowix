@@ -3,20 +3,17 @@
 import { resolveTableView } from './view-selection';
 import { useTableViewManagement } from './use-table-view-management';
 import { useTableTitle } from './use-table-title';
-import { valueMatchesFieldType, renameNoteProperty, notePropertyEditorValue, calendarCreatePropertyValue, isCalendarCreateWritableField } from './table-note-properties';
+import { notePropertyEditorValue, isCalendarCreateWritableField } from './table-note-properties';
 import { normalizeNoteFilterCondition } from '@features/collection/public/note-filter-api';
 import { resolveDatasetFilterForLocation } from '@features/collection/dataset-filter-location';
-import { NotePropertyImageValue, propertyImagePaths as imagePaths, selectPropertyImage } from '@features/document/properties/image-value-input';
+import { NotePropertyImageValue, propertyImagePaths as imagePaths } from '@features/document/properties/image-value-input';
 import { DateValueInput } from '@features/document/components/note-properties/date-value-input';
 import { ColorValueInput } from '@features/document/properties/color-value-input';
 import { IconValueInput } from '@features/document/properties/icon-value-input';
 import { MultiSelectValueInput } from '@features/document/properties/multi-select-value-input';
 import { SelectValueInput } from '@features/document/properties/select-value-input';
 import { PropertyValueTypographyContext, propertyValueTypography } from '@features/document/properties/value-typography';
-import { countPresetTableReferences, deletePresetEverywhere, ensureTableFieldPreset, migrateNotePropertyKey, updatePresetFromTable } from '@features/properties/property-preset-service';
-import { usePropertyPresetStore } from '@features/properties/property-preset-store';
 import { DeletePresetDialog } from '@features/properties/delete-preset-dialog';
-import { PROPERTY_TYPES_KEY, readPropertyTypes } from '@features/document/properties/property-type-metadata';
 import { NoteCreatePicker } from './note-create-picker';
 import { collectionSessionKey } from '@/lib/collection-session-key';
 import { MultidimensionalTableLoadingSkeleton } from '@shared/ui/multidimensional-table-loading-skeleton';
@@ -26,28 +23,21 @@ import { friendlyErrorMessage } from '@/lib/friendly-error-message';
 import type { SurfaceLifecycle, SurfacePresentationUpdate } from '@features/workspace/public/surface-api';
 
 import { FolderCollectionSwitchConfirmDialog } from '@features/collection/public/folder-api';
-import { reviseCollection, type CollectionSource } from '@features/collection/model';
-import { resolveCollectionSaveDirectory } from '@features/collection/save-location';
-import { collectionFilterUsesField, type DatasetFilter } from '@features/collection/rule-filter';
+import { reviseCollection } from '@features/collection/model';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, LoaderCircle, Plus, MousePointerClick, Table2 } from 'lucide-react';
 import { DotsThreeIcon, EyeIcon, EyeSlashIcon, PencilSimpleIcon, TrashIcon } from '@phosphor-icons/react';
-import { collections, notes as notesClient, windows, type NoteEntry } from '@platform/tauri/client';
+import { collections, windows, type NoteEntry } from '@platform/tauri/client';
 import { NOTE_COLOR_HEX } from '@features/memo/store';
-import { canonicalDirectoryPath, canonicalPath, joinNotebookMemoPath, notebookRelativeDirectoryPath, parentDirectoryPath } from '@/lib/path';
+import { canonicalPath, joinNotebookMemoPath } from '@/lib/path';
 import { toast } from '@/lib/toast';
-import { canonicalizePropertyKey, isSystemPropertyKey } from '@features/properties/property-key';
-import type { PropertyFieldConfig } from '@/lib/constants';
-import { compareAndPatchDocumentProperties, removeDocumentProperty, setDocumentProperties } from '@features/document/public/path-properties';
-import { assetUrl, decodeStorageKey } from '@features/editor/extensions/attachment-link/utils';
-import { getAllPresets, resolvePropertyPreset, resolvePropertyDisplayName, type PropertyPreset } from '@features/document/properties/presets';
+import { canonicalizePropertyKey } from '@features/properties/property-key';
+import { getAllPresets, type PropertyPreset } from '@features/document/properties/presets';
 import { usePropertyPresets } from '@features/properties/public-api';
 import { createFileBrowserTarget } from '@features/workspace/public/browser-column-api';
 import { openWorkspaceSurface } from '@features/workspace/public/open-surface-api';
-import { replaceExternalDocumentPath } from '@features/workspace/public/note-navigation-api';
 import { CollectionTitle } from '@features/collection/public/title-api';
-import { renameMarkdownTitle } from '@features/document/use-cases/local-document-operations';
-import { ensureFileDisplayIdentity, type FileDisplayIdentity } from '@/lib/file-display-registry';
+import type { FileDisplayIdentity } from '@/lib/file-display-registry';
 import { displayTitleFromFilename } from '@/lib/utils';
 import { collectionDisplayName } from '@features/collection/model';
 import { Button } from '@shared/ui/button';
@@ -55,8 +45,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { OverlayScrollbar } from '@shared/ui/overlay-scrollbar';
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/ui/popover';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@shared/ui/context-menu';
-import { useI18n, type I18nKey } from '@/lib/i18n';
-import { ADDABLE_TABLE_PROPERTY_KINDS, getPropertyTypeDefinition, type PropertyKind, type PropertyIconKind } from '@/lib/property-types';
+import { useI18n } from '@/lib/i18n';
+import { getPropertyTypeDefinition } from '@/lib/property-types';
 import {
   createUuidV7,
   addKanbanView,
@@ -66,7 +56,6 @@ import {
   type MultidimensionalTableDocument,
   type TableField,
   type TableRecord,
-  type TableFieldType,
   type TableFieldOption,
   type TableAutoCollectCondition,
   type TableAutoCollectConfig,
@@ -83,15 +72,13 @@ import {
   builtinTableFieldValue,
   builtinTableFieldLabel,
 } from './builtin-fields';
-import { groupRecordsByValue, KANBAN_UNASSIGNED_GROUP_ID } from './view-index';
+import { groupRecordsByValue } from './view-index';
 import { noteMatchesCollectionFilter } from './record-filter';
 import { applyTableView } from './view-records';
-import { planTableNoteDrop, type TableNoteDropPreview, type TableNoteDropRejection } from './table-note-drop';
 import { useTableImages } from './use-table-images';
 import { useTableScrollLoading } from './use-table-scroll-loading';
 import { TableCalendarView, TableGalleryView, TableKanbanView } from './table-secondary-views';
 import { TableNoteDropOverlay } from './table-note-drop-overlay';
-import { useTableNoteDropTarget, type TableNoteDropTargetRejection } from './use-table-note-drop-target';
 import { TableSortButton, cycleTableSort, tableSortDirection } from './table-sort-button';
 import { TableDatasetMenu } from './table-dataset-menu';
 import { sortFields } from './field-order';
@@ -101,16 +88,36 @@ import { TableFieldList } from './table-field-list';
 import { TableBooleanInput, TableNumberInput, TableRecordRow } from './table-record-row';
 import { TableTagValueInput } from './table-tag-value-input';
 import { TableTextValueInput } from './table-text-value-input';
-import { applyFieldMigrations, migratedOptionValue, planFieldMigrations, type FieldValueMigration } from './table-field-migration';
-import { bindTableField, presetFromTableField, retireTablePreset, tableFieldFromPreset } from './table-preset-bindings';
 import { NOTE_CALENDAR_DATE_FIELDS, useCalendarController } from './use-calendar-controller';
-import type { NoteListItem } from '@/types/note-item';
 import { TableFieldEditorForm, TableFieldHeader, TablePresetMenu } from './table-field-header';
 import { useTableSession } from './use-table-session';
 import { useTableCellWriter, type TableCellSaveStatus } from './use-table-cell-writer';
 import { useTableViewSelection } from './use-table-view-selection';
-import { isMarkdownNoteDragResource, type NotebookNoteDragResource } from '@features/memo/public/drag-resource-api';
-import { addPresetField, addTableField, toggleDatasetTableFieldVisibility, changeFieldType as changeFieldTypeInDocument, removeBuiltinField as removeBuiltinTableField, removeField, removePresetField, viewsRequiringField } from './table-commands';
+import { toggleDatasetTableFieldVisibility } from './table-commands';
+import { IncompatibleViewEmptyState } from './incompatible-view-empty-state';
+import { useTableNoteLinking } from './use-table-note-linking';
+import { useTableNoteDrop } from './use-table-note-drop';
+import { useTableFieldEdits } from './use-table-field-edits';
+import { useTableCalendarNotes } from './use-table-calendar-notes';
+import { useTableKanban } from './use-table-kanban';
+import {
+  calendarDateKey,
+  calendarDateTimeForTimestamp,
+  EMBEDDED_GALLERY_PAGE_SIZE,
+  EMBEDDED_TABLE_PAGE_SIZE,
+  FIELD_TYPE_CHOICES,
+  fieldLabel,
+  fieldTypeIconKind,
+  fieldTypeLabel,
+  isoDate,
+  noteInCollectionSource,
+  noteKeyForRecord,
+  noteThumbnailUrl,
+  resolveTableNoteParentRelativePath,
+  SCROLL_PAGE_SIZE,
+  TABLE_ACTION_COLUMN_MIN_WIDTH,
+  TABLE_FIELD_WIDTHS,
+} from './table-view-helpers';
 
 
 export interface TableDocumentViewProps {
@@ -139,126 +146,6 @@ export interface TableDocumentViewProps {
   /** Called after the table file has been renamed. */
   onFilePathChange?: (filePath: string) => void;
 }
-
-const FIELD_TYPE_CHOICES: TableFieldType[] = ADDABLE_TABLE_PROPERTY_KINDS.filter((kind) => kind !== 'Note');
-const SCROLL_PAGE_SIZE = 50;
-const EMBEDDED_TABLE_PAGE_SIZE = 10;
-const EMBEDDED_GALLERY_PAGE_SIZE = 14;
-
-function noteInCollectionSource(
-  notePath: string,
-  source: CollectionSource | undefined,
-  collectionFilePath: string,
-  notebookPath: string | null,
-): boolean {
-  if (!notePath) return true;
-  if (!source || source.scope === 'notebook') return true;
-  let base = source.path ?? '';
-  if (source.scope === 'containing_folder') {
-    if (!notebookPath) return false;
-    const root = canonicalDirectoryPath(notebookPath).replace(/\/$/, '');
-    const parent = canonicalDirectoryPath(collectionFilePath.replace(/[\\/][^\\/]*$/, '')).replace(/\/$/, '');
-    if (parent === root) base = '';
-    else if (parent.startsWith(`${root}/`)) base = parent.slice(root.length + 1);
-    else return false;
-  }
-  const normalized = notePath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-  const prefix = base.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
-  if (!prefix) return source.depth === 'descendants' || !normalized.includes('/');
-  if (!normalized.startsWith(`${prefix}/`)) return false;
-  const remainder = normalized.slice(prefix.length + 1);
-  return source.depth === 'descendants' || !remainder.includes('/');
-}
-const TABLE_ACTION_COLUMN_MIN_WIDTH = 120;
-
-/** Resolve the table YAML's folder as the second choice for notes created from its rows. */
-function resolveTableNoteParentRelativePath(filePath: string, notebookPath: string | null): string | undefined {
-  if (!filePath || !notebookPath) return undefined;
-  const notebookRoot = canonicalDirectoryPath(notebookPath);
-  const tableDirectory = parentDirectoryPath(filePath, notebookRoot);
-  const relativePath = notebookRelativeDirectoryPath(notebookRoot, tableDirectory);
-  return relativePath ?? undefined;
-}
-
-// Default column widths are selected by type and applied through the colgroup.
-const TABLE_FIELD_WIDTHS: Record<TableFieldType, number> = {
-  primary: 240,
-  Text: 120,
-  Boolean: 120,
-  Number: 120,
-  Date: 120,
-  URL: 120,
-  Select: 120,
-  MultiSelect: 120,
-  Tag: 120,
-  Color: 120,
-  Icon: 120,
-  Image: 120,
-};
-function IncompatibleViewEmptyState({ title, description, titleAction }: { title: string; description: string; titleAction?: ReactNode }) {
-  return <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 py-12 text-center">
-    <div className="flex items-center justify-center gap-3">
-      <div className="text-sm font-medium text-[var(--foreground)]">{title}</div>
-      {titleAction}
-    </div>
-    <p className="max-w-md text-sm leading-6 text-[var(--muted-foreground)]">{description}</p>
-  </div>;
-}
-
-
-function fieldTypeLabel(type: PropertyKind | 'primary', t: (key: I18nKey) => string): string {
-  return t(getPropertyTypeDefinition(type === 'primary' ? 'Note' : type).labelKey);
-}
-
-function fieldTypeIconKind(type: TableFieldType): PropertyIconKind {
-  return type === 'primary' ? 'note' : getPropertyTypeDefinition(type).iconKind;
-}
-
-function fieldLabel(
-  field: TableField,
-  propertyFields: ReturnType<typeof usePropertyPresets>['fields'],
-  t: (key: I18nKey) => string,
-): string {
-  if (field.type === 'primary') return '笔记名称';
-  // A user preset's key IS its display name; only system presets resolve a
-  // separate localized label.
-  return resolvePropertyDisplayName(field.property_key ?? '', propertyFields, t);
-}
-
-
-function noteThumbnailUrl(thumbnail: string | null | undefined): string | null {
-  if (!thumbnail) return null;
-  const storageKey = decodeStorageKey(thumbnail);
-  return storageKey ? assetUrl(storageKey) : thumbnail;
-}
-
-function isoDate(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
-
-function calendarDateKey(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  return /^(\d{4}-\d{2}-\d{2})(?:$|[T ])/.exec(value)?.[1] ?? null;
-}
-
-function calendarDateTimeForTimestamp(timestamp: number | undefined): string | null {
-  if (typeof timestamp !== 'number' || !Number.isFinite(timestamp)) return null;
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return null;
-  return `${isoDate(date)}T${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
-}
-
-function noteKeyForRecord(record: TableRecord): string {
-  return record.note_path;
-}
-
-function upsertTableRecord(records: TableRecord[], nextRecord: TableRecord): TableRecord[] {
-  if (!records.some((record) => record.id === nextRecord.id)) return [...records, nextRecord];
-  return records.map((record) => record.id === nextRecord.id ? nextRecord : record);
-}
-
-
-
 
 const EMPTY_CELL_STATUSES: ReadonlyMap<string, TableCellSaveStatus> = new Map();
 
@@ -362,6 +249,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     };
   }, [document?.views.items, editingViewName]);
   const [folderMediaSwitchConfirmOpen, setFolderMediaSwitchConfirmOpen] = useState(false);
+  const [headerMenuFieldId, setHeaderMenuFieldId] = useState<string | null>(null);
   const [fieldPanelHeaderId, setFieldPanelHeaderId] = useState<string | null>(null);
   const [pendingKanbanOption, setPendingKanbanOption] = useState<TableFieldOption | null>(null);
   const [matchingOpen, setMatchingOpen] = useState(false);
@@ -370,16 +258,11 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
   const [pendingViewType, setPendingViewType] = useState<'calendar' | 'kanban' | null>(null);
   const [configuringViewId, setConfiguringViewId] = useState<string | null>(null);
   const [viewFieldPickerAnchorRect, setViewFieldPickerAnchorRect] = useState<DOMRect | null>(null);
-  const [calendarCursor, setCalendarCursor] = useState(() => new Date());
-  const [calendarCreatePropertyValues, setCalendarCreatePropertyValues] = useState<Record<string, unknown>>({});
-  const [calendarEditingRecord, setCalendarEditingRecord] = useState<TableRecord | null>(null);
-  const calendarPendingCreatedNoteRef = useRef<{ title: string; entry: NoteEntry } | null>(null);
   const [tablePage, setTablePage] = useState(0);
   const [galleryPage, setGalleryPage] = useState(0);
   const recordsScrollerRef = useRef<HTMLDivElement | null>(null);
   const tableDropAreaRef = useRef<HTMLDivElement | null>(null);
   const tableDropTargetId = useId();
-  const [tableDropPreview, setTableDropPreview] = useState<TableNoteDropPreview | null>(null);
   const loadMoreRecordsRef = useRef<HTMLDivElement | null>(null);
   const [pendingTablePageRecordId, setPendingTablePageRecordId] = useState<string | null>(null);
   const { cellStatusesByRecord, updateCell, flush: flushCells } = useTableCellWriter({
@@ -437,25 +320,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       reportPresentation({ title, state: { status: 'ready' } });
     }
   }, [currentFilePath, document, editable, embeddedInEditor, expectedCollectionId, hasRemoveReference, load, loadError, notebookPath, removeReferenceForPresentation, reportPresentation]);
-  const [newFieldOpen, setNewFieldOpen] = useState(false);
-  const [newFieldAnchor, setNewFieldAnchor] = useState<{ rect: DOMRect; align: 'start' | 'end'; source: 'dataset' | 'table' } | null>(null);
-  const [newFieldPropertyKey, setNewFieldPropertyKey] = useState('');
-  const [newFieldType, setNewFieldType] = useState<TableFieldType>('Text');
-  const [newFieldTypeMenuOpen, setNewFieldTypeMenuOpen] = useState(false);
-  const [newFieldPresetMenuOpen, setNewFieldPresetMenuOpen] = useState(false);
-  const skipNewFieldSaveOnCloseRef = useRef(false);
-  const [datasetPresetMenuOpen, setDatasetPresetMenuOpen] = useState(false);
-  const [newFieldOptions, setNewFieldOptions] = useState<TableFieldOption[]>([]);
-  const [headerMenuFieldId, setHeaderMenuFieldId] = useState<string | null>(null);
-  const [pendingDeleteTarget, setPendingDeleteTarget] = useState<{ field: TableField; preset: PropertyFieldConfig } | null>(null);
-  const [pendingDeleteTableCount, setPendingDeleteTableCount] = useState(0);
-  const [deletingFieldBusy, setDeletingFieldBusy] = useState(false);
-  const [rowActionRecordId, setRowActionRecordId] = useState<string | null>(null);
-  const [notePickerOpen, setNotePickerOpen] = useState(false);
-  const [notePickerAnchorRect, setNotePickerAnchorRect] = useState<DOMRect | null>(null);
-  const [notePickerRecordId, setNotePickerRecordId] = useState<string | null>(null);
-  const [notePickerCalendarDate, setNotePickerCalendarDate] = useState<{ fieldId: string; date: string } | null>(null);
-  const [newNoteTitle, setNewNoteTitle] = useState('');
+
   const [autoOpenPrimaryRecordId, setAutoOpenPrimaryRecordId] = useState<string | null>(null);
   const conditionRecordIdsRef = useRef(new Map<string, string>());
 
@@ -493,32 +358,8 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     }
     return sortFields(schemaFields.filter(isCalendarCreateWritableField), (field) => field.id, document.dataset.schema.field_order);
   }, [document]);
-  const openCalendarNotePopover = useCallback((date: string, anchorRect: DOMRect, fieldId: string) => {
-    calendarPendingCreatedNoteRef.current = null;
-    setCalendarEditingRecord(null);
-    setCalendarCreatePropertyValues(Object.fromEntries(calendarCreateFields.map((field) => [
-      field.id,
-      field.type === 'Date' && field.id === fieldId ? date
-        : field.type === 'Boolean' ? false
-          : field.type === 'MultiSelect' || field.type === 'Tag' || field.type === 'Color' || (field.type === 'Image' && field.multiple) ? []
-            : '',
-    ])));
-    openCalendarAddDialog(date, anchorRect, fieldId);
-  }, [calendarCreateFields, openCalendarAddDialog]);
-  const calendarDays = useMemo(() => {
-    const year = calendarCursor.getFullYear();
-    const month = calendarCursor.getMonth();
-    const first = new Date(year, month, 1);
-    const last = new Date(year, month + 1, 0);
-    const startOffset = (first.getDay() - calendarWeekStart + 7) % 7;
-    const endOffset = (calendarWeekStart + 6 - last.getDay() + 7) % 7;
-    const start = new Date(year, month, 1 - startOffset);
-    return Array.from({ length: startOffset + last.getDate() + endOffset }, (_, index) => {
-      const date = new Date(start);
-      date.setDate(start.getDate() + index);
-      return { date, iso: isoDate(date), inMonth: date.getMonth() === month };
-    });
-  }, [calendarCursor, calendarWeekStart]);
+
+
   const noteForRecord = useCallback((record: TableRecord) => {
     const key = noteKeyForRecord(record);
     return key ? noteByKey.get(key.replace(/\\/g, '/')) : undefined;
@@ -594,6 +435,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
   });
   const columnSizingRecords = useMemo(() => {
     const pageCount = Math.max(1, Math.ceil(visibleRecords.length / tablePageSize));
+  
     const page = Math.min(tablePage, pageCount - 1);
     return visibleRecords.slice(embeddedInEditor ? page * tablePageSize : 0, (page + 1) * tablePageSize);
   }, [embeddedInEditor, tablePage, tablePageSize, visibleRecords]);
@@ -709,6 +551,34 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     setGalleryPage(0);
   }, [activeViewId, embeddedInEditor]);
 
+  const {
+    notePickerOpen, setNotePickerOpen,
+    notePickerAnchorRect, setNotePickerAnchorRect,
+    setNotePickerRecordId,
+    setNotePickerCalendarDate,
+    newNoteTitle, setNewNoteTitle,
+    rowActionRecordId, setRowActionRecordId,
+    openNotePicker,
+    addDraftRecordAndOpenNoteSelector,
+    applyCalendarDateToNote,
+    createNoteInNotebook,
+    linkSelectedNote,
+    replaceLinkedNote,
+    createAndLinkRecordNote,
+    createAndLinkNote,
+    renameLinkedNote,
+    deleteRecord,
+    updateRecordField,
+    selectImageForCell,
+    createBlankGalleryNote: createBlankGalleryNoteBase,
+    requestDeleteLinkedNote,
+  } = useTableNoteLinking({
+    session: { document, saving, setSaving, save, loadSequenceRef, isCurrentSession, resolvedNotebookId, setNotes, reportSaveFailure },
+    noteField,
+    editable, notebookPath, notebookId, currentFilePath, availableNotes,
+    visibleRecords, collectionFilterFields, activeViewLayout: activeView?.layout,
+    noteForRecord, setPendingTablePageRecordId, setAutoOpenPrimaryRecordId, setTablePage, updateCell,
+  });
   const pageCount = Math.max(1, Math.ceil(visibleRecords.length / tablePageSize));
   const currentPage = Math.min(tablePage, pageCount - 1);
   const galleryPageCount = Math.max(1, Math.ceil(secondaryViewRecords.length / galleryPageSize));
@@ -717,6 +587,19 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     embeddedInEditor ? currentPage * tablePageSize : 0, (currentPage + 1) * tablePageSize,
   ), [visibleRecords, embeddedInEditor, currentPage, tablePageSize]);
   const nextTableRecordId = visibleRecords[(embeddedInEditor ? currentPage * tablePageSize : 0) + visibleTableRecords.length]?.id ?? null;
+  const {
+    tableDropPreview,
+    previewExternalGalleryDrop,
+    addExternalNotesToGallery,
+    addExternalNotesToCalendar,
+  } = useTableNoteDrop({
+    session: { document, saving, setSaving, save, loadSequenceRef, isCurrentSession, resolvedNotebookId, notes, setNotes },
+    noteField, editable, notebookPath, currentFilePath, activeView: activeView ?? null, conditionRecords, collectionFilterFields,
+    noteForRecord, applyCalendarDateToNote, calendarDateFieldId, calendarField, datasetRecords,
+    embeddedInEditor, tablePageSize, galleryPageSize, galleryCurrentPage, currentPage,
+    nextTableRecordId, recordsScrollerRef, tableDropAreaRef, tableDropTargetId,
+    setTablePage, setGalleryPage,
+  });
   const renderedTableRecords = tableDropPreview?.records ?? visibleTableRecords;
   const visibleGalleryRecords = useMemo(() => secondaryViewRecords.slice(
     embeddedInEditor ? galleryCurrentPage * galleryPageSize : 0, (galleryCurrentPage + 1) * galleryPageSize,
@@ -733,6 +616,50 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     page: scrollPage, pageCount: scrollPageCount, onLoadMore: loadMoreRecords,
   });
 
+  const {
+    newFieldOpen, setNewFieldOpen,
+    newFieldAnchor, setNewFieldAnchor,
+    newFieldPropertyKey, setNewFieldPropertyKey,
+    newFieldType, setNewFieldType,
+    newFieldTypeMenuOpen, setNewFieldTypeMenuOpen,
+    newFieldPresetMenuOpen, setNewFieldPresetMenuOpen,
+    datasetPresetMenuOpen, setDatasetPresetMenuOpen,
+    newFieldOptions, setNewFieldOptions,
+    skipNewFieldSaveOnCloseRef,
+    pendingDeleteTarget, setPendingDeleteTarget,
+    pendingDeleteTableCount,
+    deletingFieldBusy,
+    addField,
+    removePreset,
+    deleteBuiltinField,
+    queueHeaderFieldEdits,
+    changeFieldType,
+    applyFieldPreset,
+    deleteField,
+    confirmDeleteField,
+    openNewFieldEditor,
+  } = useTableFieldEdits({
+    session: { document, saving, setSaving, save, loadSequenceRef, isCurrentSession, resolvedNotebookId, setNotes, reportSaveFailure, pendingNotePropertiesRef },
+    notebookPath, propertyFields, datasetRecords, notesLoadError, noteForRecord,
+  });
+  const {
+    calendarPendingCreatedNoteRef,
+    calendarCursor, setCalendarCursor,
+    calendarCreatePropertyValues, setCalendarCreatePropertyValues,
+    calendarEditingRecord, setCalendarEditingRecord,
+    calendarDays,
+    openCalendarNotePopover,
+    closeCalendarNoteDialog,
+    createCalendarNote,
+    openCalendarEditPopover,
+    saveCalendarNoteEdit,
+  } = useTableCalendarNotes({
+    session: { document, saving, setSaving, save, loadSequenceRef, isCurrentSession, resolvedNotebookId, setNotes, reportSaveFailure },
+    editable, notebookPath,
+    calendar: { dateFieldId: calendarDateFieldId, dateMetadata: calendarDateMetadata, openAddDialog: openCalendarAddDialog, closeAddDialog: closeCalendarAddPopover, setTitle: setCalendarAddTitle, addDialog: calendarAddDialog },
+    noteField, calendarWeekStart, calendarField, calendarCreateFields, visibleRecords, noteForRecord,
+    applyCalendarDateToNote, createNoteInNotebook, renameLinkedNote,
+  });
   const imageReferences = useMemo(() => {
     if (!document) return [];
     const active = resolveTableView(document, activeViewId ?? initialViewId);
@@ -816,68 +743,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     return value == null || value === '' ? '—' : String(value);
   };
 
-  const openNotePicker = useCallback((anchorRect: DOMRect, recordId: string | null, calendarDate: { fieldId: string; date: string } | null = null) => {
-    setNotePickerAnchorRect(anchorRect);
-    setNotePickerRecordId(recordId);
-    setNotePickerCalendarDate(calendarDate);
-    setNewNoteTitle('');
-    setNotePickerOpen(true);
-  }, []);
 
-  const addDraftRecordAndOpenNoteSelector = useCallback(async () => {
-    if (!editable || !document || !noteField || saving) return;
-    const sequence = loadSequenceRef.current;
-    const record: TableRecord = {
-      id: `rec_${createUuidV7()}`,
-      updated_at: new Date().toISOString(),
-      note_path: '',
-    };
-    const records = [...document.dataset.records.include, record];
-    setSaving(true);
-    try {
-      const saved = await save({
-        ...document,
-        collection: reviseCollection(document.collection),
-        dataset: { ...document.dataset, records: { ...document.dataset.records, include: records } },
-      }, true, sequence);
-      if (!saved || !isCurrentSession(sequence)) return;
-      setPendingTablePageRecordId(record.id);
-      setAutoOpenPrimaryRecordId(record.id);
-    } catch (error) {
-      reportSaveFailure(sequence);
-      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableAddRow'));
-    } finally {
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [document, editable, isCurrentSession, loadSequenceRef, noteField, save, saving, setSaving, reportSaveFailure]);
-
-  const applyCalendarDateToNote = useCallback(async (note: NoteEntry, calendarDate: { fieldId: string; date: string } | null): Promise<NoteEntry> => {
-    if (!calendarDate) return note;
-    if (!editable) throw new Error('当前引用为只读，无法修改笔记属性');
-    const field = document?.dataset.schema.fields.find((item) => item.id === calendarDate.fieldId)
-      ?? builtinPresetTableField(calendarDate.fieldId) ?? undefined;
-    if (field?.type !== 'Date' || !field.property_key) return note;
-    const path = notebookPath ? joinNotebookMemoPath(notebookPath, note.relativePath) : null;
-    if (!path) throw new Error('无法确定笔记路径，未能设置日期');
-    if (!await setDocumentProperties(path, { [field.property_key]: calendarDate.date }, { [field.property_key]: 'Date' })) {
-      throw new Error('笔记日期未能保存');
-    }
-    return { ...note, updatedAt: Date.now(), properties: { ...note.properties, [field.property_key]: calendarDate.date } };
-  }, [document, editable, notebookPath]);
-
-  const createNoteInNotebook = useCallback(async (title?: string) => {
-    if (!editable) throw new Error('当前引用为只读，无法新建笔记');
-    if (!resolvedNotebookId) throw new Error('无法确定当前笔记本');
-    if (!document || !notebookPath) throw new Error('无法确定当前多维表路径');
-    const directory = resolveCollectionSaveDirectory({
-      filePath: currentFilePath, notebookPath, placement: document.collection.placement,
-      source: document.dataset.source,
-      configuredFolder: tableAutoCollectConfig(document)?.condition.path || undefined,
-      defaultDirectory: parentDirectoryPath(currentFilePath, notebookPath),
-    });
-    const parentRelativePath = notebookRelativeDirectoryPath(notebookPath, directory) ?? undefined;
-    return notesClient.create(resolvedNotebookId, undefined, parentRelativePath, title);
-  }, [currentFilePath, document, editable, notebookPath, resolvedNotebookId]);
 
   const createViewForField = useCallback(async (field: TableField | string) => {
     if (!document || !pendingViewType || saving) return;
@@ -1026,789 +892,23 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     if (await save(next)) setTablePage(0);
   }, [activeViewId, document, editable, save, saving]);
 
-  const linkSelectedNote = useCallback(async (selectedNoteKey: string) => {
-    if (!editable || !document || document.collection.placement === 'folder' || !noteField || !selectedNoteKey || saving) return;
-    const sequence = loadSequenceRef.current;
-    setSaving(true);
-    try {
-      const selectedNote = availableNotesRef.current.find((note) => note.relativePath.replace(/\\/g, '/') === selectedNoteKey);
-      const updatedNote = selectedNote ? await applyCalendarDateToNote(selectedNote, notePickerCalendarDate) : null;
-      if (!isCurrentSession(sequence)) return;
-      if (updatedNote && notePickerCalendarDate) {
-        const field = document.dataset.schema.fields.find((item) => item.id === notePickerCalendarDate.fieldId)
-          ?? builtinPresetTableField(notePickerCalendarDate.fieldId);
-        if (field?.type === 'Date' && field.property_key) {
-          setNotes((current) => current.map((note) => note.relativePath.replace(/\\/g, '/') === selectedNoteKey ? updatedNote : note));
-        }
-      }
-      const now = new Date().toISOString();
-      const targetRecord = notePickerRecordId ? visibleRecords.find((record) => record.id === notePickerRecordId) : undefined;
-      const linkedRecord = targetRecord
-        ? { ...targetRecord, updated_at: now, note_path: selectedNoteKey }
-        : { id: `rec_${createUuidV7()}`, updated_at: now, note_path: selectedNoteKey };
-      const records = upsertTableRecord(document.dataset.records.include, linkedRecord);
-      const next: MultidimensionalTableDocument = { ...document, collection: reviseCollection(document.collection), dataset: { ...document.dataset, records: { ...document.dataset.records, include: records } } };
-      setNotePickerOpen(false);
-      setNotePickerRecordId(null);
-      setNotePickerCalendarDate(null);
-      const saved = await save(next, true, sequence);
-      if (saved && isCurrentSession(sequence) && activeView?.layout === 'table' && (!targetRecord || !targetRecord.note_path)) setPendingTablePageRecordId(linkedRecord.id);
-      if (!saved && updatedNote && notePickerCalendarDate) toast.error('笔记日期已修改，但表格关联未保存，请重试关联');
-    } catch (error) {
-      reportSaveFailure(sequence);
-      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableLink'));
-    } finally {
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [activeView?.layout, applyCalendarDateToNote, document, editable, isCurrentSession, loadSequenceRef, noteField, notePickerCalendarDate, notePickerRecordId, save, saving, setNotes, setSaving, visibleRecords, reportSaveFailure]);
 
-  const replaceLinkedNote = useCallback((recordId: string, noteKey: string) => {
-    if (!document || document.collection.placement === 'folder' || !noteField || saving) return;
-    const now = new Date().toISOString();
-    const targetRecord = visibleRecords.find((record) => record.id === recordId);
-    if (!targetRecord) return;
-    const records = upsertTableRecord(document.dataset.records.include, { ...targetRecord, updated_at: now, note_path: noteKey });
-    void save({ ...document, collection: reviseCollection(document.collection), dataset: { ...document.dataset, records: { ...document.dataset.records, include: records } } })
-      .then((saved) => {
-        if (saved && !targetRecord.note_path) setPendingTablePageRecordId(recordId);
-      });
-  }, [document, noteField, save, saving, visibleRecords]);
-
-  const createAndLinkRecordNote = useCallback(async (recordId: string, title: string): Promise<boolean> => {
-    const noteTitle = title.trim();
-    if (!editable || !document || !noteField || !resolvedNotebookId || !noteTitle || saving) return false;
-    const sequence = loadSequenceRef.current;
-    setSaving(true);
-    try {
-      const created = await createNoteInNotebook(noteTitle);
-      if (!isCurrentSession(sequence)) return false;
-      const note = created.entry;
-      const noteKey = note.relativePath.replace(/\\/g, '/');
-      const now = new Date().toISOString();
-      const targetRecord = visibleRecords.find((record) => record.id === recordId);
-      if (!targetRecord) return false;
-      const records = upsertTableRecord(document.dataset.records.include, { ...targetRecord, updated_at: now, note_path: noteKey });
-      setNotes((current) => [...current.filter((item) => item.relativePath.replace(/\\/g, '/') !== noteKey), note]);
-      const saved = await save({ ...document, collection: reviseCollection(document.collection), dataset: { ...document.dataset, records: { ...document.dataset.records, include: records } } }, true, sequence);
-      if (saved && isCurrentSession(sequence) && !targetRecord.note_path) setPendingTablePageRecordId(recordId);
-      return saved && isCurrentSession(sequence);
-    } catch (error) {
-      reportSaveFailure(sequence);
-      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableCreateLink'));
-      return false;
-    } finally {
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [createNoteInNotebook, document, editable, isCurrentSession, loadSequenceRef, noteField, resolvedNotebookId, save, saving, visibleRecords, reportSaveFailure, setSaving]);
 
   const handleAutoOpenHandled = useCallback(() => setAutoOpenPrimaryRecordId(null), []);
 
-  const createAndLinkNote = useCallback(async () => {
-    const title = newNoteTitle.trim();
-    if (!editable || !document || !noteField || !resolvedNotebookId || !title || saving) return;
-    const sequence = loadSequenceRef.current;
-    setSaving(true);
-    try {
-      const created = await createNoteInNotebook(title);
-      if (!isCurrentSession(sequence)) return;
-      const note = await applyCalendarDateToNote(created.entry, notePickerCalendarDate);
-      const noteKey = note.relativePath.replace(/\\/g, '/');
-      const now = new Date().toISOString();
-      const targetRecord = notePickerRecordId ? visibleRecords.find((record) => record.id === notePickerRecordId) : undefined;
-      const linkedRecord = targetRecord
-        ? { ...targetRecord, updated_at: now, note_path: noteKey }
-        : { id: `rec_${createUuidV7()}`, updated_at: now, note_path: noteKey };
-      const records = upsertTableRecord(document.dataset.records.include, linkedRecord);
-      setNotes((current) => [...current.filter((item) => item.relativePath.replace(/\\/g, '/') !== noteKey), note]);
-      setNotePickerOpen(false);
-      setNotePickerRecordId(null);
-      setNotePickerCalendarDate(null);
-      setNewNoteTitle('');
-      const saved = await save({ ...document, collection: reviseCollection(document.collection), dataset: { ...document.dataset, records: { ...document.dataset.records, include: records } } }, false, sequence);
-      if (saved && isCurrentSession(sequence) && activeView?.layout === 'table' && (!targetRecord || !targetRecord.note_path)) setPendingTablePageRecordId(linkedRecord.id);
-    } catch (error) {
-      reportSaveFailure(sequence);
-      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableCreateLink'));
-    } finally {
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [activeView?.layout, applyCalendarDateToNote, createNoteInNotebook, document, editable, isCurrentSession, loadSequenceRef, newNoteTitle, noteField, notePickerCalendarDate, notePickerRecordId, resolvedNotebookId, save, saving, visibleRecords, reportSaveFailure, setSaving]);
 
-  const persistCalendarNote = useCallback(async (note: NoteEntry, calendarDate: { fieldId: string; date: string } | null, sequence: number) => {
-    if (!editable || !document || !noteField || !isCurrentSession(sequence)) return false;
-    const datedNote = await applyCalendarDateToNote(note, calendarDate);
-    if (!isCurrentSession(sequence)) return false;
-    const noteKey = datedNote.relativePath.replace(/\\/g, '/');
-    const now = new Date().toISOString();
-    const record: TableRecord = { id: `rec_${createUuidV7()}`, updated_at: now, note_path: noteKey };
-    const records = upsertTableRecord(document.dataset.records.include, record);
-    setNotes((current) => [...current.filter((item) => item.relativePath.replace(/\\/g, '/') !== noteKey), datedNote]);
-    const saved = await save({ ...document, collection: reviseCollection(document.collection), dataset: { ...document.dataset, records: { ...document.dataset.records, include: records } } }, true, sequence);
-    if (saved && isCurrentSession(sequence)) {
-      closeCalendarAddPopover();
-    }
-    return saved;
-  }, [applyCalendarDateToNote, closeCalendarAddPopover, document, editable, isCurrentSession, noteField, save, setNotes]);
 
-  const planExternalNoteDrop = useCallback((
-    draggedNotes: NotebookNoteDragResource[], beforeRecordId: string | null,
-  ) => {
-    if (!document || (activeView?.layout !== 'gallery' && activeView?.layout !== 'table') || !notebookPath || !resolvedNotebookId) {
-      return { reason: 'unavailable' as const };
-    }
-    const uniqueNotes = [...new Map(draggedNotes.map((note) => [canonicalPath(note.relativePath), note])).values()];
-    const resolved: NoteEntry[] = [];
-    for (const draggedNote of uniqueNotes) {
-      if (!isMarkdownNoteDragResource(draggedNote) || draggedNote.notebookId !== resolvedNotebookId) {
-        return { reason: 'unavailable' as const };
-      }
-      const relativePath = canonicalPath(draggedNote.relativePath).replace(/^\/+/, '');
-      const note = notes.find((item) => item.relativePath.replace(/\\/g, '/') === relativePath);
-      if (!note || !noteInCollectionSource(relativePath, document.dataset.source, currentFilePath, notebookPath)) {
-        return { reason: 'unavailable' as const };
-      }
-      resolved.push(note);
-    }
-    return planTableNoteDrop({
-      explicitRecords: document.dataset.records.include,
-      automaticRecords: conditionRecords,
-      draggedNotes: resolved,
-      beforeRecordId,
-      view: activeView,
-      fields: collectionFilterFields,
-      primaryFieldId: document.dataset.schema.primary_field_id,
-      noteForRecord,
-      isInSource: (path) => noteInCollectionSource(path, document.dataset.source, currentFilePath, notebookPath),
-    });
-  }, [activeView, collectionFilterFields, conditionRecords, currentFilePath, document, noteForRecord, notes, notebookPath, resolvedNotebookId]);
 
-  const previewExternalGalleryDrop = useCallback((
-    draggedNotes: NotebookNoteDragResource[], beforeRecordId: string | null,
-  ): TableNoteDropPreview | TableNoteDropRejection => {
-    const plan = planExternalNoteDrop(draggedNotes, beforeRecordId);
-    if ('reason' in plan) return plan;
-    const index = plan.records.findIndex((record) => plan.draggedPaths.includes(record.note_path.replace(/\\/g, '/')));
-    const page = embeddedInEditor
-      ? Math.floor(index / galleryPageSize)
-      : Math.max(galleryCurrentPage, Math.floor(index / galleryPageSize));
-    return {
-      records: plan.records.slice(embeddedInEditor ? page * galleryPageSize : 0, (page + 1) * galleryPageSize),
-      draggedPaths: plan.draggedPaths,
-    };
-  }, [embeddedInEditor, galleryCurrentPage, galleryPageSize, planExternalNoteDrop]);
 
-  const persistExternalNotesToTableView = useCallback(async (
-    draggedNotes: NotebookNoteDragResource[],
-    beforeRecordId: string | null,
-    layout: 'table' | 'gallery',
-  ) => {
-    if (!editable || !document || !noteField || saving || activeView?.layout !== layout) return;
-    const plan = planExternalNoteDrop(draggedNotes, beforeRecordId);
-    const filteredMessage = layout === 'gallery'
-      ? 'multidimensionalTable.galleryDropFiltered' : 'multidimensionalTable.tableDropFiltered';
-    const unsupportedMessage = layout === 'gallery'
-      ? 'memo.fileTree.galleryDropUnsupported' : 'memo.fileTree.tableDropUnsupported';
-    const failedMessage = layout === 'gallery'
-      ? 'multidimensionalTable.galleryDropFailed' : 'multidimensionalTable.tableDropFailed';
-    if ('reason' in plan) {
-      toast.warning(t(plan.reason === 'filtered' ? filteredMessage : unsupportedMessage));
-      return;
-    }
-    const sequence = loadSequenceRef.current;
-    if (!isCurrentSession(sequence)) return;
-    setSaving(true);
-    try {
-      const records = plan.includedRecords.map((record) => record.id.startsWith('drop-note:')
-        ? { ...record, id: `rec_${createUuidV7()}` } : record);
-      const next: MultidimensionalTableDocument = {
-        ...document,
-        collection: reviseCollection(document.collection),
-        dataset: { ...document.dataset, records: {
-          ...document.dataset.records,
-          include: records,
-          exclude: document.dataset.records.exclude.filter((record) => !plan.draggedPaths.includes(record.note_path.replace(/\\/g, '/'))),
-        } },
-      };
-      if (!await save(next, true, sequence)) {
-        if (isCurrentSession(sequence)) toast.error(t(failedMessage));
-        return;
-      }
-      if (!isCurrentSession(sequence)) return;
-      const index = plan.records.findIndex((record) => plan.draggedPaths.includes(record.note_path.replace(/\\/g, '/')));
-      const pageSize = layout === 'gallery' ? galleryPageSize : tablePageSize;
-      const setPage = layout === 'gallery' ? setGalleryPage : setTablePage;
-      setPage((page) => embeddedInEditor
-        ? Math.floor(index / pageSize)
-        : Math.max(page, Math.floor(index / pageSize)));
-    } catch (error) {
-      if (isCurrentSession(sequence)) toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteMove'));
-    } finally {
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [activeView?.layout, document, editable, embeddedInEditor, galleryPageSize, isCurrentSession, loadSequenceRef, noteField, planExternalNoteDrop, save, saving, setSaving, t, tablePageSize]);
 
-  const addExternalNotesToGallery = useCallback((draggedNotes: NotebookNoteDragResource[], beforeRecordId: string | null) => (
-    persistExternalNotesToTableView(draggedNotes, beforeRecordId, 'gallery')
-  ), [persistExternalNotesToTableView]);
 
-  const previewExternalTableDrop = useCallback((
-    draggedNotes: NotebookNoteDragResource[], beforeRecordId: string | null,
-  ): TableNoteDropPreview | TableNoteDropRejection => {
-    const plan = planExternalNoteDrop(draggedNotes, beforeRecordId);
-    if ('reason' in plan) return plan;
-    const index = plan.records.findIndex((record) => plan.draggedPaths.includes(record.note_path.replace(/\\/g, '/')));
-    const page = embeddedInEditor
-      ? Math.floor(index / tablePageSize)
-      : Math.max(currentPage, Math.floor(index / tablePageSize));
-    return {
-      records: plan.records.slice(embeddedInEditor ? page * tablePageSize : 0, (page + 1) * tablePageSize),
-      draggedPaths: plan.draggedPaths,
-    };
-  }, [currentPage, embeddedInEditor, planExternalNoteDrop, tablePageSize]);
 
-  const addExternalNotesToTable = useCallback((draggedNotes: NotebookNoteDragResource[], beforeRecordId: string | null) => (
-    persistExternalNotesToTableView(draggedNotes, beforeRecordId, 'table')
-  ), [persistExternalNotesToTableView]);
 
-  const previewTableDrop = useCallback((draggedNotes: NotebookNoteDragResource[], location: { beforeRecordId: string | null }) => (
-    previewExternalTableDrop(draggedNotes, location.beforeRecordId)
-  ), [previewExternalTableDrop]);
-  const onTableDropPreview = useCallback((preview: TableNoteDropPreview | null) => {
-    setTableDropPreview((current) => current && preview
-      && current.records.length === preview.records.length
-      && current.records.every((record, index) => record.id === preview.records[index].id)
-      && current.draggedPaths.join('\0') === preview.draggedPaths.join('\0') ? current : preview);
-  }, []);
-  const onTableDropReject = useCallback((reason: TableNoteDropTargetRejection) => {
-    if (reason === 'unsupported-resource' || reason === 'wrong-notebook' || reason === 'unavailable') {
-      toast.warning(t('memo.fileTree.tableDropUnsupported'));
-    } else if (reason === 'read-only') {
-      toast.warning(t('multidimensionalTable.tableDropReadOnly'));
-    } else if (reason === 'filtered') {
-      toast.warning(t('multidimensionalTable.tableDropFiltered'));
-    }
-  }, [t]);
-  useTableNoteDropTarget({
-    id: `table:${tableDropTargetId}`,
-    active: activeView?.layout === 'table',
-    notebookId: resolvedNotebookId,
-    canDrop: editable && !saving,
-    canHandleDrop: true,
-    hitTest: ({ x, y }) => {
-      const area = recordsScrollerRef.current;
-      if (!area) return null;
-      const bounds = area.getBoundingClientRect();
-      if (x < bounds.left || x > bounds.right || y < bounds.top || y > bounds.bottom) return null;
-      const rows = [...(tableDropAreaRef.current?.querySelectorAll<HTMLElement>('tbody tr[data-table-record]') ?? [])]
-        .filter((candidate) => {
-          const rowBounds = candidate.getBoundingClientRect();
-          return rowBounds.bottom > bounds.top && rowBounds.top < bounds.bottom;
-        });
-      if (!rows.length) return { beforeRecordId: null };
-      const row = rows.reduce((nearest, candidate) => {
-        const rowBounds = candidate.getBoundingClientRect();
-        const nearestBounds = nearest.getBoundingClientRect();
-        return Math.abs(y - (rowBounds.top + rowBounds.height / 2))
-          < Math.abs(y - (nearestBounds.top + nearestBounds.height / 2)) ? candidate : nearest;
-      });
-      const index = rows.indexOf(row);
-      const rowBounds = row.getBoundingClientRect();
-      const insertAfter = y >= rowBounds.top + rowBounds.height / 2;
-      return {
-        beforeRecordId: rows[index + (insertAfter ? 1 : 0)]?.dataset.tableRecord
-          ?? (insertAfter ? nextTableRecordId : null),
-      };
-    },
-    locationKey: ({ beforeRecordId }) => beforeRecordId ?? 'end',
-    preview: previewTableDrop,
-    onPreview: onTableDropPreview,
-    onDrop: (notes, location) => addExternalNotesToTable(notes, location.beforeRecordId),
-    onReject: onTableDropReject,
-    onError: (error) => toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteMove')),
-  });
 
-  const addExternalNotesToCalendar = useCallback(async (
-    draggedNotes: NotebookNoteDragResource[],
-    date: string,
-  ) => {
-    if (!editable || !document || !noteField || !notebookPath || !calendarDateFieldId
-      || !calendarField || calendarField.type !== 'Date' || saving) return;
-    const sequence = loadSequenceRef.current;
-    const uniqueNotes = [...new Map(draggedNotes.map((note) => [canonicalPath(note.relativePath), note])).values()];
-    const resolved = uniqueNotes.map((draggedNote) => {
-      if (!isMarkdownNoteDragResource(draggedNote) || draggedNote.notebookId !== resolvedNotebookId) return null;
-      const relativePath = canonicalPath(draggedNote.relativePath).replace(/^\/+/, '');
-      const note = notes.find((item) => item.relativePath.replace(/\\/g, '/') === relativePath);
-      if (!note || !noteInCollectionSource(relativePath, document.dataset.source, currentFilePath, notebookPath)) return null;
-      return { note, relativePath };
-    });
-    if (!resolved.length || resolved.some((item) => !item)) {
-      toast.warning(t('memo.fileTree.calendarDropUnsupported'));
-      return;
-    }
-    if (!isCurrentSession(sequence)) return;
-    setSaving(true);
-    try {
-      for (const item of resolved) {
-        if (!item || !isCurrentSession(sequence)) return;
-        const datedNote = await applyCalendarDateToNote(item.note, { fieldId: calendarDateFieldId, date });
-        if (!isCurrentSession(sequence)) return;
-        setNotes((current) => current.map((note) => (
-          note.relativePath.replace(/\\/g, '/') === item.relativePath ? datedNote : note
-        )));
-      }
 
-      let records = [...document.dataset.records.include];
-      const now = new Date().toISOString();
-      for (const item of resolved) {
-        if (!item) continue;
-        const existing = datasetRecords.find((record) => record.note_path.replace(/\\/g, '/') === item.relativePath);
-        const linkedRecord = existing
-          ? { ...existing, updated_at: now, note_path: item.relativePath }
-          : { id: `rec_${createUuidV7()}`, updated_at: now, note_path: item.relativePath };
-        records = upsertTableRecord(records, linkedRecord);
-      }
-      const next: MultidimensionalTableDocument = {
-        ...document,
-        collection: reviseCollection(document.collection),
-        dataset: { ...document.dataset, records: { ...document.dataset.records, include: records } },
-      };
-      if (!await save(next, true, sequence) || !isCurrentSession(sequence)) {
-        toast.error('日历关联未保存，请重试');
-        return;
-      }
-    } catch (error) {
-      if (isCurrentSession(sequence)) toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableLink'));
-    } finally {
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [applyCalendarDateToNote, calendarDateFieldId, calendarField, currentFilePath, datasetRecords, document, editable, isCurrentSession, loadSequenceRef, noteField, notes, notebookPath, resolvedNotebookId, save, saving, setNotes, setSaving, t]);
 
-  const createCalendarNote = useCallback(async () => {
-    const title = calendarAddTitle.trim();
-    if (!editable || !document || !noteField || !resolvedNotebookId || !calendarAddDate || !title || saving) return;
-    const sequence = loadSequenceRef.current;
-    setSaving(true);
-    try {
-      let pending = calendarPendingCreatedNoteRef.current;
-      if (!pending || pending.title !== title) {
-        const created = await createNoteInNotebook(title);
-        if (!isCurrentSession(sequence)) return;
-        pending = { title, entry: created.entry };
-        calendarPendingCreatedNoteRef.current = pending;
-      }
-      let note = await applyCalendarDateToNote(pending.entry, calendarAddDate);
-      if (!isCurrentSession(sequence)) return;
-      const properties: Record<string, unknown> = {};
-      const types: Record<string, PropertyKind | null | undefined> = {};
-      for (const field of calendarCreateFields) {
-        if (field.type === 'primary' || !field.property_key) continue;
-        const property = calendarCreatePropertyValue(field, calendarCreatePropertyValues[field.id]);
-        if (!property.include) continue;
-        properties[field.property_key] = property.value;
-        types[field.property_key] = field.type;
-      }
-      if (Object.keys(properties).length) {
-        const path = notebookPath ? joinNotebookMemoPath(notebookPath, note.relativePath) : null;
-        if (!path || !await setDocumentProperties(path, properties, types)) throw new Error('笔记属性未能保存');
-        note = { ...note, updatedAt: Date.now(), properties: { ...note.properties, ...properties } };
-      }
-      const saved = await persistCalendarNote(note, null, sequence);
-      if (saved && calendarPendingCreatedNoteRef.current?.entry.relativePath === pending.entry.relativePath) {
-        calendarPendingCreatedNoteRef.current = null;
-      }
-    } catch (error) {
-      reportSaveFailure(sequence);
-      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableCreateLink'));
-    } finally {
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [applyCalendarDateToNote, calendarAddDate, calendarAddTitle, calendarCreateFields, calendarCreatePropertyValues, createNoteInNotebook, document, editable, isCurrentSession, loadSequenceRef, noteField, notebookPath, persistCalendarNote, resolvedNotebookId, saving, setSaving, reportSaveFailure]);
 
-  const addField = useCallback(async (preset?: PropertyPreset) => {
-    if (!document || saving) return;
-    try {
-      if (preset) {
-        await save(addPresetField(document, preset));
-        return;
-      }
-      const propertyKey = newFieldPropertyKey.trim();
-      if (!propertyKey) return;
-      const options = (newFieldType === 'Select' || newFieldType === 'MultiSelect')
-        ? newFieldOptions.reduce<TableFieldOption[]>((result, option) => {
-          const label = option.label.trim();
-          if (label && !result.some((item) => item.label === label)) result.push({ ...option, label });
-          return result;
-        }, [])
-        : [];
-      let field: TableField = {
-        id: `fld_${createUuidV7()}`,
-        type: newFieldType,
-        property_key: propertyKey,
-        ...(options.length ? { options } : {}),
-        ...(newFieldType === 'Image' ? { multiple: true } : {}),
-      };
-      const existing = propertyFields.find((item) => canonicalizePropertyKey(item.key).toLowerCase() === canonicalizePropertyKey(propertyKey).toLowerCase());
-      if (existing) {
-        if (existing.type !== field.type) throw new Error('此属性已有不同类型，请使用已有预设');
-        field = tableFieldFromPreset(existing);
-      } else field = { ...field, preset_pending: true };
-      if (!await save(addTableField(document, field))) return;
-      if (!existing) {
-        try { await ensureTableFieldPreset(field); }
-        catch (error) { console.warn('Preset sync failed after saving table', error); toast.error(t('errors.friendly.presetSync')); }
-      }
-    } catch (error) {
-      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.propertySave'));
-      return;
-    }
-    setNewFieldOpen(false);
-    setNewFieldPropertyKey('');
-    setNewFieldOptions([]);
-  }, [document, newFieldOptions, newFieldPropertyKey, newFieldType, propertyFields, save, saving]);
 
-  const removePreset = useCallback((preset: PropertyPreset) => {
-    if (!document || saving) return;
-    try {
-      void save(removePresetField(document, preset));
-    } catch (error) {
-      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.propertyDelete'));
-    }
-  }, [document, save, saving]);
-
-  const deleteBuiltinField = useCallback(async (field: TableField): Promise<boolean> => {
-    if (!document || saving) return false;
-    try {
-      return await save(removeBuiltinTableField(document, field.id));
-    } catch (error) {
-      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.propertyDelete'));
-      return false;
-    }
-  }, [document, save, saving]);
-
-  const saveHeaderFieldEdits = useCallback(async (field: TableField, nameDraft: string, optionsDraft: TableFieldOption[]): Promise<boolean> => {
-    if (!document || saving || field.type === 'primary') return false;
-    const expectedRevision = field.preset_revision;
-    field = document.dataset.schema.fields.find((item) => item.id === field.id) ?? field;
-    const name = nameDraft.trim();
-    const nextOptions = field.type === 'Select' || field.type === 'MultiSelect'
-      ? optionsDraft.map((option) => ({ ...option, label: option.label.trim() })).filter((option) => option.label)
-      : undefined;
-    if (nextOptions && new Set(nextOptions.map((option) => option.label)).size !== nextOptions.length) {
-      toast.error('选项名称不能重复');
-      return false;
-    }
-    const optionsChanged = nextOptions !== undefined
-      && JSON.stringify(field.options ?? []) !== JSON.stringify(nextOptions);
-    const propertyKey = field.property_key;
-    if (!propertyKey || !document.dataset.schema.fields.some((item) => item.id === field.id)) return false;
-    // A user preset's key IS the name typed in the header. System presets keep
-    // their fixed key and only resolve a display label.
-    const systemPreset = usePropertyPresetStore.getState().registry.systemFields?.some((item) => item.id === field.id)
-      || isSystemPropertyKey(propertyKey);
-    const keyChanged = !systemPreset && Boolean(name) && name !== propertyKey;
-    if (!optionsChanged && !keyChanged) return true;
-    if (keyChanged) {
-      const normalized = canonicalizePropertyKey(name).toLowerCase();
-      if (isSystemPropertyKey(propertyKey) || isSystemPropertyKey(name)
-        || !name || ['flowix_property_types', 'flowix_plugin'].includes(normalized)) {
-        toast.error('系统预设或保留名称不能修改属性名称');
-        return false;
-      }
-      if (document.dataset.schema.fields.some((item) => item.id !== field.id && item.property_key
-          && canonicalizePropertyKey(item.property_key).toLowerCase() === normalized)
-        || propertyFields.some((item) => item.id !== field.id && canonicalizePropertyKey(item.key).toLowerCase() === normalized)) {
-        toast.error('属性名称已存在');
-        return false;
-      }
-    }
-    if (optionsChanged && notesLoadError) { toast.error('当前表格的笔记尚未完整加载，请稍后重试'); return false; }
-
-    const nextKey = keyChanged ? canonicalizePropertyKey(name) : propertyKey;
-    let nextField: TableField = { ...field, preset_revision: expectedRevision ?? field.preset_revision, preset_pending: true };
-    if (keyChanged) {
-      nextField = { ...nextField, property_key: nextKey };
-      delete nextField.name;
-    }
-    if (nextOptions !== undefined) {
-      nextField = { ...nextField, options: nextOptions };
-      if (nextOptions.length === 0) delete nextField.options;
-    }
-
-    const nextDocument: MultidimensionalTableDocument = {
-      ...document,
-      collection: reviseCollection(document.collection),
-      dataset: { ...document.dataset, schema: { ...document.dataset.schema, fields: document.dataset.schema.fields.map((item) => item.id === field.id ? nextField : item) } },
-    };
-    const sequence = loadSequenceRef.current;
-
-    // Renaming a user preset renames its key everywhere: definition, current
-    // table and every note that carries the property.
-    if (keyChanged) {
-      setSaving(true);
-      try {
-        const savedNow = await save(nextDocument, true, sequence);
-        if (!savedNow) {
-          reportSaveFailure(sequence);
-          toast.error('当前表格未保存，可以重试');
-          return false;
-        }
-        try { await updatePresetFromTable(nextField, presetFromTableField(nextField)); }
-        catch (error) {
-          console.warn('Preset sync failed after saving table', error); toast.error(t('errors.friendly.presetSync'));
-          return true;
-        }
-        const transform = optionsChanged && nextOptions
-          ? (value: unknown) => migratedOptionValue(field, nextOptions, value) ?? { value, remove: false }
-          : undefined;
-        let keyResult: { moved: number; failed: number } = { moved: 0, failed: 0 };
-        try { keyResult = await migrateNotePropertyKey(propertyKey, nextKey, transform); }
-        catch (error) { toast.error(friendlyErrorMessage(error, t, 'errors.friendly.propertySave')); }
-        if (keyResult.failed) toast.error(`${keyResult.failed} 个笔记未改名（目标属性名已存在），已保留原值`);
-        if (isCurrentSession(sequence)) {
-          setNotes((current) => current.map((note) => renameNoteProperty(note, propertyKey, nextKey, field, optionsChanged ? nextOptions : undefined, propertyFields)));
-        }
-        return savedNow;
-      } finally {
-        if (isCurrentSession(sequence)) setSaving(false);
-      }
-    }
-
-    let migrations: FieldValueMigration[];
-    try {
-      migrations = planFieldMigrations(
-        datasetRecords.flatMap((record) => {
-          const note = noteForRecord(record);
-          return note ? [note] : [];
-        }), field, propertyKey, optionsChanged ? nextOptions : undefined,
-      );
-    } catch (error) {
-      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.propertySave'));
-      return false;
-    }
-    if (migrations.some(({ noteKey }) => {
-      const pending = pendingNotePropertiesRef.current.get(noteKey);
-      return pending?.has(propertyKey);
-    })) {
-      toast.error('该属性正在保存，请稍后重试');
-      return false;
-    }
-    setSaving(true);
-    try {
-      const result = await applyFieldMigrations(migrations, async (migration) => {
-        const path = notebookPath ? joinNotebookMemoPath(notebookPath, migration.noteKey) : null;
-        if (!path) return false;
-        if (!isCurrentSession(sequence)) return false;
-        const before = {
-          [propertyKey]: { exists: true, value: migration.previousValue },
-        };
-        const after = {
-          [propertyKey]: { exists: !migration.remove, value: migration.value },
-        };
-        return compareAndPatchDocumentProperties(path, before, after, {
-          [propertyKey]: field.type === 'primary' ? undefined : field.type,
-        });
-      }, () => save(nextDocument, true, sequence));
-      if (result.saved) {
-        try { await updatePresetFromTable(nextField, presetFromTableField(nextField)); }
-        catch (error) { toast.error(friendlyErrorMessage(error, t, 'errors.friendly.propertySave')); }
-      }
-      if (result.failed.length) toast.error(`当前表格已保存，${result.failed.length} 个笔记未同步，已保留原值`);
-      if (!isCurrentSession(sequence)) return result.saved;
-      const applied = new Map(result.retained.map((migration) => [migration.noteKey, migration]));
-      if (result.saved && applied.size) setNotes((current) => current.map((note) => {
-        const update = applied.get(note.relativePath.replace(/\\/g, '/'));
-        if (!update) return note;
-        const properties = { ...note.properties };
-        if (update.remove) delete properties[propertyKey];
-        if (!update.remove) properties[propertyKey] = update.value;
-        const types = readPropertyTypes(properties[PROPERTY_TYPES_KEY]);
-        if (update.remove || resolvePropertyPreset(propertyKey, propertyFields)) delete types[propertyKey];
-        else if (field.type !== 'primary') types[propertyKey] = field.type;
-        if (Object.keys(types).length) properties[PROPERTY_TYPES_KEY] = types;
-        else delete properties[PROPERTY_TYPES_KEY];
-        return { ...note, properties };
-      }));
-      if (!result.saved) {
-        reportSaveFailure(sequence);
-        toast.error('当前表格未保存，可以重试');
-      }
-      return result.saved;
-    } finally {
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [datasetRecords, document, isCurrentSession, loadSequenceRef, noteForRecord, notebookPath, notesLoadError, pendingNotePropertiesRef, propertyFields, reportSaveFailure, save, saving, setNotes, setSaving]);
-
-  const headerEditsQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
-  const latestHeaderSaverRef = useRef(saveHeaderFieldEdits);
-  latestHeaderSaverRef.current = saveHeaderFieldEdits;
-  const queueHeaderFieldEdits = useCallback((field: TableField, name: string, options: TableFieldOption[]) => {
-    const write = headerEditsQueueRef.current.catch(() => false).then(async () => {
-      // Let the previous write publish its document and release the saving state.
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-      return latestHeaderSaverRef.current(field, name, options);
-    });
-    headerEditsQueueRef.current = write;
-    return write;
-  }, []);
-
-  const saveFieldDefinition = useCallback(async (nextDocument: MultidimensionalTableDocument, field: TableField): Promise<boolean> => {
-    const pendingDocument = { ...nextDocument, dataset: { ...nextDocument.dataset, schema: {
-      ...nextDocument.dataset.schema,
-      fields: nextDocument.dataset.schema.fields.map((item) => item.id === field.id ? { ...item, preset_revision: field.preset_revision ?? item.preset_revision, preset_pending: true } : item),
-    } } };
-    if (!await save(pendingDocument)) return false;
-    const persistedField = pendingDocument.dataset.schema.fields.find((item) => item.id === field.id)!;
-    try { await updatePresetFromTable(persistedField, presetFromTableField(persistedField)); }
-    catch (error) { console.warn('Preset sync failed after saving table', error); toast.error(t('errors.friendly.presetSync')); }
-    return true;
-  }, [save]);
-
-  const changeFieldType = useCallback(async (field: TableField, type: TableFieldType, optionsOverride?: TableField['options']): Promise<boolean> => {
-    if (!document || saving || field.type === 'primary' || type === 'primary' || field.type === type) return false;
-    if (usePropertyPresetStore.getState().registry.systemFields?.some((item) => item.id === field.id)
-      || isSystemPropertyKey(field.property_key ?? '')) {
-      toast.error('系统预设字段不能修改类型');
-      return false;
-    }
-    const options = type === 'Select' || type === 'MultiSelect'
-      ? optionsOverride?.length
-        ? optionsOverride
-        : field.options?.length
-          ? field.options
-        : ['选项 1', '选项 2', '选项 3'].map((label) => ({ id: `opt_${createUuidV7()}`, label }))
-      : undefined;
-    const multiple = type === 'Image' ? field.type === 'Image' ? Boolean(field.multiple) : true : undefined;
-    const incompatibleRecords = datasetRecords.filter((record) => {
-      const note = noteForRecord(record);
-      const value = note && field.property_key && Object.prototype.hasOwnProperty.call(note.properties, field.property_key)
-        ? note.properties[field.property_key] : null;
-      return !valueMatchesFieldType(value, type, options, Boolean(multiple));
-    });
-    if (incompatibleRecords.length) {
-      toast.error(`${incompatibleRecords.length} 条记录的现有值与目标类型不兼容，请先修改值`);
-      return false;
-    }
-    const nextDocument = changeFieldTypeInDocument(document, field.id, type, options, multiple);
-    return saveFieldDefinition(nextDocument, { ...field, type });
-  }, [datasetRecords, document, noteForRecord, saveFieldDefinition, saving]);
-
-  const applyFieldPreset = useCallback(async (field: TableField, preset: PropertyPreset): Promise<boolean> => {
-    if (!document || saving || field.type === 'primary') return false;
-    if (usePropertyPresetStore.getState().registry.systemFields?.some((item) => item.id === field.id)
-      || isSystemPropertyKey(field.property_key ?? '')) return false;
-    const propertyKey = preset.key.trim();
-    const normalizedKey = canonicalizePropertyKey(propertyKey).toLocaleLowerCase();
-    if (!propertyKey || normalizedKey === 'flowix_property_types'
-      || document.dataset.schema.fields.some((item) => item.id !== field.id && item.property_key
-        && canonicalizePropertyKey(item.property_key).toLocaleLowerCase() === normalizedKey)) {
-      toast.error('属性键已存在或属于保留名称');
-      return false;
-    }
-    const definition = propertyFields.find((item) => item.id === preset.id && item.id !== undefined)
-      ?? propertyFields.find((item) => canonicalizePropertyKey(item.key).toLowerCase() === normalizedKey);
-    if (!definition) { toast.error('预设尚未加载，请稍后重试'); return false; }
-    const nextField = tableFieldFromPreset(definition);
-    const options = nextField.options;
-    const incompatibleRecords = datasetRecords.filter((record) => {
-      const note = noteForRecord(record);
-      const value = note && Object.prototype.hasOwnProperty.call(note.properties, propertyKey)
-        ? notePropertyEditorValue(note, nextField)
-        : null;
-      return !valueMatchesFieldType(value, preset.kind, options, false);
-    });
-    if (incompatibleRecords.length) {
-      toast.error(`${incompatibleRecords.length} 条记录的现有值与该属性预设不兼容，请先修改值`);
-      return false;
-    }
-    const next = bindTableField(document, field.id, definition);
-    return save({ ...next, collection: reviseCollection(document.collection) });
-  }, [datasetRecords, document, noteForRecord, propertyFields, save, saving]);
-
-  const deleteField = useCallback(async (field: TableField): Promise<boolean> => {
-    if (!document || saving || field.type === 'primary' || field.id === document.dataset.schema.primary_field_id) return false;
-    const registry = usePropertyPresetStore.getState().registry;
-    const systemPreset = registry.systemFields?.find((item) => item.id === field.id);
-    if (systemPreset) return false;
-    const preset = registry.fields.find((item) => item.id === field.id);
-    if (!preset) {
-      const dependentViews = viewsRequiringField(document, field.id);
-      if (dependentViews.length || collectionFilterUsesField(document.dataset.filter as unknown as DatasetFilter | null, field.id)) {
-        toast.error('请先调整依赖此属性的视图或笔记数据集');
-        return false;
-      }
-      return save(removeField(document, field.id));
-    }
-    setPendingDeleteTarget({ field, preset });
-    setPendingDeleteTableCount(await countPresetTableReferences(field.id));
-    return true;
-  }, [document, save, saving]);
-
-  const confirmDeleteField = useCallback(async () => {
-    const target = pendingDeleteTarget;
-    if (!document || !target) { setPendingDeleteTarget(null); return; }
-    setDeletingFieldBusy(true);
-    try {
-      const savedCurrentTable = await save(retireTablePreset(document, target.preset));
-      if (!savedCurrentTable) {
-        toast.error('当前表格未保存，属性尚未全局删除');
-        return;
-      }
-      const result = await deletePresetEverywhere(target.preset);
-      if (result.failed) toast.error(`${result.failed} 个笔记未同步删除，稍后可重试`);
-      setPendingDeleteTarget(null);
-    } catch (error) {
-      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.propertyDelete'));
-    } finally {
-      setDeletingFieldBusy(false);
-    }
-  }, [document, pendingDeleteTarget, save]);
-
-  const deleteRecord = useCallback((recordId: string) => {
-    if (!document || saving) return;
-    const record = visibleRecords.find((item) => item.id === recordId);
-    if (!record) return;
-    const primaryField = document.dataset.schema.fields[0];
-    const datasetFilter = resolveDatasetFilterForLocation(document.dataset.filter, document.collection.placement, currentFilePath, notebookPath);
-    let nextDocument = document;
-    const note = record ? noteForRecord(record) : undefined;
-    const ruleMatch = primaryField && record && note
-      ? datasetFilter !== null && noteMatchesCollectionFilter(note, collectionFilterFields, primaryField.id, datasetFilter)
-      : false;
-    if (primaryField && record && note && ruleMatch) {
-      const notePath = note.relativePath.replace(/\\/g, '/');
-      nextDocument = {
-        ...document,
-        dataset: { ...document.dataset, records: { ...document.dataset.records,
-          exclude: document.dataset.records.exclude.some((item) => item.note_path === notePath)
-            ? document.dataset.records.exclude
-            : [...document.dataset.records.exclude, { note_path: notePath }] } },
-      };
-    }
-    const next = {
-      ...nextDocument,
-      collection: reviseCollection(nextDocument.collection),
-      dataset: { ...nextDocument.dataset, records: { ...nextDocument.dataset.records, include: document.dataset.records.include.filter((item) => item.id !== recordId) } },
-    };
-    void save(next);
-  }, [collectionFilterFields, currentFilePath, document, notebookPath, noteForRecord, save, saving, visibleRecords]);
-
-  const updateRecordField = useCallback((recordId: string, fieldId: string, value: unknown) => {
-    if (!document) return;
-    const record = visibleRecords.find((item) => item.id === recordId);
-    const field = document.dataset.schema.fields.find((item) => item.id === fieldId) ?? builtinPresetTableField(fieldId) ?? undefined;
-    if (record && field) updateCell(record, noteForRecord(record), field, value);
-  }, [document, noteForRecord, updateCell, visibleRecords]);
-
-  const selectImageForCell = useCallback(async (record: TableRecord, note: NoteEntry, field: TableField) => {
-    if (field.type !== 'Image' || !editable || saving) return;
-    if (!notebookPath || !notebookId) {
-      toast.error(t('document.properties.imageUploadFailed'));
-      return;
-    }
-    const relativePath = await selectPropertyImage({ id: notebookId, path: notebookPath }, t);
-    if (relativePath) updateCell(record, note, field, relativePath);
-  }, [editable, notebookId, notebookPath, saving, t, updateCell]);
 
   const handleRowActionOpenChange = useCallback((open: boolean, recordId: string) => {
     setRowActionRecordId(open ? recordId : null);
@@ -1818,134 +918,15 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     deleteRecord(recordId);
   }, [deleteRecord]);
 
-  const renameLinkedNote = useCallback(async (_recordId: string, note: NoteEntry, title: string): Promise<NoteEntry | null> => {
-    if (!editable || !notebookPath || saving) return null;
-    const sequence = loadSequenceRef.current;
-    const oldPath = joinNotebookMemoPath(notebookPath, note.relativePath);
-    if (!oldPath) return null;
-    const identity = ensureFileDisplayIdentity(oldPath);
-    setSaving(true);
-    try {
-      const renamed = await renameMarkdownTitle({
-        path: oldPath,
-        title,
-        scopePath: notebookPath,
-        notebook: notebookId ? { id: notebookId, path: notebookPath } : null,
-        displayId: identity.displayId,
-        onPathChanged: (previousPath, nextPath) => replaceExternalDocumentPath(identity.displayId, previousPath, nextPath),
-      });
-      if (!renamed) {
-        reportSaveFailure(sequence);
-        return null;
-      }
-      if (!renamed.changed) return note;
-      const parentPath = note.relativePath.replace(/\\/g, '/').split('/').slice(0, -1).join('/');
-      const nextRelativePath = `${parentPath ? `${parentPath}/` : ''}${renamed.filename}`;
-      const updatedNote = { ...note, relativePath: nextRelativePath, title: displayTitleFromFilename(nextRelativePath) };
-      if (isCurrentSession(sequence)) {
-        setNotes((current) => current.map((item) => item.relativePath.replace(/\\/g, '/') === note.relativePath.replace(/\\/g, '/') ? updatedNote : item));
-      }
-      return updatedNote;
-    } catch (error) {
-      reportSaveFailure(sequence);
-      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteRename'));
-      return null;
-    } finally {
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [editable, isCurrentSession, loadSequenceRef, notebookPath, saving, setNotes, reportSaveFailure, setSaving]);
 
-  const closeCalendarNoteDialog = useCallback(() => {
-    calendarPendingCreatedNoteRef.current = null;
-    setCalendarEditingRecord(null);
-    closeCalendarAddPopover();
-  }, [closeCalendarAddPopover]);
 
-  const openCalendarEditPopover = useCallback((recordId: string, anchorRect: DOMRect) => {
-    const record = visibleRecords.find((item) => item.id === recordId);
-    const note = record ? noteForRecord(record) : undefined;
-    if (!record || !note) {
-      toast.warning('无法找到这篇笔记');
-      return;
-    }
-    if (!editable) {
-      toast.warning('当前多维表格为只读状态');
-      return;
-    }
-    const dateValue = calendarDateMetadata
-      ? calendarDateTimeForTimestamp(note[calendarDateMetadata.timestamp])
-      : calendarField ? notePropertyEditorValue(note, calendarField) : null;
-    const date = calendarDateKey(dateValue) ?? isoDate(new Date());
-    setCalendarEditingRecord(record);
-    setCalendarCreatePropertyValues(Object.fromEntries(calendarCreateFields.map((field) => {
-      const value = notePropertyEditorValue(note, field);
-      return [field.id, value ?? (field.type === 'Boolean' ? false : field.type === 'MultiSelect' || field.type === 'Tag' || field.type === 'Color' || (field.type === 'Image' && field.multiple) ? [] : '')];
-    })));
-    openCalendarAddDialog(date, anchorRect, calendarDateFieldId ?? '');
-    setCalendarAddTitle(note.title);
-  }, [calendarCreateFields, calendarDateFieldId, calendarDateMetadata, calendarField, editable, noteForRecord, openCalendarAddDialog, setCalendarAddTitle, visibleRecords]);
 
-  const saveCalendarNoteEdit = useCallback(async () => {
-    const record = calendarEditingRecord;
-    const initialNote = record ? noteForRecord(record) : undefined;
-    const title = calendarAddTitle.trim();
-    if (!record || !initialNote || !editable || !document || !title || saving) return;
-    const sequence = loadSequenceRef.current;
-    try {
-      const note = title === initialNote.title ? initialNote : await renameLinkedNote(record.id, initialNote, title);
-      if (!note || !isCurrentSession(sequence)) return;
-      if (note.relativePath.replace(/\\/g, '/') !== record.note_path.replace(/\\/g, '/')) {
-        setCalendarEditingRecord((current) => current?.id === record.id
-          ? { ...current, note_path: note.relativePath.replace(/\\/g, '/') }
-          : current);
-      }
-      if (!notebookPath) throw new Error('无法确定笔记路径');
-      const path = joinNotebookMemoPath(notebookPath, note.relativePath);
-      if (!path) throw new Error('无法确定笔记路径');
-      const expected: Record<string, { exists: boolean; value?: unknown }> = {};
-      const next: Record<string, { exists: boolean; value?: unknown }> = {};
-      const types: Record<string, PropertyKind> = {};
-      for (const field of calendarCreateFields) {
-        if (!field.property_key) continue;
-        const key = field.property_key;
-        const property = calendarCreatePropertyValue(field, calendarCreatePropertyValues[field.id]);
-        expected[key] = {
-          exists: Object.prototype.hasOwnProperty.call(note.properties, key),
-          value: note.properties[key],
-        };
-        next[key] = property.include ? { exists: true, value: property.value } : { exists: false };
-        types[key] = field.type as PropertyKind;
-      }
-      setSaving(true);
-      const saved = Object.keys(next).length
-        ? await compareAndPatchDocumentProperties(path, expected, next, types)
-        : true;
-      if (!saved) throw new Error('笔记属性未能保存');
-      if (!isCurrentSession(sequence)) return;
-      const properties = { ...note.properties };
-      for (const [key, state] of Object.entries(next)) {
-        if (state.exists) properties[key] = state.value;
-        else delete properties[key];
-      }
-      setNotes((current) => current.map((item) => item.relativePath.replace(/\\/g, '/') === note.relativePath.replace(/\\/g, '/')
-        ? { ...note, updatedAt: Date.now(), properties }
-        : item));
-      closeCalendarNoteDialog();
-    } catch (error) {
-      reportSaveFailure(sequence);
-      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteEdit'));
-    } finally {
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [calendarAddTitle, calendarCreateFields, calendarCreatePropertyValues, calendarEditingRecord, closeCalendarNoteDialog, document, editable, isCurrentSession, loadSequenceRef, noteForRecord, notebookPath, renameLinkedNote, reportSaveFailure, saving, setCalendarEditingRecord, setNotes, setSaving]);
 
-  const renameKanbanRecord = useCallback(async (recordId: string, title: string) => {
-    const record = visibleRecords.find((item) => item.id === recordId);
-    const note = record ? noteForRecord(record) : undefined;
-    if (!record || !note) return;
-    // The shared rename operation updates table references and emits the collection change event.
-    await renameLinkedNote(recordId, note, title);
-  }, [noteForRecord, renameLinkedNote, visibleRecords]);
+
+
+
+
+
 
   const openLinkedNote = useCallback((note: NoteEntry) => {
     if (!notebookPath) return;
@@ -1961,72 +942,23 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     if (note) openLinkedNote(note);
   }, [noteForRecord, openLinkedNote, visibleRecords]);
 
+
+
   const createBlankGalleryNote = useCallback(async () => {
-    if (!editable || !document || !noteField || !resolvedNotebookId || saving) return;
     const nextNoteNumber = datasetRecords.reduce((max, record) => {
       const title = noteForRecord(record)?.title ?? '';
       const match = /^未命名笔记\s+(\d+)$/.exec(title.trim());
       return match ? Math.max(max, Number(match[1])) : max;
     }, 0) + 1;
-    const sequence = loadSequenceRef.current;
-    setSaving(true);
-    try {
-      const created = await createNoteInNotebook(`未命名笔记 ${nextNoteNumber}`);
-      if (!isCurrentSession(sequence)) return;
-      const note = created.entry;
-      const noteKey = note.relativePath.replace(/\\/g, '/');
-      const record: TableRecord = {
-        id: `rec_${createUuidV7()}`,
-        updated_at: new Date().toISOString(),
-        note_path: noteKey,
-      };
-      const records = upsertTableRecord(document.dataset.records.include, record);
-      setNotes((current) => [...current.filter((item) => item.relativePath.replace(/\\/g, '/') !== noteKey), note]);
-      const saved = await save({
-        ...document,
-        collection: reviseCollection(document.collection),
-        dataset: { ...document.dataset, records: { ...document.dataset.records, include: records } },
-      }, true, sequence);
-      if (saved && isCurrentSession(sequence)) {
-        setTablePage(0);
-      }
-    } catch (error) {
-      reportSaveFailure(sequence);
-      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.tableCreateLink'));
-    } finally {
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [createNoteInNotebook, datasetRecords, document, editable, isCurrentSession, loadSequenceRef, noteField, noteForRecord, reportSaveFailure, resolvedNotebookId, save, saving, setNotes, setSaving]);
+    await createBlankGalleryNoteBase(nextNoteNumber);
+  }, [createBlankGalleryNoteBase, datasetRecords, noteForRecord]);
 
   const chooseGalleryData = useCallback(() => {
     setDatasetFilterOpen(false);
     setMatchingOpen(true);
   }, []);
 
-  const requestDeleteLinkedNote = useCallback((note: NoteEntry) => {
-    const targetNotebookId = resolvedNotebookId ?? notebookId;
-    if (!targetNotebookId) return;
-    const filename = note.relativePath.split(/[\\/]/).filter(Boolean).pop() ?? note.relativePath;
-    const target: NoteListItem = {
-      kind: 'path-note',
-      notebookId: targetNotebookId,
-      relativePath: note.relativePath,
-      filename,
-      title: note.title,
-      preview: note.preview,
-      thumbnail: note.thumbnail,
-      tags: note.tags,
-      todos: note.todos,
-      agents: note.agents,
-      createdAt: note.createdAt,
-      updatedAt: note.updatedAt,
-      favorited: note.favorited,
-      icon: note.icon,
-      colors: note.colors,
-      properties: note.properties,
-    };
-    window.dispatchEvent(new CustomEvent<NoteListItem>('flowix:request-delete-memo', { detail: target }));
-  }, [notebookId, resolvedNotebookId]);
+
 
   const groupFieldId = activeView?.layout === 'kanban' && typeof activeView.config.group_by === 'string' ? activeView.config.group_by : null;
   const groupField = groupFieldId ? document?.dataset.schema.fields.find((field) => field.id === groupFieldId) : undefined;
@@ -2035,276 +967,12 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     ...(document?.dataset.schema.preset_fields.includes(NOTE_CALENDAR_DATE_FIELD_ID) ? [{ id: NOTE_CALENDAR_DATE_FIELD_ID, label: '日期' }] : []),
     ...(document?.dataset.schema.fields.filter((field) => field.type === 'Date').map((field) => ({ id: field.id, label: fieldLabel(field, propertyFields, t) })) ?? []),
   ];
-  const kanbanGroups = useMemo(() => document && groupField?.type === 'Select'
-    ? groupRecordsByValue(secondaryViewRecords, (record) => notePropertyEditorValue(noteForRecord(record), groupField))
-    : new Map<string, TableRecord[]>(), [document, groupField, noteForRecord, secondaryViewRecords]);
-  const kanbanUnassignedRecords = useMemo(() => {
-    if (!document || groupField?.type !== 'Select') return [];
-    const assignedIds = new Set((groupField.options ?? []).flatMap((option) => kanbanGroups.get(option.id) ?? []).map((record) => record.id));
-    return secondaryViewRecords.filter((record) => !assignedIds.has(record.id));
-  }, [document, groupField, kanbanGroups, secondaryViewRecords]);
-  const addKanbanLane = useCallback(() => {
-    if (!editable || saving || groupField?.type !== 'Select') return;
-    const existingLabels = new Set((groupField.options ?? []).map((option) => option.label.trim()));
-    let number = 1;
-    while (existingLabels.has(`选项 ${number}`)) number += 1;
-    const option = { id: `opt_${createUuidV7()}`, label: `选项 ${number}` };
-    setPendingKanbanOption(option);
-    setMatchingOpen(true);
-    setFieldPanelHeaderId(groupField.id);
-  }, [editable, groupField, saving]);
-  const reorderKanbanLane = useCallback(async (sourceOptionId: string, targetOptionId: string, insertAfter: boolean) => {
-    if (!document || groupField?.type !== 'Select' || saving || sourceOptionId === targetOptionId) return;
-    const options = [...(groupField.options ?? [])];
-    const sourceIndex = options.findIndex((option) => option.id === sourceOptionId);
-    if (sourceIndex < 0 || !options.some((option) => option.id === targetOptionId)) return;
-    const [source] = options.splice(sourceIndex, 1);
-    const targetIndex = options.findIndex((option) => option.id === targetOptionId);
-    options.splice(targetIndex + (insertAfter ? 1 : 0), 0, source);
-    if (options.every((option, index) => option.id === groupField.options?.[index]?.id)) return;
-    const updatedField = { ...groupField, options };
-    const next: MultidimensionalTableDocument = {
-      ...document,
-      collection: reviseCollection(document.collection),
-      dataset: { ...document.dataset, schema: { ...document.dataset.schema, fields: document.dataset.schema.fields.map((field) => field.id === groupField.id ? updatedField : field) } },
-    };
-    await save(next);
-  }, [document, groupField, save, saving]);
-  const addKanbanTask = useCallback(async (targetGroupId: string) => {
-    if (!editable || !document || !noteField || !resolvedNotebookId || groupField?.type !== 'Select' || saving) return;
-    const targetIsUnassigned = targetGroupId === KANBAN_UNASSIGNED_GROUP_ID;
-    const targetOption = groupField.options?.find((option) => option.id === targetGroupId);
-    if (!targetIsUnassigned && !targetOption) return;
-    if (!targetIsUnassigned && !groupField.property_key) {
-      toast.error('状态字段未配置属性键，无法创建任务');
-      return;
-    }
 
-    const nextTaskNumber = datasetRecords.reduce((max, record) => {
-      const title = noteForRecord(record)?.title ?? '';
-      const match = /^未命名任务\s+(\d+)$/.exec(title.trim());
-      return match ? Math.max(max, Number(match[1])) : max;
-    }, 0) + 1;
-    const title = `未命名任务 ${nextTaskNumber}`;
-    const sequence = loadSequenceRef.current;
-    setSaving(true);
-    try {
-      const created = await createNoteInNotebook(title);
-      if (!isCurrentSession(sequence)) return;
-      let note = created.entry;
-      const noteKey = note.relativePath.replace(/\\/g, '/');
-      if (targetOption) {
-        const path = notebookPath ? joinNotebookMemoPath(notebookPath, note.relativePath) : null;
-        if (!path || !await setDocumentProperties(path, { [groupField.property_key!]: targetOption.label }, { [groupField.property_key!]: 'Select' })) {
-          throw new Error('任务已创建，但无法设置状态');
-        }
-        note = { ...note, properties: { ...note.properties, [groupField.property_key!]: targetOption.label } };
-      }
-      const record: TableRecord = {
-        id: `rec_${createUuidV7()}`,
-        updated_at: new Date().toISOString(),
-        note_path: noteKey,
-      };
-      const records = upsertTableRecord(document.dataset.records.include, record);
-      setNotes((current) => [...current.filter((item) => item.relativePath.replace(/\\/g, '/') !== noteKey), note]);
-      await save({
-        ...document,
-        collection: reviseCollection(document.collection),
-        dataset: { ...document.dataset, records: { ...document.dataset.records, include: records } },
-      }, true, sequence);
-    } catch (error) {
-      reportSaveFailure(sequence);
-      toast.error(friendlyErrorMessage(error, t, 'errors.friendly.taskCreate'));
-    } finally {
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [createNoteInNotebook, datasetRecords, document, editable, groupField, isCurrentSession, loadSequenceRef, noteField, noteForRecord, notebookPath, reportSaveFailure, resolvedNotebookId, save, saving, setNotes, setSaving]);
-  const addExternalNotesToKanban = useCallback(async (
-    draggedNotes: NotebookNoteDragResource[],
-    targetGroupId: string,
-    beforeRecordId: string | null,
-  ) => {
-    if (!editable || !document || !noteField || !notebookPath || !resolvedNotebookId
-      || groupField?.type !== 'Select' || saving) return;
-    const targetIsUnassigned = targetGroupId === KANBAN_UNASSIGNED_GROUP_ID;
-    const targetOption = groupField.options?.find((option) => option.id === targetGroupId);
-    if (!targetIsUnassigned && !targetOption) return;
-    if (!targetIsUnassigned && !groupField.property_key) {
-      toast.error('状态字段未配置属性键，无法加入任务');
-      return;
-    }
-    const uniqueNotes = [...new Map(draggedNotes.map((note) => [canonicalPath(note.relativePath), note])).values()];
-    const resolved = uniqueNotes.map((draggedNote) => {
-      if (!isMarkdownNoteDragResource(draggedNote) || draggedNote.notebookId !== resolvedNotebookId) return null;
-      const relativePath = canonicalPath(draggedNote.relativePath).replace(/^\/+/, '');
-      const note = notes.find((item) => item.relativePath.replace(/\\/g, '/') === relativePath);
-      if (!note || !noteInCollectionSource(relativePath, document.dataset.source, currentFilePath, notebookPath)) return null;
-      return { note, relativePath };
-    });
-    if (!resolved.length || resolved.some((item) => !item)) {
-      toast.warning(t('memo.fileTree.kanbanDropUnsupported'));
-      return;
-    }
-    const sequence = loadSequenceRef.current;
-    if (!isCurrentSession(sequence)) return;
-    setSaving(true);
-    try {
-      for (const item of resolved) {
-        if (!item || !isCurrentSession(sequence)) return;
-        const path = joinNotebookMemoPath(notebookPath, item.relativePath);
-        if (!path) throw new Error('无法确定笔记路径');
-        if (groupField.property_key) {
-          const saved = targetOption
-            ? await setDocumentProperties(path, { [groupField.property_key]: targetOption.label }, { [groupField.property_key]: 'Select' })
-            : !Object.prototype.hasOwnProperty.call(item.note.properties, groupField.property_key)
-              || await removeDocumentProperty(path, groupField.property_key);
-          if (!saved) throw new Error('笔记的分组属性未能保存');
-        }
-        if (!isCurrentSession(sequence)) return;
-        setNotes((current) => current.map((note) => {
-          if (note.relativePath.replace(/\\/g, '/') !== item.relativePath) return note;
-          const properties = { ...note.properties };
-          if (groupField.property_key) {
-            if (targetOption) properties[groupField.property_key] = targetOption.label;
-            else delete properties[groupField.property_key];
-          }
-          return { ...note, properties };
-        }));
-      }
 
-      const linkedRecords: TableRecord[] = [];
-      const now = new Date().toISOString();
-      for (const item of resolved) {
-        if (!item) continue;
-        const existing = datasetRecords.find((record) => record.note_path.replace(/\\/g, '/') === item.relativePath);
-        const linkedRecord = existing
-          ? { ...existing, updated_at: now, note_path: item.relativePath }
-          : { id: `rec_${createUuidV7()}`, updated_at: now, note_path: item.relativePath };
-        linkedRecords.push(linkedRecord);
-      }
-      const linkedIds = new Set(linkedRecords.map((record) => record.id));
-      const recordsWithoutDropped = document.dataset.records.include.filter((record) => !linkedIds.has(record.id));
-      let insertAt = beforeRecordId
-        ? recordsWithoutDropped.findIndex((record) => record.id === beforeRecordId)
-        : -1;
-      if (insertAt < 0) {
-        const targetRecords = (targetGroupId === KANBAN_UNASSIGNED_GROUP_ID
-          ? kanbanUnassignedRecords
-          : kanbanGroups.get(targetGroupId) ?? []).filter((record) => !linkedIds.has(record.id));
-        const lastTargetRecord = targetRecords[targetRecords.length - 1];
-        const lastTargetIndex = lastTargetRecord
-          ? recordsWithoutDropped.findIndex((record) => record.id === lastTargetRecord.id)
-          : -1;
-        insertAt = lastTargetIndex >= 0 ? lastTargetIndex + 1 : recordsWithoutDropped.length;
-      }
-      const records = [
-        ...recordsWithoutDropped.slice(0, insertAt),
-        ...linkedRecords,
-        ...recordsWithoutDropped.slice(insertAt),
-      ];
-      const next: MultidimensionalTableDocument = {
-        ...document,
-        collection: reviseCollection(document.collection),
-        dataset: { ...document.dataset, records: { ...document.dataset.records, include: records } },
-      };
-      if (!await save(next, true, sequence) || !isCurrentSession(sequence)) {
-        toast.error(t('multidimensionalTable.kanbanDropFailed'));
-      }
-    } catch (error) {
-      if (isCurrentSession(sequence)) toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteMove'));
-    } finally {
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [currentFilePath, datasetRecords, document, editable, groupField, isCurrentSession, kanbanGroups, kanbanUnassignedRecords, loadSequenceRef, noteField, notes, notebookPath, resolvedNotebookId, save, saving, setNotes, setSaving, t]);
-  const dropKanbanRecord = useCallback(async (recordId: string, targetGroupId: string, beforeRecordId: string | null) => {
-    if (!editable || !document || groupField?.type !== 'Select' || saving) return;
-    const record = visibleRecords.find((item) => item.id === recordId);
-    const targetIsUnassigned = targetGroupId === KANBAN_UNASSIGNED_GROUP_ID;
-    const targetOption = groupField.options?.find((option) => option.id === targetGroupId);
-    if (!record || (!targetIsUnassigned && !targetOption)) return;
-    const isPersistedRecord = document.dataset.records.include.some((item) => item.id === recordId);
-    const note = noteForRecord(record);
-    const sourceGroupId = notePropertyEditorValue(note, groupField);
-    const sourceGroupKey = groupField.options?.some((option) => option.id === sourceGroupId)
-      ? String(sourceGroupId)
-      : KANBAN_UNASSIGNED_GROUP_ID;
-    const propertyKey = groupField.property_key;
-    const recordNoteKey = record.note_path.replace(/\\/g, '/');
-    const path = notebookPath && recordNoteKey ? joinNotebookMemoPath(notebookPath, record.note_path) : null;
-    const updateNoteGroupValue = async () => {
-      if (!propertyKey || !path) return false;
-      return targetIsUnassigned
-        ? removeDocumentProperty(path, propertyKey)
-        : setDocumentProperties(path, { [propertyKey]: targetOption!.label }, { [propertyKey]: 'Select' });
-    };
-    const updateLocalNoteGroupValue = (noteKey: string) => {
-      setNotes((current) => current.map((item) => {
-        if (item.relativePath.replace(/\\/g, '/') !== noteKey) return item;
-        const properties = { ...item.properties };
-        if (targetIsUnassigned) delete properties[propertyKey!];
-        else properties[propertyKey!] = targetOption!.label;
-        return { ...item, properties };
-      }));
-    };
-    if (!isPersistedRecord) {
-      if (sourceGroupKey === targetGroupId) return;
-      if (!propertyKey || !path) return;
-      const sequence = loadSequenceRef.current;
-      setSaving(true);
-      try {
-        if (!await updateNoteGroupValue()) throw new Error('笔记的单选属性未能保存');
-        if (!isCurrentSession(sequence)) return;
-        updateLocalNoteGroupValue(recordNoteKey);
-      } catch (error) {
-        reportSaveFailure(sequence);
-        if (isCurrentSession(sequence)) toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteMove'));
-      } finally {
-        if (isCurrentSession(sequence)) setSaving(false);
-      }
-      return;
-    }
 
-    const targetGroup = (targetIsUnassigned ? kanbanUnassignedRecords : kanbanGroups.get(targetGroupId) ?? []).filter((item) => item.id !== recordId);
-    const recordsWithoutDragged = document.dataset.records.include.filter((item) => item.id !== recordId);
-    let insertAt = beforeRecordId
-      ? recordsWithoutDragged.findIndex((item) => item.id === beforeRecordId)
-      : -1;
-    if (insertAt < 0) {
-      const lastTargetRecord = targetGroup[targetGroup.length - 1];
-      const lastTargetIndex = lastTargetRecord
-        ? recordsWithoutDragged.findIndex((item) => item.id === lastTargetRecord.id)
-        : -1;
-      insertAt = lastTargetIndex >= 0 ? lastTargetIndex + 1 : recordsWithoutDragged.length;
-    }
-    const records = [...recordsWithoutDragged.slice(0, insertAt), record, ...recordsWithoutDragged.slice(insertAt)];
-    const orderChanged = records.some((item, index) => item.id !== document.dataset.records.include[index]?.id);
-    if (!orderChanged && sourceGroupKey === targetGroupId) return;
 
-    if (sourceGroupKey === targetGroupId) {
-      await save({ ...document, collection: reviseCollection(document.collection), dataset: { ...document.dataset, records: { ...document.dataset.records, include: records } } });
-      return;
-    }
 
-    if (!propertyKey || !path) {
-      toast.error('无法定位笔记文件，无法更新分组属性');
-      return;
-    }
-    const sequence = loadSequenceRef.current;
-    setSaving(true);
-    try {
-      if (!await updateNoteGroupValue()) {
-        throw new Error('笔记的单选属性未能保存');
-      }
-      if (!isCurrentSession(sequence)) return;
-      updateLocalNoteGroupValue(recordNoteKey);
-      if (orderChanged) await save({ ...document, collection: reviseCollection(document.collection), dataset: { ...document.dataset, records: { ...document.dataset.records, include: records } } }, true, sequence);
-    } catch (error) {
-      reportSaveFailure(sequence);
-      if (isCurrentSession(sequence)) toast.error(friendlyErrorMessage(error, t, 'errors.friendly.noteMove'));
-    } finally {
-      if (isCurrentSession(sequence)) setSaving(false);
-    }
-  }, [document, editable, groupField, isCurrentSession, kanbanGroups, kanbanUnassignedRecords, loadSequenceRef, noteForRecord, notebookPath, save, saving, setNotes, setSaving, visibleRecords, reportSaveFailure]);
+
   const calendarGroups = useMemo(() => document && calendarDateFieldId
     ? groupRecordsByValue(secondaryViewRecords, (record) => {
       if (calendarDateMetadata) {
@@ -2314,6 +982,20 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
       return calendarField ? calendarDateKey(notePropertyEditorValue(noteForRecord(record), calendarField)) : null;
     })
     : new Map<string, TableRecord[]>(), [calendarDateFieldId, calendarDateMetadata, calendarField, document, noteForRecord, secondaryViewRecords]);
+  const {
+    kanbanGroups,
+    addKanbanLane,
+    reorderKanbanLane,
+    addKanbanTask,
+    addExternalNotesToKanban,
+    dropKanbanRecord,
+    renameKanbanRecord,
+  } = useTableKanban({
+    session: { document, saving, setSaving, save, loadSequenceRef, isCurrentSession, resolvedNotebookId, notes, setNotes, reportSaveFailure },
+    noteField, editable, notebookPath, currentFilePath, groupField, datasetRecords, visibleRecords, secondaryViewRecords,
+    noteForRecord, createNoteInNotebook, renameLinkedNote,
+    setPendingKanbanOption, setMatchingOpen, setFieldPanelHeaderId,
+  });
   if (loadError) {
     if (reportPresentation) return null;
     return <div className={`flex h-full min-h-0 flex-col items-center justify-center gap-3 p-8 text-center ${embeddedInEditor ? 'rounded-lg border border-[var(--border)] bg-[var(--editor-block-bg)]' : ''}`}>
@@ -2415,17 +1097,7 @@ function TableDocumentViewSession({ onSurfaceLifecycleReady, reportPresentation,
     onSave: (condition: TableAutoCollectCondition) => saveAutoCollectCondition(document.dataset.schema.fields[0], condition),
     onSavePath: saveAutoCollectPath,
   };
-  const openNewFieldEditor = (button: HTMLButtonElement, source: 'dataset' | 'table') => {
-    setNewFieldType('Text');
-    setNewFieldTypeMenuOpen(false);
-    setNewFieldPresetMenuOpen(false);
-    setDatasetPresetMenuOpen(false);
-    setNewFieldPropertyKey('');
-    setNewFieldOptions([]);
-    // The dataset submenu grows upward; the table header editor grows downward.
-    setNewFieldAnchor({ rect: button.getBoundingClientRect(), align: source === 'dataset' ? 'end' : 'start', source });
-    setNewFieldOpen(true);
-  };
+
   const closeDatasetSubmenus = () => {
     setDatasetFilterOpen(false);
     setFieldPanelHeaderId(null);

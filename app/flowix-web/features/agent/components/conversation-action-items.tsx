@@ -3,9 +3,14 @@ import { DropdownMenuItem, DropdownMenuSeparator } from '@shared/ui/dropdown-men
 import { ContextMenuItem } from '@shared/ui/context-menu';
 import { useI18n } from '@/lib/i18n';
 
-export function ConversationActionItems({ context = false, archiveSeparator = false, favorite, onOpen, onFavorite, onRename, onArchive, onDelete }: {
+export function ConversationActionItems({ context = false, archiveSeparator = false, openHost = 'browser-column', favorite, onOpen, onFavorite, onRename, onArchive, onDelete }: {
   context?: boolean;
   archiveSeparator?: boolean;
+  /**
+   * Where the row's default click lands. The menu offers the other host, so the
+   * label has to follow whatever the click no longer does.
+   */
+  openHost?: 'browser-column' | 'main-third';
   favorite: boolean;
   onOpen: () => void;
   onFavorite: () => void;
@@ -18,7 +23,9 @@ export function ConversationActionItems({ context = false, archiveSeparator = fa
   return (
     <>
       <Item onClick={onOpen} className="group h-7 items-center justify-start rounded-lg px-2 py-0 text-left hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]">
-        <SquareSplitHorizontalIcon className="mr-2 h-4 w-4" /> {t('workColumn.context.openInBrowserColumn')}
+        <SquareSplitHorizontalIcon className="mr-2 h-4 w-4" /> {t(openHost === 'main-third'
+          ? 'workColumn.context.openInBrowserColumn'
+          : 'memo.fileTree.openInLeft')}
       </Item>
       <Item onClick={onFavorite} className="group h-7 items-center gap-2 rounded-lg px-2 py-0 hover:bg-[var(--brand)] hover:text-[var(--primary-foreground)]">
         <StarIcon className="h-4 w-4" weight={favorite ? 'fill' : 'regular'} />

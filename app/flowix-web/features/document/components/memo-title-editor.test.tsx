@@ -311,6 +311,67 @@ describe('MemoTitleEditor IME handling', () => {
   });
 });
 
+describe('MemoTitleEditor autofocus', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    window.getSelection()?.removeAllRanges();
+  });
+
+  it('places a collapsed caret at the end of the title instead of selecting it', () => {
+    act(() => {
+      root.render(createElement(MemoTitleEditor, {
+        displayId: 'display:title-test',
+        filename: 'Original.md',
+        renameTitle,
+        editable: true,
+        autoFocus: true,
+        onMoveToBody: vi.fn(),
+      }));
+    });
+
+    const textarea = container.querySelector('textarea')!;
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.selectionStart).toBe(textarea.value.length);
+    expect(textarea.selectionEnd).toBe(textarea.value.length);
+  });
+
+  it('collapses the document selection surface caret at the title end', () => {
+    act(() => {
+      root.render(createElement(MemoTitleEditor, {
+        displayId: 'display:title-test',
+        filename: 'Original.md',
+        renameTitle,
+        editable: true,
+        autoFocus: true,
+        useDocumentSelection: true,
+        onMoveToBody: vi.fn(),
+      }));
+    });
+
+    const title = container.querySelector<HTMLElement>('.memo-title-editor--document-selection')!;
+    const selection = window.getSelection();
+    expect(selection?.rangeCount).toBe(1);
+    const range = selection!.getRangeAt(0);
+    expect(range.collapsed).toBe(true);
+    expect(title.contains(range.startContainer)).toBe(true);
+    const prefix = document.createRange();
+    prefix.selectNodeContents(title);
+    prefix.setEnd(range.startContainer, range.startOffset);
+    expect(prefix.toString()).toBe(title.textContent);
+  });
+});
+
 describe('MemoTitleEditor title paste splitting', () => {
   let container: HTMLDivElement;
   let root: Root;

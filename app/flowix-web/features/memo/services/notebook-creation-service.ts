@@ -5,6 +5,12 @@ import {
   type NotebookSetupJob,
   type NotebookImportStatus,
 } from '@platform/tauri/client';
+import { files } from '@platform/tauri/client/desktop';
+import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
+import { loadLanguage, translate } from '@/lib/i18n';
+import { createLogger } from '@/lib/logger';
+
+const logger = createLogger('notebook-creation-service');
 
 export interface NotebookRegistrationResult {
   notebook: Notebook;
@@ -88,6 +94,46 @@ export async function startNotebookImportWithMonitoring(
 }
 
 /**
+ * Localized name for the auto-created default notes folder (zh-CN → 笔记,
+ * en-US → Notes). Reuses the same i18n key as the tree's default-folder badge
+ * so the copy lives in one place. en-US messages are lazily loaded, so make
+ * sure they're ready before reading; fall back to 笔记 if the key is empty.
+ */
+async function resolveDefaultNoteFolderName(): Promise<string> {
+  const language = getCurrentAppLanguage();
+  await loadLanguage(language);
+  return translate(language, 'memo.fileTree.defaultNoteFolderLabel').trim() || '笔记';
+}
+
+/**
+ * Creates the localized default notes folder inside a freshly created notebook
+ * and marks it as the notebook's `defaultCreateFolder`, so subsequent notes
+ * land there instead of the notebook root.
+ *
+ * Best-effort by design: notebook creation has already succeeded at this point,
+ * so any failure here is logged and swallowed rather than rolling back or
+ * surfacing an error for an otherwise usable notebook.
+ */
+async function ensureDefaultNoteFolder(notebook: Notebook): Promise<void> {
+  try {
+    const folderName = await resolveDefaultNoteFolderName();
+    // create_folder maps to fs::create_dir_all — idempotent when the folder
+    // already exists (e.g. seeded by a template or pre-existing directory).
+    await files.createFolder(notebook.path, folderName);
+    // Read-modify-write to preserve the notebook's file-management policy.
+    const preferences = await files.getNotebookViewPreferences(notebook.path);
+    if ((preferences.defaultCreateFolder ?? null) !== folderName) {
+      await files.setNotebookViewPreferences(notebook.path, {
+        ...preferences,
+        defaultCreateFolder: folderName,
+      });
+    }
+  } catch (error) {
+    logger.warn('ensure default note folder failed', { error, notebookId: notebook.id });
+  }
+}
+
+/**
  * Registers a local notebook through the same IPC sequence used by the
  * notebook dialog. Reusing an existing path makes onboarding retry-safe.
  */
@@ -113,6 +159,10 @@ export async function createNotebookRegistration({
         trimmedName, pathForCreate, icon, false, templateId, overwriteExisting,
       )
       : await notebookRepository.create(trimmedName, pathForCreate, icon, false);
+    // Only a brand-new notebook gets the auto-created default notes folder.
+    // The reuse-existing branch below targets an already registered notebook
+    // whose folder layout / preferences must be left untouched.
+    await ensureDefaultNoteFolder(notebook);
     return {
       notebook,
       created: true,

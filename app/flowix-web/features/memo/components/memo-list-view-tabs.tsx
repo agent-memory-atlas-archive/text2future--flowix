@@ -161,7 +161,7 @@ export function MemoListViewTabs({
               className={cn(
                 'group relative z-[1] flex h-6 w-6 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)]',
                 active
-                  ? 'text-[var(--primary)]'
+                  ? 'text-[var(--foreground)]'
                   : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]',
               )}
             >
@@ -177,8 +177,8 @@ export function MemoListViewTabs({
                       <TabIcon
                         icon={IconComponent}
                         weight={active ? 'fill' : 'regular'}
-                        dimmed={dimmed}
-                        className="absolute inset-0 transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0"
+                        dimmed={active ? false : dimmed}
+                        className="absolute inset-0 opacity-90 transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0"
                       />
                       <ChevronRight
                         className="absolute inset-0 h-4 w-4 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
@@ -188,7 +188,7 @@ export function MemoListViewTabs({
                   )}
                 </span>
               ) : (
-                <TabIcon icon={IconComponent} weight={active ? 'fill' : 'regular'} dimmed={dimmed} />
+                <TabIcon icon={IconComponent} weight={active ? 'fill' : 'regular'} dimmed={active ? false : dimmed} className={active ? 'opacity-90' : undefined} />
               )}
             </button>
           </Tooltip>

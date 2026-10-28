@@ -1,8 +1,7 @@
 ---
-key: bnj8t85d
 kind: guide
 status: overview
-agentRole: onboarding
+flowix_icon: pizza
 keywords:
   - overview
   - what-is

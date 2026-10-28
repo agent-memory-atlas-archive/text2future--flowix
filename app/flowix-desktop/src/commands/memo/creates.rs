@@ -24,7 +24,7 @@ use flowix_core::NoteService;
 
 use crate::app::state::AppState;
 use crate::template_store;
-use crate::watcher::runtime::mark_self_write_for;
+use crate::watcher::runtime::{mark_self_create_dir_for, mark_self_write_for};
 
 use super::helpers::*;
 use super::*;
@@ -64,6 +64,22 @@ fn default_parent_relative_path(
         .map_err(flowix_core::FlowixError::InvalidInput)
 }
 
+/// Resolve the directory a create command is about to write into, so the
+/// watcher can treat the following native create as a product creation.
+fn create_target_dir(
+    memo_file: &MemoFile,
+    notebook_id: &str,
+    parent: Option<&str>,
+) -> Option<PathBuf> {
+    let root = memo_file
+        .get_notebook_config_by_id(notebook_id)
+        .map(|notebook| PathBuf::from(&notebook.path))?;
+    Some(match parent {
+        Some(parent) if !parent.is_empty() => root.join(parent),
+        _ => root,
+    })
+}
+
 #[tauri::command]
 pub async fn add_path_document(
     tag: Option<String>,
@@ -89,6 +105,9 @@ pub async fn add_path_document(
             Some(parent) => Some(parent),
             None => default_parent_relative_path(&memo_file, &notebook_id)?,
         };
+        if let Some(dir) = create_target_dir(&memo_file, &notebook_id, effective_parent.as_deref()) {
+            mark_self_create_dir_for(&app, &dir);
+        }
         let created = NoteService::new(&memo_file)
             .create(&notebook_id, effective_parent.as_deref(), &title, &body)?;
         mark_self_write_for(&app, &created.path);
@@ -264,6 +283,9 @@ pub fn create_path_from_template(
     let memo_file = read_lock(&state.memo_file, "memo_file");
     let parent = default_parent_relative_path(&memo_file, &notebook_id)
         .map_err(|error| error.to_string())?;
+    if let Some(dir) = create_target_dir(&memo_file, &notebook_id, parent.as_deref()) {
+        mark_self_create_dir_for(&app, &dir);
+    }
     let created = NoteService::new(&memo_file)
         .create(&notebook_id, parent.as_deref(), &title, body)
         .map_err(|e| e.to_string())?;
@@ -300,6 +322,9 @@ pub fn import_external_document_by_path(
     let memo_file = read_lock(&state.memo_file, "memo_file");
     let parent = default_parent_relative_path(&memo_file, &notebook_id)
         .map_err(|error| error.to_string())?;
+    if let Some(dir) = create_target_dir(&memo_file, &notebook_id, parent.as_deref()) {
+        mark_self_create_dir_for(&app, &dir);
+    }
     let created = NoteService::new(&memo_file)
         .create(&notebook_id, parent.as_deref(), title, &content)
         .map_err(|error| error.to_string())?;

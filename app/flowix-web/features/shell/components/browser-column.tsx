@@ -36,6 +36,12 @@ export interface BrowserColumnProps {
   onResize: (width: number) => void;
   toolbarCollapsed: boolean;
   onToolbarCollapsedChange: (collapsed: boolean) => void;
+  /**
+   * When true, the outer width transitions instead of snapping. Only enabled
+   * during the memo-list collapse/expand window so browser-column drags and
+   * viewport resizes stay responsive.
+   */
+  animated?: boolean;
 }
 
 export const BrowserColumn = memo(function BrowserColumn({
@@ -43,6 +49,7 @@ export const BrowserColumn = memo(function BrowserColumn({
   onResize,
   toolbarCollapsed,
   onToolbarCollapsedChange,
+  animated = false,
 }: BrowserColumnProps) {
   const { t } = useI18n();
   const { current, webRuntime } = useBrowserColumnViewModel();
@@ -123,7 +130,9 @@ export const BrowserColumn = memo(function BrowserColumn({
       aria-label="浏览器列辅助工作区"
       onPointerDown={(event) => focusWorkspaceHostFromEvent(event, 'browser-column')}
       onFocusCapture={(event) => focusWorkspaceHostFromEvent(event, 'browser-column')}
-      className={'relative flex h-full min-w-0 shrink-0 flex-col border-l border-[var(--divider)] bg-[var(--document-bg)]'}
+      className={`relative flex h-full min-w-0 shrink-0 flex-col border-l border-[var(--divider)] bg-[var(--document-bg)]${
+        animated ? ' transition-[width] flowix-motion' : ''
+      }`}
       style={{ width }}
     >
       <ColumnResizeHandle label="调整浏览器列宽度" width={width} direction={-1} onResize={onResize} />

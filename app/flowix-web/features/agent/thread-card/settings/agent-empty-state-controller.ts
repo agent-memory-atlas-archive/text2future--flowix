@@ -1,7 +1,7 @@
 import type { AppLanguage, I18nKey, I18nParams } from "@/lib/i18n";
 import type { AgentTypeKey } from "@/types/agent";
 import skillLibraryIconSvg from "@/assets/skill-library.svg?raw";
-import { agent, windows } from "@platform/tauri/client";
+import { agent } from "@platform/tauri/client";
 import { openWorkspaceSurface } from "@features/workspace/public/open-surface-api";
 import { NOTEBOOK_SKILLS_CHANGED_EVENT } from "@features/agent/services/notebook-skills-events";
 import type { ComposerSlashSkill } from "../composer/composer-slash-command-controller";
@@ -10,6 +10,7 @@ import { createChevronIcon } from "../agent-thread-card-icons";
 import { disposeEmptyState, registerEmptyStateLifecycle } from "../messages/empty-state-lifecycle";
 import { createExternalAgentEmptyIcon } from "./external-agent-settings";
 import { FeaturedNotesController, type FeaturedNoteReference } from "./featured-notes-controller";
+import { PiSettingsDialogController } from "./pi-settings-dialog";
 
 export type AgentEmptyStatePresentation = "inline-card" | "expanded";
 
@@ -38,6 +39,25 @@ const EMPTY_STATE_PROMPTS = [
   { label: "agent.empty.prompt.summary", prompt: "agent.empty.prompt.summary.text" },
 ] as const satisfies readonly { label: I18nKey; prompt: I18nKey }[];
 
+/**
+ * Humanize a raw skill identifier for card titles.
+ *
+ * The backend falls back to the machine identifier (e.g. "gzh-design") whenever a
+ * skill has no `display-name` frontmatter, so titles can end up showing kebab/snake
+ * ids verbatim. We only reformat values that look like such identifiers — anything
+ * with spaces, uppercase, CJK, or punctuation is treated as a genuine display name
+ * and returned unchanged ("gzh-design" -> "Gzh Design", "公众号排版" -> "公众号排版").
+ */
+function humanizeSkillIdentifier(value: string): string {
+  const trimmed = value.trim();
+  if (!/^[a-z0-9]+(?:[-_][a-z0-9]+)*$/u.test(trimmed)) return trimmed;
+  return trimmed
+    .split(/[-_]/u)
+    .filter((part) => part.length > 0)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function createEmptySkillIcon(): SVGSVGElement {
   const template = document.createElement("template");
   template.innerHTML = skillLibraryIconSvg;
@@ -58,6 +78,7 @@ export class AgentEmptyStateController {
   private emptySkillRequestId = 0;
   private emptySkillsSurface: { container: HTMLElement; list: HTMLElement } | null = null;
   private readonly featuredNotes: FeaturedNotesController;
+  private readonly piSettingsDialog = new PiSettingsDialogController();
 
   constructor(private readonly options: AgentEmptyStateOptions) {
     this.featuredNotes = new FeaturedNotesController({
@@ -131,6 +152,7 @@ export class AgentEmptyStateController {
     this.disposed = true;
     if (this.root) disposeEmptyState(this.root);
     this.featuredNotes.dispose();
+    this.piSettingsDialog.close();
   }
 
   private appendExpandedEmptyGuidance(empty: HTMLElement): void {
@@ -140,21 +162,19 @@ export class AgentEmptyStateController {
 
     const actions = document.createElement("div");
     actions.className = "agent-thread-card__empty-welcome-actions";
-    const editButton = document.createElement("button");
-    editButton.type = "button";
-    editButton.className = "agent-thread-card__empty-welcome-action";
-    editButton.textContent = this.t("preferences.documentProperties.edit");
-    editButton.disabled = true;
-    const modelButton = document.createElement("button");
-    modelButton.type = "button";
-    modelButton.className = "agent-thread-card__empty-welcome-action";
-    modelButton.textContent = this.t("agent.model.title");
-    modelButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const typeKey = this.getTypeKey();
-      const preferencesTab = typeKey === "pi" ? "pi" : typeKey === "dsh" ? "dsh" : "aiAgent";
-      void windows.openPreferences(preferencesTab);
-    });
+    const actionButtons: HTMLButtonElement[] = [];
+    // 「设置」仅对 Pi 展示；点击后弹出 Pi 设置弹窗（系统提示词 / 代码模式 / 工具搜索 / MCP）。
+    if (this.getTypeKey() === "pi") {
+      const settingsButton = document.createElement("button");
+      settingsButton.type = "button";
+      settingsButton.className = "agent-thread-card__empty-welcome-action";
+      settingsButton.textContent = this.t("agent.tools.settings");
+      settingsButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.piSettingsDialog.open(this.options.getLanguage());
+      });
+      actionButtons.push(settingsButton);
+    }
     const skillMarketButton = document.createElement("button");
     skillMarketButton.type = "button";
     skillMarketButton.className = "agent-thread-card__empty-welcome-action";
@@ -166,10 +186,11 @@ export class AgentEmptyStateController {
         target: { kind: "web", url: "https://skills.flowix.cc/i/index" },
       });
     });
-    for (const button of [editButton, modelButton, skillMarketButton]) {
+    actionButtons.push(skillMarketButton);
+    for (const button of actionButtons) {
       button.addEventListener("mousedown", (event) => event.stopPropagation());
     }
-    actions.append(editButton, modelButton, skillMarketButton);
+    actions.append(...actionButtons);
 
     const start = document.createElement("p");
     start.className = "agent-thread-card__empty-start";
@@ -284,7 +305,9 @@ export class AgentEmptyStateController {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "agent-thread-card__empty-skill";
-      const titleText = preferredComposerSkillName(skill.name, skill.displayName);
+      const titleText = humanizeSkillIdentifier(
+        preferredComposerSkillName(skill.name, skill.displayName),
+      );
       const descriptionText = skill.description.trim()
         || skill.shortDescription?.trim()
         || skill.name;
@@ -295,14 +318,17 @@ export class AgentEmptyStateController {
       );
       const title = document.createElement("span");
       title.className = "agent-thread-card__empty-skill-title";
-      title.textContent = titleText;
+      const titleTextSpan = document.createElement("span");
+      titleTextSpan.className = "agent-thread-card__empty-skill-title-text";
+      titleTextSpan.textContent = titleText;
+      title.append(createEmptySkillIcon(), titleTextSpan);
       const description = document.createElement("span");
       description.className = "agent-thread-card__empty-skill-description";
       description.textContent = descriptionText;
       const content = document.createElement("span");
       content.className = "agent-thread-card__empty-skill-content";
       content.append(title, description);
-      button.append(createEmptySkillIcon(), content);
+      button.append(content);
       button.addEventListener("click", (event) => {
         event.stopPropagation();
         this.options.onSelectEmptySkill?.(skill);

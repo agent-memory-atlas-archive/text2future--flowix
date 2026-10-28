@@ -5,6 +5,7 @@ import { noteRepository } from '@features/memo/services/note-repository';
 import { documentIdentityFromFile, saveWorkspaceDocumentPath } from '@features/document/public/workspace-api';
 import { ensureFileDisplayIdentity } from '@/lib/file-display-registry';
 import { useNotebookViewActions } from './use-notebook-view-actions';
+import { fileTreeCreateFailureKey } from './file-tree-failure';
 import { useNotebookTreeRename } from './use-notebook-tree-rename';
 
 import { NotebookTreeCustomizePanel, type NotebookTreeCustomizePanelHandle } from './notebook-tree-customize-panel';
@@ -24,6 +25,7 @@ import {
   useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
+  type RefObject,
 } from 'react';
 import {
   ChevronRight, ChevronLeft, Plus,
@@ -76,6 +78,7 @@ import {
 import { useDynamicVirtualList } from '@features/memo/hooks/use-dynamic-virtual-list';
 import { useNotebookViewData } from './use-notebook-view-data';
 import { AgentRepositoriesSection } from './notebook-repositories-section';
+import { useRepositoryFileOpen } from './use-repository-file-open';
 import { NotebookMoreSection } from './notebook-more-section';
 import { TREE_EDGE_GUTTER, INDENT_PER_LEVEL, TREE_ROW_GAP, TREE_ROW_HEIGHT, TREE_ROW_SIZE } from './notebook-tree-layout';
 import { useNotebookTreeInteraction } from './use-notebook-tree-interaction';
@@ -372,7 +375,9 @@ export function NotebookFileTree({
     page.style.visibility = 'visible';
     const animation = page.animate(
       [{ transform: from }, { transform: repositoriesPageOpen ? 'translateX(0)' : 'translateX(100%)' }],
-      { duration: 240, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' },
+      // Keep in sync with --flowix-motion-duration / --flowix-motion-easing
+      // in styles/index.css.
+      { duration: 180, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
     );
     animation.onfinish = () => {
       page.style.visibility = repositoriesPageOpen ? 'visible' : 'hidden';
@@ -522,6 +527,7 @@ export function NotebookFileTree({
   const handledFolderRequestIdRef = useRef<number | null>(null);
   const cancelledDraftRequestIdRef = useRef<number | null>(null);
   const submittingDraftRef = useRef(false);
+  const draftInputRef = useRef<HTMLInputElement | null>(null);
   const [keptAlivePaths, setKeptAlivePaths] = useState<Set<string>>(() => new Set());
   const { rootChildren, nodes, expanded } = tree;
   const pinnedFolderFullPaths = useMemo(() => pinnedFolders.flatMap((path) => {
@@ -754,19 +760,14 @@ export function NotebookFileTree({
       return;
     }
     try {
-      const created = await files.createFolder(parentPath, name);
-      if (!created) {
-        toast.error(t('memo.fileTree.createFailed'));
-        return;
-      }
+      await files.createFolder(parentPath, name);
       await tree.refresh(parentPath);
       setDraft(null);
     } catch (error) {
-      toast.error(t(
-        String(error).includes('FILE_EXISTS')
-          ? 'memo.fileTree.nameConflict'
-          : 'memo.fileTree.createFailed',
-      ));
+      // 失焦触发的提交已把焦点交给点击处, 失败时把光标还给输入框并全选文本。
+      toast.error(t(fileTreeCreateFailureKey(error)));
+      draftInputRef.current?.focus();
+      draftInputRef.current?.select();
     } finally {
       submittingDraftRef.current = false;
     }
@@ -837,15 +838,7 @@ export function NotebookFileTree({
     else toast.success(message);
   }, [selectedFilePaths, treeItemByPath, notebookPath, onDeleteFile, t, updateSelection]);
 
-  const handleOpenRepositoryFile = useCallback((path: string, scopePath: string) => {
-    void openWorkspaceSurface({
-      host: 'main-third',
-      target: { kind: 'external', path, scopePath, transitionId: null },
-    }).catch((error) => {
-      logger.warn('failed to open repository file', { error, path });
-      toast.error(t('memo.fileTree.openFailed'));
-    });
-  }, [t]);
+  const { openRepositoryFileInBrowser, openRepositoryFileInWork } = useRepositoryFileOpen();
   const handleOpenTableDocument = useCallback((relativePath: string) => {
     const path = joinNotebookMemoPath(notebookPath, relativePath);
     if (!path) return;
@@ -954,6 +947,7 @@ export function NotebookFileTree({
       draft={draftState}
       depth={depth}
       data-notebook-tree-depth={depth}
+      inputRef={draftInputRef}
       onChange={(value) => setDraft({ ...draftState, value })}
       onSubmit={() => void submitDraft()}
       onCancel={cancelDraft}
@@ -1484,8 +1478,8 @@ export function NotebookFileTree({
               onRemoveRepository={(repository) => { void handleRemoveRepository(repository); }}
               onExpandRepository={() => {}}
               canAddRepository={Boolean(notebookId)}
-              onOpenFile={handleOpenRepositoryFile}
-              onOpenInNewTab={onNoteOpenInNewTab ? handleOpenPathInNewTab : undefined}
+              onOpenFile={openRepositoryFileInBrowser}
+              onOpenFileInMainColumn={openRepositoryFileInWork}
               viewMode="links"
               onOpenRepositoryList={() => setRepositoriesPageOpen(true)}
             />
@@ -1596,8 +1590,8 @@ export function NotebookFileTree({
               onRemoveRepository={(repository) => { void handleRemoveRepository(repository); }}
               onExpandRepository={() => {}}
               canAddRepository={Boolean(notebookId)}
-              onOpenFile={handleOpenRepositoryFile}
-              onOpenInNewTab={onNoteOpenInNewTab ? handleOpenPathInNewTab : undefined}
+              onOpenFile={openRepositoryFileInBrowser}
+              onOpenFileInMainColumn={openRepositoryFileInWork}
               hideSectionHeader
             />
           </div>
@@ -1612,6 +1606,7 @@ function NotebookTreeDraft({
   onChange,
   onSubmit,
   onCancel,
+  inputRef,
   style,
   'data-notebook-tree-depth': dataDepth,
 }: {
@@ -1620,6 +1615,7 @@ function NotebookTreeDraft({
   onChange: (value: string) => void;
   onSubmit: () => void;
   onCancel: () => void;
+  inputRef?: RefObject<HTMLInputElement | null>;
   style?: CSSProperties;
   'data-notebook-tree-depth'?: number;
 }) {
@@ -1647,6 +1643,7 @@ function NotebookTreeDraft({
       </span>
       <input
         key={draft.requestId}
+        ref={inputRef}
         autoFocus
         value={draftInput.value}
         placeholder={t('memo.fileTree.newFolder')}

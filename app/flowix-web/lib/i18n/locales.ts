@@ -1,4 +1,6 @@
 import zhCNMessages from './messages.zh-CN';
+import fileTreeZhCN from './messages.file-tree.zh-CN';
+import piSettingsZhCN from './messages.pi-settings.zh-CN';
 
 export const APP_LANGUAGES = ["zh-CN", "en-US"] as const;
 
@@ -22,13 +24,16 @@ export function sanitizeAppLanguage(value: unknown): AppLanguage {
 // 未加载的语言回退到默认语言; I18nProvider 在 language 变化时触发 loadLanguage
 // 并在就绪后重渲染。
 //
-// key 类型以 zh-CN 为基准派生, messages.en-US.ts 用 Record<keyof typeof zhCN, string>
-// 约束保证两语言 key 集合一致 (编译期检查)。
-export type I18nKey = keyof typeof zhCNMessages;
+// 主表 (messages.zh-CN / messages.en-US) 被千行闸门冻结, 新增文案放分片 (如
+// messages.file-tree.*) 后与主表合并。I18nKey 从合并结果派生; 主表与分片各自用
+// Record<...> 约束 key 集合一致, en-US 合并后再按 MessageMap 校验一次完整性。
+const zhCN = { ...zhCNMessages, ...fileTreeZhCN, ...piSettingsZhCN };
+
+export type I18nKey = keyof typeof zhCN;
 export type MessageMap = Record<I18nKey, string>;
 
 const loadedMessages: Partial<Record<AppLanguage, MessageMap>> = {
-  "zh-CN": zhCNMessages,
+  "zh-CN": zhCN,
 };
 
 let enUSPromise: Promise<MessageMap> | null = null;
@@ -46,19 +51,23 @@ export function isLanguageLoaded(lang: AppLanguage): boolean {
 /** 异步加载某语言消息表 (已加载则立即 resolve); 默认语言无需加载。 */
 export function loadLanguage(lang: AppLanguage): Promise<MessageMap> {
   if (lang === DEFAULT_APP_LANGUAGE) {
-    return Promise.resolve(zhCNMessages as MessageMap);
+    return Promise.resolve(zhCN as MessageMap);
   }
   const cached = loadedMessages[lang];
   if (cached) return Promise.resolve(cached);
   if (lang === "en-US") {
     if (!enUSPromise) {
-      enUSPromise = import('./messages.en-US').then((module) => {
-        const msgs = module.default as unknown as MessageMap;
+      enUSPromise = Promise.all([
+        import('./messages.en-US'),
+        import('./messages.file-tree.en-US'),
+        import('./messages.pi-settings.en-US'),
+      ]).then(([module, fileTree, piSettings]) => {
+        const msgs: MessageMap = { ...module.default, ...fileTree.default, ...piSettings.default };
         loadedMessages["en-US"] = msgs;
         return msgs;
       });
     }
     return enUSPromise;
   }
-  return Promise.resolve(zhCNMessages as MessageMap);
+  return Promise.resolve(zhCN as MessageMap);
 }

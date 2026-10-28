@@ -2099,6 +2099,20 @@ fn file_mutation_error(error: std::io::Error) -> String {
     format!("{code}: {error}")
 }
 
+/// Create a single new directory level, failing with `AlreadyExists` when the
+/// target already exists (folder or file). Unlike `create_dir_all`, which
+/// silently succeeds on duplicates, this lets `create_folder` surface
+/// `FILE_EXISTS` to the UI. `create_dir` is atomic, so no check-then-create
+/// race remains. Validated names never contain separators, so the target is
+/// always one level below an existing parent.
+fn create_new_dir(target: &Path) -> std::io::Result<()> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| std::io::Error::other("folder has no parent"))?;
+    fs::create_dir_all(parent)?;
+    fs::create_dir(target)
+}
+
 fn target_directory_error(error: std::io::Error) -> String {
     if error.kind() == std::io::ErrorKind::NotFound {
         "TARGET_NOT_DIRECTORY".to_string()
@@ -2565,8 +2579,10 @@ pub fn create_folder(
     name: String,
     _parent_id: Option<String>,
     state: State<AppState>,
-) -> Option<DocTreeItem> {
-    validate_file_name(&name).ok()?;
+) -> Result<DocTreeItem, String> {
+    // Same failure contract as `create_document`: stable codes instead of `None`,
+    // so the UI can tell an invalid name from a conflict or a permission denial.
+    validate_file_name(&name)?;
     let target_path = Path::new(&space_path).join(&name);
     if !is_browsable_scope(Path::new(&space_path), &state)
         || !path_is_inside(&target_path, Path::new(&space_path))
@@ -2576,22 +2592,26 @@ pub fn create_folder(
             "[create_folder] refused out-of-scope path: {}",
             target_path.display()
         );
-        return None;
+        return Err("FILE_PERMISSION_DENIED".to_string());
     }
     let memo_file = read_lock(&state.memo_file, "memo_file");
-    let notebook_ids = memo_file.notebook_ids_for_paths(&[&target_path]).ok()?;
+    let notebook_ids = memo_file
+        .notebook_ids_for_paths(&[&target_path])
+        .map_err(file_mutation_error)?;
     if notebook_ids.is_empty() {
-        let _guard = memo_file.acquire_cross_process_write_lock().ok()?;
-        fs::create_dir_all(&target_path).ok()?;
+        let _guard = memo_file
+            .acquire_cross_process_write_lock()
+            .map_err(file_mutation_error)?;
+        create_new_dir(&target_path).map_err(file_mutation_error)?;
     } else {
         memo_file
             .with_registered_path_change(&[&target_path], "create_folder", || {
-                fs::create_dir_all(&target_path)
+                create_new_dir(&target_path)
             })
-            .ok()?;
+            .map_err(file_mutation_error)?;
     }
 
-    Some(DocTreeItem {
+    Ok(DocTreeItem {
         id: generate_stable_id(&target_path.to_string_lossy()),
         full_path: target_path.to_string_lossy().to_string(),
         name,
@@ -2702,6 +2722,28 @@ mod tests {
         fs::write(target_root.join("a.pdf"), b"target").unwrap();
         assert!(resolve_import_file_paths(&source_root.join("a.pdf"), &target_root).is_err());
         assert_eq!(fs::read(target_root.join("a.pdf")).unwrap(), b"target");
+    }
+
+    #[test]
+    fn create_new_dir_rejects_duplicate_folders_and_files_atomically() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("parent");
+        fs::create_dir(&parent).unwrap();
+
+        create_new_dir(&parent.join("folder")).unwrap();
+        assert!(parent.join("folder").is_dir());
+        let duplicate = create_new_dir(&parent.join("folder")).unwrap_err();
+        assert_eq!(duplicate.kind(), std::io::ErrorKind::AlreadyExists);
+
+        // An existing file at the target path conflicts as well — never overwrite.
+        fs::write(parent.join("note.md"), b"body").unwrap();
+        let file_conflict = create_new_dir(&parent.join("note.md")).unwrap_err();
+        assert_eq!(file_conflict.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(parent.join("note.md")).unwrap(), b"body");
+
+        // Missing parents are still created, matching the old create_dir_all behavior.
+        create_new_dir(&parent.join("nested/deep")).unwrap();
+        assert!(parent.join("nested/deep").is_dir());
     }
 
     #[test]

@@ -251,7 +251,9 @@ async function runQueue(displayId: string, session: MemoTitleSession): Promise<b
       const message = error instanceof Error ? error.message : String(error);
       rejectTitle(session, message.includes('FILE_EXISTS')
         ? translate(getCurrentAppLanguage(), 'memo.fileTree.nameConflict')
-        : message);
+        : message.includes('INVALID_FILE_NAME')
+          ? translate(getCurrentAppLanguage(), 'memo.fileTree.invalidName')
+          : message);
       succeeded = false;
     } finally {
       session.inFlight = null;

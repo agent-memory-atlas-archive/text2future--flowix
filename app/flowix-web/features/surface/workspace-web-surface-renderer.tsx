@@ -25,7 +25,7 @@ import { useI18n } from '@/lib/i18n';
 import { toast } from '@/lib/toast';
 import { openUrl } from '@platform/tauri/opener';
 import { SkillMarketLoadingSkeleton } from '@shared/ui/skill-market-loading-skeleton';
-import { styleAccessibleIframeScrollbar } from '@shared/ui/iframe-scrollbar';
+import { connectWebFrameScrollbar } from '@shared/ui/web-frame-scrollbar';
 import type { WorkspaceSurfaceRendererData, WorkspaceSurfaceRenderContext, WorkspaceWebNavigationPort } from './workspace-surface-renderer-contract';
 
 import { skillMarketLanguageForUrl, skillMarketOriginForUrl, skillMarketUrlForLanguage } from './skill-market-origin';
@@ -347,9 +347,16 @@ export function WebRenderer({ surface, context }: {
     });
   }, [address, port]);
 
+  // The page document is cross-origin, so its scrollbar is rebuilt from inside
+  // the frame. Reconnect whenever the frame is recreated (navigate or reload).
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    return connectWebFrameScrollbar(iframe);
+  }, [currentUrl, reloadToken]);
+
   const handleIframeLoad = useCallback(() => {
     const iframe = iframeRef.current;
-    styleAccessibleIframeScrollbar(iframe);
     if (embedTimeoutRef.current !== null) window.clearTimeout(embedTimeoutRef.current);
     embedTimeoutRef.current = null;
     setShowEmbedTimeout(false);

@@ -9,10 +9,6 @@ import type { Notebook } from '@features/memo/store/note-store';
 import { NotebookSelectorPopup } from '@features/shell/components/status-bar/notebook-selector-popup';
 import { ProductUpdatePill } from '@features/shell/components/status-bar/product-update-pill';
 import { ProductIntroDialog } from '@features/product-intro';
-import { AgentIcon } from '@features/agent/public/icon-api';
-import { createAndOpenPiConversation } from '@features/agent/public/new-conversation-api';
-import { normalizeAgentRuntimeStatus } from '@features/agent/public/status-bar-api';
-import { useAgentRuntimeStore } from '@features/agent/store/agent-runtime-store';
 import { useI18n } from '@/lib/i18n';
 import { getCloudSyncAccess } from '@/lib/cloud-account';
 import { useDocumentMetricsStore } from '@features/document/store/document-metrics-store';
@@ -48,43 +44,19 @@ interface StatusBarProps {
   updater: AppUpdaterState;
 }
 
-function PiRuntimeStatusIndicator() {
-  const { t } = useI18n();
-  const piStatus = useAgentRuntimeStore((state) => state.statusByType.pi);
-  const isChecking = useAgentRuntimeStore((state) => state.isChecking);
-
-  const runtimeStatus = normalizeAgentRuntimeStatus(piStatus, isChecking);
-  const statusText = runtimeStatus.state === 'ready'
-    ? t('agent.status.available')
-    : runtimeStatus.state === 'checking'
-      ? t('agent.status.checking')
-      : runtimeStatus.state === 'unknown'
-        ? t('agent.status.notChecked')
-        : t('agent.status.setup');
-  const label = `${t('agent.types.pi.name')} · ${statusText}`;
-
-  return (
-    <Tooltip content={label} side="top">
-      <button
-        type="button"
-        onClick={createAndOpenPiConversation}
-        className="h-full flex items-center justify-center px-1.5 py-0 hover:bg-[var(--muted)]"
-        aria-label={label}
-      >
-        <AgentIcon typeKey="pi" alt="" className="h-3.5 w-3.5" />
-      </button>
-    </Tooltip>
-  );
-}
-
 /**
  * Bottom status bar for the main window.
  *
  * Layout (two columns):
- *   [NotebookSwitcher] | [Todos] [char count]   …flex spacer…   [Note Nav] [AI Chat] [⚙]
+ *   [NotebookSwitcher] | [Note Nav] [Todos] [running conversations]   …flex spacer…
+ *                       [update pill] [syncing] [char count] [⚙ MCP] [ⓘ intro]
  *
  * The left column is the notebook switcher (fixed width by its own button
  * content); the right column takes the remaining width for the status actions.
+ *
+ * The bar carries no persistent agent entry point: starting an agent
+ * conversation lives in the memo list / agent conversation list, so the strip
+ * only surfaces agent activity that is actually running or unread.
  *
  * Renders no chrome of its own — it assumes it lives in a `h-[26px]` flex strip.
  */
@@ -272,7 +244,6 @@ export function StatusBar({
             <span className="font-mono tabular-nums">{charCount}</span>
           </span>
         )}
-        <PiRuntimeStatusIndicator />
         <Tooltip content={t('preferences.tabs.mcp')} side="top">
           <button
             type="button"

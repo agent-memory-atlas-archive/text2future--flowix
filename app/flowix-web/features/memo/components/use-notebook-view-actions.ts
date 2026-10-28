@@ -6,6 +6,7 @@ import { createLogger } from '@/lib/logger';
 import { displayTitleFromFilename, tableDocumentExtension } from '@/lib/utils';
 import { canonicalPath } from '@/lib/path';
 import { renameWorkspaceFile } from '@features/workspace/public/shell-api';
+import { fileTreeRenameFailureKey } from './file-tree-failure';
 
 const logger = createLogger('notebook-view-actions');
 const MESSAGES = {
@@ -111,7 +112,7 @@ export function useNotebookViewActions({ kind, notebookId, notebookPath, itemsBy
       toast.success(t('memo.fileTree.renamed', { name: trimmed }));
       return true;
     } catch (error) {
-      toast.error(t(String(error).includes('FILE_EXISTS') ? 'memo.fileTree.nameConflict' : 'memo.fileTree.renameFailed'));
+      toast.error(t(fileTreeRenameFailureKey(error)));
       return false;
     }
   }, [itemsByPath, notebookId, notebookPath, refresh, t]);

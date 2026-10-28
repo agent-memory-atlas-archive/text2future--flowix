@@ -5,6 +5,7 @@ import { Link2 } from 'lucide-react';
 import { WorkColumnTitlebar } from '@features/shell/components/work-column-titlebar';
 import { WORK_COLUMN_TITLEBAR_GRADIENT } from '@features/shell/components/work-column-titlebar-shell';
 import { WorkColumnTitlebarNavigation } from '@features/shell/components/work-column-titlebar-navigation';
+import { WorkColumnBrowserExpandButton } from '@features/shell/public/work-column-api';
 import {
   DOCUMENT_TITLEBAR_ICON_BUTTON_MAC, DOCUMENT_TITLEBAR_ICON_BUTTON_WIN,
   type DocumentTitlebarProps,
@@ -63,6 +64,7 @@ export function DocumentTitlebar({
       ><Link2 className="h-4 w-4" /></button>}
       <AgentThreadCardFullscreenExitButton className="agent-thread-card-fullscreen-exit-btn" />
       {!fullscreen && target && <ExternalTitlebarBadge target={target} />}
+      <WorkColumnBrowserExpandButton iconButtonClass={iconButtonClass} />
       {target && !isMediaSurface && <DocumentTitlebarActions
         key={`${target.fileIdentity.displayId}:${target.fileIdentity.path}`}
         target={target}

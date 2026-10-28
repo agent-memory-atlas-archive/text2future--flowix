@@ -1,4 +1,4 @@
-import { ChevronsRight, ChevronLeft, ChevronRight, Ellipsis, Link2, FilePlus2, MessageCirclePlus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Ellipsis, Link2, FilePlus2, MessageCirclePlus } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { BrowserColumnEntry } from '@features/workspace/public/browser-column-api';
 import { navigateBrowserColumnHistory, useBrowserColumnViewModel, canOpenBrowserColumnTargetInWorkColumn } from '@features/workspace/public/browser-column-api';
@@ -7,6 +7,7 @@ import { AgentThreadCardFullscreenExitButton, AgentThreadCardFullscreenIdentity,
 import type { BrowserColumnSurfaceChrome } from '@features/surface/public/shell-api';
 import type { AgentTypeKey } from '@/types/agent';
 import { useI18n } from '@/lib/i18n';
+import { SidebarToggleIconRight } from '@shared/icons/sidebar-toggle-icon';
 import { useNotebookNoteIcon } from '@features/memo/public/shell-api';
 import { classifyFileContent, isHtmlFilePath } from '@features/content/public/content-api';
 import { requireFileDisplayIdentity } from '@/lib/file-display-registry';
@@ -192,7 +193,7 @@ export function BrowserColumnHeader(props: BrowserColumnHeaderProps) {
     data-thread-card-fullscreen={fullscreen ? '' : undefined}
     className={`relative flex shrink-0 items-center gap-1 pl-1 pr-2 ${windows ? 'h-9 min-h-9 pr-[126px]' : 'h-12 min-h-12'} ${special}`}
     style={special ? undefined : { backgroundImage: WORK_COLUMN_TITLEBAR_GRADIENT }}>
-    <button type="button" className={buttonClass} aria-label={t('tabWindow.closeColumn')} onClick={props.onCloseColumn}><ChevronsRight className="h-4 w-4" /></button>
+    <button type="button" className={buttonClass} aria-label={t('tabWindow.closeColumn')} onClick={props.onCloseColumn}><SidebarToggleIconRight className="h-4 w-4" variant="expanded" /></button>
     <button type="button" className={buttonClass} aria-label={t('document.titlebar.back')} disabled={!canNavigateBack} onClick={() => void navigate('back')}><ChevronLeft className="h-4 w-4" /></button>
     <button type="button" className={buttonClass} aria-label={t('document.titlebar.forward')} disabled={!canNavigateForward} onClick={() => void navigate('forward')}><ChevronRight className="h-4 w-4" /></button>
     <div className="flex min-w-0 flex-1 items-center gap-2" data-tauri-drag-region>

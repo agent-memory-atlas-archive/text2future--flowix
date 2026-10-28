@@ -22,6 +22,15 @@ use flowix_core::memo_file::{
 
 const REMOVE_TOMBSTONE_DELAY: Duration = Duration::from_millis(450);
 
+/// How long an in-app create window stays open after a backend command
+/// announces it. Small on purpose: an unrelated external create in the same
+/// folder must still surface the new-document notice.
+const SELF_CREATE_WINDOW: Duration = Duration::from_secs(2);
+
+/// Native creates one command may own inside its announced folder. Every create
+/// command writes a single file; a batch creator must announce once per file.
+const SELF_CREATE_BUDGET: u8 = 1;
+
 /// Watches only the selected notebook root and sends filtered events to a serial worker.
 /// A delayed remove can be canceled by a confirmed rename pair. The watcher
 /// never matches a replacement file using its Markdown content or frontmatter.
@@ -32,6 +41,10 @@ pub struct MemoWatcher {
     worker_generation: Arc<AtomicU64>,
     suspended_notebook_ids: HashMap<String, usize>,
     recent_self_writes: Arc<Mutex<SelfWriteMap>>,
+    /// Directories where this backend is creating files right now. A native
+    /// create inside one of them is an in-app create, not an external new
+    /// document, so it must not raise the new-document notice.
+    recent_self_create_dirs: Arc<Mutex<HashMap<PathBuf, (Instant, u8)>>>,
     rename_tracker: Arc<Mutex<super::rename_tracker::RenameTracker>>,
     remove_coalescer: Option<RemoveCoalescer>,
     memo_file: Arc<std::sync::RwLock<MemoFile>>,
@@ -162,6 +175,7 @@ impl MemoWatcher {
             worker_generation: Arc::new(AtomicU64::new(0)),
             suspended_notebook_ids: HashMap::new(),
             recent_self_writes: Arc::new(Mutex::new(HashMap::new())),
+            recent_self_create_dirs: Arc::new(Mutex::new(HashMap::new())),
             rename_tracker: Arc::new(Mutex::new(super::rename_tracker::RenameTracker::default())),
             remove_coalescer: None,
             memo_file,
@@ -265,6 +279,7 @@ impl MemoWatcher {
         let remove_coalescer_for_callback = remove_coalescer.clone();
         let app = app.clone();
         let recent_for_worker = self.recent_self_writes.clone();
+        let self_create_dirs_for_callback = self.recent_self_create_dirs.clone();
         let whitelist = self.whitelist.clone();
         let watched_roots = self.watched_roots.clone();
 
@@ -309,6 +324,7 @@ impl MemoWatcher {
                     event,
                     removed_known_directories,
                     path_history,
+                    &self_create_dirs_for_callback,
                 );
             }) {
                 Ok(w) => w,
@@ -421,6 +437,17 @@ impl MemoWatcher {
 
     pub fn mark_self_write_missing(&self, path: &Path) {
         self.mark_self_write_expected(path, None);
+    }
+
+    /// Announce that this backend is about to create a file inside `dir`. The
+    /// window is registered before the write so the native create event is
+    /// recognized even when it reaches the watcher first.
+    pub fn mark_self_create_dir(&self, dir: &Path) {
+        if let Ok(mut map) = self.recent_self_create_dirs.lock() {
+            let now = Instant::now();
+            map.retain(|_, (at, _)| now.duration_since(*at) < SELF_CREATE_WINDOW);
+            map.insert(normalize_for_compare(dir), (now, SELF_CREATE_BUDGET));
+        }
     }
 
     fn mark_self_write_expected(&self, path: &Path, expected_revision: Option<FileRevision>) {
@@ -537,6 +564,7 @@ fn handle_notify_event(
     event: notify::Event,
     removed_known_directories: std::collections::HashSet<PathBuf>,
     path_history: std::collections::HashMap<PathBuf, bool>,
+    self_create_dirs: &Arc<Mutex<HashMap<PathBuf, (Instant, u8)>>>,
 ) {
     let path_filter = PathFilter {
         whitelist: whitelist.clone(),
@@ -664,6 +692,15 @@ fn handle_notify_event(
         }
         let mut raw = RawFsEvent::new(fs_kind, path.clone());
         raw.path_was_known = path_history.get(&path).copied();
+        // A backend create is announced before the file exists, but its native
+        // event can still reach this callback before the tracker observes the
+        // path. Inside a self-create window the path is a product-created
+        // document, so reconcile it as an update instead of a new document.
+        if matches!(fs_kind, FsEventKind::Create | FsEventKind::Modify)
+            && self_create_window_covers(self_create_dirs, &path)
+        {
+            raw.path_was_known = Some(true);
+        }
         match if matches!(fs_kind, FsEventKind::DirectoryChange)
             || resource_kind_for_path(&path).is_some()
             || crate::commands::document_list::is_table_document_path(&path) {
@@ -698,6 +735,28 @@ fn handle_notify_event(
         // worker 线程串行 drain, 不阻塞 notify 共享线程。`send` 非阻塞 (unbounded channel)。
         let _ = worker_tx.send((raw, ctx));
     }
+}
+/// Consume one unit of the in-app create budget when `path`'s parent has an open
+/// window. The budget bounds the suppression to the file the command creates, so
+/// an unrelated external create in the same folder still notifies.
+fn self_create_window_covers(
+    dirs: &Arc<Mutex<HashMap<PathBuf, (Instant, u8)>>>,
+    path: &Path,
+) -> bool {
+    let Some(parent) = path.parent() else { return false };
+    let Ok(mut map) = dirs.lock() else { return false };
+    let now = Instant::now();
+    map.retain(|_, (at, _)| now.duration_since(*at) < SELF_CREATE_WINDOW);
+    let key = normalize_for_compare(parent);
+    let Some((_, budget)) = map.get_mut(&key) else { return false };
+    if *budget == 0 {
+        return false;
+    }
+    *budget -= 1;
+    if *budget == 0 {
+        map.remove(&key);
+    }
+    true
 }
 
 fn path_allowed_for_watch(root: &Path, path: &Path, directory_event: bool) -> bool {
@@ -843,8 +902,25 @@ fn coalesce_queued_events(
             normalize_for_compare(&event.path),
         );
         if let Some(index) = coalescible.get(&key).copied() {
-            if events[index].0.kind == FsEventKind::Create {
+            // A writer that creates a file and then fills it delivers
+            // Create(known=false) followed by Modify(known=true) inside one
+            // batch. Keeping the later flag would report the whole burst as an
+            // update and silently drop the "new document" notice, so a
+            // create-led burst keeps the create's evidence.
+            //
+            // Modify-led bursts keep the previous last-wins semantics on
+            // purpose: right after a root rebind the rename baseline is still
+            // being seeded on a background thread, so every path reads as
+            // unknown. Letting the first Modify win there would turn an
+            // ordinary edit into a false "new document".
+            let first = &events[index].0;
+            let create_led = first.kind == FsEventKind::Create;
+            let fresh = create_led && first.path_was_known == Some(false);
+            if create_led {
                 event.kind = FsEventKind::Create;
+            }
+            if fresh {
+                event.path_was_known = Some(false);
             }
             events[index] = (event, context);
         } else {
@@ -1059,6 +1135,77 @@ mod tests {
     }
 
     #[test]
+    fn watcher_batch_keeps_the_pre_burst_history_for_create_then_write() {
+        // A writer that creates a file and then fills it delivers
+        // Create(known=false) + Modify(known=true) inside one batch window.
+        // The burst must stay a creation, otherwise the new-document notice is
+        // silently dropped.
+        let root = PathBuf::from("/notes");
+        let context = || NotebookWatchContext {
+            notebook_id: "nb_a".into(),
+            root: root.clone(),
+        };
+        let mut created = RawFsEvent::new(FsEventKind::Create, root.join("a.md"));
+        created.path_was_known = Some(false);
+        let mut filled = RawFsEvent::new(FsEventKind::Modify, root.join("a.md"));
+        filled.path_was_known = Some(true);
+        let mut touched = RawFsEvent::new(FsEventKind::Modify, root.join("a.md"));
+        touched.path_was_known = Some(true);
+
+        let merged = coalesce_queued_events(vec![
+            (created, context()),
+            (filled, context()),
+            (touched, context()),
+        ]);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].0.kind, FsEventKind::Create);
+        assert_eq!(merged[0].0.path_was_known, Some(false));
+    }
+
+    #[test]
+    fn watcher_batch_does_not_turn_a_seeding_edit_into_a_create() {
+        // Right after a rebind every path reads as unknown until the rename
+        // baseline merges. A modify-led burst must stay an update, otherwise an
+        // ordinary edit would raise a false new-document notice.
+        let root = PathBuf::from("/notes");
+        let context = || NotebookWatchContext {
+            notebook_id: "nb_a".into(),
+            root: root.clone(),
+        };
+        let mut first = RawFsEvent::new(FsEventKind::Modify, root.join("a.md"));
+        first.path_was_known = Some(false);
+        let mut second = RawFsEvent::new(FsEventKind::Modify, root.join("a.md"));
+        second.path_was_known = Some(true);
+
+        let merged = coalesce_queued_events(vec![(first, context()), (second, context())]);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].0.kind, FsEventKind::Modify);
+        assert_eq!(merged[0].0.path_was_known, Some(true));
+    }
+
+    #[test]
+    fn watcher_batch_keeps_product_created_suppression() {
+        // The self-create window marks every event of the burst as known, so a
+        // product-created document never surfaces as a new-document notice.
+        let root = PathBuf::from("/notes");
+        let context = || NotebookWatchContext {
+            notebook_id: "nb_a".into(),
+            root: root.clone(),
+        };
+        let mut created = RawFsEvent::new(FsEventKind::Create, root.join("a.md"));
+        created.path_was_known = Some(true);
+        let mut filled = RawFsEvent::new(FsEventKind::Modify, root.join("a.md"));
+        filled.path_was_known = Some(true);
+
+        let merged = coalesce_queued_events(vec![(created, context()), (filled, context())]);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].0.path_was_known, Some(true));
+    }
+
+    #[test]
     fn watcher_batch_does_not_coalesce_across_rename_events() {
         let root = PathBuf::from("/notes");
         let context = || NotebookWatchContext {
@@ -1193,5 +1340,47 @@ mod tests {
         );
         assert_eq!(normalized.file_name().unwrap(), "not-yet-created.md");
         std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    fn window_with(dir: &Path, budget: u8, age: Duration) -> Arc<Mutex<HashMap<PathBuf, (Instant, u8)>>> {
+        let dirs = Arc::new(Mutex::new(HashMap::new()));
+        dirs.lock().unwrap().insert(
+            crate::watcher::path::normalize_for_compare(dir),
+            (Instant::now() - age, budget),
+        );
+        dirs
+    }
+
+    #[test]
+    fn self_create_window_covers_only_its_own_folder() {
+        let folder = PathBuf::from("/notes/inbox");
+        let dirs = window_with(&folder, SELF_CREATE_BUDGET, Duration::ZERO);
+
+        assert!(self_create_window_covers(&dirs, Path::new("/notes/inbox/New.md")));
+        // The budget is spent, so a second create in the same folder notifies.
+        assert!(!self_create_window_covers(&dirs, Path::new("/notes/inbox/Second.md")));
+        assert!(!self_create_window_covers(&dirs, Path::new("/notes/other/New.md")));
+        assert!(!self_create_window_covers(&dirs, Path::new("/notes/inbox/sub/New.md")));
+    }
+
+    #[test]
+    fn expired_self_create_window_no_longer_covers_creates() {
+        let folder = PathBuf::from("/notes/inbox");
+        let dirs = window_with(
+            &folder,
+            SELF_CREATE_BUDGET,
+            SELF_CREATE_WINDOW + Duration::from_millis(1),
+        );
+
+        assert!(!self_create_window_covers(&dirs, Path::new("/notes/inbox/Later.md")));
+    }
+
+    #[test]
+    fn spent_self_create_window_is_removed() {
+        let folder = PathBuf::from("/notes/inbox");
+        let dirs = window_with(&folder, SELF_CREATE_BUDGET, Duration::ZERO);
+
+        assert!(self_create_window_covers(&dirs, Path::new("/notes/inbox/New.md")));
+        assert!(dirs.lock().unwrap().is_empty());
     }
 }

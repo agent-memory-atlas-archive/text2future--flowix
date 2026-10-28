@@ -1,5 +1,8 @@
 import { renameCollectionAtPath } from '@features/collection/mutations';
 import { canonicalPath } from '@/lib/path';
+import { toast } from '@/lib/toast';
+import { translate } from '@/lib/i18n';
+import { getCurrentAppLanguage } from '@features/preferences/public/runtime-api';
 import { externalDocuments } from '@platform/tauri/client';
 import { files } from '@platform/tauri/client/desktop';
 import { updateNoteLinksAfterMove } from '@features/memo/services/note-link-rewriter';
@@ -65,15 +68,43 @@ export interface RenameMarkdownTitleResult {
   changed: boolean;
 }
 
-/** Build a Markdown filename from a title while preserving its extension. */
-export function markdownFilenameForTitle(path: string, requestedTitle: string): string | null {
+/**
+ * Replace characters the backend rejects in file names with spaces, matching
+ * `sanitize_filename_component` (`/ \ : * ? " < > |`) plus control characters
+ * and a trailing dot, so a title rename never rejects on reserved characters.
+ */
+export function sanitizeTitleForFilename(title: string): string {
+  return title
+    .replace(/[/\\:*?"<>|]/g, ' ')
+    // Unicode Cc covers C0/C1 controls, matching the backend's `char::is_control`.
+    .replace(/\p{Cc}+/gu, ' ')
+    .trim()
+    .replace(/\.+$/, '')
+    .trim();
+}
+
+/** Strip the current file's Markdown extension from a requested title. */
+function requestedTitleStem(path: string, requestedTitle: string): string {
   const filename = path.split(/[\\/]/).pop() ?? '';
   const extension = filename.match(/(\.markdown|\.md)$/i)?.[0] ?? '';
   let title = requestedTitle.trim();
   if (extension && title.toLowerCase().endsWith(extension.toLowerCase())) {
     title = title.slice(0, -extension.length).trimEnd();
   }
+  return title;
+}
+
+/** True when the requested title needed filesystem-reserved characters replaced. */
+function titleNeededSanitization(path: string, requestedTitle: string): boolean {
+  const stem = requestedTitleStem(path, requestedTitle);
+  return sanitizeTitleForFilename(stem) !== stem.trim();
+}
+
+/** Build a Markdown filename from a title while preserving its extension. */
+export function markdownFilenameForTitle(path: string, requestedTitle: string): string | null {
+  const title = sanitizeTitleForFilename(requestedTitleStem(path, requestedTitle));
   if (!title || title === '.' || title === '..') return null;
+  const extension = (path.split(/[\\/]/).pop() ?? '').match(/(\.markdown|\.md)$/i)?.[0] ?? '';
   return `${title}${extension}`;
 }
 
@@ -84,7 +115,12 @@ export function markdownFilenameForTitle(path: string, requestedTitle: string): 
  */
 export async function renameMarkdownTitle({ title, ...request }: RenameMarkdownTitleRequest): Promise<RenameMarkdownTitleResult | null> {
   const name = markdownFilenameForTitle(request.path, title);
-  return name ? renameLocalDocumentFile({ ...request, name }) : null;
+  if (!name) return null;
+  const result = await renameLocalDocumentFile({ ...request, name });
+  if (result.changed && titleNeededSanitization(request.path, title)) {
+    toast.info(translate(getCurrentAppLanguage(), 'memo.fileTree.invalidNameReplaced'));
+  }
+  return result;
 }
 
 /** Rename an exact filename with the same session/event protection as a title edit. */

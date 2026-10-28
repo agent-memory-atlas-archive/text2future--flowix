@@ -1,8 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { resolveBrowserColumnLayout } from '@features/shell/hooks/browser-column-layout';
 import { useResizablePanels } from '@features/shell/hooks/use-resizable-panels';
 
 export type NoteNavigationDrawerPhase = 'closed' | 'open' | 'closing';
+
+// Slightly longer than --flowix-motion-duration (180ms, see styles/index.css)
+// so the flag outlives the transition even if a frame is dropped. Kept local:
+// this is a layout-sync signal, not a shared motion token.
+const MEMO_LIST_ANIMATION_MS = 200;
 
 interface MainPanelControllerOptions {
   browserColumnSplitRatio: number;
@@ -57,6 +62,35 @@ export function useMainPanelController({
     memoListVisible,
     noteNavigationWidth: 0,
   });
+
+  // True while the memo list is mid-collapse/expand. Consumers use this to
+  // gate transitions on the sibling columns so their widths interpolate in
+  // lockstep with ListColumn's animated width — otherwise the flex row
+  // overflows the container for the duration of the transition and
+  // overflow-x-auto flashes a horizontal scrollbar.
+  const [isMemoListAnimating, setIsMemoListAnimating] = useState(false);
+  const memoListAnimateTimerRef = useRef<number | null>(null);
+  const hasSeenInitialMemoListVisible = useRef(false);
+  useEffect(() => {
+    if (!hasSeenInitialMemoListVisible.current) {
+      hasSeenInitialMemoListVisible.current = true;
+      return;
+    }
+    setIsMemoListAnimating(true);
+    if (memoListAnimateTimerRef.current !== null) {
+      window.clearTimeout(memoListAnimateTimerRef.current);
+    }
+    memoListAnimateTimerRef.current = window.setTimeout(() => {
+      memoListAnimateTimerRef.current = null;
+      setIsMemoListAnimating(false);
+    }, MEMO_LIST_ANIMATION_MS);
+  }, [memoListVisible]);
+  useEffect(() => () => {
+    if (memoListAnimateTimerRef.current !== null) {
+      window.clearTimeout(memoListAnimateTimerRef.current);
+      memoListAnimateTimerRef.current = null;
+    }
+  }, []);
 
   const browserColumnLayout = resolveBrowserColumnLayout({
     viewportWidth,
@@ -122,6 +156,7 @@ export function useMainPanelController({
     closeNoteNavigation,
     completeNoteNavigationClose,
     isDraggingListDivider,
+    isMemoListAnimating,
     isMemoListHidden,
     memoColWidth,
     memoListWidth,

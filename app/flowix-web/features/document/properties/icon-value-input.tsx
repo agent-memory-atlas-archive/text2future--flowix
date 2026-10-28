@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { MouseEvent } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/ui/popover';
 import { useI18n } from '@/lib/i18n';
@@ -16,6 +16,12 @@ interface IconValueInputProps {
   keepParentMenuOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
   onChange: (next: string) => void;
+  /**
+   * 自定义触发器：把宿主自身的元素（如侧栏列表项的笔记图标）当作弹窗触发按钮。
+   * 提供时不再渲染默认的整宽按钮与清除入口，弹窗网格保持不变。
+   * 传入的元素需自行转发 Radix 合并的 props（原生 button/span 即可）。
+   */
+  trigger?: ReactNode;
 }
 
 export function IconValueInput({
@@ -25,6 +31,7 @@ export function IconValueInput({
   keepParentMenuOpen = false,
   onOpenChange,
   onChange,
+  trigger,
 }: IconValueInputProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -45,6 +52,7 @@ export function IconValueInput({
   return (
     <Popover open={disabled ? false : open} onOpenChange={changeOpen} cellPopup={variant === 'table'}>
       <PopoverTrigger asChild>
+        {trigger ?? (
         <button
           type="button"
           disabled={disabled}
@@ -82,6 +90,7 @@ export function IconValueInput({
             </span>
           )}
         </button>
+        )}
       </PopoverTrigger>
       <PopoverContent
         align="start"

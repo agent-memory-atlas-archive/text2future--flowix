@@ -32,6 +32,7 @@ import {
 } from '@features/memo/components/use-folder-tree';
 import { ContentIcon } from '@features/content/public/content-api';
 import { useI18n } from '@/lib/i18n';
+import { fileTreeCreateFailureKey, fileTreeRenameFailureKey } from './file-tree-failure';
 
 const TREE_EDGE_GUTTER = 6;
 const ITEM_INLINE_PADDING = 6;
@@ -112,6 +113,7 @@ export function FolderFileTree({
   const [showScrollTopHint, setShowScrollTopHint] = useState(false);
   // 新建/重命名行的受控输入态: null = 无进行中的行内编辑。
   const [draftRow, setDraftRow] = useState<{ parentPath: string; kind: 'file' | 'folder'; value: string } | null>(null);
+  const draftInputRef = useRef<HTMLInputElement>(null);
   const [renaming, setRenaming] = useState<{ item: DocTreeItem; value: string } | null>(null);
   // 「…」按钮下拉采用受控单开: 同一时刻只允许一个行菜单展开,
   // 点击其他按钮 / 其他位置时由 DropdownMenu 的 pointerdown 收起逻辑驱动 onOpenChange(false)。
@@ -172,7 +174,7 @@ export function FolderFileTree({
         const extension = isTableDocument ? tableDocumentExtension(item.name) : '';
         await renameWorkspaceFile({ path: item.fullPath, name: `${trimmed}${extension}`, scopePath: folderPath });
       } catch (error) {
-        toast.error(t(String(error).includes('FILE_EXISTS') ? 'memo.fileTree.nameConflict' : 'memo.fileTree.renameFailed'));
+        toast.error(t(fileTreeRenameFailureKey(error)));
         return;
       }
     } else {
@@ -188,20 +190,22 @@ export function FolderFileTree({
 
   const handleCreate = useCallback(async (parentPath: string, kind: 'file' | 'folder', name: string) => {
     const trimmed = name.trim();
-    setDraftRow(null);
-    if (!trimmed) return;
-    try {
-      const created = kind === 'file'
-        ? await files.createDocument(parentPath, trimmed)
-        : await files.createFolder(parentPath, trimmed);
-      if (!created) {
-        toast.error(t('memo.fileTree.createFailed'));
-        return;
-      }
-    } catch (error) {
-      toast.error(t(String(error).includes('FILE_EXISTS') ? 'memo.fileTree.nameConflict' : 'memo.fileTree.createFailed'));
+    if (!trimmed) {
+      setDraftRow(null);
       return;
     }
+    try {
+      if (kind === 'file') await files.createDocument(parentPath, trimmed);
+      else await files.createFolder(parentPath, trimmed);
+    } catch (error) {
+      // 保留草稿行, 与 notebook-file-tree 的 submitDraft 一致: toast 提示后可就地改名重试。
+      // 失焦触发的提交已把焦点交给点击处, 这里把光标还给输入框并全选文本。
+      toast.error(t(fileTreeCreateFailureKey(error)));
+      draftInputRef.current?.focus();
+      draftInputRef.current?.select();
+      return;
+    }
+    setDraftRow(null);
     await tree.refresh(parentPath);
   }, [t, tree]);
 
@@ -617,6 +621,7 @@ export function FolderFileTree({
                   />
                 )}
                 <input
+                  ref={draftInputRef}
                   autoFocus
                   value={draftRow.value}
                   placeholder={draftRow.kind === 'file' ? t('memo.fileTree.newNote') : t('memo.fileTree.newFolder')}

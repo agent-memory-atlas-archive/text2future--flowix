@@ -146,13 +146,18 @@ impl RenameTracker {
             self.known.remove(&path);
             self.known_directories.remove(&path);
         }
-        let history = event.paths.iter().map(|path| {
+        let mut history: HashMap<PathBuf, bool> = event.paths.iter().map(|path| {
             (path.clone(), self.known.contains_key(path))
         }).collect();
-        let event = self.correlate_inner(event);
+        let (event, renamed_to) = self.correlate_inner(event);
+        // A correlated rename reuses an existing filesystem identity, so the
+        // new path counts as "known" and must not surface as a created file.
+        if let Some(new) = renamed_to {
+            history.insert(new, true);
+        }
         (event, history)
     }
-    fn correlate_inner(&mut self, event: Event) -> Event {
+    fn correlate_inner(&mut self, event: Event) -> (Event, Option<PathBuf>) {
         self.pending
             .retain(|_, (_, time)| time.elapsed() < Duration::from_secs(2));
         if matches!(event.kind, EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
@@ -163,10 +168,10 @@ impl RenameTracker {
             if !old.exists() && self.known.get(old).copied() == filesystem_identity(new) {
                 self.rebase_known(old, new);
             }
-            return event;
+            return (event, None);
         }
         if event.paths.len() != 1 {
-            return event;
+            return (event, None);
         }
         let path = &event.paths[0];
         if matches!(
@@ -177,7 +182,7 @@ impl RenameTracker {
                 self.pending
                     .insert(path.clone(), (*identity, Instant::now()));
             }
-            return event;
+            return (event, None);
         }
         if matches!(
             event.kind,
@@ -194,9 +199,40 @@ impl RenameTracker {
                     let old = &candidates[0];
                     self.pending.remove(old);
                     self.rebase_known(old, path);
-                    return Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+                    return (Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
                         .add_path(old.clone())
-                        .add_path(path.clone());
+                        .add_path(path.clone()), None);
+                }
+            }
+        }
+        // macOS FSEvents reports a rename as Remove(old) + Create/Modify(new)
+        // without a RenameMode pair. Correlate a single-path create/modify
+        // whose filesystem identity matches exactly one disappeared known
+        // path, so an application or user rename is not misread as a newly
+        // created file (which would surface the "new document" notice).
+        //
+        // Accepted trade-off: identity is (device, inode), so a create that
+        // reuses a just-deleted inode reads as a rename and loses its notice.
+        // APFS/ext4 allocate inodes monotonically, so this stays a theoretical
+        // case; guarding it would need a timestamped baseline, which costs more
+        // than the missed notice.
+        if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_))
+            && !self.known.contains_key(path)
+        {
+            if let Some(identity) = filesystem_identity(path) {
+                let candidates: Vec<_> = self
+                    .known
+                    .iter()
+                    .filter(|(old, old_identity)| {
+                        **old_identity == identity && !old.exists()
+                    })
+                    .map(|(old, _)| old.clone())
+                    .collect();
+                if candidates.len() == 1 {
+                    let old = candidates.into_iter().next().expect("checked above");
+                    let new = path.clone();
+                    self.rebase_known(&old, &new);
+                    return (event, Some(new));
                 }
             }
         }
@@ -206,7 +242,7 @@ impl RenameTracker {
         } else if matches!(event.kind, EventKind::Remove(_)) {
             self.pending_removals.insert(path.clone(), Instant::now());
         }
-        event
+        (event, None)
     }
 }
 
@@ -271,5 +307,75 @@ mod tests {
         tracker.correlate(event(RenameMode::From, &middle));
         assert_eq!(tracker.correlate(event(RenameMode::To, &final_path)).paths,
             vec![middle, final_path]);
+    }
+
+    #[test]
+    fn fs_events_style_rename_counts_the_new_path_as_known() {
+        // macOS FSEvents delivers a rename as a bare Create for the new path.
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("Old.md");
+        let new = dir.path().join("New.md");
+        std::fs::write(&old, "note").unwrap();
+        let mut tracker = RenameTracker::default();
+        tracker.observe(&old);
+        std::fs::rename(&old, &new).unwrap();
+
+        let created = Event::new(EventKind::Create(notify::event::CreateKind::File))
+            .add_path(new.clone());
+        let (event, history) = tracker.correlate_with_path_history(created);
+        assert_eq!(event.paths, vec![new.clone()]);
+        assert_eq!(history[&new], true);
+        assert!(tracker.known.contains_key(&new));
+        assert!(!tracker.known.contains_key(&old));
+    }
+
+    #[test]
+    fn created_file_with_fresh_identity_is_not_correlated() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("Old.md");
+        std::fs::write(&old, "note").unwrap();
+        let mut tracker = RenameTracker::default();
+        tracker.observe(&old);
+        std::fs::remove_file(&old).unwrap();
+
+        let created_path = dir.path().join("Fresh.md");
+        std::fs::write(&created_path, "fresh").unwrap();
+        let created = Event::new(EventKind::Create(notify::event::CreateKind::File))
+            .add_path(created_path.clone());
+        let (_, history) = tracker.correlate_with_path_history(created);
+        assert_eq!(history[&created_path], false);
+    }
+
+    #[test]
+    fn copied_bytes_do_not_correlate_a_fs_events_style_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("Old.md");
+        let copy = dir.path().join("Copy.md");
+        std::fs::write(&old, "same bytes").unwrap();
+        let mut tracker = RenameTracker::default();
+        tracker.observe(&old);
+        std::fs::copy(&old, &copy).unwrap();
+        std::fs::remove_file(&old).unwrap();
+
+        let created = Event::new(EventKind::Create(notify::event::CreateKind::File))
+            .add_path(copy.clone());
+        let (_, history) = tracker.correlate_with_path_history(created);
+        assert_eq!(history[&copy], false);
+    }
+
+    #[test]
+    fn modify_events_correlate_the_same_way_as_creates() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("Old.md");
+        let new = dir.path().join("New.md");
+        std::fs::write(&old, "note").unwrap();
+        let mut tracker = RenameTracker::default();
+        tracker.observe(&old);
+        std::fs::rename(&old, &new).unwrap();
+
+        let modified = Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
+            .add_path(new.clone());
+        let (_, history) = tracker.correlate_with_path_history(modified);
+        assert_eq!(history[&new], true);
     }
 }

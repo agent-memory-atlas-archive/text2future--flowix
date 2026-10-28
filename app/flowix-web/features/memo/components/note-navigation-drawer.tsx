@@ -90,7 +90,7 @@ export function NoteNavigationDrawer({
         tabIndex={phase === 'open' ? 0 : -1}
         onClick={closeWithAnimation}
         className={cn(
-          'absolute inset-0 h-full w-full cursor-default bg-transparent transition-opacity duration-150',
+          'absolute inset-0 h-full w-full cursor-default bg-transparent transition-opacity flowix-motion',
           phase === 'open' ? 'opacity-100' : 'opacity-0',
         )}
       />
@@ -104,7 +104,7 @@ export function NoteNavigationDrawer({
         className={cn(
           'relative m-1 h-[calc(100%-0.5rem)] w-[var(--flowix-note-navigation-drawer-width)] min-w-0 overflow-hidden rounded-xl',
           'border border-[var(--border-popup)] bg-[var(--card)] text-[var(--agent-foreground)]',
-          'transition-transform flowix-note-navigation-motion',
+          'transition-transform flowix-motion',
           phase === 'open' ? 'translate-x-0' : '-translate-x-[calc(100%+0.5rem)]',
           // Keep the navigation drawer shadow at a softened weight (24% -> 16%).
           phase === 'open' && 'shadow-[0_4px_24px_-3px_rgb(0_0_0_/_0.16)]',

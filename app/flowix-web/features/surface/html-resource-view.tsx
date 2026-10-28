@@ -13,7 +13,7 @@ import { workspaceSurfaceAppearance } from '@features/workspace/public/surface-a
 import { WorkspaceSurfaceStateView } from './workspace-surface-state-view';
 import { useLocalHtmlPreview } from './use-local-html-preview';
 import { DocumentContainer } from '@features/document/components/document-container';
-import { connectLocalHtmlScrollbar } from '@shared/ui/local-html-scrollbar';
+import { connectWebFrameScrollbar } from '@shared/ui/web-frame-scrollbar';
 import { useDocumentEditorMode, setDocumentEditorMode } from '@features/document/store/document-editor-view-store';
 import type { SurfacePresentationUpdate, SurfaceState } from '@features/workspace/model/surface-contract';
 import type { DocumentContentStatus } from '@features/document/components/session/types';
@@ -112,7 +112,7 @@ function HtmlPreview({ filePath, scopePath, documentProps, reportPresentation, r
   }, [failed, onDocumentResolved, src]);
   useEffect(() => {
     const iframe = iframeRef.current;
-    if (iframe) return connectLocalHtmlScrollbar(iframe);
+    if (iframe) return connectWebFrameScrollbar(iframe);
   }, [iframeRef, src]);
 
   return <div className="absolute inset-0 min-h-0 min-w-0">

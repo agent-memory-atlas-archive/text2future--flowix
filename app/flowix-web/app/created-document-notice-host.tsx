@@ -7,6 +7,8 @@ import { NOTICE_PAGE_SIZE, useCreatedDocumentNoticeStack } from './use-created-d
 
 const COLLAPSE_DELAY_MS = 180;
 const SCROLL_IDLE_MS = 700;
+/** A single card already carries its own dismiss button; bulk clear only earns its place past this count. */
+const CLEAR_ACTION_MIN_NOTICES = 3;
 
 export function CreatedDocumentNoticeHost() {
   const { t } = useI18n();
@@ -81,12 +83,12 @@ export function CreatedDocumentNoticeHost() {
       }}
       data-expanded={expanded}
       aria-label={t('createdDocuments.region')} className="created-document-notice-host pointer-events-auto fixed bottom-7 right-4 z-[var(--layer-document-notice)] w-[min(352px,calc(100vw-2rem))] text-[var(--foreground)]">
+      <span className="sr-only" role="status" aria-live="polite">{t('createdDocuments.title')} {notices.length}</span>
       <div className="created-document-notice-toolbar relative z-10" aria-hidden={!expanded} inert={!expanded}>
-        <div className="created-document-notice-toolbar-inner flex items-center justify-between px-1 text-sm text-[var(--muted-foreground)]">
-          <span role="status" aria-live="polite">{t('createdDocuments.title')} {notices.length}</span>
-          <button type="button" onClick={clearCreatedDocumentNotices} className="rounded-md px-2 py-1 hover:bg-[var(--muted)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)]">
+        <div className="created-document-notice-toolbar-inner flex items-center justify-end px-1">
+          {notices.length >= CLEAR_ACTION_MIN_NOTICES && <button type="button" onClick={clearCreatedDocumentNotices} className="rounded-full px-2.5 py-1 text-xs text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)]">
             {t('createdDocuments.clear')}
-          </button>
+          </button>}
         </div>
       </div>
       <div data-scrolling={isScrolling ? 'true' : 'false'} onScroll={handleScroll} className="created-document-notice-scroll max-h-[min(calc(48vh_+_56px),476px)] overflow-y-auto overscroll-contain px-12 pb-12 pt-2 -mx-12 -mb-12">

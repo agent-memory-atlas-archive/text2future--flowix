@@ -518,8 +518,13 @@ html.flowix-drag-drop-active * {
 		/* Shared overlay geometry: the collapsed list preview uses this value
 		 * to sit beside the note-navigation drawer instead of behind it. */
 		--flowix-note-navigation-drawer-width: min(240px, calc(100vw - 16px));
-		--flowix-note-navigation-motion-duration: 150ms;
-		--flowix-note-navigation-motion-easing: cubic-bezier(0.16, 1, 0.3, 1);
+		/* Canonical panel/layout motion tokens. Used by the memo list collapse,
+		 * note-navigation drawer, hover preview, and the sibling main/browser
+		 * column transitions that keep the flex row in sync during collapse.
+		 * Hover-state micro transitions (colors, opacity on buttons/tree rows)
+		 * are intentionally NOT routed through these tokens. */
+		--flowix-motion-duration: 180ms;
+		--flowix-motion-easing: cubic-bezier(0.16, 1, 0.3, 1);
 
 		/* Agent 面板等宽字体 — 非颜色, 不参与主题 */
 		--agent-font: 'Flowix Small Emoji', 'Anonymous Pro', 'PingFang SC', 'Microsoft YaHei', 'Inter', -apple-system, monospace;
@@ -663,9 +668,9 @@ html.flowix-drag-drop-active * {
 		}
 	}
 
-	.flowix-note-navigation-motion {
-		transition-duration: var(--flowix-note-navigation-motion-duration);
-		transition-timing-function: var(--flowix-note-navigation-motion-easing);
+	.flowix-motion {
+		transition-duration: var(--flowix-motion-duration);
+		transition-timing-function: var(--flowix-motion-easing);
 	}
 
 	/* Popover presence lifecycle: mount invisibly, position before paint, then
@@ -1033,6 +1038,24 @@ html.flowix-drag-drop-active * {
 .agent-conversation-new-agent-item:hover > img,
 .agent-conversation-new-agent-item:focus-visible > img {
   filter: brightness(0) invert(1);
+}
+
+/* Pi 是双色品牌图标: 统一的 brightness(0) invert(1) 会把内部眼睛一并漂白、
+ * 与主体融为一体, 因此 hover/focus 时换用专用反色资源(白色主体 + 灰色眼睛)。 */
+.agent-icon--pi-inverted {
+  display: none;
+}
+
+.agent-conversation-new-agent-item:hover > img.agent-icon--pi:not(.agent-icon--pi-inverted),
+.agent-conversation-new-agent-item:focus-visible > img.agent-icon--pi:not(.agent-icon--pi-inverted) {
+  display: none;
+  filter: none;
+}
+
+.agent-conversation-new-agent-item:hover > img.agent-icon--pi-inverted,
+.agent-conversation-new-agent-item:focus-visible > img.agent-icon--pi-inverted {
+  display: block;
+  filter: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

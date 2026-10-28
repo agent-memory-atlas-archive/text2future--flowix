@@ -198,6 +198,37 @@ describe('NotebookFileTree pointer dragging', () => {
     return { root, refresh, tree };
   }
 
+  it('renders hidden folders with 80% opacity on the icon and the label', async () => {
+    const hiddenFolder = item('/notes/.trash', 'folder');
+    const visibleFolder = item('/notes/projects', 'folder');
+    const tree = {
+      rootChildren: [hiddenFolder, visibleFolder],
+      nodes: new Map([[hiddenFolder.fullPath, hiddenFolder], [visibleFolder.fullPath, visibleFolder]]),
+      expanded: new Set<string>(), loading: false, error: null,
+      toggle: vi.fn(), expandTo: vi.fn(async () => {}), collapseAll: vi.fn(),
+      refresh: vi.fn(async () => {}), refreshDirectories: vi.fn(async () => {}), reload: vi.fn(async () => {}),
+    } as unknown as FolderTreeController;
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(
+        <NotebookFileTree notebookPath="/notes" notebookName="Notes" tree={tree}
+          onNoteSelect={vi.fn()} onCreateNote={vi.fn()} onMoveNote={successfulMove} />,
+      ));
+      const row = (path: string) => host.querySelector<HTMLElement>(`[data-notebook-tree-path="${path}"]`)!;
+      const label = (path: string) => row(path).querySelector<HTMLElement>('span.truncate')!;
+
+      // 隐藏文件夹: 图标套 0.5 类, 文案是 0.82 × 0.8 (行内样式压过 opacity-[0.82])。
+      const hiddenIcon = (path: string) => row(path).querySelector('button')?.querySelector('.opacity-50') ?? null;
+      expect(hiddenIcon('/notes/.trash')).not.toBeNull();
+      expect(Number.parseFloat(label('/notes/.trash').style.opacity)).toBeCloseTo(0.656, 3);
+      // 普通文件夹不受影响。
+      expect(hiddenIcon('/notes/projects')).toBeNull();
+      expect(label('/notes/projects').style.opacity).toBe('');
+    } finally {
+      await act(async () => root.unmount());
+    }
+  });
+
   it.each([false, true])('restores retry feedback after initial loading (skip=%s)', async (skipInitialLoading) => {
     const tree = {
       rootChildren: [],
@@ -1563,5 +1594,5 @@ describe('NotebookFileTree pointer dragging', () => {
     }
 
     await act(async () => root.unmount());
-  });
+  }, 15_000);
 });

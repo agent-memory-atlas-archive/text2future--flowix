@@ -21,6 +21,7 @@ describe('persistent created document cards', () => {
   afterEach(async () => { vi.useRealTimers(); await act(async () => root.unmount()); vi.unstubAllGlobals(); host.remove(); });
   const add = (name: string) => notifyCreatedDocument(`/notes/${name}.md`, '/notes', 'nb');
   const button = (text: string) => Array.from(host.querySelectorAll('button')).find((el) => el.textContent?.includes(text))!;
+  const hasButton = (text: string) => Array.from(host.querySelectorAll('button')).some((el) => el.textContent?.includes(text));
   it('deduplicates events, stacks to one, expands and dismisses without navigating', async () => {
     await act(async () => {
       for (let i = 0; i < 6; i++) add(String(i));
@@ -84,11 +85,11 @@ describe('persistent created document cards', () => {
   });
   it('hides the toolbar until keyboard focus expands the stack', async () => {
     vi.useFakeTimers();
-    await act(async () => { add('First'); add('Second'); root.render(<CreatedDocumentNoticeHost />); });
+    await act(async () => { add('First'); add('Second'); add('Third'); root.render(<CreatedDocumentNoticeHost />); });
     expect(host.querySelector('.created-document-notice-toolbar')?.getAttribute('aria-hidden')).toBe('true');
     expect(button('createdDocuments.clear').closest('[inert]')).not.toBeNull();
     await act(async () => host.querySelector('aside')!.focus());
-    expect(host.querySelectorAll('section:not([aria-hidden="true"])')).toHaveLength(2);
+    expect(host.querySelectorAll('section:not([aria-hidden="true"])')).toHaveLength(3);
     expect(host.querySelector('.created-document-notice-toolbar')?.getAttribute('aria-hidden')).toBe('false');
     await act(async () => {
       host.querySelector('aside')!.dispatchEvent(new Event('pointerout', { bubbles: true }));
@@ -98,9 +99,25 @@ describe('persistent created document cards', () => {
     await act(async () => host.querySelector('aside')!.blur());
     expect(host.querySelectorAll('section:not([aria-hidden="true"])')).toHaveLength(1);
     await act(async () => host.querySelector('aside')!.focus());
-    expect(host.querySelectorAll('section:not([aria-hidden="true"])')).toHaveLength(2);
+    expect(host.querySelectorAll('section:not([aria-hidden="true"])')).toHaveLength(3);
     await act(async () => host.querySelector('aside')!.blur());
     expect(host.querySelectorAll('section:not([aria-hidden="true"])')).toHaveLength(1);
+  });
+  it('keeps the toolbar label out of sight and only offers clear past two cards', async () => {
+    await act(async () => { add('First'); add('Second'); root.render(<CreatedDocumentNoticeHost />); });
+    await act(async () => host.querySelector('aside')!.focus());
+    const toolbar = host.querySelector('.created-document-notice-toolbar')!;
+    expect(host.querySelector('aside')?.dataset.expanded).toBe('true');
+    expect(toolbar.textContent).toBe('');
+    expect(hasButton('createdDocuments.clear')).toBe(false);
+    await act(async () => add('Third'));
+    expect(toolbar.textContent).toBe('createdDocuments.clear');
+    expect(button('createdDocuments.clear').closest('[inert]')).toBeNull();
+    // The drop from the toolbar must not cost screen readers the count.
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('createdDocuments.title 3');
+    await act(async () => button('createdDocuments.clear').click());
+    expect(useCreatedDocumentNotices.getState().notices).toHaveLength(0);
+    expect(host.querySelector('aside')).toBeNull();
   });
   it('limits the initial card DOM while preserving every notification for older pages', async () => {
     await act(async () => {

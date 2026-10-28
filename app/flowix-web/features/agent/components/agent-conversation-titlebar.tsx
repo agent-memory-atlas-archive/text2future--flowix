@@ -19,6 +19,7 @@ import { getAgentConversationPresentation } from '@features/agent/conversation-p
 import { toast } from '@/lib/toast';
 import { WorkColumnTitlebar } from '@features/shell/components/work-column-titlebar';
 import { WorkColumnTitlebarNavigation } from '@features/shell/components/work-column-titlebar-navigation';
+import { WorkColumnBrowserExpandButton } from '@features/shell/public/work-column-api';
 import { AgentConversationMoreMenu } from '@features/agent/components/agent-conversation-more-menu';
 import { AgentConversationIdentity } from '@features/agent/components/agent-conversation-identity';
 
@@ -83,6 +84,7 @@ function AgentConversationHeader({ instanceId }: { instanceId: string }) {
             <LinkBreakIcon className="agent-thread-card__fullscreen-icon" aria-hidden="true" />
           </span>
         )}
+        <WorkColumnBrowserExpandButton iconButtonClass={actionButtonClass} />
         <AgentConversationMoreMenu
           instance={instance}
           iconButtonClass={actionButtonClass}

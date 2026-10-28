@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { rename, updateNoteLinksAfterMove } = vi.hoisted(() => ({
   rename: vi.fn(async () => 'C:/Notes/New.md'),
   updateNoteLinksAfterMove: vi.fn(),
 }));
 const bus = vi.hoisted(() => ({ handlers: new Set<(payload: unknown) => void>() }));
+vi.mock('@/lib/toast', () => ({ toast: { info: vi.fn(), error: vi.fn(), success: vi.fn() } }));
+vi.mock('@/lib/i18n', () => ({ translate: (_lang: string, key: string) => key }));
+vi.mock('@features/preferences/public/runtime-api', () => ({ getCurrentAppLanguage: () => 'zh-CN' }));
 vi.mock('@platform/tauri/event-bus', () => ({
   subscribe: (_name: string, handler: (payload: unknown) => void) => {
     bus.handlers.add(handler);
@@ -16,12 +19,15 @@ vi.mock('@platform/tauri/client', () => ({ externalDocuments: {} }));
 vi.mock('@platform/tauri/client/desktop', () => ({ files: { rename } }));
 vi.mock('@features/memo/services/note-link-rewriter', () => ({ updateNoteLinksAfterMove }));
 
-import { renameMarkdownTitle } from './local-document-operations';
+import { toast } from '@/lib/toast';
+import { markdownFilenameForTitle, renameMarkdownTitle, sanitizeTitleForFilename } from './local-document-operations';
 import { ensureFileDisplayIdentity, findFileDisplayPath, rebaseFileDisplayPath, reconcileFileDisplays } from '@/lib/file-display-registry';
 import { consumeExpectedExternalDocumentEvent, isExternalDocumentRenameInProgress } from '../store/external-document-operation';
 import { beginNotebookPathRename, publishNotebookPathMove, subscribeNotebookChanges } from '@platform/tauri/notebook-change-events';
 
 describe('local note rename', () => {
+  beforeEach(() => vi.clearAllMocks());
+
   it('schedules link updates after the editor title renames the file', async () => {
     const identity = ensureFileDisplayIdentity('C:/Notes/Old.md');
     const result = await renameMarkdownTitle({
@@ -110,5 +116,60 @@ describe('local note rename', () => {
     })).rejects.toThrow('Rename source must belong');
     expect(rename.mock.calls).toHaveLength(calls);
     expect(isExternalDocumentRenameInProgress(identity.displayId)).toBe(false);
+  });
+
+  it('replaces filesystem-reserved characters with spaces instead of rejecting', async () => {
+    const identity = ensureFileDisplayIdentity('C:/Notes/Old.md');
+    rename.mockResolvedValueOnce('C:/Notes/New  draft.md');
+    const result = await renameMarkdownTitle({
+      path: 'C:/Notes/Old.md',
+      title: 'New: draft',
+      scopePath: 'C:/Notes',
+      notebook: null,
+      displayId: identity.displayId,
+      onPathChanged: vi.fn(),
+    });
+    expect(rename).toHaveBeenLastCalledWith('C:/Notes/Old.md', 'New  draft.md', 'C:/Notes');
+    expect(result?.filename).toBe('New  draft.md');
+    expect(toast.info).toHaveBeenCalledExactlyOnceWith('memo.fileTree.invalidNameReplaced');
+  });
+
+  it('does not toast when the title needs no sanitization', async () => {
+    const identity = ensureFileDisplayIdentity('C:/Notes/Old.md');
+    rename.mockResolvedValueOnce('C:/Notes/New.md');
+    await renameMarkdownTitle({
+      path: 'C:/Notes/Old.md',
+      title: 'New',
+      scopePath: 'C:/Notes',
+      notebook: null,
+      displayId: identity.displayId,
+      onPathChanged: vi.fn(),
+    });
+    expect(toast.info).not.toHaveBeenCalled();
+  });
+});
+
+describe('markdownFilenameForTitle sanitization', () => {
+  it('replaces filesystem-reserved characters with spaces', () => {
+    expect(sanitizeTitleForFilename('a/b\\c:d*e?f"g<h>i|j')).toBe('a b c d e f g h i j');
+    expect(sanitizeTitleForFilename('  spaced  ')).toBe('spaced');
+  });
+
+  it('folds control characters to spaces', () => {
+    expect(sanitizeTitleForFilename('a\tb')).toBe('a b');
+  });
+
+  it('strips a trailing dot', () => {
+    expect(sanitizeTitleForFilename('draft.')).toBe('draft');
+    expect(sanitizeTitleForFilename('a:b.')).toBe('a b');
+  });
+
+  it('builds a sanitized filename while preserving the extension', () => {
+    expect(markdownFilenameForTitle('C:/Notes/Old.md', 'New: draft')).toBe('New  draft.md');
+    expect(markdownFilenameForTitle('C:/Notes/Old.markdown', 'x/y?z')).toBe('x y z.markdown');
+  });
+
+  it('returns null when the sanitized title is empty', () => {
+    expect(markdownFilenameForTitle('C:/Notes/Old.md', ':::')).toBe(null);
   });
 });

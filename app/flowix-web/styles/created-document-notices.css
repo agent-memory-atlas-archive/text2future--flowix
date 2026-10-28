@@ -53,6 +53,11 @@
   overflow: hidden;
 }
 
+/* Bulk clear is the only toolbar affordance; when it is not offered the row must not reserve space. */
+.created-document-notice-toolbar-inner:empty {
+  display: none;
+}
+
 .created-document-notice-host[data-expanded="true"] .created-document-notice-toolbar {
   grid-template-rows: 1fr;
   opacity: 1;

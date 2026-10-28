@@ -17,7 +17,7 @@
   },
   "app/flowix-web/features/agent/components/agent-conversation-list.tsx": {
     "no-restricted-imports": {
-      "count": 2
+      "count": 1
     }
   },
   "app/flowix-web/features/agent/components/agent-conversation-status-bar.tsx": {
@@ -579,7 +579,7 @@
   },
   "app/flowix-web/features/memo/components/notebook-repositories-section.tsx": {
     "no-restricted-imports": {
-      "count": 3
+      "count": 2
     }
   },
   "app/flowix-web/features/memo/components/notebook-setup-coordinator.tsx": {
@@ -671,7 +671,7 @@
       "count": 2
     },
     "no-restricted-imports": {
-      "count": 22
+      "count": 15
     }
   },
   "app/flowix-web/features/multidimensional-table/table-field-header.tsx": {
@@ -719,6 +719,11 @@
       "count": 1
     }
   },
+  "app/flowix-web/features/multidimensional-table/table-view-helpers.ts": {
+    "no-restricted-imports": {
+      "count": 4
+    }
+  },
   "app/flowix-web/features/multidimensional-table/use-auto-content-column-widths.ts": {
     "no-restricted-imports": {
       "count": 1
@@ -727,6 +732,26 @@
   "app/flowix-web/features/multidimensional-table/use-calendar-controller.ts": {
     "no-restricted-imports": {
       "count": 1
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/use-table-calendar-notes.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/use-table-field-edits.ts": {
+    "no-restricted-imports": {
+      "count": 8
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/use-table-kanban.ts": {
+    "no-restricted-imports": {
+      "count": 1
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/use-table-note-linking.ts": {
+    "no-restricted-imports": {
+      "count": 5
     }
   },
   "app/flowix-web/features/multidimensional-table/use-table-session.ts": {
@@ -872,7 +897,7 @@
   },
   "app/flowix-web/features/shell/components/status-bar/status-bar.tsx": {
     "no-restricted-imports": {
-      "count": 4
+      "count": 3
     }
   },
   "app/flowix-web/features/shell/components/workspace-column-context-menu.tsx": {
@@ -1034,6 +1059,11 @@
   "app/flowix-web/shared/ui/popover.tsx": {
     "prefer-const": {
       "count": 2
+    }
+  },
+  "app/flowix-web/features/multidimensional-table/use-table-note-drop.ts": {
+    "no-restricted-imports": {
+      "count": 1
     }
   }
 }

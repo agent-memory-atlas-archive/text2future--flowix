@@ -37,6 +37,12 @@ fn validate_document_frontmatter(content: &str) -> std::io::Result<()> {
 
 /// title 清洗: 替换文件系统非法字符 `\ / : * ? " < > |` 为空格,
 /// 截到 200 字符, 去尾随 `.` (Windows 不接受 `name.`)。
+///
+/// 前端对应实现: `features/document/use-cases/local-document-operations.ts` 的
+/// `sanitizeTitleForFilename`。两边**故意不完全相同**: 前端还会把控制字符替换为
+/// 空格并去掉全部尾随点, 因为标题重命名走 `validate_file_name` (它拒绝控制字符
+/// 和结尾点/空格), 而这里服务创建路径 (标题已由编辑器去掉换行)。改动任一侧的
+/// 字符集时请同步另一侧与其单测。
 pub fn sanitize_filename_component(title: &str) -> String {
     let mut sanitized: String = title
         .chars()

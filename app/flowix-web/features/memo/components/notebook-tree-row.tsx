@@ -36,10 +36,13 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, u
 import { POPUP_SEPARATOR_CLASS } from '@shared/ui/popup-separator';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@shared/ui/dialog';
 import folderIcon from '@/assets/folder-outline.svg?raw';
+import folderIconDefault from '@/assets/folder-outline-default.svg?raw';
 import { getPropertyIconOption } from '@features/document/properties/property-icons';
 import { useNoteMetadata } from '../hooks/use-note-metadata';
 import { resourceKindFromPath } from '@features/editor/code-file';
 import { ContentIcon, getFileIconKind, HtmlFileIcon } from '@features/content/public/content-api';
+import { IconValueInput } from '@features/document/public/property-display-api';
+import { setDocumentProperties } from '@features/document/public/path-properties';
 import { files, notes, product, type DocTreeItem } from '@platform/tauri/client';
 import { logNativeContextMenuError } from '@platform/tauri/native-context-menu';
 import type { TableViewType } from '@features/multidimensional-table/public/create-api';
@@ -53,19 +56,13 @@ const TREE_EDGE_GUTTER = 6;
 const INDENT_PER_LEVEL = 20;
 /** 单击选中文件夹的延迟：需要小于系统双击间隔，否则双击会先触发选中。 */
 export const FOLDER_SINGLE_CLICK_DELAY_MS = 300;
-
-function DefaultFolderCheck() {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 7 7"
-      className="absolute left-[6px] top-[7px] h-[6px] w-[6px] transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0"
-      fill="none"
-    >
-      <path d="m1 3.6 1.5 1.5L6 1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
+/**
+ * 隐藏文件夹 (`.` 开头) 的弱化: 图标压到 50%, 名称文案再乘 80%。
+ * 文案本身还有一层 0.82 (选中/激活时为 1) 的行内弱化, 隐藏时再乘一次,
+ * 保证 `.trash` / `.claude` 这类目录明显比普通文件夹淡。
+ */
+const HIDDEN_FOLDER_ICON_OPACITY_CLASS = 'opacity-50';
+const HIDDEN_FOLDER_LABEL_OPACITY = 0.8;
 
 const NOTEBOOK_AGENT_PROJECT_FOLDER_NAMES = new Set([
   '.agent',
@@ -194,6 +191,10 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
     onToggle(item.fullPath);
   };
   const sourceFolderName = item.fullPath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? item.name;
+  const isHiddenFolder = isFolder
+    && sourceFolderName.startsWith('.')
+    && sourceFolderName !== '.'
+    && sourceFolderName !== '..';
   const isAgentProjectFolder = isFolder
     && depth === 0
     && NOTEBOOK_AGENT_PROJECT_FOLDER_NAMES.has(sourceFolderName);
@@ -242,6 +243,12 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
   const noteIcon = isNote && displayedIcon
     ? getPropertyIconOption(displayedIcon)
     : null;
+  /** 列表里选中图标后写回 frontmatter flowix_icon；保存后由 notebook-change 事件驱动 useNoteMetadata 刷新。 */
+  const persistNoteIcon = useCallback((next: string) => {
+    void setDocumentProperties(item.fullPath, { flowix_icon: next }).catch((error: unknown) => {
+      console.error('[notebook-tree-row] 设置笔记图标失败', error);
+    });
+  }, [item.fullPath]);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(
@@ -457,16 +464,14 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
             className={cn(
               'relative flex h-[18px] w-[18px] shrink-0 items-center justify-center',
               'text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] [[data-theme="mist"]_&]:text-[var(--foreground)]',
+              isHiddenFolder && HIDDEN_FOLDER_ICON_OPACITY_CLASS,
             )}
           >
             {isFolder ? (
-              <>
-                <span
-                  className="absolute inset-0 flex items-center justify-center"
-                  dangerouslySetInnerHTML={{ __html: folderIcon }}
-                />
-                {isDefaultFolder && <DefaultFolderCheck />}
-              </>
+              <span
+                className="absolute inset-0 flex items-center justify-center"
+                dangerouslySetInnerHTML={{ __html: isDefaultFolder ? folderIconDefault : folderIcon }}
+              />
             ) : isNote ? (
               <ContentIcon content={{ kind: 'note' }} className="notebook-file-tree__default-file-icon h-[18px] w-[18px]" />
             ) : (
@@ -517,35 +522,52 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
               'relative h-5 w-5 shrink-0 rounded-md transition-colors group-hover:bg-[color-mix(in_oklch,var(--muted)_90%,var(--foreground)_10%)] group-focus-visible:bg-[color-mix(in_oklch,var(--muted)_90%,var(--foreground)_10%)] hover:bg-[color-mix(in_oklch,var(--muted)_90%,var(--foreground)_10%)] focus-visible:bg-[color-mix(in_oklch,var(--muted)_90%,var(--foreground)_10%)]',
               'text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] [[data-theme="mist"]_&]:text-[var(--foreground)]',
             )}>
-              <span className="absolute left-1/2 top-1/2 h-[18px] w-[18px] -translate-x-1/2 -translate-y-1/2">
+              <span className={cn(
+                'absolute left-1/2 top-1/2 h-[18px] w-[18px] -translate-x-1/2 -translate-y-1/2',
+                isHiddenFolder && HIDDEN_FOLDER_ICON_OPACITY_CLASS,
+              )}>
                 <span
                   className="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0"
-                  dangerouslySetInnerHTML={{ __html: folderIcon }}
+                  dangerouslySetInnerHTML={{ __html: isDefaultFolder ? folderIconDefault : folderIcon }}
                 />
-                {isDefaultFolder && <DefaultFolderCheck />}
               </span>
               <ChevronRight className={cn(
                 'absolute left-1/2 top-1/2 h-[15px] w-[15px] -translate-x-1/2 -translate-y-1/2 opacity-0 transition-[opacity,transform] duration-150 group-hover:opacity-100 group-focus-visible:opacity-100',
                 expanded && 'rotate-90',
               )} />
             </button>
+          ) : isNote ? (
+            <IconValueInput
+              value={displayedIcon ?? ''}
+              onChange={persistNoteIcon}
+              trigger={(
+                <button
+                  type="button"
+                  aria-label={t('document.properties.icon.placeholder')}
+                  onClick={(event) => event.stopPropagation()}
+                  onDoubleClick={(event) => event.stopPropagation()}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  className={'relative flex h-[18px] w-[18px] shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] [[data-theme="mist"]_&]:text-[var(--foreground)]'}
+                >
+                  {noteIcon ? (
+                    <img
+                      src={noteIcon.src}
+                      alt=""
+                      aria-hidden="true"
+                      className="h-[18px] w-[18px] object-contain"
+                      draggable={false}
+                    />
+                  ) : (
+                    <ContentIcon content={{ kind: 'note' }} className="notebook-file-tree__default-file-icon h-[18px] w-[18px]" />
+                  )}
+                </button>
+              )}
+            />
           ) : (
             <span className={'relative flex h-[18px] w-[18px] shrink-0 items-center justify-center text-[color-mix(in_oklch,var(--foreground)_70%,black_30%)] [[data-theme="dark"]_&]:text-[var(--foreground)] [[data-theme="mist"]_&]:text-[var(--foreground)]'}>
-              {noteIcon ? (
-                <img
-                  src={noteIcon.src}
-                  alt=""
-                  aria-hidden="true"
-                  className="h-[18px] w-[18px] object-contain"
-                  draggable={false}
-                />
-              ) : isNote ? (
-                <ContentIcon content={{ kind: 'note' }} className="notebook-file-tree__default-file-icon h-[18px] w-[18px]" />
-              ) : (
-                isHtmlFile
-                  ? <HtmlFileIcon className="h-[18px] w-[18px]" />
-                  : <ContentIcon content={workDocumentsCollection ? { kind: 'work-documents' } : isMediaLibrary ? { kind: 'media-library' } : isTableDocument ? { kind: 'multidimensional-table' } : { kind: 'file', path: item.name }} className="h-[18px] w-[18px]" />
-              )}
+              {isHtmlFile
+                ? <HtmlFileIcon className="h-[18px] w-[18px]" />
+                : <ContentIcon content={workDocumentsCollection ? { kind: 'work-documents' } : isMediaLibrary ? { kind: 'media-library' } : isTableDocument ? { kind: 'multidimensional-table' } : { kind: 'file', path: item.name }} className="h-[18px] w-[18px]" />}
             </span>
           )}
           {!isFolder && isNote && displayedColors.length > 0 && (
@@ -563,11 +585,16 @@ export const NotebookTreeRow = memo(function NotebookTreeRow({
               ))}
             </span>
           )}
-          <span className={cn(
-            'min-w-0 flex-1 truncate',
-            'ml-1.5',
-            active || selected ? 'opacity-100' : 'opacity-[0.82]',
-          )}>
+          <span
+            className={cn(
+              'min-w-0 flex-1 truncate',
+              'ml-1.5',
+              active || selected ? 'opacity-100' : 'opacity-[0.82]',
+            )}
+            style={isHiddenFolder
+              ? { opacity: (active || selected ? 1 : 0.82) * HIDDEN_FOLDER_LABEL_OPACITY }
+              : undefined}
+          >
             {optimisticName ?? (isFolder || !isExtensionlessDocument
               ? item.name
               : displayTitleFromFilename(item.name))}

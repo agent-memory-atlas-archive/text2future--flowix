@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { friendlyErrorMessage } from './friendly-error-message';
 import { cloudModelAccessErrorMessage, cloudSyncErrorMessage } from '@platform/tauri/errors';
-import zhCN from './i18n/messages.zh-CN';
-import type { I18nKey } from './i18n';
+import { getMessages, type I18nKey } from './i18n';
 
-const t = (key: I18nKey) => zhCN[key];
+// Read the merged table so sharded messages are covered too.
+const t = (key: I18nKey) => getMessages('zh-CN')[key];
 beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}); });
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -47,7 +47,7 @@ describe('friendly error presentation', () => {
   });
 
   it('keeps friendly Chinese copy free of trailing full stops', () => {
-    for (const [key, message] of Object.entries(zhCN)) {
+    for (const [key, message] of Object.entries(getMessages('zh-CN'))) {
       if (key.startsWith('errors.friendly.')) expect(message).not.toMatch(/[。.]$/);
     }
   });

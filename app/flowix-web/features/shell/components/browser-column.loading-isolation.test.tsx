@@ -8,7 +8,7 @@ import { useWorkspaceFocusStore } from '@features/workspace/store/workspace-focu
 import { getWorkspaceSurfacePresentation } from '@features/surface/workspace-surface-runtime';
 
 vi.mock('./browser-column-header', () => ({ BrowserColumnHeader: () => null }));
-vi.mock('@shared/ui/iframe-scrollbar', () => ({ styleAccessibleIframeScrollbar: vi.fn() }));
+vi.mock('@shared/ui/web-frame-scrollbar', () => ({ connectWebFrameScrollbar: vi.fn(() => () => {}) }));
 const noop = () => {};
 
 /** Work publishes navigation/loading repeatedly while Browser keeps its mounted web session. */

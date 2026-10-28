@@ -33,6 +33,7 @@ import { Button } from '@shared/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@shared/ui/dialog';
 import { Input } from '@shared/ui/input';
 import { NotebookCopyContextMenu } from '@features/memo/components/notebook-copy-context-menu';
+import { fileTreeRenameFailureKey } from './file-tree-failure';
 
 interface MemoCardProps {
   memo: NoteListItem;
@@ -189,8 +190,7 @@ function MemoCardShell({
       }
       setRenameOpen(false);
     } catch (error) {
-      const message = String(error);
-      toast.error(t(message.includes('FILE_EXISTS') ? 'memo.fileTree.nameConflict' : 'memo.fileTree.renameFailed'));
+      toast.error(t(fileTreeRenameFailureKey(error)));
     } finally {
       setRenameSaving(false);
     }
