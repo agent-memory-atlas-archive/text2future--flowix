@@ -194,8 +194,8 @@
 
 /* 头部 ── grid auto 行, 高度由 grid-template-rows 显式控制 (40px)。
  * 取消旧的 min-height 写法, 用 height 让 grid 行严格等于 token。
- * 底色透明, 由 container 提供卡片底色; 叠加工作区编辑器标题栏同源的
- * 向下渐变, 在 header 下缘淡出并融入消息区。
+ * 不写背景 ── div 默认透明, 底色由 container 的 --agent-bg 提供,
+ * header 与消息区视觉同色, 靠文字层级分区, 不用渐变制造"分块感"。
  *
  * ── 圆角裁剪责任收口到 card 根 ──
  * 之前 header 自己写 border-top-left-radius + border-top-right-radius
@@ -216,10 +216,6 @@
   min-width: 0;
   padding: 0 0.8rem;
   box-sizing: border-box;
-  /* 底色由 container 提供; 渐变沿用编辑器标题栏的 --bg-titlebar →
-   * transparent 处理, 让 header 底部的投影提示自然淡出。 */
-  background: transparent;
-  background-image: var(--titlebar-gradient);
   cursor: grab;
   touch-action: none;
   user-select: none;
